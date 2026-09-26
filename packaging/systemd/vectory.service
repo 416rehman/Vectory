@@ -1,0 +1,22 @@
+[Unit]
+Description=Vectory outbound configuration agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vectory
+Group=vectory
+ExecStart=/usr/bin/vectory run --state-dir /var/lib/vectory-agent
+Restart=on-failure
+RestartSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vectory-agent /etc/vector/vectory-managed
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

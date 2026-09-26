@@ -1,0 +1,30 @@
+{
+  "sources": {
+    "demo": {
+      "type": "demo_logs",
+      "format": "json",
+      "interval": 1
+    }
+  },
+  "transforms": {
+    "process": {
+      "type": "remap",
+      "inputs": [
+        "demo"
+      ],
+      "source": ".environment = \"development\""
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "process"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}

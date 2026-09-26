@@ -1,0 +1,11 @@
+Vectory
+Copyright 2026 Vectory contributors
+
+Vectory is an independent open-source configuration management project for
+Vector. It is not affiliated with or endorsed by Datadog, Inc. or the Vector
+project. Vector and Datadog names belong to their respective owners.
+
+Third-party components retain their original licenses. Dependency lockfiles
+and release-generated SBOM/license inventories identify the exact components.
+No completeness claim is made for an inventory that has not been generated
+and reviewed for the corresponding release artifact.

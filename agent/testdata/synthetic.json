@@ -1,0 +1,1 @@
+{"sources":{"synthetic":{"type":"demo_logs","format":"json","interval":1}},"sinks":{"discard":{"type":"blackhole","inputs":["synthetic"]}}}

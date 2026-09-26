@@ -1,0 +1,122 @@
+{
+  "measured_at": "2026-09-26T08:46:39.004987+00:00",
+  "version": "0.1.0-dev",
+  "go_toolchain": "go1.26.8",
+  "cgo_enabled": false,
+  "signed": false,
+  "published": false,
+  "catalog": [
+    {
+      "name": "vectory-0.1.0-dev-linux-amd64",
+      "os": "linux",
+      "arch": "amd64",
+      "version": "0.1.0-dev",
+      "sha256": "7798601f00c6af334cb42951015f85cea73ed7f79975ee6e9ffcff9baafee4af",
+      "size": 7082110,
+      "url": "/api/v1/releases/vectory-0.1.0-dev-linux-amd64",
+      "signed": false
+    },
+    {
+      "name": "vectory-0.1.0-dev-linux-arm64",
+      "os": "linux",
+      "arch": "arm64",
+      "version": "0.1.0-dev",
+      "sha256": "3cde9fcbadc0aacb4591c0842a70d651f6e3e6e469f5d0aaa68c02fedb9bb6c3",
+      "size": 6553726,
+      "url": "/api/v1/releases/vectory-0.1.0-dev-linux-arm64",
+      "signed": false
+    },
+    {
+      "name": "vectory-0.1.0-dev-darwin-amd64",
+      "os": "darwin",
+      "arch": "amd64",
+      "version": "0.1.0-dev",
+      "sha256": "63efb1662939f2d1f4037c13a84eab64d3cfe2c117e4f984378ee3177525b2eb",
+      "size": 7234800,
+      "url": "/api/v1/releases/vectory-0.1.0-dev-darwin-amd64",
+      "signed": false
+    },
+    {
+      "name": "vectory-0.1.0-dev-darwin-arm64",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "0.1.0-dev",
+      "sha256": "745dc2e39ee6eda4e033552d387656c7e9de43a9ef3062514b67846c8312d007",
+      "size": 6696546,
+      "url": "/api/v1/releases/vectory-0.1.0-dev-darwin-arm64",
+      "signed": false
+    },
+    {
+      "name": "vectory-0.1.0-dev-windows-amd64.exe",
+      "os": "windows",
+      "arch": "amd64",
+      "version": "0.1.0-dev",
+      "sha256": "992da460f0bc448862e7585085790cf11161f401805495a2a8c776948d2a718b",
+      "size": 7439360,
+      "url": "/api/v1/releases/vectory-0.1.0-dev-windows-amd64.exe",
+      "signed": false
+    }
+  ],
+  "same_host_second_build_byte_identical": {
+    "catalog.json": true,
+    "vectory-0.1.0-dev-linux-amd64": true,
+    "vectory-0.1.0-dev-linux-arm64": true,
+    "vectory-0.1.0-dev-darwin-amd64": true,
+    "vectory-0.1.0-dev-darwin-arm64": true,
+    "vectory-0.1.0-dev-windows-amd64.exe": true,
+    "vectory-0.1.0-dev-linux-amd64.tar.gz": true,
+    "vectory-0.1.0-dev-linux-arm64.tar.gz": true,
+    "vectory-0.1.0-dev-darwin-amd64.tar.gz": true,
+    "vectory-0.1.0-dev-darwin-arm64.tar.gz": true,
+    "vectory-0.1.0-dev-windows-amd64.zip": true
+  },
+  "linux_elf_no_interpreter_or_needed_dependencies": true,
+  "source_spdx_packages": 534,
+  "source_spdx_sha256": "a8752c1ec09e6309440c0880857c4472f9842859641c9c8a8e00109b12e9b8a2",
+  "checksums_sha256": "e94bca51afe04c6fd64fbaa70993e67ab6393aba6bc4b7a4aaa1a87731ae4330",
+  "native_artifact_version_output": "0.1.0-dev",
+  "native_artifact_version_platform": "Windows amd64",
+  "remaining_gates": [
+    "native Linux/macOS and earliest OS compatibility",
+    "privileged service install/reboot/upgrade on each supported platform",
+    "container image build/start/isolation and runtime-image SBOM/scanning",
+    "maintainer release signatures/publication identity",
+    "independent reproducible build environment"
+  ],
+  "metadata_finalized_at": "2026-09-26T09:05:44.504438+00:00",
+  "source_input_inventory_sha256": "8bca442fcd0bbebb63e9dc6d0b72ef53d4fda521a10743a049743f44fcf165c7",
+  "source_input_file_count": 180,
+  "source_input_file_sha256": "16bf5390dbf87335e83ab8fc1a0145959b7d4ea6334887c96ff788278e3a5086",
+  "source_input_scope": "Git-listed tracked and nonignored untracked regular repository files, excluding docs/evidence generated reports and this output. Ignored private fixtures/build outputs are excluded.",
+  "native_packaged_windows_acceptance": {
+    "passed": true,
+    "binary_sha256": "992da460f0bc448862e7585085790cf11161f401805495a2a8c776948d2a718b",
+    "platform": "Windows 11 amd64",
+    "vector": "0.58.0",
+    "workflow_evidence": "native-workflow.json",
+    "secret_telemetry_evidence": "native-secret-telemetry.json",
+    "checks": [
+      "native install and explicit adoption",
+      "verified TLS/CSR enrollment",
+      "dashboard control-plane CRUD and immutable publish",
+      "preview and assignment",
+      "mTLS signed desired state and authorized artifact fetch",
+      "actual Vector validate/activation acknowledgment",
+      "exact artifact SHA256",
+      "same-generation actual-file drift repair",
+      "local pause preserves edits with heartbeats",
+      "resume restores latest desired state",
+      "real receiver-observed local credential rotation at unchanged generation",
+      "template/effective hash binding and monotonic secret revision",
+      "bounded actual Vector telemetry persisted through real API",
+      "tested response endpoints contain no generated secret value"
+    ],
+    "does_not_cover": [
+      "SCM service registration",
+      "reboot",
+      "upgrade",
+      "earliest supported Windows"
+    ]
+  },
+  "other_target_native_acceptance": "Not executed; cross-build and archive/ELF checks only"
+}

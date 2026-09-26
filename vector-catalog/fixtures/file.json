@@ -1,0 +1,31 @@
+{
+  "sources": {
+    "sample": {
+      "type": "file",
+      "include": [
+        "/var/log/app/*.log"
+      ]
+    }
+  },
+  "transforms": {
+    "enrich": {
+      "type": "remap",
+      "inputs": [
+        "sample"
+      ],
+      "source": ".environment = \"development\"\n.managed_by = \"vectory\""
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "enrich"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}

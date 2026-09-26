@@ -1,0 +1,81 @@
+name: vectory
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runtime
+    image: vectory-local:development
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    environment:
+      VECTORY_TLS_CERT: /run/secrets/server_cert
+      VECTORY_TLS_KEY: /run/secrets/server_key
+      VECTORY_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap
+      VECTORY_VALIDATION_URL: http://validator:8081
+      VECTORY_RELEASES_DIR: /app/releases
+      VECTORY_MAX_AGENT_CONNECTIONS: ${VECTORY_MAX_AGENT_CONNECTIONS:-16384}
+      VECTORY_TELEMETRY_RETENTION_DAYS: ${VECTORY_TELEMETRY_RETENTION_DAYS:-7}
+    secrets: [server_cert, server_key, bootstrap]
+    volumes:
+      - data:/var/lib/vectory
+      - ${VECTORY_RELEASES_DIRECTORY:-./releases}:/app/releases:ro
+    ports:
+      - "${VECTORY_BIND_IP:-0.0.0.0}:8443:8443"
+    networks: [private, validation]
+    depends_on:
+      validator:
+        condition: service_started
+  validator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: validator
+    image: vectory-validator-local:development
+    restart: unless-stopped
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,uid=10002,gid=10002"]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 64
+    environment:
+      VECTORY_VALIDATOR_ISOLATED: "true"
+    networks: [validation]
+  proxy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/data:rw,noexec,nosuid,size=16m,uid=10001,gid=10001", "/config:rw,noexec,nosuid,size=16m,uid=10001,gid=10001"]
+    environment:
+      VECTORY_HOSTNAME: ${VECTORY_HOSTNAME:?Set the DNS name in deploy/.env}
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro]
+    secrets: [server_cert, server_key]
+    ports:
+      - "${VECTORY_BIND_IP:-0.0.0.0}:443:8443"
+    depends_on:
+      server:
+        condition: service_healthy
+    networks: [private]
+secrets:
+  server_cert:
+    file: ${VECTORY_TLS_CERT_FILE:?Set your TLS certificate file}
+  server_key:
+    file: ${VECTORY_TLS_KEY_FILE:?Set your TLS private-key file}
+  bootstrap:
+    file: ${VECTORY_BOOTSTRAP_SECRET_FILE:?Set a random bootstrap secret file}
+volumes:
+  data:
+networks:
+  private:
+  validation:
+    internal: true

@@ -1,0 +1,28 @@
+# Agent test evidence — 2026-09-26
+
+Host: Windows 11 Pro 10.0.26200 amd64. Final toolchain: `go version go1.26.8 windows/amd64` (initial development checks used 1.26.6; current 1.26 patch was subsequently verified through the official Go release feed and all checks repeated). Vector: official 0.58.0 Windows amd64, reported revision `2bcad9b 2026-08-26 13:37:07.557544670`; downloaded/checksum verification handled by release workstream.
+
+| Check | Observed result | Meaning |
+| --- | --- | --- |
+| `go test ./...` | PASS | Unit, protocol, TLS fixture, filesystem, rollback and injected recovery tests; native test skips without explicit binary |
+| `go vet ./...` | PASS | Static Go checks |
+| `VECTOR_TEST_BINARY=<verified vector.exe> go test -v ./internal/agent -run TestNativeVectorActivationAndRollback` | PASS, about 12 seconds | Actual native Vector validation/startup/liveness, drift repair, startup failure and last-good rollback |
+| `VECTOR_TEST_BINARY=<verified vector.exe> go test -v ./internal/agent -run TestNativeVectorTelemetry` | PASS, about 4 seconds | Actual internal_metrics/exporter, loopback source and component rates, uptime, buffer gauges, intentional filter discard and remap runtime-error counters |
+| `VECTOR_TEST_BINARY=<verified vector.exe> go test -v ./internal/agent -run TestNativeVectorLocalSecretRotation` | PASS, about 6 seconds | Actual HTTP receiver observes bearer credential from protected local file, then rotated credential after same-template/same-generation activation; effective hashes and revisions differ |
+| `CGO_ENABLED=0 go build -trimpath` Linux amd64/arm64, macOS amd64/arm64, Windows amd64 | PASS all five | Build evidence only for non-Windows targets |
+| `go test -race ./...` | NOT RUN: requires cgo/toolchain unavailable on this host | Race detector gate remains open |
+| Independent `govulncheck` v1.8.0, Go 1.26.8 | No vulnerabilities found | Release workstream scan; does not prove absence of unknown vulnerabilities |
+
+Security negatives include unknown server CA before enrollment token transmission, redirects, malformed signatures, wrong recipient/nonce/protocol, expired/future/overlong manifests, stale config/policy counters, changed same-generation content, unauthorized artifact paths/size, heartbeat hard bounds, exec/provider/secret/environment/VRL/file/network/API policy bypasses, console startup-log spoofing, scrubbed Vector environment and single-operation locks.
+
+Enrollment fixture exercises a lost first response and verifies the retry retains its request ID, key and name; a real TLS server observes the resulting client certificate on a heartbeat. Credentials are never token-authenticated after enrollment. Expired local credentials preserve offline recovery eligibility while enrollment validation rejects expiry.
+
+Renewal fixture authenticates with the current certificate, verifies the CSR proves a newly generated key, rotates certificate/signing trust, and reconstructs runtime after deliberately reverting obsolete PEM mirrors. The canonical private identity bundle remains authoritative. Replacement-identity journal tests ensure only an explicitly committed replacement UUID resets generation counters, preserves local pause/last-good content and clears old identity transactions; arbitrary credential UUID mismatch cannot reset anti-rollback state.
+
+Native service registration/control code uses Windows SCM APIs and a virtual service account, fixed systemd operations with a named unprivileged account, or fixed launchd operations. Those adapters compile for target OSes but were not registered/executed with privileged host service managers in this session.
+
+Independent review regressions reject shared configuration/state directories before permission changes and limit service ownership changes to the exact dedicated config directory/file. Recovery crash tests cover the post-commit/pre-cleanup gap: retrying the same completed transaction does not reset subsequently advanced counters, and a new token can initiate the next recovery after cleanup. Signature failures remain rejected while allowing one authenticated signing-trust renewal per hour, with a durable cooldown.
+
+Recovery tests inject errors at validated, prepared, written, reload_requested, activated and verified boundaries. They reconstruct a new Engine from durable state and assert complete old or durably verified new content. Failure restores the verified artifact, never a locally drifted pre-attempt snapshot. Rejected generations are suppressed, pause racing validation blocks commit, and expired manifests cannot commit. Secret rotation repeats all six boundaries at the same generation and proves attempt revisions do not roll back or falsely acknowledge an older applied revision. Failed rotation restores old good credentials; changed local values permit corrected same-generation retries. Typed reference negatives cover disallowed paths/types, embedded names, missing bindings, JSON injection, bounds/UTF-8/NUL, broad Windows DACL and hardlinks. A deliberately secret-bearing validator error never appears in returned errors, state/status, template cache or captured heartbeat. Effective capability policy is reapplied after substitution.
+
+Remaining: real server full workflow evidence is maintained by the lead integration tests. Native service installation/reboot/upgrade, minimum OS matrix, macOS orphan-child behavior under helper SIGKILL, real power loss, file/ACL permissions under separate service identities, process CPU/RSS telemetry, long outage and physical disk-full tests remain unverified. Static hostname/root checks are not an OS sandbox; see README security boundary.

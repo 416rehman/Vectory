@@ -1,0 +1,22 @@
+name: vectory
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Vectory maintainers
+description: Standalone outbound configuration management agent for Vector
+license: Apache-2.0
+contents:
+  - src: ../artifacts/releases/vectory-${VERSION}-linux-${GOARCH}
+    dst: /usr/bin/vectory
+    file_info:
+      mode: 0755
+  - src: systemd/vectory.service
+    dst: /usr/lib/systemd/system/vectory.service
+  - src: ../docs/AGENT-INSTALL.md
+    dst: /usr/share/doc/vectory/AGENT-INSTALL.md
+  - src: ../LICENSE
+    dst: /usr/share/doc/vectory/LICENSE
+# Deliberately no install scripts: no secret enrollment, account privilege grants,
+# Vector replacement, or service startup occurs during package installation.

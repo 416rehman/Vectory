@@ -1,0 +1,30 @@
+{
+  "sources": {
+    "demo": {
+      "type": "demo_logs",
+      "format": "json",
+      "interval": 1
+    }
+  },
+  "transforms": {
+    "process": {
+      "type": "filter",
+      "inputs": [
+        "demo"
+      ],
+      "condition": ".level != \"debug\""
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "process"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}

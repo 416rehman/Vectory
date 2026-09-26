@@ -1,0 +1,55 @@
+{
+  "recorded_at": "2026-09-26T08:56:28.629548+00:00",
+  "platform": "Windows 11 amd64 build26200",
+  "go_toolchain": "go1.26.8",
+  "native_server_sha256": "9070eee630700e541a3ac0816fad4be7cdfdf4d3bb484aa6b3adf373e8ddcd5e",
+  "suite_source_sha256": "75ac12eb9323fec3f6cde6a04ab065198e00112a33c324a52d7697267dd4aa13",
+  "independent_tls_suite": {
+    "passed": true,
+    "subtests": 21,
+    "package_elapsed_seconds": 13.278,
+    "scope": "New temporary CA, SQLite state and native listeners; no ordinary product fleet state reused",
+    "reused_tls_connection_revocation_asserted": true
+  },
+  "targeted_agent_secret_and_telemetry_suite": {
+    "passed": true,
+    "package_elapsed_seconds": 11.594,
+    "actual_vector_version": "0.58.0",
+    "actual_vector_executable_sha256": "019c41f4ae28543dd8e275a631f4d7b67a6aed3e3fba4c0ed37c4bdf054ac3a6",
+    "skipped": [
+      "Windows symbolic-link creation: required OS privilege unavailable"
+    ],
+    "executed": [
+      "typed secret reference restrictions",
+      "UTF8/size/NUL/private-file limits",
+      "hardlink rejection",
+      "Windows broad-DACL rejection",
+      "same-generation secret change failure and correction",
+      "six journal crash boundaries",
+      "diagnostic/status/template leak probes",
+      "native Vector HTTP bearer rotation",
+      "native Vector bounded telemetry and component metrics"
+    ]
+  },
+  "backup_suite": {
+    "passed": true,
+    "tests": 5,
+    "elapsed_seconds": 0.27
+  },
+  "dependency_gates": {
+    "go_govulncheck_1_8_0": "No vulnerabilities found",
+    "npm_audit_total": 0,
+    "rust_report": "rust-dependency-audit.json",
+    "rust_optional_inactive_exception": "RUSTSEC-2023-0071 rsa0.9.10 only with all-target active-graph absence proof"
+  },
+  "source_pattern_scan": {
+    "private_key_or_known_cloud_token_pattern_matches": 0,
+    "scope": "nonignored source via rg; excludes ignored local fixture/build/release files; heuristic only"
+  },
+  "external_gates": [
+    "container execution/isolation",
+    "native service/oldest-OS/reboot/upgrade",
+    "real physical power loss",
+    "independent audit and prolonged operational qualification"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-09-26T08:53:59.137Z",
+  "passed": true,
+  "scope": "Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data",
+  "checks": [
+    "initial load",
+    "newest same-path response wins over delayed error",
+    "path change hides prior data",
+    "late old-path response cannot overwrite new resource",
+    "null path resets data and stops polling",
+    "unmount invalidates pending work and disables saved reload/poll"
+  ]
+}
