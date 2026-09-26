@@ -1,0 +1,33 @@
+{
+  "sources": {
+    "demo": {
+      "type": "demo_logs",
+      "format": "json",
+      "interval": 1
+    }
+  },
+  "transforms": {
+    "process": {
+      "type": "route",
+      "inputs": [
+        "demo"
+      ],
+      "route": {
+        "errors": ".level == \"error\"",
+        "other": ".level != \"error\""
+      }
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "process.errors"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "vector_version": "0.58.0",
+  "results": [
+    {
+      "component": "demo_logs",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "file",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "syslog",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "http_server",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "opentelemetry",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "remap",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "filter",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "route",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "sample",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "console",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "http",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "elasticsearch",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    },
+    {
+      "component": "loki",
+      "valid": true,
+      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+    }
+  ]
+}

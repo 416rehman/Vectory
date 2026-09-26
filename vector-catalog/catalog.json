@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "vector_version": "0.58.0",
+  "source": "Hand-curated forms checked against pinned Vector; no complete official machine-readable schema is assumed.",
+  "components": [
+    {
+      "type": "demo_logs",
+      "kind": "sources",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "format",
+        "interval"
+      ]
+    },
+    {
+      "type": "file",
+      "kind": "sources",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "include"
+      ]
+    },
+    {
+      "type": "syslog",
+      "kind": "sources",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "address",
+        "mode"
+      ]
+    },
+    {
+      "type": "http_server",
+      "kind": "sources",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "address",
+        "encoding"
+      ]
+    },
+    {
+      "type": "opentelemetry",
+      "kind": "sources",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": []
+    },
+    {
+      "type": "remap",
+      "kind": "transforms",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "source"
+      ]
+    },
+    {
+      "type": "filter",
+      "kind": "transforms",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "condition"
+      ]
+    },
+    {
+      "type": "route",
+      "kind": "transforms",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": []
+    },
+    {
+      "type": "sample",
+      "kind": "transforms",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "rate"
+      ]
+    },
+    {
+      "type": "console",
+      "kind": "sinks",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "encoding.codec",
+        "target"
+      ]
+    },
+    {
+      "type": "http",
+      "kind": "sinks",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "uri",
+        "encoding.codec"
+      ]
+    },
+    {
+      "type": "elasticsearch",
+      "kind": "sinks",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "endpoints"
+      ]
+    },
+    {
+      "type": "loki",
+      "kind": "sinks",
+      "coverage": "curated form plus lossless raw JSON",
+      "fields": [
+        "endpoint"
+      ]
+    }
+  ]
+}

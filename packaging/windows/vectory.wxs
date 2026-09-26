@@ -1,0 +1,14 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Vectory Agent" Manufacturer="Vectory contributors" Version="$(var.Version)" UpgradeCode="A948C519-E7D6-4E8F-AE85-3D0724A0D2D7" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Vectory agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Vectory">
+        <Component Id="AgentBinary" Guid="*">
+          <File Id="VectoryExe" Source="$(var.Binary)" Name="vectory.exe" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="Vectory Agent" Level="1"><ComponentRef Id="AgentBinary" /></Feature>
+  </Package>
+</Wix>

@@ -1,0 +1,30 @@
+{
+  "sources": {
+    "sample": {
+      "type": "http_server",
+      "address": "127.0.0.1:8088",
+      "encoding": "json"
+    }
+  },
+  "transforms": {
+    "enrich": {
+      "type": "remap",
+      "inputs": [
+        "sample"
+      ],
+      "source": ".environment = \"development\"\n.managed_by = \"vectory\""
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "enrich"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}

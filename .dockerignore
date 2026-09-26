@@ -1,0 +1,14 @@
+.git
+.local
+.env
+**/.env
+**/node_modules
+**/target
+**/dist
+artifacts
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.pem
+**/*.key
+**/*.log

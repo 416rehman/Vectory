@@ -1,0 +1,1335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vectory.local/schemas/protocol-v1",
+  "title": "Vectory protocol v1",
+  "description": "Validate one named schema via $defs. Cryptographic, authorization and semantic checks remain mandatory.",
+  "$defs": {
+    "Error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": true
+    },
+    "User": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "viewer",
+            "editor",
+            "operator",
+            "admin"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "name",
+        "role"
+      ],
+      "additionalProperties": true
+    },
+    "Session": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/User"
+        },
+        "csrf_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "user",
+        "csrf_token"
+      ],
+      "additionalProperties": true
+    },
+    "Status": {
+      "type": "object",
+      "properties": {
+        "initialized": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "initialized",
+        "version"
+      ],
+      "additionalProperties": true
+    },
+    "Configuration": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "additionalProperties": true
+        },
+        "config": {
+          "type": "object",
+          "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "revision",
+        "graph",
+        "config",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    },
+    "Version": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "additionalProperties": true
+        },
+        "config": {
+          "type": "object",
+          "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": "string"
+        },
+        "uses_local_secrets": {
+          "type": "boolean"
+        },
+        "validation": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "configuration_id",
+        "number",
+        "graph",
+        "config",
+        "artifact",
+        "sha256",
+        "size",
+        "created_at",
+        "message",
+        "validation"
+      ],
+      "additionalProperties": true
+    },
+    "AgentPolicy": {
+      "type": "object",
+      "properties": {
+        "heartbeat_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600
+        },
+        "sync_paused": {
+          "type": "boolean"
+        },
+        "telemetry_enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "heartbeat_seconds",
+        "sync_paused",
+        "telemetry_enabled"
+      ],
+      "additionalProperties": true
+    },
+    "Selector": {
+      "type": "object",
+      "properties": {
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "group_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "exclude_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "device_ids",
+        "group_ids",
+        "exclude_ids"
+      ],
+      "additionalProperties": true
+    },
+    "Rollout": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "all",
+            "canary"
+          ]
+        },
+        "canary_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observation_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failure_threshold": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "canary_size",
+        "batch_size",
+        "observation_seconds",
+        "failure_threshold"
+      ],
+      "additionalProperties": true
+    },
+    "Telemetry": {
+      "type": "object",
+      "properties": {
+        "sampled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "events_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uptime_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_bytes": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cpu_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "discarded_events": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "buffer_bytes": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "components": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "type": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errors": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "discarded_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_bytes": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "sampled_at"
+      ],
+      "additionalProperties": true
+    },
+    "TelemetryHistory": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Telemetry"
+          }
+        }
+      },
+      "required": [
+        "device_id",
+        "samples"
+      ],
+      "additionalProperties": true
+    },
+    "Device": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "vector_version": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "apply_state": {
+          "type": "string"
+        },
+        "desired_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reported_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "desired_version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actual_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applied_template_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secret_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uses_local_secrets": {
+          "type": "boolean"
+        },
+        "local_paused": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "object"
+        },
+        "sync_paused": {
+          "type": "boolean"
+        },
+        "pause_acknowledged": {
+          "type": "boolean"
+        },
+        "telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Telemetry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "apply_state",
+        "desired_generation",
+        "reported_generation"
+      ],
+      "additionalProperties": true
+    },
+    "DeploymentTarget": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "state": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "device_id",
+        "state",
+        "generation"
+      ],
+      "additionalProperties": true
+    },
+    "Deployment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selector": {
+          "$ref": "#/$defs/Selector"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "target_mode": {
+          "enum": [
+            "snapshot",
+            "persistent"
+          ]
+        },
+        "status": {
+          "enum": [
+            "scheduled",
+            "active",
+            "paused",
+            "completed",
+            "cancelled",
+            "failed",
+            "missed",
+            "unassigned"
+          ]
+        },
+        "scheduled_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeploymentTarget"
+          }
+        },
+        "rollout": {
+          "$ref": "#/$defs/Rollout"
+        }
+      },
+      "required": [
+        "id",
+        "selector",
+        "priority",
+        "target_mode",
+        "status",
+        "created_at",
+        "targets",
+        "rollout"
+      ],
+      "additionalProperties": true
+    },
+    "DeploymentRequest": {
+      "type": "object",
+      "properties": {
+        "version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "policy": {
+          "$ref": "#/$defs/AgentPolicy"
+        },
+        "selector": {
+          "$ref": "#/$defs/Selector"
+        },
+        "expected_device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "target_mode": {
+          "enum": [
+            "snapshot",
+            "persistent"
+          ]
+        },
+        "scheduled_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rollout": {
+          "$ref": "#/$defs/Rollout"
+        }
+      },
+      "required": [
+        "selector",
+        "priority",
+        "target_mode",
+        "rollout"
+      ],
+      "additionalProperties": true
+    },
+    "Preview": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Device"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {}
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "devices",
+        "conflicts",
+        "warnings"
+      ],
+      "additionalProperties": true
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "device_ids"
+      ],
+      "additionalProperties": true
+    },
+    "Token": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_uses": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name_prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "expires_at",
+        "uses",
+        "max_uses",
+        "name_prefix",
+        "revoked",
+        "created_at"
+      ],
+      "additionalProperties": true
+    },
+    "TokenCreated": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/$defs/Token"
+        }
+      },
+      "required": [
+        "token",
+        "record"
+      ],
+      "additionalProperties": true
+    },
+    "Release": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "url": {
+          "type": "string"
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "os",
+        "arch",
+        "version",
+        "sha256",
+        "size",
+        "url",
+        "signed"
+      ],
+      "additionalProperties": true
+    },
+    "Validation": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "valid",
+        "errors",
+        "warnings"
+      ],
+      "additionalProperties": true
+    },
+    "EnrollmentRequest": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "csr_pem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "vector_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "token",
+        "name",
+        "csr_pem",
+        "os",
+        "arch",
+        "agent_version",
+        "vector_version"
+      ],
+      "additionalProperties": true
+    },
+    "Credential": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "certificate_pem": {
+          "type": "string"
+        },
+        "ca_pem": {
+          "type": "string"
+        },
+        "signing_public_key": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "certificate_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "device_id",
+        "certificate_pem",
+        "ca_pem",
+        "signing_public_key",
+        "certificate_expires_at"
+      ],
+      "additionalProperties": true
+    },
+    "HeartbeatRequest": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Exactly 32 unpredictable decoded bytes"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "vector_version": {
+          "type": "string"
+        },
+        "reported_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actual_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applied_template_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secret_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "apply_state": {
+          "enum": [
+            "unmanaged",
+            "desired",
+            "downloaded",
+            "validated",
+            "written",
+            "reload_requested",
+            "verified_applied",
+            "verification_unknown",
+            "failed",
+            "rolled_back",
+            "paused"
+          ]
+        },
+        "local_paused": {
+          "type": "boolean"
+        },
+        "remote_pause_acknowledged": {
+          "type": "boolean"
+        },
+        "telemetry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Telemetry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "stage": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "stage",
+                "message"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "nonce",
+        "boot_id",
+        "agent_version",
+        "vector_version",
+        "reported_generation",
+        "policy_generation",
+        "actual_sha256",
+        "apply_state",
+        "local_paused",
+        "remote_pause_acknowledged"
+      ],
+      "additionalProperties": true
+    },
+    "DesiredArtifact": {
+      "type": "object",
+      "properties": {
+        "version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "artifact_path": {
+          "type": "string",
+          "pattern": "^/agent/v1/artifacts/[a-f0-9]{64}$"
+        },
+        "vector_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version_id",
+        "sha256",
+        "size",
+        "artifact_path",
+        "vector_version"
+      ],
+      "additionalProperties": true
+    },
+    "Manifest": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy": {
+          "$ref": "#/$defs/AgentPolicy"
+        },
+        "desired": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesiredArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocol_version",
+        "device_id",
+        "nonce",
+        "issued_at",
+        "expires_at",
+        "generation",
+        "policy_generation",
+        "policy",
+        "desired"
+      ],
+      "additionalProperties": true
+    },
+    "SignedManifest": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Exact UTF-8 JSON Manifest bytes, decoded before signature verification"
+        },
+        "signature": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Ed25519 signature over exact decoded payload"
+        }
+      },
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

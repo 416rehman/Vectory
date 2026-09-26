@@ -1,0 +1,1329 @@
+{
+  "hardware": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 0, AuthenticAMD",
+    "logical_cpus": 32,
+    "physical_cpus": 16,
+    "memory_total_bytes": 137354223616,
+    "python": "3.11.0",
+    "aiohttp": "3.13.5",
+    "cryptography": "46.0.6",
+    "psutil": "7.0.0",
+    "server_sha256": "9a5cf93119f96d50b32da9840bb69724ca2bf860963494ab0fcb23e8a0129ef3",
+    "build_profile": "debug (not release-optimized)",
+    "storage": "C:\\ local workspace volume; exact drive media not measured",
+    "measurement_notes": "client and server share this host; no network latency; synthetic isolated certificates; no advertised fleet capacity"
+  },
+  "results": [
+    {
+      "agents": 100,
+      "duration_requested_seconds": 70.0,
+      "elapsed_seconds": 70.715,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 122,
+      "success": 122,
+      "request_bytes": 66720,
+      "response_bytes": 108458,
+      "errors": {},
+      "error_rate": 0.0,
+      "latency_all_requests_ms": {
+        "p50": 9.123,
+        "p95": 23.116,
+        "p99": 28.11,
+        "max": 33.856
+      },
+      "unique_agents_succeeded": 100,
+      "signed_manifest_convergence_seconds": {
+        "p50": 27.556,
+        "p95": 54.744,
+        "max": 59.183
+      },
+      "server_cpu_seconds": 0.875,
+      "server_average_cpu_percent_one_core": 1.237,
+      "server_peak_sampled_cpu_percent_one_core": 6.3,
+      "server_peak_rss_bytes": 25796608,
+      "sqlite_bytes_before": 274432,
+      "sqlite_logical_bytes_after": 348160,
+      "sqlite_wal_peak_bytes": 3122992,
+      "telemetry_rows_after": 117,
+      "samples": [
+        {
+          "t": 0.0,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 20807680,
+          "database_bytes": 241664,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2
+        },
+        {
+          "t": 1.01,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 20807680,
+          "database_bytes": 241664,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2
+        },
+        {
+          "t": 2.02,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 23207936,
+          "database_bytes": 241664,
+          "wal_bytes": 127752,
+          "server_tcp_connections": 5
+        },
+        {
+          "t": 3.02,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23388160,
+          "database_bytes": 241664,
+          "wal_bytes": 164832,
+          "server_tcp_connections": 6
+        },
+        {
+          "t": 4.03,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 23429120,
+          "database_bytes": 241664,
+          "wal_bytes": 164832,
+          "server_tcp_connections": 6
+        },
+        {
+          "t": 5.03,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23715840,
+          "database_bytes": 241664,
+          "wal_bytes": 333752,
+          "server_tcp_connections": 11
+        },
+        {
+          "t": 6.03,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24018944,
+          "database_bytes": 241664,
+          "wal_bytes": 432632,
+          "server_tcp_connections": 15
+        },
+        {
+          "t": 7.04,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24018944,
+          "database_bytes": 241664,
+          "wal_bytes": 432632,
+          "server_tcp_connections": 15
+        },
+        {
+          "t": 8.02,
+          "cpu_percent_one_core": 6.3,
+          "rss_bytes": 24178688,
+          "database_bytes": 241664,
+          "wal_bytes": 457352,
+          "server_tcp_connections": 17
+        },
+        {
+          "t": 9.02,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24326144,
+          "database_bytes": 241664,
+          "wal_bytes": 531512,
+          "server_tcp_connections": 19
+        },
+        {
+          "t": 10.03,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24539136,
+          "database_bytes": 241664,
+          "wal_bytes": 580952,
+          "server_tcp_connections": 21
+        },
+        {
+          "t": 11.05,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 24547328,
+          "database_bytes": 241664,
+          "wal_bytes": 675712,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 12.06,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24727552,
+          "database_bytes": 241664,
+          "wal_bytes": 675712,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 13.07,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24731648,
+          "database_bytes": 241664,
+          "wal_bytes": 700432,
+          "server_tcp_connections": 25
+        },
+        {
+          "t": 14.08,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24776704,
+          "database_bytes": 241664,
+          "wal_bytes": 762232,
+          "server_tcp_connections": 28
+        },
+        {
+          "t": 15.09,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 24780800,
+          "database_bytes": 241664,
+          "wal_bytes": 836392,
+          "server_tcp_connections": 30
+        },
+        {
+          "t": 16.1,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25100288,
+          "database_bytes": 241664,
+          "wal_bytes": 922912,
+          "server_tcp_connections": 33
+        },
+        {
+          "t": 17.11,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25276416,
+          "database_bytes": 241664,
+          "wal_bytes": 984712,
+          "server_tcp_connections": 32
+        },
+        {
+          "t": 18.12,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25321472,
+          "database_bytes": 241664,
+          "wal_bytes": 1009432,
+          "server_tcp_connections": 32
+        },
+        {
+          "t": 19.13,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25325568,
+          "database_bytes": 241664,
+          "wal_bytes": 1042392,
+          "server_tcp_connections": 33
+        },
+        {
+          "t": 20.14,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25214976,
+          "database_bytes": 241664,
+          "wal_bytes": 1116552,
+          "server_tcp_connections": 31
+        },
+        {
+          "t": 21.15,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25227264,
+          "database_bytes": 241664,
+          "wal_bytes": 1178352,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 22.16,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25321472,
+          "database_bytes": 241664,
+          "wal_bytes": 1203072,
+          "server_tcp_connections": 30
+        },
+        {
+          "t": 23.16,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25325568,
+          "database_bytes": 241664,
+          "wal_bytes": 1273112,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 24.18,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25354240,
+          "database_bytes": 241664,
+          "wal_bytes": 1273112,
+          "server_tcp_connections": 28
+        },
+        {
+          "t": 25.19,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25358336,
+          "database_bytes": 241664,
+          "wal_bytes": 1367872,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 26.2,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25362432,
+          "database_bytes": 241664,
+          "wal_bytes": 1450272,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 27.21,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25362432,
+          "database_bytes": 241664,
+          "wal_bytes": 1450272,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 28.24,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25243648,
+          "database_bytes": 241664,
+          "wal_bytes": 1577992,
+          "server_tcp_connections": 31
+        },
+        {
+          "t": 29.25,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25243648,
+          "database_bytes": 241664,
+          "wal_bytes": 1577992,
+          "server_tcp_connections": 28
+        },
+        {
+          "t": 30.24,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25313280,
+          "database_bytes": 241664,
+          "wal_bytes": 1627432,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 31.27,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25026560,
+          "database_bytes": 241664,
+          "wal_bytes": 1627432,
+          "server_tcp_connections": 25
+        },
+        {
+          "t": 32.27,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25137152,
+          "database_bytes": 241664,
+          "wal_bytes": 1627432,
+          "server_tcp_connections": 23
+        },
+        {
+          "t": 33.29,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 25223168,
+          "database_bytes": 241664,
+          "wal_bytes": 1845792,
+          "server_tcp_connections": 30
+        },
+        {
+          "t": 34.3,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25231360,
+          "database_bytes": 241664,
+          "wal_bytes": 1845792,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 35.31,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25001984,
+          "database_bytes": 241664,
+          "wal_bytes": 1928192,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 36.33,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25120768,
+          "database_bytes": 241664,
+          "wal_bytes": 1977632,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 37.34,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25198592,
+          "database_bytes": 241664,
+          "wal_bytes": 2022952,
+          "server_tcp_connections": 29
+        },
+        {
+          "t": 38.36,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25219072,
+          "database_bytes": 241664,
+          "wal_bytes": 2022952,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 39.37,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25239552,
+          "database_bytes": 241664,
+          "wal_bytes": 2109472,
+          "server_tcp_connections": 30
+        },
+        {
+          "t": 40.39,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25284608,
+          "database_bytes": 241664,
+          "wal_bytes": 2191872,
+          "server_tcp_connections": 30
+        },
+        {
+          "t": 41.4,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25317376,
+          "database_bytes": 241664,
+          "wal_bytes": 2311352,
+          "server_tcp_connections": 31
+        },
+        {
+          "t": 42.41,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25530368,
+          "database_bytes": 241664,
+          "wal_bytes": 2360792,
+          "server_tcp_connections": 33
+        },
+        {
+          "t": 43.43,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25538560,
+          "database_bytes": 241664,
+          "wal_bytes": 2385512,
+          "server_tcp_connections": 31
+        },
+        {
+          "t": 44.44,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25583616,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 34
+        },
+        {
+          "t": 45.46,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25583616,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 32
+        },
+        {
+          "t": 46.47,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25583616,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 33
+        },
+        {
+          "t": 47.49,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25751552,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 32
+        },
+        {
+          "t": 48.52,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25759744,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 26
+        },
+        {
+          "t": 49.53,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25759744,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 26
+        },
+        {
+          "t": 50.55,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25772032,
+          "database_bytes": 241664,
+          "wal_bytes": 2566792,
+          "server_tcp_connections": 22
+        },
+        {
+          "t": 51.56,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25780224,
+          "database_bytes": 241664,
+          "wal_bytes": 2690392,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 52.56,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25780224,
+          "database_bytes": 241664,
+          "wal_bytes": 2715112,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 53.58,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25780224,
+          "database_bytes": 241664,
+          "wal_bytes": 2727472,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 54.59,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25788416,
+          "database_bytes": 241664,
+          "wal_bytes": 2764552,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 55.6,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25788416,
+          "database_bytes": 241664,
+          "wal_bytes": 2834592,
+          "server_tcp_connections": 27
+        },
+        {
+          "t": 56.61,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25796608,
+          "database_bytes": 241664,
+          "wal_bytes": 2846952,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 57.62,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25460736,
+          "database_bytes": 241664,
+          "wal_bytes": 2871672,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 58.63,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25542656,
+          "database_bytes": 241664,
+          "wal_bytes": 2896392,
+          "server_tcp_connections": 23
+        },
+        {
+          "t": 59.64,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25567232,
+          "database_bytes": 241664,
+          "wal_bytes": 2954072,
+          "server_tcp_connections": 22
+        },
+        {
+          "t": 60.65,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25567232,
+          "database_bytes": 241664,
+          "wal_bytes": 2954072,
+          "server_tcp_connections": 22
+        },
+        {
+          "t": 61.65,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25571328,
+          "database_bytes": 241664,
+          "wal_bytes": 2991152,
+          "server_tcp_connections": 23
+        },
+        {
+          "t": 62.67,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25571328,
+          "database_bytes": 241664,
+          "wal_bytes": 2991152,
+          "server_tcp_connections": 23
+        },
+        {
+          "t": 63.67,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 25579520,
+          "database_bytes": 241664,
+          "wal_bytes": 3003512,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 64.68,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25579520,
+          "database_bytes": 241664,
+          "wal_bytes": 3003512,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 65.69,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3015872,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 66.7,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3040592,
+          "server_tcp_connections": 21
+        },
+        {
+          "t": 67.71,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3085912,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 68.72,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3098272,
+          "server_tcp_connections": 24
+        },
+        {
+          "t": 69.72,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3122992,
+          "server_tcp_connections": 24
+        }
+      ]
+    },
+    {
+      "agents": 1000,
+      "duration_requested_seconds": 70.0,
+      "elapsed_seconds": 70.767,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 1184,
+      "success": 1184,
+      "request_bytes": 648701,
+      "response_bytes": 1052576,
+      "errors": {},
+      "error_rate": 0.0,
+      "latency_all_requests_ms": {
+        "p50": 14.875,
+        "p95": 65.026,
+        "p99": 105.456,
+        "max": 162.944
+      },
+      "unique_agents_succeeded": 1000,
+      "signed_manifest_convergence_seconds": {
+        "p50": 29.996,
+        "p95": 56.819,
+        "max": 59.988
+      },
+      "server_cpu_seconds": 8.719,
+      "server_average_cpu_percent_one_core": 12.32,
+      "server_peak_sampled_cpu_percent_one_core": 26.2,
+      "server_peak_rss_bytes": 46211072,
+      "sqlite_bytes_before": 1105920,
+      "sqlite_logical_bytes_after": 2084864,
+      "sqlite_wal_peak_bytes": 4140632,
+      "telemetry_rows_after": 1137,
+      "samples": [
+        {
+          "t": 0.02,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 21540864,
+          "database_bytes": 1073152,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2
+        },
+        {
+          "t": 1.02,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 24133632,
+          "database_bytes": 1073152,
+          "wal_bytes": 704552,
+          "server_tcp_connections": 18
+        },
+        {
+          "t": 2.03,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 26329088,
+          "database_bytes": 1073152,
+          "wal_bytes": 1347272,
+          "server_tcp_connections": 34
+        },
+        {
+          "t": 3.03,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 27041792,
+          "database_bytes": 1073152,
+          "wal_bytes": 2010592,
+          "server_tcp_connections": 51
+        },
+        {
+          "t": 4.04,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 27889664,
+          "database_bytes": 1073152,
+          "wal_bytes": 2476152,
+          "server_tcp_connections": 63
+        },
+        {
+          "t": 5.03,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 29298688,
+          "database_bytes": 1073152,
+          "wal_bytes": 3197152,
+          "server_tcp_connections": 86
+        },
+        {
+          "t": 6.04,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 31145984,
+          "database_bytes": 1073152,
+          "wal_bytes": 3876952,
+          "server_tcp_connections": 108
+        },
+        {
+          "t": 7.06,
+          "cpu_percent_one_core": 12.1,
+          "rss_bytes": 31842304,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 123
+        },
+        {
+          "t": 8.07,
+          "cpu_percent_one_core": 18.8,
+          "rss_bytes": 32702464,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 137
+        },
+        {
+          "t": 9.13,
+          "cpu_percent_one_core": 16.2,
+          "rss_bytes": 33288192,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 157
+        },
+        {
+          "t": 10.14,
+          "cpu_percent_one_core": 26.1,
+          "rss_bytes": 34893824,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 182
+        },
+        {
+          "t": 11.15,
+          "cpu_percent_one_core": 20.3,
+          "rss_bytes": 35442688,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 200
+        },
+        {
+          "t": 12.18,
+          "cpu_percent_one_core": 20.9,
+          "rss_bytes": 35729408,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 216
+        },
+        {
+          "t": 13.2,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 36323328,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 232
+        },
+        {
+          "t": 14.21,
+          "cpu_percent_one_core": 15.4,
+          "rss_bytes": 37670912,
+          "database_bytes": 1314816,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 247
+        },
+        {
+          "t": 15.22,
+          "cpu_percent_one_core": 15.4,
+          "rss_bytes": 38494208,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 261
+        },
+        {
+          "t": 16.22,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 39518208,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 272
+        },
+        {
+          "t": 17.23,
+          "cpu_percent_one_core": 26.1,
+          "rss_bytes": 39763968,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 272
+        },
+        {
+          "t": 18.26,
+          "cpu_percent_one_core": 7.6,
+          "rss_bytes": 40173568,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 275
+        },
+        {
+          "t": 19.28,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 40341504,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 273
+        },
+        {
+          "t": 20.29,
+          "cpu_percent_one_core": 18.5,
+          "rss_bytes": 41074688,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 266
+        },
+        {
+          "t": 21.29,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 39833600,
+          "database_bytes": 1413120,
+          "wal_bytes": 4132392,
+          "server_tcp_connections": 262
+        },
+        {
+          "t": 22.28,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 40624128,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 263
+        },
+        {
+          "t": 23.3,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 41340928,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 268
+        },
+        {
+          "t": 24.29,
+          "cpu_percent_one_core": 7.9,
+          "rss_bytes": 41537536,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 262
+        },
+        {
+          "t": 25.28,
+          "cpu_percent_one_core": 21.9,
+          "rss_bytes": 40394752,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 253
+        },
+        {
+          "t": 26.28,
+          "cpu_percent_one_core": 23.4,
+          "rss_bytes": 41598976,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 255
+        },
+        {
+          "t": 27.3,
+          "cpu_percent_one_core": 13.9,
+          "rss_bytes": 41648128,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 251
+        },
+        {
+          "t": 28.31,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 40554496,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 247
+        },
+        {
+          "t": 29.32,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 40804352,
+          "database_bytes": 1511424,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 247
+        },
+        {
+          "t": 30.33,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 41398272,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 243
+        },
+        {
+          "t": 31.34,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 41435136,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 226
+        },
+        {
+          "t": 32.35,
+          "cpu_percent_one_core": 13.8,
+          "rss_bytes": 41156608,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 222
+        },
+        {
+          "t": 33.36,
+          "cpu_percent_one_core": 9.2,
+          "rss_bytes": 40054784,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 233
+        },
+        {
+          "t": 34.38,
+          "cpu_percent_one_core": 23.1,
+          "rss_bytes": 40542208,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 240
+        },
+        {
+          "t": 35.37,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 40701952,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 238
+        },
+        {
+          "t": 36.39,
+          "cpu_percent_one_core": 23.1,
+          "rss_bytes": 41222144,
+          "database_bytes": 1630208,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 245
+        },
+        {
+          "t": 37.39,
+          "cpu_percent_one_core": 9.4,
+          "rss_bytes": 41381888,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 250
+        },
+        {
+          "t": 38.4,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 43204608,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 242
+        },
+        {
+          "t": 39.42,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 43282432,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 245
+        },
+        {
+          "t": 40.43,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 40247296,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 244
+        },
+        {
+          "t": 41.45,
+          "cpu_percent_one_core": 12.1,
+          "rss_bytes": 40378368,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 247
+        },
+        {
+          "t": 42.46,
+          "cpu_percent_one_core": 23.4,
+          "rss_bytes": 41279488,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260
+        },
+        {
+          "t": 43.46,
+          "cpu_percent_one_core": 9.2,
+          "rss_bytes": 41312256,
+          "database_bytes": 1757184,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260
+        },
+        {
+          "t": 44.48,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 42049536,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 269
+        },
+        {
+          "t": 45.5,
+          "cpu_percent_one_core": 7.6,
+          "rss_bytes": 42131456,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 267
+        },
+        {
+          "t": 46.5,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 43941888,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 276
+        },
+        {
+          "t": 47.51,
+          "cpu_percent_one_core": 13.8,
+          "rss_bytes": 43982848,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 274
+        },
+        {
+          "t": 48.53,
+          "cpu_percent_one_core": 9.4,
+          "rss_bytes": 43016192,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 258
+        },
+        {
+          "t": 49.54,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 43028480,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260
+        },
+        {
+          "t": 50.55,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 44212224,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 259
+        },
+        {
+          "t": 51.56,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 44212224,
+          "database_bytes": 1867776,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 258
+        },
+        {
+          "t": 52.57,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 41959424,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 254
+        },
+        {
+          "t": 53.58,
+          "cpu_percent_one_core": 10.8,
+          "rss_bytes": 42094592,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 265
+        },
+        {
+          "t": 54.59,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 44199936,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 265
+        },
+        {
+          "t": 55.61,
+          "cpu_percent_one_core": 10.8,
+          "rss_bytes": 44228608,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 275
+        },
+        {
+          "t": 56.62,
+          "cpu_percent_one_core": 10.9,
+          "rss_bytes": 43188224,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 276
+        },
+        {
+          "t": 57.62,
+          "cpu_percent_one_core": 26.2,
+          "rss_bytes": 44744704,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 271
+        },
+        {
+          "t": 58.63,
+          "cpu_percent_one_core": 9.4,
+          "rss_bytes": 44908544,
+          "database_bytes": 1966080,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 283
+        },
+        {
+          "t": 59.64,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 45977600,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 286
+        },
+        {
+          "t": 60.66,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 44392448,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 284
+        },
+        {
+          "t": 61.67,
+          "cpu_percent_one_core": 13.9,
+          "rss_bytes": 46202880,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 282
+        },
+        {
+          "t": 62.69,
+          "cpu_percent_one_core": 9.2,
+          "rss_bytes": 46211072,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 278
+        },
+        {
+          "t": 63.7,
+          "cpu_percent_one_core": 13.9,
+          "rss_bytes": 45821952,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 274
+        },
+        {
+          "t": 64.72,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 44048384,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 268
+        },
+        {
+          "t": 65.73,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 45711360,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 266
+        },
+        {
+          "t": 66.74,
+          "cpu_percent_one_core": 10.8,
+          "rss_bytes": 45711360,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 256
+        },
+        {
+          "t": 67.73,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 44134400,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260
+        },
+        {
+          "t": 68.74,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 44158976,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 252
+        },
+        {
+          "t": 69.74,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 45481984,
+          "database_bytes": 2048000,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 253
+        }
+      ]
+    },
+    {
+      "agents": 10000,
+      "duration_requested_seconds": 70.0,
+      "elapsed_seconds": 73.947,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 4939,
+      "success": 691,
+      "request_bytes": 2710960,
+      "response_bytes": 614299,
+      "errors": {
+        "ClientConnectorError": 2058,
+        "ServerDisconnectedError": 39,
+        "TimeoutError": 2150,
+        "ClientOSError": 1
+      },
+      "error_rate": 0.860093,
+      "latency_all_requests_ms": {
+        "p50": 29725.111,
+        "p95": 65042.288,
+        "p99": 66906.587,
+        "max": 67578.948
+      },
+      "unique_agents_succeeded": 691,
+      "signed_manifest_convergence_seconds": {
+        "p50": 72.891,
+        "p95": 73.841,
+        "max": 73.944
+      },
+      "server_cpu_seconds": 16.812,
+      "server_average_cpu_percent_one_core": 22.736,
+      "server_peak_sampled_cpu_percent_one_core": 35.2,
+      "server_peak_rss_bytes": 48300032,
+      "sqlite_bytes_before": 9465856,
+      "sqlite_logical_bytes_after": 11259904,
+      "sqlite_wal_peak_bytes": 4157112,
+      "telemetry_rows_after": 691,
+      "samples": [
+        {
+          "t": 0.05,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23273472,
+          "database_bytes": 9433088,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2
+        },
+        {
+          "t": 2.35,
+          "cpu_percent_one_core": 11.6,
+          "rss_bytes": 28049408,
+          "database_bytes": 9433088,
+          "wal_bytes": 0,
+          "server_tcp_connections": 159
+        },
+        {
+          "t": 8.11,
+          "cpu_percent_one_core": 35.2,
+          "rss_bytes": 43073536,
+          "database_bytes": 9433088,
+          "wal_bytes": 2912872,
+          "server_tcp_connections": 544
+        },
+        {
+          "t": 21.39,
+          "cpu_percent_one_core": 17.4,
+          "rss_bytes": 48300032,
+          "database_bytes": 9846784,
+          "wal_bytes": 4157112,
+          "server_tcp_connections": 1032
+        },
+        {
+          "t": 53.92,
+          "cpu_percent_one_core": 19.7,
+          "rss_bytes": 43782144,
+          "database_bytes": 10182656,
+          "wal_bytes": 4157112,
+          "server_tcp_connections": 2003
+        }
+      ]
+    }
+  ],
+  "methodology_warning": "Initial run loaded TLS contexts and enumerated Windows sockets on asyncio event loop; 10000-identity run starved client loop, only 5 monitor samples, unsuitable for server capacity inference. Preserved as failed experiment; corrected run reported separately."
+}

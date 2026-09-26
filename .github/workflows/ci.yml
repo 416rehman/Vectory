@@ -1,0 +1,66 @@
+name: checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: 1.94.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.94.0 --profile minimal
+      - run: cargo +1.94.0 test --locked --manifest-path server/Cargo.toml
+      - run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml
+      - run: cargo +1.94.0 install cargo-audit --version 0.22.2 --locked
+      - run: python3 packaging/audit-rust.py --out artifacts/rust-dependency-audit.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with: {go-version: '1.26.8', cache: false}
+      - run: go test -v tests/security/protocol_test.go
+        env:
+          VECTORY_SECURITY_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
+  dashboard:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: {node-version: '22', cache: npm, cache-dependency-path: dashboard/package-lock.json}
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: node ../tests/security/resource-race.mjs
+  agent:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with: {go-version: '1.26.8', cache-dependency-path: agent/go.sum}
+      - run: go test ./...
+        working-directory: agent
+      - run: go vet ./...
+        working-directory: agent
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        working-directory: agent
+  operational:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with: {python-version: '3.13'}
+      - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
+      - run: docker compose -f deploy/compose.yaml config --quiet
+        env:
+          VECTORY_HOSTNAME: localhost
+          VECTORY_TLS_CERT_FILE: /tmp/test.pem
+          VECTORY_TLS_KEY_FILE: /tmp/test-key.pem
+          VECTORY_BOOTSTRAP_SECRET_FILE: /tmp/bootstrap
+      - run: docker build -f deploy/Dockerfile -t vectory-ci .
+      - run: docker build -f deploy/Dockerfile --target validator -t vectory-validator-ci .

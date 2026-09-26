@@ -1,0 +1,2283 @@
+{
+  "hardware": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 0, AuthenticAMD",
+    "logical_cpus": 32,
+    "physical_cpus": 16,
+    "memory_total_bytes": 137354223616,
+    "python": "3.11.0",
+    "aiohttp": "3.13.5",
+    "cryptography": "46.0.6",
+    "psutil": "7.0.0",
+    "server_sha256": "d71881bbe51256b2c596ed1b6a3186ec1f8ff3e3e8c05fd0c4173f7cb1fd8676",
+    "build_profile": "debug (not release-optimized)",
+    "storage": "C:\\ local workspace volume; exact drive media not measured",
+    "measurement_notes": "client and server share this host; no network latency; synthetic isolated certificates; no advertised fleet capacity",
+    "cpu_name": "AMD Ryzen 9 5950X 16-Core Processor",
+    "storage_verified": "C: local volume on ADATA SX8100NP NVMe, 2048408248320 bytes physical disk",
+    "background_work": "development builds and tests were not suspended",
+    "http_protocol": "HTTP/1.1; native Go agent HTTP/2 not measured"
+  },
+  "results": [
+    {
+      "agents": 100,
+      "duration_requested_seconds": 70.0,
+      "context_setup_outside_measurement_seconds": 1.345,
+      "unique_agents_attempted": 100,
+      "latency_successful_requests_ms": {
+        "p50": 12.226,
+        "p95": 29.503,
+        "p99": 131.974
+      },
+      "max_client_event_loop_lag_ms": 22.56,
+      "elapsed_seconds": 70.738,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 118,
+      "success": 118,
+      "request_bytes": 64533,
+      "response_bytes": 104902,
+      "errors": {},
+      "error_rate": 0.0,
+      "latency_all_requests_ms": {
+        "p50": 12.226,
+        "p95": 29.503,
+        "p99": 131.974,
+        "max": 370.523
+      },
+      "unique_agents_succeeded": 100,
+      "signed_manifest_convergence_seconds": {
+        "p50": 27.551,
+        "p95": 54.75,
+        "max": 59.186
+      },
+      "server_cpu_seconds": 1.203,
+      "server_average_cpu_percent_one_core": 1.701,
+      "server_peak_sampled_cpu_percent_one_core": 7.7,
+      "server_peak_rss_bytes": 25714688,
+      "sqlite_bytes_before": 274432,
+      "sqlite_logical_bytes_after": 348160,
+      "sqlite_wal_peak_bytes": 3127112,
+      "telemetry_rows_after": 118,
+      "samples": [
+        {
+          "t": 0.01,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 20762624,
+          "database_bytes": 241664,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 1.591
+        },
+        {
+          "t": 1.03,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 20762624,
+          "database_bytes": 241664,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2,
+          "collection_seconds": -0.002,
+          "client_event_loop_lag_ms": 10.793
+        },
+        {
+          "t": 2.03,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 23347200,
+          "database_bytes": 241664,
+          "wal_bytes": 127752,
+          "server_tcp_connections": 5,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 6.129
+        },
+        {
+          "t": 3.04,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 23363584,
+          "database_bytes": 241664,
+          "wal_bytes": 164832,
+          "server_tcp_connections": 6,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 4.042
+        },
+        {
+          "t": 4.05,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23396352,
+          "database_bytes": 241664,
+          "wal_bytes": 164832,
+          "server_tcp_connections": 6,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 2.503
+        },
+        {
+          "t": 5.06,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23609344,
+          "database_bytes": 241664,
+          "wal_bytes": 333752,
+          "server_tcp_connections": 11,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 7.219
+        },
+        {
+          "t": 6.06,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23732224,
+          "database_bytes": 241664,
+          "wal_bytes": 432632,
+          "server_tcp_connections": 15,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 3.889
+        },
+        {
+          "t": 7.08,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23732224,
+          "database_bytes": 241664,
+          "wal_bytes": 432632,
+          "server_tcp_connections": 15,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 9.919
+        },
+        {
+          "t": 8.09,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 24174592,
+          "database_bytes": 241664,
+          "wal_bytes": 482072,
+          "server_tcp_connections": 17,
+          "collection_seconds": -0.002,
+          "client_event_loop_lag_ms": 6.264
+        },
+        {
+          "t": 9.08,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 24199168,
+          "database_bytes": 241664,
+          "wal_bytes": 531512,
+          "server_tcp_connections": 19,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 10.08,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 24477696,
+          "database_bytes": 241664,
+          "wal_bytes": 580952,
+          "server_tcp_connections": 21,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 11.09,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 24510464,
+          "database_bytes": 241664,
+          "wal_bytes": 675712,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 7.148
+        },
+        {
+          "t": 12.11,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24662016,
+          "database_bytes": 241664,
+          "wal_bytes": 675712,
+          "server_tcp_connections": 24,
+          "collection_seconds": -0.0,
+          "client_event_loop_lag_ms": 9.42
+        },
+        {
+          "t": 13.13,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 24670208,
+          "database_bytes": 241664,
+          "wal_bytes": 700432,
+          "server_tcp_connections": 25,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 22.56
+        },
+        {
+          "t": 14.15,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 24702976,
+          "database_bytes": 241664,
+          "wal_bytes": 786952,
+          "server_tcp_connections": 28,
+          "collection_seconds": -0.0,
+          "client_event_loop_lag_ms": 11.327
+        },
+        {
+          "t": 15.14,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 24723456,
+          "database_bytes": 241664,
+          "wal_bytes": 836392,
+          "server_tcp_connections": 30,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 16.16,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 24924160,
+          "database_bytes": 241664,
+          "wal_bytes": 922912,
+          "server_tcp_connections": 33,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 13.957
+        },
+        {
+          "t": 17.17,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25112576,
+          "database_bytes": 241664,
+          "wal_bytes": 984712,
+          "server_tcp_connections": 32,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 5.854
+        },
+        {
+          "t": 18.19,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25128960,
+          "database_bytes": 241664,
+          "wal_bytes": 1009432,
+          "server_tcp_connections": 32,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 18.3
+        },
+        {
+          "t": 19.2,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25133056,
+          "database_bytes": 241664,
+          "wal_bytes": 1042392,
+          "server_tcp_connections": 33,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 7.983
+        },
+        {
+          "t": 20.21,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25235456,
+          "database_bytes": 241664,
+          "wal_bytes": 1116552,
+          "server_tcp_connections": 30,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 8.812
+        },
+        {
+          "t": 21.23,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 25255936,
+          "database_bytes": 241664,
+          "wal_bytes": 1178352,
+          "server_tcp_connections": 29,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 9.423
+        },
+        {
+          "t": 22.24,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25268224,
+          "database_bytes": 241664,
+          "wal_bytes": 1203072,
+          "server_tcp_connections": 30,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 14.889
+        },
+        {
+          "t": 23.27,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25296896,
+          "database_bytes": 241664,
+          "wal_bytes": 1273112,
+          "server_tcp_connections": 29,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 18.767
+        },
+        {
+          "t": 24.28,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25296896,
+          "database_bytes": 241664,
+          "wal_bytes": 1273112,
+          "server_tcp_connections": 28,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 7.112
+        },
+        {
+          "t": 25.28,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25169920,
+          "database_bytes": 241664,
+          "wal_bytes": 1367872,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 3.432
+        },
+        {
+          "t": 26.3,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 25317376,
+          "database_bytes": 241664,
+          "wal_bytes": 1450272,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 12.04
+        },
+        {
+          "t": 27.31,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25317376,
+          "database_bytes": 241664,
+          "wal_bytes": 1450272,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 7.573
+        },
+        {
+          "t": 28.32,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25387008,
+          "database_bytes": 241664,
+          "wal_bytes": 1577992,
+          "server_tcp_connections": 31,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 9.329
+        },
+        {
+          "t": 29.33,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25387008,
+          "database_bytes": 241664,
+          "wal_bytes": 1577992,
+          "server_tcp_connections": 27,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 8.286
+        },
+        {
+          "t": 30.35,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25346048,
+          "database_bytes": 241664,
+          "wal_bytes": 1627432,
+          "server_tcp_connections": 27,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 10.046
+        },
+        {
+          "t": 31.35,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25047040,
+          "database_bytes": 241664,
+          "wal_bytes": 1627432,
+          "server_tcp_connections": 25,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 5.118
+        },
+        {
+          "t": 32.34,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25194496,
+          "database_bytes": 241664,
+          "wal_bytes": 1676872,
+          "server_tcp_connections": 25,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 33.36,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 25198592,
+          "database_bytes": 241664,
+          "wal_bytes": 1845792,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 12.983
+        },
+        {
+          "t": 34.37,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25300992,
+          "database_bytes": 241664,
+          "wal_bytes": 1845792,
+          "server_tcp_connections": 28,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 4.449
+        },
+        {
+          "t": 35.36,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 25317376,
+          "database_bytes": 241664,
+          "wal_bytes": 1952912,
+          "server_tcp_connections": 31,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 36.37,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25370624,
+          "database_bytes": 241664,
+          "wal_bytes": 1977632,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 7.008
+        },
+        {
+          "t": 37.39,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25370624,
+          "database_bytes": 241664,
+          "wal_bytes": 2022952,
+          "server_tcp_connections": 29,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 15.579
+        },
+        {
+          "t": 38.41,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25370624,
+          "database_bytes": 241664,
+          "wal_bytes": 2022952,
+          "server_tcp_connections": 27,
+          "collection_seconds": 0.0,
+          "client_event_loop_lag_ms": 11.638
+        },
+        {
+          "t": 39.42,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25374720,
+          "database_bytes": 241664,
+          "wal_bytes": 2109472,
+          "server_tcp_connections": 30,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 11.954
+        },
+        {
+          "t": 40.43,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 25374720,
+          "database_bytes": 241664,
+          "wal_bytes": 2191872,
+          "server_tcp_connections": 30,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 4.676
+        },
+        {
+          "t": 41.45,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25374720,
+          "database_bytes": 241664,
+          "wal_bytes": 2311352,
+          "server_tcp_connections": 31,
+          "collection_seconds": 0.0,
+          "client_event_loop_lag_ms": 12.328
+        },
+        {
+          "t": 42.45,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25509888,
+          "database_bytes": 241664,
+          "wal_bytes": 2360792,
+          "server_tcp_connections": 33,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 2.381
+        },
+        {
+          "t": 43.48,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25509888,
+          "database_bytes": 241664,
+          "wal_bytes": 2385512,
+          "server_tcp_connections": 31,
+          "collection_seconds": -0.002,
+          "client_event_loop_lag_ms": 17.302
+        },
+        {
+          "t": 44.48,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 25526272,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 34,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 1.443
+        },
+        {
+          "t": 45.49,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25526272,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 32,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 9.648
+        },
+        {
+          "t": 46.49,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25530368,
+          "database_bytes": 241664,
+          "wal_bytes": 2472032,
+          "server_tcp_connections": 33,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 47.5,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25649152,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 32,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 10.61
+        },
+        {
+          "t": 48.5,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25665536,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 26,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 49.51,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25665536,
+          "database_bytes": 241664,
+          "wal_bytes": 2533832,
+          "server_tcp_connections": 26,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 1.226
+        },
+        {
+          "t": 50.54,
+          "cpu_percent_one_core": 6.1,
+          "rss_bytes": 25673728,
+          "database_bytes": 241664,
+          "wal_bytes": 2566792,
+          "server_tcp_connections": 22,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 19.589
+        },
+        {
+          "t": 51.55,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25681920,
+          "database_bytes": 241664,
+          "wal_bytes": 2690392,
+          "server_tcp_connections": 27,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 3.492
+        },
+        {
+          "t": 52.56,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25690112,
+          "database_bytes": 241664,
+          "wal_bytes": 2715112,
+          "server_tcp_connections": 27,
+          "collection_seconds": -0.002,
+          "client_event_loop_lag_ms": 2.502
+        },
+        {
+          "t": 53.56,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25300992,
+          "database_bytes": 241664,
+          "wal_bytes": 2727472,
+          "server_tcp_connections": 27,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 2.218
+        },
+        {
+          "t": 54.59,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25669632,
+          "database_bytes": 241664,
+          "wal_bytes": 2764552,
+          "server_tcp_connections": 27,
+          "collection_seconds": -0.0,
+          "client_event_loop_lag_ms": 21.338
+        },
+        {
+          "t": 55.58,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25669632,
+          "database_bytes": 241664,
+          "wal_bytes": 2834592,
+          "server_tcp_connections": 27,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 56.57,
+          "cpu_percent_one_core": 3.2,
+          "rss_bytes": 25714688,
+          "database_bytes": 241664,
+          "wal_bytes": 2846952,
+          "server_tcp_connections": 23,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 57.57,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25346048,
+          "database_bytes": 241664,
+          "wal_bytes": 2871672,
+          "server_tcp_connections": 23,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 58.58,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25460736,
+          "database_bytes": 241664,
+          "wal_bytes": 2896392,
+          "server_tcp_connections": 23,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 10.319
+        },
+        {
+          "t": 59.6,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25583616,
+          "database_bytes": 241664,
+          "wal_bytes": 2954072,
+          "server_tcp_connections": 22,
+          "collection_seconds": -0.001,
+          "client_event_loop_lag_ms": 10.322
+        },
+        {
+          "t": 60.61,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25591808,
+          "database_bytes": 241664,
+          "wal_bytes": 2954072,
+          "server_tcp_connections": 22,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 10.895
+        },
+        {
+          "t": 61.63,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 25600000,
+          "database_bytes": 241664,
+          "wal_bytes": 2991152,
+          "server_tcp_connections": 23,
+          "collection_seconds": 0.052,
+          "client_event_loop_lag_ms": 16.56
+        },
+        {
+          "t": 62.68,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25600000,
+          "database_bytes": 241664,
+          "wal_bytes": 2991152,
+          "server_tcp_connections": 23,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0.79
+        },
+        {
+          "t": 63.69,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25612288,
+          "database_bytes": 241664,
+          "wal_bytes": 3003512,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 4.342
+        },
+        {
+          "t": 64.7,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 25612288,
+          "database_bytes": 241664,
+          "wal_bytes": 3003512,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 9.637
+        },
+        {
+          "t": 65.71,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 25452544,
+          "database_bytes": 241664,
+          "wal_bytes": 3015872,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 1.531
+        },
+        {
+          "t": 66.72,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25567232,
+          "database_bytes": 241664,
+          "wal_bytes": 3040592,
+          "server_tcp_connections": 21,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 5.718
+        },
+        {
+          "t": 67.73,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 25595904,
+          "database_bytes": 241664,
+          "wal_bytes": 3090032,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 6.038
+        },
+        {
+          "t": 68.72,
+          "cpu_percent_one_core": 1.6,
+          "rss_bytes": 25346048,
+          "database_bytes": 241664,
+          "wal_bytes": 3102392,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 69.73,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 25444352,
+          "database_bytes": 241664,
+          "wal_bytes": 3127112,
+          "server_tcp_connections": 24,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 4.802
+        }
+      ]
+    },
+    {
+      "agents": 1000,
+      "duration_requested_seconds": 70.0,
+      "context_setup_outside_measurement_seconds": 12.853,
+      "unique_agents_attempted": 1000,
+      "latency_successful_requests_ms": {
+        "p50": 9.386,
+        "p95": 17.882,
+        "p99": 115.961
+      },
+      "max_client_event_loop_lag_ms": 26.926,
+      "elapsed_seconds": 70.772,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 1185,
+      "success": 1185,
+      "request_bytes": 649249,
+      "response_bytes": 1053465,
+      "errors": {},
+      "error_rate": 0.0,
+      "latency_all_requests_ms": {
+        "p50": 9.386,
+        "p95": 17.882,
+        "p99": 115.961,
+        "max": 240.994
+      },
+      "unique_agents_succeeded": 1000,
+      "signed_manifest_convergence_seconds": {
+        "p50": 29.963,
+        "p95": 56.773,
+        "max": 59.983
+      },
+      "server_cpu_seconds": 8.766,
+      "server_average_cpu_percent_one_core": 12.386,
+      "server_peak_sampled_cpu_percent_one_core": 29.7,
+      "server_peak_rss_bytes": 42565632,
+      "sqlite_bytes_before": 1101824,
+      "sqlite_logical_bytes_after": 2084864,
+      "sqlite_wal_peak_bytes": 4144752,
+      "telemetry_rows_after": 1185,
+      "samples": [
+        {
+          "t": 0.03,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 21663744,
+          "database_bytes": 1069056,
+          "wal_bytes": 0,
+          "server_tcp_connections": 3,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 18.767
+        },
+        {
+          "t": 1.04,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 24125440,
+          "database_bytes": 1069056,
+          "wal_bytes": 704552,
+          "server_tcp_connections": 18,
+          "collection_seconds": -0.0,
+          "client_event_loop_lag_ms": 4.905
+        },
+        {
+          "t": 2.03,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 26161152,
+          "database_bytes": 1069056,
+          "wal_bytes": 1347272,
+          "server_tcp_connections": 36,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 3.01,
+          "cpu_percent_one_core": 6.3,
+          "rss_bytes": 26603520,
+          "database_bytes": 1069056,
+          "wal_bytes": 1985872,
+          "server_tcp_connections": 51,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 4.03,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 27553792,
+          "database_bytes": 1069056,
+          "wal_bytes": 2476152,
+          "server_tcp_connections": 64,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 11.351
+        },
+        {
+          "t": 5.01,
+          "cpu_percent_one_core": 12.7,
+          "rss_bytes": 28377088,
+          "database_bytes": 1069056,
+          "wal_bytes": 3225992,
+          "server_tcp_connections": 86,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 6.01,
+          "cpu_percent_one_core": 15.6,
+          "rss_bytes": 29769728,
+          "database_bytes": 1069056,
+          "wal_bytes": 3881072,
+          "server_tcp_connections": 108,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 7.02,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 30253056,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 123,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 2.555
+        },
+        {
+          "t": 8.03,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 31895552,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 136,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 2.973
+        },
+        {
+          "t": 9.04,
+          "cpu_percent_one_core": 10.9,
+          "rss_bytes": 31997952,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 155,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 5.061
+        },
+        {
+          "t": 10.05,
+          "cpu_percent_one_core": 23.1,
+          "rss_bytes": 33599488,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 180,
+          "collection_seconds": 0.0,
+          "client_event_loop_lag_ms": 1.201
+        },
+        {
+          "t": 11.05,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 34119680,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 199,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 12.05,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 35254272,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 212,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 13.07,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 35778560,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 230,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 10.069
+        },
+        {
+          "t": 14.07,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 36896768,
+          "database_bytes": 1310720,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 246,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 15.06,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 37421056,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 257,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 16.07,
+          "cpu_percent_one_core": 10.9,
+          "rss_bytes": 38412288,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 269,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 4.266
+        },
+        {
+          "t": 17.06,
+          "cpu_percent_one_core": 21.9,
+          "rss_bytes": 38662144,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 272,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 18.08,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 38985728,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 272,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 16.734
+        },
+        {
+          "t": 19.11,
+          "cpu_percent_one_core": 13.6,
+          "rss_bytes": 39133184,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 272,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 20.615
+        },
+        {
+          "t": 20.09,
+          "cpu_percent_one_core": 17.4,
+          "rss_bytes": 39464960,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 268,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 21.1,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 38318080,
+          "database_bytes": 1409024,
+          "wal_bytes": 4136512,
+          "server_tcp_connections": 262,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 22.09,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 39079936,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 264,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 23.11,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 39120896,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 269,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 11.058
+        },
+        {
+          "t": 24.12,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 39292928,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 263,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 3.383
+        },
+        {
+          "t": 25.15,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 38199296,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 250,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 19.979
+        },
+        {
+          "t": 26.18,
+          "cpu_percent_one_core": 22.7,
+          "rss_bytes": 39161856,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 254,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 26.926
+        },
+        {
+          "t": 27.19,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 39174144,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 251,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 3.765
+        },
+        {
+          "t": 28.2,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 38068224,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 247,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 2.993
+        },
+        {
+          "t": 29.19,
+          "cpu_percent_one_core": 3.2,
+          "rss_bytes": 38076416,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 244,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 30.22,
+          "cpu_percent_one_core": 25.8,
+          "rss_bytes": 38842368,
+          "database_bytes": 1515520,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 245,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 18.253
+        },
+        {
+          "t": 31.23,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 38846464,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 228,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 4.758
+        },
+        {
+          "t": 32.25,
+          "cpu_percent_one_core": 10.6,
+          "rss_bytes": 38469632,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 222,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 16.789
+        },
+        {
+          "t": 33.26,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 38653952,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 233,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 2.858
+        },
+        {
+          "t": 34.27,
+          "cpu_percent_one_core": 9.2,
+          "rss_bytes": 38637568,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 240,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 2.98
+        },
+        {
+          "t": 35.27,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 38752256,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 237,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 36.27,
+          "cpu_percent_one_core": 20.3,
+          "rss_bytes": 37773312,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 244,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 37.29,
+          "cpu_percent_one_core": 16.7,
+          "rss_bytes": 37888000,
+          "database_bytes": 1638400,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 249,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 13.723
+        },
+        {
+          "t": 38.32,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 39100416,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 242,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 14.889
+        },
+        {
+          "t": 39.34,
+          "cpu_percent_one_core": 15.2,
+          "rss_bytes": 39116800,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 245,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 15.608
+        },
+        {
+          "t": 40.36,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 39489536,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 244,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 15.025
+        },
+        {
+          "t": 41.36,
+          "cpu_percent_one_core": 29.7,
+          "rss_bytes": 38342656,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 248,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 42.37,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 39690240,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260,
+          "collection_seconds": 0.047,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 43.43,
+          "cpu_percent_one_core": 10.3,
+          "rss_bytes": 39821312,
+          "database_bytes": 1753088,
+          "wal_bytes": 4140632,
+          "server_tcp_connections": 260,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 9.002
+        },
+        {
+          "t": 44.45,
+          "cpu_percent_one_core": 25.8,
+          "rss_bytes": 39972864,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 269,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 15.566
+        },
+        {
+          "t": 45.46,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 39985152,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 267,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 46.45,
+          "cpu_percent_one_core": 17.4,
+          "rss_bytes": 40509440,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 275,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 47.45,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 40787968,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 274,
+          "collection_seconds": 0.002,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 48.44,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 41054208,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 260,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 49.43,
+          "cpu_percent_one_core": 10.9,
+          "rss_bytes": 39866368,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 260,
+          "collection_seconds": 0.166,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 50.6,
+          "cpu_percent_one_core": 13.5,
+          "rss_bytes": 40505344,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 260,
+          "collection_seconds": 0.001,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 51.6,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 40505344,
+          "database_bytes": 1863680,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 259,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0.591
+        },
+        {
+          "t": 52.61,
+          "cpu_percent_one_core": 9.2,
+          "rss_bytes": 40280064,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 254,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 2.348
+        },
+        {
+          "t": 53.61,
+          "cpu_percent_one_core": 23.4,
+          "rss_bytes": 40345600,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 263,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 54.62,
+          "cpu_percent_one_core": 10.9,
+          "rss_bytes": 40796160,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 266,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 4.795
+        },
+        {
+          "t": 55.64,
+          "cpu_percent_one_core": 15.1,
+          "rss_bytes": 41373696,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 274,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 15.687
+        },
+        {
+          "t": 56.65,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 41390080,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 273,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 4.352
+        },
+        {
+          "t": 57.64,
+          "cpu_percent_one_core": 12.7,
+          "rss_bytes": 40796160,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 271,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 58.64,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 41000960,
+          "database_bytes": 1978368,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 286,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 59.65,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 41517056,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 285,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 3.079
+        },
+        {
+          "t": 60.67,
+          "cpu_percent_one_core": 10.6,
+          "rss_bytes": 41521152,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 287,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 16.436
+        },
+        {
+          "t": 61.7,
+          "cpu_percent_one_core": 1.5,
+          "rss_bytes": 41832448,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 282,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 16.424
+        },
+        {
+          "t": 62.71,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 41840640,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 276,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 0.311
+        },
+        {
+          "t": 63.71,
+          "cpu_percent_one_core": 21.9,
+          "rss_bytes": 41992192,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 275,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 0.271
+        },
+        {
+          "t": 64.73,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 41992192,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 269,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 7.962
+        },
+        {
+          "t": 65.72,
+          "cpu_percent_one_core": 17.2,
+          "rss_bytes": 42553344,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 265,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 66.73,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 42565632,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 255,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 0.812
+        },
+        {
+          "t": 67.74,
+          "cpu_percent_one_core": 20.0,
+          "rss_bytes": 41398272,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 259,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 4.176
+        },
+        {
+          "t": 68.76,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 41402368,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 252,
+          "collection_seconds": 0.003,
+          "client_event_loop_lag_ms": 7.015
+        },
+        {
+          "t": 69.76,
+          "cpu_percent_one_core": 26.1,
+          "rss_bytes": 40611840,
+          "database_bytes": 2060288,
+          "wal_bytes": 4144752,
+          "server_tcp_connections": 255,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 1.593
+        }
+      ]
+    },
+    {
+      "agents": 10000,
+      "duration_requested_seconds": 70.0,
+      "context_setup_outside_measurement_seconds": 164.973,
+      "unique_agents_attempted": 10000,
+      "latency_successful_requests_ms": {
+        "p50": 31.316,
+        "p95": 294.623,
+        "p99": 356.25
+      },
+      "max_client_event_loop_lag_ms": 278.858,
+      "elapsed_seconds": 70.838,
+      "heartbeat_seconds": 60.0,
+      "initial_jitter_seconds": [
+        0,
+        60.0
+      ],
+      "repeat_jitter_factor": [
+        0.8,
+        1.2
+      ],
+      "connection_idle_timeout_seconds": 90,
+      "telemetry_json_bytes": 78,
+      "configuration_bytes": 1230,
+      "configuration_churn": 0,
+      "artifact_downloads": 0,
+      "scope": "real mTLS signed-manifest steady heartbeat simulation; seeded enrollment/desired state; no real apply or rollout measurement",
+      "requests": 24656,
+      "success": 2560,
+      "request_bytes": 13533388,
+      "response_bytes": 2275840,
+      "errors": {
+        "ClientConnectorError": 22096
+      },
+      "error_rate": 0.896171,
+      "latency_all_requests_ms": {
+        "p50": 8.01,
+        "p95": 84.064,
+        "p99": 279.08,
+        "max": 609.454
+      },
+      "unique_agents_succeeded": 2507,
+      "signed_manifest_convergence_seconds": {
+        "p50": 31.591,
+        "p95": 63.065,
+        "max": 63.458
+      },
+      "server_cpu_seconds": 31.844,
+      "server_average_cpu_percent_one_core": 44.953,
+      "server_peak_sampled_cpu_percent_one_core": 201.6,
+      "server_peak_rss_bytes": 79323136,
+      "sqlite_bytes_before": 9469952,
+      "sqlite_logical_bytes_after": 12922880,
+      "sqlite_wal_peak_bytes": 4177712,
+      "telemetry_rows_after": 2560,
+      "samples": [
+        {
+          "t": 0.11,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 23523328,
+          "database_bytes": 9437184,
+          "wal_bytes": 0,
+          "server_tcp_connections": 2,
+          "collection_seconds": 0.043,
+          "client_event_loop_lag_ms": 91.212
+        },
+        {
+          "t": 1.19,
+          "cpu_percent_one_core": 91.4,
+          "rss_bytes": 36122624,
+          "database_bytes": 9850880,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 188,
+          "collection_seconds": 0.096,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 2.28,
+          "cpu_percent_one_core": 117.1,
+          "rss_bytes": 48226304,
+          "database_bytes": 10452992,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 374,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 3.3,
+          "cpu_percent_one_core": 92.4,
+          "rss_bytes": 53911552,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 12.924
+        },
+        {
+          "t": 4.31,
+          "cpu_percent_one_core": 29.2,
+          "rss_bytes": 56819712,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 5.6,
+          "cpu_percent_one_core": 8.5,
+          "rss_bytes": 56819712,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.022,
+          "client_event_loop_lag_ms": 278.858
+        },
+        {
+          "t": 6.67,
+          "cpu_percent_one_core": 30.4,
+          "rss_bytes": 55422976,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.014,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 7.7,
+          "cpu_percent_one_core": 26.1,
+          "rss_bytes": 69926912,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 5.957
+        },
+        {
+          "t": 8.72,
+          "cpu_percent_one_core": 21.2,
+          "rss_bytes": 55398400,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 15.72
+        },
+        {
+          "t": 9.75,
+          "cpu_percent_one_core": 26.1,
+          "rss_bytes": 63873024,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 11.472
+        },
+        {
+          "t": 10.73,
+          "cpu_percent_one_core": 4.7,
+          "rss_bytes": 56082432,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 514,
+          "collection_seconds": 0.035,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 11.77,
+          "cpu_percent_one_core": 30.3,
+          "rss_bytes": 73617408,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.014,
+          "client_event_loop_lag_ms": 1.56
+        },
+        {
+          "t": 12.8,
+          "cpu_percent_one_core": 18.2,
+          "rss_bytes": 55787520,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 6.915
+        },
+        {
+          "t": 13.82,
+          "cpu_percent_one_core": 43.1,
+          "rss_bytes": 55857152,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 5.115
+        },
+        {
+          "t": 14.84,
+          "cpu_percent_one_core": 12.3,
+          "rss_bytes": 55857152,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 521,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 15.86,
+          "cpu_percent_one_core": 86.3,
+          "rss_bytes": 53821440,
+          "database_bytes": 10915840,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 512,
+          "collection_seconds": 0.014,
+          "client_event_loop_lag_ms": 5.835
+        },
+        {
+          "t": 16.86,
+          "cpu_percent_one_core": 132.8,
+          "rss_bytes": 58408960,
+          "database_bytes": 11272192,
+          "wal_bytes": 4161232,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 17.86,
+          "cpu_percent_one_core": 146.9,
+          "rss_bytes": 62820352,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 18.87,
+          "cpu_percent_one_core": 68.8,
+          "rss_bytes": 62976000,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 520,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 19.86,
+          "cpu_percent_one_core": 29.7,
+          "rss_bytes": 63320064,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 520,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 20.88,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 63320064,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 524,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 6.591
+        },
+        {
+          "t": 21.91,
+          "cpu_percent_one_core": 24.2,
+          "rss_bytes": 63393792,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 14.777
+        },
+        {
+          "t": 22.9,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 63393792,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 514,
+          "collection_seconds": 0.015,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 23.92,
+          "cpu_percent_one_core": 41.6,
+          "rss_bytes": 63221760,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 7.025
+        },
+        {
+          "t": 24.94,
+          "cpu_percent_one_core": 7.7,
+          "rss_bytes": 63221760,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 8.216
+        },
+        {
+          "t": 25.94,
+          "cpu_percent_one_core": 43.8,
+          "rss_bytes": 63225856,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 26.95,
+          "cpu_percent_one_core": 3.1,
+          "rss_bytes": 63225856,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 5.883
+        },
+        {
+          "t": 27.99,
+          "cpu_percent_one_core": 43.9,
+          "rss_bytes": 63610880,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 518,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 21.561
+        },
+        {
+          "t": 28.99,
+          "cpu_percent_one_core": 9.4,
+          "rss_bytes": 63610880,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 529,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 29.99,
+          "cpu_percent_one_core": 32.8,
+          "rss_bytes": 63553536,
+          "database_bytes": 11554816,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 30.99,
+          "cpu_percent_one_core": 51.6,
+          "rss_bytes": 61640704,
+          "database_bytes": 11673600,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 518,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 31.99,
+          "cpu_percent_one_core": 201.6,
+          "rss_bytes": 59621376,
+          "database_bytes": 11902976,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 32.99,
+          "cpu_percent_one_core": 106.2,
+          "rss_bytes": 60850176,
+          "database_bytes": 12009472,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 33.99,
+          "cpu_percent_one_core": 60.9,
+          "rss_bytes": 64679936,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 525,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 34.99,
+          "cpu_percent_one_core": 6.2,
+          "rss_bytes": 64679936,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 518,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 36.0,
+          "cpu_percent_one_core": 32.3,
+          "rss_bytes": 64638976,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 37.01,
+          "cpu_percent_one_core": 10.8,
+          "rss_bytes": 64638976,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.015,
+          "client_event_loop_lag_ms": 0.352
+        },
+        {
+          "t": 38.02,
+          "cpu_percent_one_core": 48.4,
+          "rss_bytes": 65077248,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 39.04,
+          "cpu_percent_one_core": 16.9,
+          "rss_bytes": 65077248,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.004,
+          "client_event_loop_lag_ms": 3.22
+        },
+        {
+          "t": 40.06,
+          "cpu_percent_one_core": 37.9,
+          "rss_bytes": 64647168,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 10.322
+        },
+        {
+          "t": 41.06,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 64647168,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 516,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 42.07,
+          "cpu_percent_one_core": 42.2,
+          "rss_bytes": 65200128,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.008,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 43.1,
+          "cpu_percent_one_core": 6.1,
+          "rss_bytes": 65200128,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 527,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 15.488
+        },
+        {
+          "t": 44.11,
+          "cpu_percent_one_core": 46.1,
+          "rss_bytes": 64987136,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 45.11,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 64987136,
+          "database_bytes": 12111872,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 527,
+          "collection_seconds": 0.015,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 46.11,
+          "cpu_percent_one_core": 109.4,
+          "rss_bytes": 61947904,
+          "database_bytes": 12210176,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.014,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 47.38,
+          "cpu_percent_one_core": 140.8,
+          "rss_bytes": 62439424,
+          "database_bytes": 12300288,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 488,
+          "collection_seconds": 0.017,
+          "client_event_loop_lag_ms": 254.944
+        },
+        {
+          "t": 48.44,
+          "cpu_percent_one_core": 130.8,
+          "rss_bytes": 63840256,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 527,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 49.45,
+          "cpu_percent_one_core": 4.6,
+          "rss_bytes": 63840256,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 526,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 50.44,
+          "cpu_percent_one_core": 42.8,
+          "rss_bytes": 66109440,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 522,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 51.44,
+          "cpu_percent_one_core": 14.1,
+          "rss_bytes": 66109440,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 526,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 52.44,
+          "cpu_percent_one_core": 32.8,
+          "rss_bytes": 66359296,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 521,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 53.44,
+          "cpu_percent_one_core": 9.4,
+          "rss_bytes": 66359296,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.009,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 54.46,
+          "cpu_percent_one_core": 44.6,
+          "rss_bytes": 66547712,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.015,
+          "client_event_loop_lag_ms": 12.383
+        },
+        {
+          "t": 55.47,
+          "cpu_percent_one_core": 23.1,
+          "rss_bytes": 66547712,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.012,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 56.49,
+          "cpu_percent_one_core": 27.7,
+          "rss_bytes": 69693440,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.005,
+          "client_event_loop_lag_ms": 1.832
+        },
+        {
+          "t": 57.5,
+          "cpu_percent_one_core": 13.9,
+          "rss_bytes": 69693440,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 1.283
+        },
+        {
+          "t": 58.54,
+          "cpu_percent_one_core": 34.8,
+          "rss_bytes": 68976640,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 20.778
+        },
+        {
+          "t": 59.54,
+          "cpu_percent_one_core": 12.5,
+          "rss_bytes": 68976640,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 531,
+          "collection_seconds": 0.014,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 60.54,
+          "cpu_percent_one_core": 46.9,
+          "rss_bytes": 63918080,
+          "database_bytes": 12488704,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 517,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 61.53,
+          "cpu_percent_one_core": 103.1,
+          "rss_bytes": 64704512,
+          "database_bytes": 12689408,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 512,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 62.69,
+          "cpu_percent_one_core": 77.0,
+          "rss_bytes": 66224128,
+          "database_bytes": 12787712,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 586,
+          "collection_seconds": 0.018,
+          "client_event_loop_lag_ms": 146.259
+        },
+        {
+          "t": 63.74,
+          "cpu_percent_one_core": 143.3,
+          "rss_bytes": 79323136,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 519,
+          "collection_seconds": 0.013,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 64.74,
+          "cpu_percent_one_core": 7.8,
+          "rss_bytes": 69341184,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 531,
+          "collection_seconds": 0.016,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 65.76,
+          "cpu_percent_one_core": 30.8,
+          "rss_bytes": 69296128,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 520,
+          "collection_seconds": 0.006,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 66.78,
+          "cpu_percent_one_core": 13.6,
+          "rss_bytes": 69296128,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.011,
+          "client_event_loop_lag_ms": 13.955
+        },
+        {
+          "t": 67.8,
+          "cpu_percent_one_core": 24.6,
+          "rss_bytes": 69406720,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 520,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 3.041
+        },
+        {
+          "t": 68.81,
+          "cpu_percent_one_core": 0.0,
+          "rss_bytes": 69406720,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 515,
+          "collection_seconds": 0.01,
+          "client_event_loop_lag_ms": 0
+        },
+        {
+          "t": 69.82,
+          "cpu_percent_one_core": 50.0,
+          "rss_bytes": 69132288,
+          "database_bytes": 12869632,
+          "wal_bytes": 4177712,
+          "server_tcp_connections": 523,
+          "collection_seconds": 0.007,
+          "client_event_loop_lag_ms": 0
+        }
+      ]
+    }
+  ]
+}

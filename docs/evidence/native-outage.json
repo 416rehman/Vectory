@@ -1,0 +1,11 @@
+{
+    "scope":  "One bounded real native control-plane outage. This does not establish sustained multi-hour outage or power-loss safety.",
+    "managed_digest_preserved":  true,
+    "vector_process_preserved":  true,
+    "generation_preserved":  true,
+    "outage_seconds":  32,
+    "timestamp":  "2026-09-26T08:53:53.3127273+00:00",
+    "reconnected_after_seconds":  4,
+    "heartbeat_interval_seconds":  10,
+    "platform":  "Windows amd64"
+}

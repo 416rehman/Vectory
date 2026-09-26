@@ -1,0 +1,5 @@
+# Public roadmap
+
+Complete the product contract's native and operational release gates before a production label. Independent adversarial network tests, explicit credential/signing-key and old-backup recovery, same-host reproducible unsigned archives, narrow device-local secret references and short 100/1,000/10,000-identity HTTP/2 measurements now have implementation or test evidence in ACCEPTANCE.md.
+
+Remaining priorities are native service/reboot/upgrade and earliest-OS tests across declared targets; privileged account/ACL verification; actual container build/start and hostile-validation isolation; independent-builder reproducibility, package signing and an approved distribution namespace; complete operational rotation/disaster-recovery drills; dedicated-host sustained load with real agents/artifact rollouts; and longer outage/physical-fault exercises. A separate Vector execution principal, broader native process telemetry and macOS helper-orphan behavior after forced termination remain hardening work. Track these concrete gates rather than treating a roadmap item or prepared workflow as delivered evidence.

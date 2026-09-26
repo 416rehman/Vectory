@@ -1,0 +1,22 @@
+{
+    "timestamp":  "2026-09-26T09:01:03.769Z",
+    "platform":  "win32",
+    "arch":  "x64",
+    "vector":  "0.58.0",
+    "result":  "passed",
+    "checks":  [
+                   "native install and explicit adoption",
+                   "verified TLS/CSR enrollment",
+                   "dashboard control-plane CRUD and immutable publish",
+                   "preview and assignment",
+                   "mTLS signed desired state and authorized artifact fetch",
+                   "actual Vector validate/activation acknowledgment",
+                   "exact artifact SHA256",
+                   "same-generation actual-file drift repair",
+                   "local pause preserves edits with heartbeats",
+                   "resume restores latest desired state"
+               ],
+    "device_name":  "local-win-mui5qf92",
+    "generation":  1,
+    "agent_binary_sha256":  "992da460f0bc448862e7585085790cf11161f401805495a2a8c776948d2a718b"
+}

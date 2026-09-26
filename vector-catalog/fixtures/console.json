@@ -1,0 +1,30 @@
+{
+  "sources": {
+    "demo": {
+      "type": "demo_logs",
+      "format": "json",
+      "interval": 1
+    }
+  },
+  "transforms": {
+    "enrich": {
+      "type": "remap",
+      "inputs": [
+        "demo"
+      ],
+      "source": ".environment = \"development\"\n.managed_by = \"vectory\""
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "enrich"
+      ],
+      "encoding": {
+        "codec": "json"
+      },
+      "target": "stderr"
+    }
+  }
+}
