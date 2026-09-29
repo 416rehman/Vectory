@@ -85,7 +85,10 @@ a.control-row-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  /* A long name (the person who created it) wraps instead of widening the page. */
+  overflow-wrap: anywhere;
 }
 .rollout-meta li.rollout-meta-status {
   gap: 8px;

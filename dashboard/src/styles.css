@@ -481,6 +481,10 @@ details[open] > summary {
 .page-breadcrumb li:last-child {
   overflow: hidden;
 }
+/* Ancestors keep their whole label; only the current page shortens. */
+.page-breadcrumb li:not(:last-child) {
+  flex: none;
+}
 .page-context > .live-status {
   flex: none;
 }
@@ -809,12 +813,17 @@ td strong {
   gap: var(--space-4);
   border-bottom: 1px solid var(--border);
 }
+/* A long name in the title wraps; it never pushes the close button away. */
+.modal-header > div {
+  min-width: 0;
+}
 .modal-header h2 {
   font-size: 18px;
   line-height: var(--leading-lg);
   letter-spacing: -0.2px;
   font-weight: var(--weight-semibold);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .modal-header p {
   margin: var(--space-1) 0 0;
@@ -822,8 +831,10 @@ td strong {
   font-size: var(--text-base);
   line-height: var(--leading-base);
   max-width: 680px;
+  overflow-wrap: anywhere;
 }
 .modal-header > .icon-button {
+  flex: none;
   margin: -4px -8px 0 0;
 }
 .modal-body {
