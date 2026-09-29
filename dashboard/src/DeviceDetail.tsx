@@ -24,6 +24,7 @@ import {
   type Version,
 } from "./api";
 import DocLink from "./DocLink";
+import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
 import TargetDialog from "./TargetDialog";
 import TelemetryPanel from "./TelemetryPanel";
@@ -498,6 +499,7 @@ function DeviceActivity({ device }: { device: Device }) {
         <ol className="device-activity-list">
           {entries.map((entry) => (
             <li key={entry.id} data-tone={activityTone(entry)}>
+              <ActivityGlyph item={entry} />
               <p>
                 {describeActivity(entry).map((part, index) =>
                   part.href ? (

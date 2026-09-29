@@ -14,12 +14,12 @@ import {
   Rocket,
   Server,
   ShieldCheck,
-  TriangleAlert,
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
 import { api, APIError, can, type Audit, type Device, type User } from "./api";
 import DocLink from "./DocLink";
+import ActivityGlyph from "./ActivityGlyph";
 import { runCommand } from "./commands";
 import {
   Button,
@@ -43,6 +43,7 @@ import {
   present,
   rolloutProgress,
   type ChecklistStep,
+  type FleetDeviceRate,
   type HealthBucket,
   type RolloutProgress,
 } from "./overviewModel";
@@ -1318,13 +1319,36 @@ function BusiestDevices({
   top,
   total,
 }: {
-  top: { id: string; name: string; eventsPerSecond: number }[];
+  top: FleetDeviceRate[];
   total: number;
 }) {
-  const max = Math.max(...top.map((item) => item.eventsPerSecond), 0);
+  const withOut = top.some((item) => item.eventsOutPerSecond !== null);
+  const max = Math.max(
+    ...top.flatMap((item) => [
+      item.eventsPerSecond,
+      item.eventsOutPerSecond ?? 0,
+    ]),
+    0,
+  );
+  const width = (value: number) =>
+    `${max ? Math.max(2, (value / max) * 100) : 0}%`;
   return (
-    <div className="busiest">
-      <p className="busiest-title">Busiest devices · events in per second</p>
+    <div className="busiest" data-series={withOut ? "2" : "1"}>
+      <div className="busiest-head">
+        <p className="busiest-title">Busiest devices · events per second</p>
+        {withOut && (
+          <ul className="chart-legend" aria-label="Series">
+            <li>
+              <span className="series-key" data-series="1" aria-hidden="true" />
+              In
+            </li>
+            <li>
+              <span className="series-key" data-series="2" aria-hidden="true" />
+              Out
+            </li>
+          </ul>
+        )}
+      </div>
       <ul>
         {top.map((item) => {
           const share = total
@@ -1336,19 +1360,36 @@ function BusiestDevices({
                 {item.name}
               </a>
               <Tooltip
-                content={`${item.name} · ${formatRate(item.eventsPerSecond)} events/s (${share}% of reported)`}
+                content={`${item.name} · in ${formatRate(item.eventsPerSecond)}/s (${share}% of reported)${
+                  item.eventsOutPerSecond !== null
+                    ? ` · out ${formatRate(item.eventsOutPerSecond)}/s`
+                    : ""
+                }`}
               >
                 <span className="busiest-track" aria-hidden="true">
                   <span
                     className="busiest-bar"
-                    style={{
-                      width: `${max ? Math.max(2, (item.eventsPerSecond / max) * 100) : 0}%`,
-                    }}
+                    data-series="1"
+                    style={{ width: width(item.eventsPerSecond) }}
                   />
+                  {withOut && (
+                    <span
+                      className="busiest-bar"
+                      data-series="2"
+                      style={{ width: width(item.eventsOutPerSecond ?? 0) }}
+                    />
+                  )}
                 </span>
               </Tooltip>
               <span className="busiest-value">
                 {formatRate(item.eventsPerSecond)}
+                {withOut && (
+                  <span className="busiest-out">
+                    {item.eventsOutPerSecond === null
+                      ? " / —"
+                      : ` / ${formatRate(item.eventsOutPerSecond)}`}
+                  </span>
+                )}
               </span>
             </li>
           );
@@ -1411,6 +1452,18 @@ function FleetChart({
   }
   return (
     <div className="fleet-chart">
+      {showOut && (
+        <ul className="chart-legend fleet-chart-legend" aria-label="Series">
+          <li>
+            <span className="series-key" data-series="1" aria-hidden="true" />
+            Events in
+          </li>
+          <li>
+            <span className="series-key" data-series="2" aria-hidden="true" />
+            Events out
+          </li>
+        </ul>
+      )}
       <div
         className="fleet-chart-frame"
         tabIndex={0}
@@ -1563,15 +1616,7 @@ function RecentChanges({ data }: { data: OverviewData }) {
             const tone = activityTone(item);
             return (
               <li key={item.id} className="activity-item" data-tone={tone}>
-                <span className="activity-marker" aria-hidden="true">
-                  {tone === "danger" ? (
-                    <CircleX size={14} />
-                  ) : tone === "warning" ? (
-                    <TriangleAlert size={14} />
-                  ) : (
-                    <span className="activity-dot" />
-                  )}
-                </span>
+                <ActivityGlyph item={item} />
                 <p className="activity-text">
                   {parts.map((part, index) => (
                     <PartText key={index} part={part} />

@@ -971,6 +971,7 @@ export const AuditExportFiltersSchema = z.object({
     .regex(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i)
     .optional(),
   target_id: auditFilterText(256).optional(),
+  scope: z.enum(["changes", "security"]).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
 });

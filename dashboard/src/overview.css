@@ -608,11 +608,33 @@ a.kpi-tile:focus-visible {
   color: var(--accent-text);
   font-size: var(--text-sm);
 }
+.busiest-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+}
 .busiest-title {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   color: var(--text-muted);
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
+}
+.chart-legend {
+  display: flex;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
 }
 .busiest ul {
   display: grid;
@@ -623,7 +645,7 @@ a.kpi-tile:focus-visible {
 }
 .busiest li {
   display: grid;
-  grid-template-columns: minmax(80px, 160px) minmax(0, 1fr) 56px;
+  grid-template-columns: minmax(80px, 160px) minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
 }
@@ -640,20 +662,36 @@ a.kpi-tile:focus-visible {
   text-underline-offset: 3px;
 }
 .busiest-track {
-  display: block;
-  height: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  height: 18px;
 }
 .busiest-bar {
   display: block;
-  height: 100%;
+  height: 8px;
   border-radius: 0 4px 4px 0;
   background: var(--series-1);
+}
+.busiest[data-series="2"] .busiest-bar {
+  height: 6px;
+}
+.busiest-bar[data-series="2"] {
+  background: var(--series-2);
+}
+.busiest-out {
+  color: var(--text-muted);
 }
 .busiest-value {
   color: var(--text);
   font-size: var(--text-sm);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+.fleet-chart-legend {
+  justify-content: flex-end;
+  margin-bottom: var(--space-2);
 }
 .fleet-chart-frame {
   display: grid;
@@ -772,7 +810,7 @@ a.kpi-tile:focus-visible {
 }
 .activity-item {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   gap: var(--space-2-5);
   align-items: start;
   padding: var(--space-2) 0;
@@ -781,25 +819,6 @@ a.kpi-tile:focus-visible {
 .activity-item:first-child {
   border-top: 0;
   padding-top: 0;
-}
-.activity-marker {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 20px;
-  color: var(--text-subtle);
-}
-.activity-item[data-tone="danger"] .activity-marker {
-  color: var(--danger-text);
-}
-.activity-item[data-tone="warning"] .activity-marker {
-  color: var(--warning-text);
-}
-.activity-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--mark-paused);
 }
 .activity-text {
   margin: 0;
@@ -813,15 +832,13 @@ a.kpi-tile:focus-visible {
 .activity-text a {
   color: var(--text);
   font-weight: var(--weight-medium);
+  text-decoration: none;
 }
-.activity-text a {
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
-}
-.activity-text a:hover {
+.activity-text a:hover,
+.activity-text a:focus-visible {
   color: var(--accent-text);
-  text-decoration-color: currentColor;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .activity-time {
   color: var(--text-subtle);
@@ -831,7 +848,8 @@ a.kpi-tile:focus-visible {
   text-decoration: none;
   font-variant-numeric: tabular-nums;
 }
-a.activity-time:hover {
+a.activity-time:hover,
+a.activity-time:focus-visible {
   color: var(--text);
   text-decoration: underline;
   text-underline-offset: 3px;

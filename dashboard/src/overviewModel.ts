@@ -97,8 +97,15 @@ export type FleetTelemetry = {
   errorsPerMinute: number | null;
   /** Devices without a fresh sample whose agent settings turn metrics off. */
   disabled: number;
-  top: { id: string; name: string; eventsPerSecond: number }[];
+  top: FleetDeviceRate[];
   freshest: string | null;
+};
+export type FleetDeviceRate = {
+  id: string;
+  name: string;
+  eventsPerSecond: number;
+  /** Sink delivery rate when the agent reports it, else null. */
+  eventsOutPerSecond: number | null;
 };
 export const present = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
@@ -146,6 +153,9 @@ export function fleetTelemetry(
         id: device.id,
         name: device.name,
         eventsPerSecond: sample.events_per_second,
+        eventsOutPerSecond: present(sample.events_out_per_second)
+          ? sample.events_out_per_second
+          : null,
       });
     }
     if (present(sample.events_out_per_second)) {

@@ -301,6 +301,7 @@ export function RefreshButton({
       {...props}
       variant="ghost compact"
       className="refresh-button"
+      icon={RotateCw}
       busy={busy}
       aria-busy={busy || undefined}
     >
@@ -721,11 +722,9 @@ export function PageHeader({
   const shell = useContext(ShellContext);
   const inSection =
     !!shell && shell.tabs.some((tab) => tab.id === shell.currentTab);
-  const ancestors =
-    breadcrumb ??
-    (shell && inSection && shell.sectionLabel !== title
-      ? [{ label: shell.sectionLabel, href: shell.sectionHref }]
-      : []);
+  // One rule everywhere: section tabs already say where you are, so only
+  // drill-down pages (a device, a deployment) show a breadcrumb trail.
+  const ancestors = breadcrumb ?? [];
   const crumbs: Crumb[] = ancestors.length
     ? [...ancestors, { label: title }]
     : [];
@@ -903,9 +902,14 @@ export type FilterChip = {
 export function FilterChips({
   chips,
   onClearAll,
+  clearLabel = "Clear all",
+  clearFrom = 2,
 }: {
   chips: FilterChip[];
   onClearAll?: () => void;
+  clearLabel?: string;
+  /** Show the clear action once this many chips are active. */
+  clearFrom?: number;
 }) {
   if (!chips.length) return null;
   return (
@@ -922,13 +926,13 @@ export function FilterChips({
           </button>
         </span>
       ))}
-      {onClearAll && chips.length > 1 && (
+      {onClearAll && chips.length >= clearFrom && (
         <button
           type="button"
           className="filter-chips-clear"
           onClick={onClearAll}
         >
-          Clear all
+          {clearLabel}
         </button>
       )}
     </div>
@@ -961,6 +965,74 @@ export function QuickFilters<T extends string>({
             {option.label}
             {option.count !== undefined && (
               <span className="quick-filter-count">{option.count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Exactly one choice from a small set, as an inline radio group. */
+export function SegmentedControl<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  disabled = false,
+  hint,
+}: {
+  label: string;
+  options: { value: T; label: string; count?: number }[];
+  value: T;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  /** Why the choice is unavailable, shown when disabled. */
+  hint?: string;
+}) {
+  const group = useRef<HTMLDivElement>(null);
+  function move(from: number, step: number) {
+    const next = (from + step + options.length) % options.length;
+    onChange(options[next].value);
+    group.current
+      ?.querySelectorAll<HTMLButtonElement>("[role='radio']")
+      [next]?.focus();
+  }
+  return (
+    <div
+      ref={group}
+      className="segmented"
+      role="radiogroup"
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      title={disabled ? hint : undefined}
+    >
+      {options.map((option, index) => {
+        const checked = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            onKeyDown={(event) => {
+              if (["ArrowRight", "ArrowDown"].includes(event.key)) {
+                event.preventDefault();
+                move(index, 1);
+              } else if (["ArrowLeft", "ArrowUp"].includes(event.key)) {
+                event.preventDefault();
+                move(index, -1);
+              }
+            }}
+          >
+            {option.label}
+            {option.count !== undefined && (
+              <span className="segmented-count">
+                {option.count.toLocaleString()}
+              </span>
             )}
           </button>
         );

@@ -326,6 +326,53 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+/* Segmented control: one choice from a small set. */
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 26px;
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.segmented button:hover:not(:disabled) {
+  color: var(--text);
+}
+.segmented button[aria-checked="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-xs),
+    0 0 0 1px var(--border);
+}
+.segmented button:disabled {
+  cursor: not-allowed;
+}
+.segmented[aria-disabled="true"] {
+  opacity: 0.6;
+}
+.segmented-count {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Empty, error and loading states ---------- */
 .empty-state {
   display: flex;
@@ -564,4 +611,28 @@
   .search-field-kbd {
     display: none;
   }
+}
+
+/* Per-event activity icon; the sentence beside it carries the meaning. */
+.activity-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: -1px;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  background: var(--neutral-bg);
+}
+.activity-glyph[data-tone="success"] {
+  color: var(--success-text);
+  background: var(--success-bg);
+}
+.activity-glyph[data-tone="warning"] {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+.activity-glyph[data-tone="danger"] {
+  color: var(--danger-text);
+  background: var(--danger-bg);
 }
