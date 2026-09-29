@@ -7,8 +7,14 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -21,7 +27,7 @@ const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  server: { host: "127.0.0.1", port: 5197, strictPort: true, proxy: {} },
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
       name: "synthetic-deployments-fixture",
@@ -395,7 +401,7 @@ async function closeDetails() {
   await expect(details()).toHaveCount(0);
 }
 try {
-  await page.goto("http://127.0.0.1:5197/__deployments-fixture");
+  await page.goto(`http://127.0.0.1:${port}/__deployments-fixture`);
   await page.waitForFunction(() => window.ready);
   await check(
     "initial browsing has one bounded summary request and no eager version, device or target hydration",
