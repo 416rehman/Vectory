@@ -112,11 +112,17 @@ func ingressSource(l metricLabels) bool {
 	return l.kind == "source" && l.typ != "internal_metrics" && l.typ != "internal_logs"
 }
 
-func parseMetricObservation(data []byte) (metricObservation, error) {
-	return parseMetricObservationWithNamespace(data, "vector")
+// egressSink excludes sinks that carry only Vector's own telemetry (see
+// telemetrySinks) from "events out".
+func egressSink(l metricLabels, internal map[string]bool) bool {
+	return l.kind == "sink" && !internal[l.id]
 }
 
-func parseMetricObservationWithNamespace(data []byte, namespace string) (metricObservation, error) {
+func parseMetricObservation(data []byte) (metricObservation, error) {
+	return parseMetricObservationWithNamespace(data, "vector", nil)
+}
+
+func parseMetricObservationWithNamespace(data []byte, namespace string, internal map[string]bool) (metricObservation, error) {
 	if !metricNamespace.MatchString(namespace) {
 		namespace = "vector"
 	}
@@ -171,7 +177,7 @@ func parseMetricObservationWithNamespace(data []byte, namespace string) (metricO
 		case "component_sent_events_total":
 			if ingressSource(l) {
 				err = addMetric(&inputs.events, v)
-			} else if l.kind == "sink" {
+			} else if egressSink(l, internal) {
 				err = addMetric(&inputs.out, v)
 			}
 		case "component_received_bytes_total":
@@ -179,7 +185,7 @@ func parseMetricObservationWithNamespace(data []byte, namespace string) (metricO
 				err = addMetric(&inputs.bytes, v)
 			}
 		case "component_sent_bytes_total":
-			if l.kind == "sink" {
+			if egressSink(l, internal) {
 				err = addMetric(&inputs.outBytes, v)
 			}
 		case "component_errors_total", "http_client_errors_total":

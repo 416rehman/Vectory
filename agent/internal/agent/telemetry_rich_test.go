@@ -161,6 +161,10 @@ func TestEngineDiscoversThePipelineExporterWithoutHostSetup(t *testing.T) {
 	if sample == nil || len(sample.Components) != 1 || source != metricsDiscovered || got != address {
 		t.Fatalf("discovery failed: %+v %s %s", sample, source, got)
 	}
+	// The exporter it scrapes carries only Vector's own metrics.
+	if !e.Metrics.internal["prom"] || len(e.Metrics.internal) != 1 {
+		t.Fatalf("telemetry sinks = %v", e.Metrics.internal)
+	}
 	e.State.Policy.TelemetryEnabled = false
 	if sample, source, _ = e.collectTelemetry(context.Background(), config); sample != nil || source != metricsDiscovered {
 		t.Fatal("telemetry policy must stop collection but still report the endpoint")
@@ -218,5 +222,88 @@ func TestComponentsRemovedByReloadAreNotReported(t *testing.T) {
 	// Without a readable running configuration nothing is dropped.
 	if got := runningComponents(components, []byte("not json")); len(got) != 3 {
 		t.Fatalf("unreadable configuration dropped components: %+v", got)
+	}
+}
+
+func TestEventsOutLeavesOutSinksCarryingOnlyVectorsOwnTelemetry(t *testing.T) {
+	config := []byte(`{
+		"sources": {"app": {"type": "demo_logs"}, "m": {"type": "internal_metrics"}, "l": {"type": "internal_logs"}},
+		"transforms": {
+			"tag": {"type": "remap", "inputs": ["l"]},
+			"route": {"type": "route", "inputs": ["m"]},
+			"loop": {"type": "remap", "inputs": ["loop"]}
+		},
+		"sinks": {
+			"archive": {"type": "blackhole", "inputs": ["app"]},
+			"prom": {"type": "prometheus_exporter", "inputs": ["route.keep"]},
+			"log_copy": {"type": "file", "inputs": ["tag"]},
+			"mixed": {"type": "console", "inputs": ["app", "m"]},
+			"wildcard": {"type": "console", "inputs": ["m*"]},
+			"cycle": {"type": "console", "inputs": ["loop"]},
+			"none": {"type": "console"}
+		}
+	}`)
+	got := telemetrySinks(config)
+	if len(got) != 2 || !got["prom"] || !got["log_copy"] {
+		t.Fatalf("telemetry sinks = %v", got)
+	}
+	if telemetrySinks([]byte("not json")) != nil {
+		t.Fatal("an unreadable configuration must exclude nothing")
+	}
+	// The real scrape: the blackhole delivered 256 events and the exporter
+	// 135 metric events. Only the blackhole is the pipeline's output.
+	data := vectorFixture(t, "metrics.prom")
+	all, err := parseMetricObservation(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := parseMetricObservationWithNamespace(data, "vector", map[string]bool{"prom": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Counters["d:out"] != 391 || own.Counters["d:out"] != 256 || own.Counters["d:in"] != all.Counters["d:in"] {
+		t.Fatalf("events out: all=%v own=%v", all.Counters["d:out"], own.Counters["d:out"])
+	}
+	if own.Counters["c:prom:sent"] != 135 {
+		t.Fatal("the exporter keeps its own component counters")
+	}
+}
+
+func TestChangingTelemetrySinksRestartsOnlyTheOutRate(t *testing.T) {
+	var round atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := float64(round.Load())
+		fmt.Fprintf(w, "vector_component_sent_events_total{component_id=\"app\",component_kind=\"source\",component_type=\"demo_logs\"} %f\n", 100+10*n)
+		fmt.Fprintf(w, "vector_component_sent_events_total{component_id=\"archive\",component_kind=\"sink\",component_type=\"blackhole\"} %f\n", 100+10*n)
+		fmt.Fprintf(w, "vector_component_sent_events_total{component_id=\"prom\",component_kind=\"sink\",component_type=\"prometheus_exporter\"} %f\n", 500+50*n)
+	}))
+	defer srv.Close()
+	c, err := NewMetricsCollector(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	c.Collect(context.Background(), now)
+	round.Store(1)
+	mixed := c.Collect(context.Background(), now.Add(10*time.Second))
+	if !near(mixed.EventsOutPerSecond, 6) {
+		t.Fatalf("without a configuration every sink counts: %v", mixed.EventsOutPerSecond)
+	}
+	c.setInternalSinks(map[string]bool{"prom": true})
+	round.Store(2)
+	changed := c.Collect(context.Background(), now.Add(20*time.Second))
+	if changed.EventsOutPerSecond != nil || !near(changed.EventsPerSecond, 1) {
+		t.Fatalf("a new sink set must not mix totals: out=%v in=%v", changed.EventsOutPerSecond, changed.EventsPerSecond)
+	}
+	round.Store(3)
+	own := c.Collect(context.Background(), now.Add(30*time.Second))
+	if !near(own.EventsOutPerSecond, 1) || !near(componentByID(t, own, "prom").EventsPerSecond, 5) {
+		t.Fatalf("events out = %v", own.EventsOutPerSecond)
+	}
+	// The same set again changes nothing.
+	c.setInternalSinks(map[string]bool{"prom": true})
+	round.Store(4)
+	if again := c.Collect(context.Background(), now.Add(40*time.Second)); !near(again.EventsOutPerSecond, 1) {
+		t.Fatalf("an unchanged set restarted the rate: %v", again.EventsOutPerSecond)
 	}
 }
