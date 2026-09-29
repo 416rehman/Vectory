@@ -73,6 +73,14 @@
   background: none;
   font: inherit;
 }
+.target-approval-block {
+  margin-top: 12px;
+}
+.target-approval-block > span {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+}
 
 /* Release strategy */
 .release-strategy {

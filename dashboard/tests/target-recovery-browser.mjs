@@ -217,6 +217,7 @@ async function load({
     legacyPreview: false,
     correlationSupported: true,
     outcomeOverride: null,
+    standing: null,
   };
   const current = state;
   context = await browser.newContext({
@@ -396,6 +397,57 @@ async function load({
             : []),
         ].filter((key) => !body.selector.exclude_ids.includes(key)),
       );
+      // Another pipeline the first device follows at the same priority: a
+      // conflict, unless the request replaces it.
+      if (current.standing) {
+        const target = current.devices.find((d) => selected.has(d.id));
+        const replacing = (body.replaces || []).includes(
+          current.standing.assignment.id,
+        );
+        return reply({
+          devices: current.devices.filter((d) => selected.has(d.id)),
+          create_idempotency: true,
+          request_correlation: true,
+          blockers: [],
+          warnings: [],
+          conflicts: replacing
+            ? []
+            : [
+                {
+                  device_id: target.id,
+                  assignment_ids: [current.standing.assignment.id],
+                  priority: body.priority,
+                  resource: "configuration",
+                  assignments: [current.standing.assignment],
+                },
+              ],
+          outcomes: [
+            replacing
+              ? {
+                  device_id: target.id,
+                  resource: "configuration",
+                  outcome: "replace",
+                  replaces: current.standing.assignment,
+                }
+              : {
+                  device_id: target.id,
+                  resource: "configuration",
+                  outcome: "conflict",
+                },
+          ],
+          ...(replacing
+            ? {
+                replacements: [
+                  {
+                    assignment: current.standing.assignment,
+                    device_ids: [target.id],
+                    retires_assignment: current.standing.retires,
+                  },
+                ],
+              }
+            : {}),
+        });
+      }
       return reply({
         devices: current.devices.filter((d) => selected.has(d.id)),
         ...(!current.legacyPreview
@@ -1437,6 +1489,213 @@ try {
         path: resolve(output, "compatibility-review-rows-375.png"),
         animations: "disabled",
       });
+    },
+  );
+  await check(
+    "Restricted hosts get commands made for them: their state directory, what keeps them running, and vectory allow",
+    async () => {
+      await load({
+        kind: "version",
+        width: 375,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              sources: { seed: { type: "demo_logs", format: "json" } },
+              sinks: {
+                out: {
+                  type: "http",
+                  inputs: ["seed"],
+                  uri: "http://127.0.0.1:8239/",
+                  encoding: { codec: "json" },
+                },
+              },
+            },
+          },
+        },
+        devices: [
+          device(1, {
+            configuration_mode: "restricted",
+            state_dir: "/srv/vectory state",
+            service_manager: "none",
+          }),
+          device(2, {
+            configuration_mode: "restricted",
+            state_dir: "/var/lib/vectory-agent",
+            service_manager: "systemd",
+          }),
+        ],
+      });
+      await preview();
+      await expect(
+        dialog().getByText(
+          "2 selected devices run in restricted mode and refuse this version until their hosts approve it",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      // Each row says the host refuses it, instead of a plain "New".
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      await expect(alpha.locator(".target-outcome")).toContainText(
+        "No pipeline assigned; refused until its host approves it",
+      );
+      await dialog()
+        .getByText("Commands for the host", { exact: true })
+        .click();
+      const block = (name) =>
+        dialog().getByLabel(`Host approval commands, On ${name}`, {
+          exact: true,
+        });
+      const text = (name) => block(name).evaluate((el) => el.textContent);
+      expect(await text("Synthetic alpha")).toBe(
+        [
+          "# First stop the agent: Ctrl-C where `vectory run` runs (`vectory status` shows its pid).",
+          "sudo vectory allow \\",
+          "  --state-dir '/srv/vectory state' \\",
+          "  --network 127.0.0.1:8239",
+          "# Then start the agent again the way you started it.",
+        ].join("\n"),
+      );
+      expect(await text("Synthetic beta")).toBe(
+        [
+          "sudo vectory service-stop",
+          "sudo vectory allow \\",
+          "  --network 127.0.0.1:8239",
+          "sudo vectory service-start",
+        ].join("\n"),
+      );
+      await expect(dialog()).not.toContainText("allowances.json");
+      await expect(dialog()).toContainText(
+        "adds these to what the host already allows and removes nothing",
+      );
+      await page.evaluate(() =>
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async (value) => {
+              window.syntheticCopied = value;
+            },
+          },
+        }),
+      );
+      await dialog()
+        .getByRole("button", {
+          name: "Copy commands on synthetic beta",
+          exact: true,
+        })
+        .click();
+      expect(await page.evaluate(() => window.syntheticCopied)).toBe(
+        await text("Synthetic beta"),
+      );
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBeLessThanOrEqual(375);
+      const scan = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
+      accessibility.push({
+        label: "host approval commands at 375px",
+        violations: scan.violations.map(({ id, nodes }) => ({
+          id,
+          targets: nodes.map((node) => node.target),
+        })),
+      });
+      expect(scan.violations).toEqual([]);
+      await block("Synthetic alpha").scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: resolve(output, "host-approval-commands-375.png"),
+        animations: "disabled",
+      });
+    },
+  );
+  await check(
+    "From a device page, a pipeline only that device follows is replaced by default",
+    async () => {
+      const first = {
+        id: id(70),
+        name: "First pipeline",
+        resource: "configuration",
+        priority: 100,
+        target_mode: "snapshot",
+        status: "active",
+        created_at: created,
+        version_id: id(71),
+        version_number: 1,
+        configuration_id: id(72),
+        configuration_name: "r16-first",
+        policy: null,
+        policy_id: null,
+        policy_name: null,
+      };
+      const open = async (extra, retires) => {
+        await load({
+          kind: "version",
+          extra: { initialDeviceIds: [id(1)], ...extra },
+          devices: [device(1), device(2)],
+        });
+        state.standing = { assignment: first, retires };
+        await page
+          .getByRole("button", { name: "Review deployment", exact: true })
+          .click();
+        await expect(table()).toBeVisible();
+      };
+      await open({ fromDevicePage: true }, true);
+      await expect(
+        dialog().getByText(
+          "Replaces r16-first v1: only this device follows it, so nothing else changes.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      expect(state.previews.map((body) => body.replaces || [])).toEqual([
+        [],
+        [id(70)],
+      ]);
+      await page.screenshot({
+        path: resolve(output, "device-page-replaces-899.png"),
+        animations: "disabled",
+      });
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeEnabled();
+      // Keeping it brings back the choice, and nothing is replaced.
+      await dialog()
+        .getByRole("button", {
+          name: "Keep r16-first v1 as well",
+          exact: true,
+        })
+        .click();
+      await expect(
+        dialog().getByText(/only this device follows it/),
+      ).toHaveCount(0);
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      expect(state.previews.at(-1).replaces || []).toEqual([]);
+      // An assignment other devices follow too is never replaced this way.
+      await open({ fromDevicePage: true }, false);
+      await expect(
+        dialog().getByText(/only this device follows/),
+      ).toHaveCount(0);
+      await expect(
+        dialog().getByRole("button", {
+          name: "Deploy to devices",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      // Nor when the dialog wasn't opened from the device's page.
+      await open({}, true);
+      expect(state.previews).toHaveLength(1);
+      await expect(
+        dialog().getByText(/only this device follows/),
+      ).toHaveCount(0);
+      expect(state.creates).toHaveLength(0);
     },
   );
   await check(
