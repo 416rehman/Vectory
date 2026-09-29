@@ -70,17 +70,25 @@ func TestEnrollmentCLIExplicitSystemTrustIsDifferentFromOmission(t *testing.T) {
 		t.Fatal("omitted CA local refusal changed settings")
 	}
 	code, diagnostic = bindingCommand(t, append(args, "--ca-file="))
-	if code != 1 || !strings.Contains(diagnostic, "preparation was saved") || strings.Contains(diagnostic, "cannot read trusted CA file") {
+	if code != 1 || !strings.Contains(diagnostic, "Nothing is accepting connections on 127.0.0.1:9") || !strings.Contains(diagnostic, "Nothing was sent to the server") || strings.Contains(diagnostic, "cannot read trusted CA file") {
 		t.Fatal("explicit portable empty flag did not select system trust", code, diagnostic)
 	}
 	saved, _ := agent.LoadSettings(dir)
 	if saved.CAFile != "" {
 		t.Fatal("explicit system trust kept additional roots")
 	}
-	for _, name := range []string{"private-key.pem", "enrollment.json"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatal("potentially transmitted request was not retained")
-		}
+	// A refused connection provably sent nothing: the request is kept, but
+	// marked as unsent so the server, name or token can still be corrected.
+	pending, err := agent.ReadPendingEnrollment(dir)
+	if err != nil || pending == nil || pending.Delivery != "no" || pending.LastFailure != "CONNECTION_REFUSED" {
+		t.Fatal("unsent request was not recorded as correctable", pending, err)
+	}
+	code, diagnostic = bindingCommand(t, []string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:10", "--id", "corrected", "--token", "other", "--ca-file="})
+	if code != 1 || !strings.Contains(diagnostic, "127.0.0.1:10") {
+		t.Fatal("unsent request prevented correcting the server and name", code, diagnostic)
+	}
+	if pending, _ = agent.ReadPendingEnrollment(dir); pending == nil || pending.Name != "corrected" || pending.Server != "https://127.0.0.1:10" {
+		t.Fatal("corrected intent was not recorded", pending)
 	}
 }
 

@@ -12,10 +12,13 @@ import (
 )
 
 // CAFile distinguishes omission (retain current trust) from an explicit empty
-// value (use only system trust). Recovery may omit the saved server and name.
+// value (use only system trust). CASHA256 pins the server CA by fingerprint
+// instead; the verified certificate becomes the saved trust file. Recovery may
+// omit the saved server and name.
 type EnrollmentOptions struct {
 	Server, Name, Token string
 	CAFile              *string
+	CASHA256            string
 	Recover             bool
 }
 
@@ -42,6 +45,67 @@ type enrollmentPending struct {
 	RequestID string `json:"request_id"`
 	Name      string `json:"name"`
 	Server    string `json:"server"`
+	// Delivery records what the server can have seen of this request: "no"
+	// (no attempt left this host), "maybe" (an attempt may have reached it) or
+	// "refused" (the server definitively refused it, so nothing was enrolled).
+	// Records written by earlier builds have no value and count as "maybe".
+	Delivery string `json:"delivery,omitempty"`
+	// LastFailure is the classified code of the most recent failed attempt.
+	LastFailure string `json:"last_failure,omitempty"`
+}
+
+// A request the server never saw, or definitively refused, cannot have
+// created a device; its server, name and token may change. Anything else keeps
+// the idempotent binding so a lost reply can still return the same identity.
+func (p enrollmentPending) rebindable() bool {
+	return p.Delivery == "no" || p.Delivery == "refused"
+}
+
+// PendingEnrollment describes an unfinished enrollment for status and doctor.
+type PendingEnrollment struct {
+	Name        string `json:"name"`
+	Server      string `json:"server"`
+	Delivery    string `json:"delivery"`
+	LastFailure string `json:"last_failure,omitempty"`
+}
+
+// ReadPendingEnrollment returns the unfinished enrollment in dir, if any.
+func ReadPendingEnrollment(dir string) (*PendingEnrollment, error) {
+	var pending enrollmentPending
+	exists, err := readOptionalEnrollmentJSON(filepath.Join(dir, "enrollment.json"), &pending)
+	if err != nil || !exists {
+		return nil, err
+	}
+	delivery := pending.Delivery
+	if delivery == "" {
+		delivery = "maybe"
+	}
+	return &PendingEnrollment{Name: pending.Name, Server: pending.Server, Delivery: delivery, LastFailure: pending.LastFailure}, nil
+}
+
+func pendingBindingError(pending enrollmentPending) error {
+	return fmt.Errorf("an earlier enrollment of %q with %s may have reached the server. Run the command again with that server and name (a new token is fine) so this host gets its identity back", pending.Name, pending.Server)
+}
+
+// enrollmentFailure adds what happens next to a classified request failure.
+func enrollmentFailure(err error) error {
+	ce, ok := AsConnectionError(err)
+	if !ok {
+		return err
+	}
+	next := *ce
+	switch {
+	case ce.Delivery == NotSent:
+		next.Fix = strings.TrimSpace(ce.Fix + " Nothing was sent to the server, so you can change the address, name or token and run the command again.")
+	case ce.Code == "ENROLLMENT_REFUSED":
+		return err
+	default:
+		next.Fix = strings.TrimSpace(ce.Fix + " The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine).")
+		if ce.Fix == "Run the same command again; it picks up where it stopped." {
+			next.Fix = "The server may have received the request: run the same command again to finish (keep the server and name; a new token is fine)."
+		}
+	}
+	return &next
 }
 
 func enrollmentInput(s Settings, token string) (Settings, string, error) {
@@ -101,13 +165,16 @@ func enrollmentPreflight(dir string, s Settings) error {
 	if err != nil {
 		return err
 	}
-	if exists && (pending.RequestID == "" || len(pending.RequestID) > 128 || pending.Name != s.Name || pending.Server != s.Server) {
-		return errors.New("pending enrollment belongs to a different server or name or is invalid; preserve its key and request and retry the original intent")
+	if exists && (pending.RequestID == "" || len(pending.RequestID) > 128) {
+		return errors.New("the pending enrollment record is invalid; preserve enrollment.json and private-key.pem for inspection")
+	}
+	if exists && !pending.rebindable() && (pending.Name != s.Name || pending.Server != s.Server) {
+		return pendingBindingError(pending)
 	}
 	keyPath := filepath.Join(dir, "private-key.pem")
 	if err = regularPath(keyPath); os.IsNotExist(err) {
-		if exists {
-			return errors.New("pending enrollment key is missing; preserve the request and restore its original key before retrying")
+		if exists && !pending.rebindable() {
+			return errors.New("the pending enrollment's private key is missing; restore private-key.pem from backup before retrying, because the server may already hold this request")
 		}
 		return nil
 	} else if err != nil {
@@ -130,6 +197,19 @@ func enrollmentPreflight(dir string, s Settings) error {
 // through request completion. It saves the prepared intent before any request
 // may be sent, and never rolls that intent back on a network/protocol failure.
 func EnrollWithOptions(ctx context.Context, dir string, options EnrollmentOptions) error {
+	var pin []byte
+	if options.CASHA256 != "" {
+		if options.CAFile != nil {
+			return errors.New("choose one of --ca-sha256 or --ca-file")
+		}
+		if options.Recover {
+			return errors.New("--ca-sha256 applies to new enrollments; recovery keeps the saved server trust")
+		}
+		var err error
+		if pin, err = ParseCAFingerprint(options.CASHA256); err != nil {
+			return err
+		}
+	}
 	unlock, err := lockSettingsMaintenance(dir)
 	if err != nil {
 		return err
@@ -175,6 +255,17 @@ func EnrollWithOptions(ctx context.Context, dir string, options EnrollmentOption
 	if err != nil {
 		return err
 	}
+	if pin != nil {
+		// Trust preflight: nothing is saved unless the presented chain verifies
+		// against the pinned CA for this host name.
+		certificate, err := ProbePinnedCA(ctx, s.Server, pin)
+		if err != nil {
+			return err
+		}
+		if s.CAFile, err = savePinnedCA(dir, certificate); err != nil {
+			return err
+		}
+	}
 	client, err := NewClient(s, nil, nil)
 	if err != nil {
 		return err
@@ -191,8 +282,5 @@ func EnrollWithOptions(ctx context.Context, dir string, options EnrollmentOption
 	} else {
 		err = enrollPrepared(ctx, dir, s, token, client)
 	}
-	if err != nil {
-		return fmt.Errorf("enrollment preparation was saved; preserve this state and retry the same server, name and token after resolving the error: %w", err)
-	}
-	return nil
+	return enrollmentFailure(err)
 }
