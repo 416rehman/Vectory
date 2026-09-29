@@ -35,7 +35,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies,Enrollment}from'/src/Control.tsx';import TargetDialog from'/src/TargetDialog.tsx';import{AssignmentActions}from'/src/RecoveryActions.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:AssignmentActions})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies}from'/src/Control.tsx';import{Enrollment}from'/src/Enrollment.tsx';import TargetDialog from'/src/TargetDialog.tsx';import ScheduledAssignmentRefresh from'/src/ScheduledAssignmentRefresh.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:(p)=>React.createElement(ScheduledAssignmentRefresh,{deploymentId:p.deployment.id,actorId:p.user.id,allowed:true,open:true,onClose:p.onClose,onDone:p.onDone})})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
@@ -168,6 +168,8 @@ async function load(name, props = {}) {
       if (path === "/policies") return reply(policies);
       if (path === "/tokens") return reply(tokens);
       if (path === "/releases") return reply([]);
+      if (path === "/agent-install")
+        return reply({ agent_url: null, agent_url_configured: false, listener_enabled: false, dashboard_url: null, certificate: null, downloads_enabled: true, installer: null, default_install_dir: "/usr/local/bin", releases: [], catalog_problems: [] });
       if (/^\/groups\/requests\//.test(path) || /^\/deployments\/requests\//.test(path))
         return reply({ request_id: path.split("/").at(-1), found: false });
     }
@@ -230,6 +232,8 @@ async function load(name, props = {}) {
         targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0, error: null })),
       });
     }
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return route.fulfill({ json: { devices: {}, sources: {} } });
     throw Error(`Unexpected synthetic request ${method} ${path}`);
   });
   await page.goto(origin + "/__fleet-tables");
@@ -247,7 +251,10 @@ async function filter(label, value) {
       name: new RegExp(`^Filter ${label}(?: \\(active\\))?$`),
     })
     .click();
-  await page.getByRole("radio", { name: value, exact: true }).click();
+  // Options may carry a match count after the label ("Revoked 1").
+  await page
+    .getByRole("radio", { name: new RegExp(`^${value}(?: [\\d,]+)?$`) })
+    .click();
 }
 async function textFilter(label, value) {
   await page
@@ -274,65 +281,80 @@ async function check(name, run) {
 let failure;
 try {
   await check(
-    "1000-device headers filter before pagination and selection survives sorting and page changes",
+    "1000 devices: URL-synced filters apply before pagination and selection survives sorting and pages",
     async () => {
       await load("devices");
-      await expect(rows("Devices")).toHaveCount(12);
+      await expect(rows("Devices")).toHaveCount(25);
       await page.getByLabel("Select visible devices", { exact: true }).check();
+      // Device 0020 is revoked on the first page, so it can't be selected.
       await expect(
-        page.getByText("12 selected", { exact: true }),
+        page.getByText("24 selected", { exact: true }),
       ).toBeVisible();
       await page.getByRole("button", { name: "Next", exact: true }).click();
-      await expect(rows("Devices").first()).toContainText("Device 0012");
-      await page.getByLabel("Select Device 0012", { exact: true }).check();
+      await expect(rows("Devices").first()).toContainText("Device 0025");
+      await page.getByLabel("Select Device 0025", { exact: true }).check();
       await sort("Device");
       await expect(rows("Devices").first()).toContainText("Device 0999");
       await expect(
-        page.getByText("13 selected", { exact: true }),
+        page.getByText("25 selected", { exact: true }),
       ).toBeVisible();
-      await filter("Connection", "Revoked");
+      expect(new URL(page.url()).hash).toContain("dir=desc");
+      await filter("Status", "Revoked");
       await expect(rows("Devices")).toHaveCount(1);
       await expect(
         page.getByLabel("Select Device 0020", { exact: true }),
       ).toBeDisabled();
-      await filter("Connection", "Online");
-      await textFilter("Device", "nothing-matches");
+      await expect(
+        page.getByRole("button", { name: "Remove filter Status Revoked" }),
+      ).toBeVisible();
+      await filter("Status", "Applied");
+      await page
+        .getByRole("textbox", { name: "Search devices", exact: true })
+        .fill("nothing-matches");
       await expect(
         page.getByRole("heading", { name: "No matching devices" }),
       ).toBeVisible();
       await expect(
         page.getByRole("button", {
-          name: "Filter Connection (active)",
+          name: "Filter Status (active)",
           exact: true,
         }),
       ).toBeVisible();
       await page
         .getByRole("button", { name: "Clear filters", exact: true })
         .click();
-      await expect(rows("Devices")).toHaveCount(12);
-      await sort("Last seen");
+      await expect(rows("Devices")).toHaveCount(25);
+      // Quick views narrow the list and show their counts.
+      const offline = page.getByRole("button", { name: /^Offline\s*500$/ });
+      await offline.click();
+      await expect(offline).toHaveAttribute("aria-pressed", "true");
+      await expect(rows("Devices").first()).toContainText("Offline");
+      await offline.click();
+      // Time columns sort newest first on the first click.
       await sort("Last seen");
       await expect(rows("Devices").first()).toContainText("Device 0998");
+      // Page size is a URL-synced choice.
+      await page.getByLabel("Rows per page").selectOption("50");
+      await expect(rows("Devices")).toHaveCount(50);
+      expect(new URL(page.url()).hash).toContain("size=50");
       state.failDevices = true;
-      await page
-        .getByRole("button", { name: "Refresh devices", exact: true })
-        .click();
+      await page.getByRole("button", { name: "Refresh now", exact: true }).click();
+      // A failed refresh keeps the last list visible but not actionable.
       await expect(
-        page.getByText("Synthetic device inventory unavailable", {
-          exact: true,
-        }),
+        page.getByText("Couldn't refresh devices.", { exact: true }),
       ).toBeVisible();
-      await expect(table("Devices").locator(".fleet-device-name")).toHaveCount(
-        0,
-      );
+      await expect(rows("Devices").first()).toContainText("Device 0998");
       await expect(
         page.getByLabel("Select visible devices", { exact: true }),
       ).toBeDisabled();
       state.failDevices = false;
-      await page
-        .getByRole("button", { name: "Try again", exact: true })
-        .click();
-      await expect(rows("Devices").first()).toContainText("Device 0998");
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(
+        page.getByText("Couldn't refresh devices.", { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByLabel("Select visible devices", { exact: true }),
+      ).toBeEnabled();
       expect(state.writes).toEqual([]);
     },
   );
@@ -340,7 +362,7 @@ try {
     "groups sort numerically and a newly saved group remains discoverable after header filtering",
     async () => {
       await load("groups");
-      await expect(rows("Groups")).toHaveCount(12);
+      await expect(rows("Groups")).toHaveCount(25);
       await sort("Members");
       await sort("Members");
       await expect(rows("Groups").first()).toContainText("4 devices");
@@ -453,6 +475,11 @@ try {
         .locator("summary")
         .filter({ hasText: /^Manage enrollment tokens/ })
         .click();
+      // Inactive tokens are hidden until asked for.
+      await expect(rows("Enrollment tokens")).toHaveCount(1);
+      await page
+        .getByLabel("Show expired, used and revoked tokens", { exact: true })
+        .check();
       await filter("Status", "Revoked");
       await expect(rows("Enrollment tokens")).toHaveCount(1);
       await expect(rows("Enrollment tokens").first()).toContainText(
@@ -487,7 +514,7 @@ try {
       await expect(rows("Deployment review devices")).toHaveCount(1);
       await expect(
         page.getByText(
-          "Column filters only change this view. All 3 reviewed devices remain included.",
+          "Filters only change this view. All 3 reviewed devices stay included.",
           { exact: true },
         ),
       ).toBeVisible();
@@ -505,13 +532,6 @@ try {
       await load("recovery", {
         deployment: { id: id(8000), status: "scheduled" },
       });
-      await page
-        .locator("summary")
-        .filter({ hasText: "Update scheduled devices" })
-        .click();
-      await page
-        .getByRole("button", { name: "Review scheduled devices", exact: true })
-        .click();
       await expect(rows("Scheduled device selection")).toHaveCount(3);
       await textFilter("Device", "Device 0002");
       await expect(rows("Scheduled device selection")).toHaveCount(1);
@@ -525,17 +545,22 @@ try {
     },
   );
   await check(
-    "mobile table headers remain available and filtering inside review dialogs preserves focus and contrast",
+    "mobile devices render as a stacked list with quick filters and filtering inside review dialogs preserves focus and contrast",
     async () => {
       await load("devices");
       await page.setViewportSize({ width: 390, height: 844 });
+      const list = page.getByRole("list", { name: "Devices", exact: true });
+      await expect(list).toBeVisible();
+      await expect(table("Devices")).toHaveCount(0);
+      await page.getByRole("button", { name: /^Offline\s*500$/ }).click();
+      await expect(list.locator(".data-list-item").first()).toContainText(
+        "Offline",
+      );
       for (const theme of ["light", "dark"]) {
         await page.evaluate(
           (t) => (document.documentElement.dataset.theme = t),
           theme,
         );
-        await filter("Connection", "Online");
-        await expect(table("Devices").locator("thead")).toBeVisible();
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth),
         ).toBe(390);

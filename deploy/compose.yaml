@@ -13,11 +13,24 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
     environment:
+      # The TLS certificate file should hold the full chain (server, then CA):
+      # devices pin the CA that the agent listener presents.
       VECTORY_TLS_CERT: /run/secrets/server_cert
       VECTORY_TLS_KEY: /run/secrets/server_key
       VECTORY_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap
       VECTORY_VALIDATION_URL: http://validator:8081
+      # Addresses people and devices use: the dashboard through the proxy on
+      # 443 and the agent listener published on 8443.
+      VECTORY_PUBLIC_URL: https://${VECTORY_HOSTNAME:?Set the DNS name in deploy/.env}
+      VECTORY_PUBLIC_AGENT_URL: https://${VECTORY_HOSTNAME:?Set the DNS name in deploy/.env}:8443
+      # The HTTP listener is reachable only through the proxy below, which
+      # sets X-Forwarded-For to the client address.
+      VECTORY_TRUST_PROXY_HEADERS: "true"
+      # Agents are bundled in the image (/app/agent-releases). An optional
+      # operator mirror mounted at /app/releases replaces a platform's build.
       VECTORY_RELEASES_DIR: /app/releases
+      # Set to false to stop serving the installer and agents to devices.
+      VECTORY_PUBLIC_AGENT_DOWNLOADS: ${VECTORY_PUBLIC_AGENT_DOWNLOADS:-true}
       VECTORY_MAX_AGENT_CONNECTIONS: ${VECTORY_MAX_AGENT_CONNECTIONS:-16384}
       VECTORY_TELEMETRY_RETENTION_DAYS: ${VECTORY_TELEMETRY_RETENTION_DAYS:-7}
     secrets: [server_cert, server_key, bootstrap]

@@ -184,25 +184,28 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
         .0,
         StatusCode::FORBIDDEN
     );
-    for reason in [
-        json!(""),
-        json!(" \n\t "),
-        json!("bad\u{0}reason"),
-        json!("🌐".repeat(1001)),
-        json!(false),
+    for (action, reason) in [
+        ("acknowledge", json!("bad\u{0}reason")),
+        ("acknowledge", json!("🌐".repeat(1001))),
+        ("acknowledge", json!(false)),
+        // Reopening states why; an acknowledgement note is optional.
+        ("reopen", json!("")),
+        ("reopen", json!(" \n\t ")),
+        ("reopen", Value::Null),
     ] {
         assert_eq!(
             call(
                 &app,
                 "POST",
-                &path(&old, "acknowledge"),
+                &path(&old, action),
                 json!({"revision":1,"reason":reason}),
                 Some(&admin),
                 true
             )
             .await
             .0,
-            StatusCode::BAD_REQUEST
+            StatusCode::BAD_REQUEST,
+            "{action} {reason}"
         );
     }
     for body in [
@@ -225,7 +228,7 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
             StatusCode::BAD_REQUEST
         );
     }
-    for record in [&current, &absent, &resolved] {
+    for record in [&absent, &resolved] {
         for action in ["acknowledge", "reopen"] {
             assert_eq!(
                 call(
@@ -242,7 +245,36 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
             );
         }
     }
+    // Not acknowledged yet, so there is nothing to reopen.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &path(&current, "reopen"),
+            json!({"revision":1,"reason":"x"}),
+            Some(&admin),
+            true
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
     let before = runtime(&s).await;
+    // Live devices can be acknowledged, and the note is optional.
+    let (status, live) = call(
+        &app,
+        "POST",
+        &path(&current, "acknowledge"),
+        json!({"revision":1}),
+        Some(&admin),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{live}");
+    assert_eq!(live["acknowledged"], true);
+    assert!(live["acknowledgement_reason"].is_null());
+    assert_eq!(live["device_revoked"], false);
+    assert_eq!(live["revision"], 2);
     let operator = actor(&s, "operator").await;
     let (status, ack) = call(
         &app,
@@ -273,15 +305,27 @@ async fn issue_permissions_reasons_and_exact_revoked_identity_are_enforced() {
     );
     assert_eq!(
         get(&app, &path(&current, ""), &admin).await["acknowledged"],
-        false
+        true
     );
     assert_eq!(runtime(&s).await, before);
     let overview = get(&app, "/api/v1/overview", &admin).await;
-    assert_eq!(overview["issues_open"], 2);
+    assert_eq!(overview["issues_open"], 1);
     assert_eq!(
         get(&app, "/api/v1/issues/history?state=acknowledged", &admin).await["total"],
-        1
+        2
     );
+    let (status, reopened) = call(
+        &app,
+        "POST",
+        &path(&current, "reopen"),
+        json!({"revision":2,"reason":"Still failing after the fix"}),
+        Some(&admin),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reopened}");
+    assert_eq!(reopened["disposition"], "open");
+    assert_eq!(reopened["revision"], 3);
     assert_eq!(
         get(&app, "/api/v1/issues/history?state=resolved", &admin).await["total"],
         1
@@ -666,11 +710,21 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
-    let issue_id = db::hash(format!("{id}:APPLY_FAILED:apply"));
+    let issue_id = db::hash(format!("{id}:{version}:APPLY_FAILED:apply"));
     let endpoint = format!("/api/v1/issues/{issue_id}");
     let first = get(&app, &endpoint, &admin).await;
     assert_eq!(first["revision"], 1);
     assert_eq!(first["count"], 1);
+    assert_eq!(first["reports"], 1);
+    assert_eq!(first["desired_version_id"], version);
+    assert_eq!(
+        first["title"],
+        "The device couldn't apply the configuration"
+    );
+    assert_eq!(
+        first["message"],
+        "The device reported a failure while applying this version."
+    );
     assert!(!first.to_string().contains("PRIVATE_AGENT"));
     sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
         .bind(&id)
@@ -724,9 +778,37 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
+    // Check-ins about the same failed attempt are reports, not occurrences:
+    // they never undo the operator's acknowledgement.
+    let repeated = get(&app, &endpoint, &admin).await;
+    assert_eq!(repeated["revision"], 2);
+    assert_eq!(repeated["count"], 1);
+    assert_eq!(repeated["reports"], 2);
+    assert_eq!(repeated["disposition"], "acknowledged");
+    // A new attempt (generation) is a new occurrence and clears it.
+    sqlx::query("UPDATE devices SET desired_generation=2 WHERE id=?")
+        .bind(&id)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    heartbeat["reported_generation"] = json!(2);
+    assert_eq!(
+        call(
+            &agent,
+            "POST",
+            "/agent/v1/heartbeat",
+            heartbeat.clone(),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     let repeated = get(&app, &endpoint, &admin).await;
     assert_eq!(repeated["revision"], 3);
     assert_eq!(repeated["count"], 2);
+    assert_eq!(repeated["reports"], 3);
     assert_eq!(repeated["disposition"], "open");
     assert!(repeated["acknowledged_by"].is_null());
     assert!(repeated["acknowledgement_reason"].is_null());
@@ -763,7 +845,8 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
     );
     let bad = get(&app, &endpoint, &admin).await;
     assert_eq!(bad["resolved"], false);
-    assert_eq!(bad["revision"], 4);
+    assert_eq!(bad["revision"], 3);
+    assert_eq!(bad["count"], 2);
     heartbeat["actual_sha256"] = json!(sha);
     assert_eq!(
         call(
@@ -780,9 +863,10 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
     );
     let resolved = get(&app, &endpoint, &admin).await;
     assert_eq!(resolved["resolved"], true);
-    assert_eq!(resolved["revision"], 5);
+    assert_eq!(resolved["resolved_reason"], "verified");
+    assert_eq!(resolved["revision"], 4);
     assert_eq!(resolved["disposition"], "resolved");
-    assert_eq!(resolved["count"], 3);
+    assert_eq!(resolved["count"], 2);
     assert_eq!(
         call(
             &agent,
@@ -796,7 +880,7 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         .0,
         StatusCode::OK
     );
-    assert_eq!(get(&app, &endpoint, &admin).await["revision"], 5);
+    assert_eq!(get(&app, &endpoint, &admin).await["revision"], 4);
     heartbeat["apply_state"] = json!("failed");
     assert_eq!(
         call(
@@ -812,9 +896,10 @@ async fn heartbeat_occurrence_and_verified_resolution_advance_revision_and_recur
         StatusCode::OK
     );
     let recurrence = get(&app, &endpoint, &admin).await;
-    assert_eq!(recurrence["revision"], 6);
-    assert_eq!(recurrence["count"], 4);
+    assert_eq!(recurrence["revision"], 5);
+    assert_eq!(recurrence["count"], 3);
     assert_eq!(recurrence["resolved"], false);
+    assert!(recurrence["resolved_reason"].is_null());
     sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
         .bind(id)
         .execute(&s.pool)

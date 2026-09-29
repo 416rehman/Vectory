@@ -24,3 +24,6 @@ agent/dist/
 *.db
 *.db-shm
 *.db-wal
+# Browser tests write captures here; only the curated product screenshots are tracked.
+docs/screenshots/*
+!docs/screenshots/product-*.png

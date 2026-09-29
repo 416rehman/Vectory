@@ -108,7 +108,7 @@ func applyNextAction(state State) string {
 	case "CAPABILITY_DENIED":
 		return "Review desired_configuration below for current local capability checks. The managed file may still be the last working configuration."
 	case "VALIDATION_FAILED":
-		return "Review the desired published version, Vector environment and top-level configuration tests under the service account. The managed file may still be last-good. Raw Vector diagnostics are suppressed because they can contain secrets. After correcting the cause, request Retry in the dashboard or stop the agent, run retry, and restart it."
+		return "Vector rejected the desired version; the diagnostics below say why (redacted). Run `vectory logs` for Vector's full output on this host. The managed file may still be last-good. After correcting the cause, request Retry in the dashboard or stop the agent, run retry, and restart it."
 	case "SECRET_RESOLUTION_FAILED":
 		return "Review desired_configuration below and the host-owned secret bindings. Check private-file permissions under the service account; never share the rendered managed configuration."
 	case "APPLY_ROLLED_BACK":

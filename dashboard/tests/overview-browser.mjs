@@ -5,6 +5,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -23,25 +24,314 @@ const user = {
   enabled: true,
   revision: 1,
 };
-const device = {
-  id: uuid(2),
-  name: "Synthetic ingest host",
-  last_seen: new Date().toISOString(),
-  status: "online",
-  apply_state: "unmanaged",
-  desired_version_id: null,
+const now = Date.now();
+const ago = (seconds) => new Date(now - seconds * 1000).toISOString();
+const pipeline = uuid(40),
+  version = uuid(41),
+  rolloutId = uuid(50),
+  scheduledId = uuid(51);
+const device = (n, name, extra = {}) => ({
+  id: uuid(n),
+  name,
+  os: "linux",
+  arch: "amd64",
+  agent_version: "0.1.0",
+  vector_version: "0.58.0",
+  labels: {},
+  status: "verified",
+  apply_state: "verified_applied",
+  desired_version_id: version,
+  desired_generation: 2,
+  reported_generation: 2,
+  sync_paused: false,
+  local_paused: false,
+  pause_acknowledged: false,
+  last_seen: ago(8),
+  created_at: ago(86400),
+  effective_policy: {
+    heartbeat_seconds: 15,
+    sync_paused: false,
+    telemetry_enabled: true,
+  },
+  ...extra,
+});
+const devices = [
+  device(2, "edge-fra-01", {
+    telemetry: { sampled_at: ago(9), events_per_second: 120.5 },
+  }),
+  device(3, "edge-nyc-01", {
+    telemetry: { sampled_at: ago(12), events_per_second: 80 },
+  }),
+  device(4, "web-ams-01", {
+    telemetry: { sampled_at: ago(700), events_per_second: 999 },
+  }),
+  device(5, "edge-lon-01", {
+    status: "failed",
+    apply_state: "failed",
+    reported_generation: 1,
+  }),
+  device(6, "edge-syd-01", { status: "offline", last_seen: ago(7200) }),
+  device(7, "lab-01", {
+    status: "unmanaged",
+    apply_state: "unmanaged",
+    desired_version_id: null,
+    desired_generation: 0,
+    reported_generation: 0,
+  }),
+  device(8, "retired-01", { status: "revoked" }),
+];
+const activity = (n, extra) => ({
+  id: uuid(100 + n),
+  actor_id: user.id,
+  actor: user.name,
+  actor_kind: "user",
+  action: "configuration.create",
+  target: pipeline,
+  target_id: pipeline,
+  target_kind: "configuration",
+  target_name: "Orders",
+  target_exists: true,
+  device_id: null,
+  outcome: "success",
+  created_at: ago(60 * n),
+  request_id: null,
+  ...extra,
+});
+const fleetActivity = [
+  activity(1, {
+    action: "device.apply_state",
+    actor_kind: "device",
+    actor: "edge-fra-01",
+    actor_id: uuid(2),
+    target: uuid(2),
+    target_id: uuid(2),
+    target_kind: "device",
+    target_name: "edge-fra-01",
+    device_id: uuid(2),
+    outcome: "verified_applied",
+    repeat: 3,
+    device_names: ["edge-fra-01", "edge-nyc-01", "web-ams-01"],
+  }),
+  activity(2, {
+    action: "device.apply_state",
+    actor_kind: "device",
+    actor: "edge-lon-01",
+    actor_id: uuid(5),
+    target: uuid(5),
+    target_id: uuid(5),
+    target_kind: "device",
+    target_name: "edge-lon-01",
+    device_id: uuid(5),
+    outcome: "failed",
+    repeat: 1,
+    device_names: ["edge-lon-01"],
+  }),
+  activity(3, {
+    action: "deployment.create",
+    target: rolloutId,
+    target_id: rolloutId,
+    target_kind: "deployment",
+    target_name: null,
+    deployment: {
+      configuration_name: "Orders",
+      version_number: 3,
+      policy: false,
+      rollout_kind: "canary",
+      priority: 100,
+      target_count: 7,
+    },
+  }),
+  activity(4, {
+    action: "configuration.publish",
+    target: version,
+    version_number: 3,
+  }),
+  activity(5, {
+    action: "configuration.archive",
+    target_name: "Deleted pipeline",
+    target_exists: false,
+  }),
+  activity(6, {
+    action: "device.revoke",
+    target_kind: "device",
+    target_id: "javascript:alert(1)",
+    target_name: "Malformed device",
+  }),
+];
+const overview = (extra = {}) => ({
+  devices_total: devices.length,
+  devices_online: 5,
+  configurations_total: 2,
+  deployments_active: 1,
+  issues_open: 2,
+  devices,
+  recent_activity: [
+    activity(20, { action: "login", outcome: "success", target_kind: "user" }),
+  ],
+  devices_managed: 5,
+  devices_on_desired: 3,
+  versions_total: 4,
+  versions: {
+    [version]: {
+      number: 3,
+      configuration_id: pipeline,
+      configuration_name: "Orders",
+    },
+  },
+  rollouts: [
+    {
+      id: rolloutId,
+      name: null,
+      configuration_id: pipeline,
+      configuration_name: "Orders",
+      version_id: version,
+      version_number: 3,
+      policy: false,
+      status: "active",
+      scheduled_at: null,
+      created_at: ago(300),
+      priority: 100,
+      rollout_kind: "canary",
+      canary_size: 1,
+      batch_size: 2,
+      target_count: 7,
+      state_counts: {
+        verified_applied: 3,
+        written: 1,
+        failed: 1,
+        pending: 2,
+      },
+    },
+    {
+      id: scheduledId,
+      name: null,
+      configuration_id: null,
+      configuration_name: null,
+      version_id: null,
+      version_number: null,
+      policy: true,
+      status: "scheduled",
+      scheduled_at: new Date(now + 3 * 3600 * 1000).toISOString(),
+      created_at: ago(600),
+      priority: 50,
+      rollout_kind: "all",
+      canary_size: null,
+      batch_size: null,
+      target_count: 4,
+      state_counts: {},
+    },
+  ],
+  attention: [
+    {
+      cause: "failed",
+      severity: "danger",
+      count: 1,
+      device_ids: [uuid(5)],
+      device_names: ["edge-lon-01"],
+      version_id: version,
+      version_number: 3,
+      configuration_id: pipeline,
+      configuration_name: "Orders",
+      state: "failed",
+      since: null,
+      reason: 'data_dir "/var/lib/vector/" does not exist',
+    },
+    {
+      cause: "offline",
+      severity: "warning",
+      count: 1,
+      device_ids: [uuid(6)],
+      device_names: ["edge-syd-01"],
+      version_id: null,
+      version_number: null,
+      configuration_id: null,
+      configuration_name: null,
+      state: null,
+      since: ago(7200),
+      reason: null,
+    },
+    {
+      cause: "unmanaged",
+      severity: "neutral",
+      count: 1,
+      device_ids: [uuid(7)],
+      device_names: ["lab-01"],
+      version_id: null,
+      version_number: null,
+      configuration_id: null,
+      configuration_name: null,
+      state: null,
+      since: null,
+      reason: null,
+    },
+  ],
+  fleet_activity: fleetActivity,
+  security_events_hidden: 4,
+  ...extra,
+});
+const empty = () => ({
+  devices_total: 0,
+  devices_online: 0,
+  configurations_total: 0,
+  deployments_active: 0,
+  issues_open: 0,
+  devices: [],
+  recent_activity: [],
+  devices_managed: 0,
+  devices_on_desired: 0,
+  versions_total: 0,
+  versions: {},
+  rollouts: [],
+  attention: [],
+  fleet_activity: [],
+  security_events_hidden: 1,
+});
+const series = Array.from({ length: 30 }, (_, index) => ({
+  bucket: index,
+  at: new Date(now - (29 - index) * 60000).toISOString(),
+  devices_reporting: 2,
+  events_in_per_second: 180 + (index % 5) * 6,
+  events_out_per_second: index === 12 ? null : 170 + (index % 4) * 5,
+  errors_per_minute: 0,
+  dropped_per_minute: 0,
+  buffer_utilization_max: 0.1,
+}));
+const summary = {
+  generated_at: new Date(now).toISOString(),
+  range: "1h",
+  step_seconds: 60,
+  from: series[0].at,
+  devices_total: 6,
+  devices_reporting: 2,
+  devices_metrics_disabled: 1,
+  devices_without_metrics_endpoint: 0,
+  fresh_seconds: 180,
+  newest_sample_at: ago(9),
+  events_in_per_second: 200.5,
+  events_out_per_second: 190.25,
+  bytes_in_per_second: null,
+  bytes_out_per_second: null,
+  errors_per_minute: 1.5,
+  filtered_per_minute: 0,
+  dropped_per_minute: 0,
+  buffer_utilization_max: 0.1,
+  coverage: {},
+  series,
 };
+
+const reservation = net.createServer();
+await new Promise((resolve, reject) => {
+  reservation.once("error", reject);
+  reservation.listen(0, "127.0.0.1", resolve);
+});
+const port = reservation.address().port;
+await new Promise((resolve) => reservation.close(resolve));
 const virtual = "\0virtual:overview-fixture";
 const server = await createServer({
   root: dashboard,
+  cacheDir: resolve(output, "vite-cache"),
   configFile: resolve(dashboard, "vite.config.ts"),
-  server: {
-    host: "127.0.0.1",
-    port: 5204,
-    strictPort: true,
-    proxy: {},
-    hmr: false,
-  },
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {}, hmr: false },
   plugins: [
     {
       name: "overview-component-fixture",
@@ -68,302 +358,346 @@ const server = await createServer({
   ],
 });
 await server.listen();
+const origin = `http://127.0.0.1:${port}`;
 const browser = await chromium.launch();
-const context = await browser.newContext({
-  viewport: { width: 1280, height: 900 },
-});
-const page = await context.newPage();
-page.setDefaultTimeout(8000);
 const results = [],
-  actionGeometry = [],
   errors = [],
   unexpected = [],
   requests = [],
   accessibility = [];
-page.on("pageerror", (error) => errors.push(error.message));
-const entry = (n, extra) => ({
-  id: uuid(100 + n),
-  actor_id: user.id,
-  actor: user.name,
-  actor_kind: "user",
-  action: "configuration.save",
-  target: uuid(3),
-  target_id: uuid(3),
-  target_kind: "configuration",
-  target_name: "Synthetic pipeline",
-  target_exists: true,
-  device_id: null,
-  outcome: "success",
-  created_at: new Date().toISOString(),
-  request_id: null,
-  ...extra,
-});
-const normal = [
-  entry(1, {
-    action: "configuration.publish",
-    target: uuid(4),
-    target_id: uuid(3),
-    target_name: "Orders pipeline",
-  }),
-  entry(2, {
-    action: "deployment.release",
-    target: `${uuid(5)}:${device.id}`,
-    target_id: uuid(5),
-    target_kind: "deployment",
-    target_name: "Canary rollout",
-    actor_id: device.id.toUpperCase(),
-    actor_kind: "device",
-    actor: device.name,
-  }),
-  entry(3, {
-    action: "device.renew",
-    target: device.id,
-    target_id: device.id.toUpperCase(),
-    target_kind: "device",
-    target_name: device.name,
-  }),
-  entry(4, {
-    action: "issue.acknowledge",
-    target: uuid(6),
-    target_id: uuid(6),
-    target_kind: "issue",
-    target_name: "Apply failed",
-    outcome: "prepared",
-  }),
-  entry(5, { target_name: user.name, target_id: uuid(7), target: uuid(7) }),
-];
-let entries = normal;
-await context.route("**/api/v1/**", async (route) => {
-  const req = route.request(),
-    path = new URL(req.url()).pathname.replace("/api/v1", "");
-  requests.push({ method: req.method(), path });
-  if (req.method() === "GET" && path === "/overview")
+let state;
+async function open(options = {}) {
+  state = {
+    overview: overview(),
+    summary: null,
+    releases: [],
+    ...options,
+  };
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  page.on("pageerror", (error) => errors.push(error.message));
+  await context.route("**/api/v1/**", async (route) => {
+    const req = route.request(),
+      url = new URL(req.url()),
+      path = url.pathname.replace("/api/v1", "");
+    requests.push({ method: req.method(), path: path + url.search });
+    if (req.method() === "GET" && path === "/overview")
+      return route.fulfill({ json: state.overview });
+    if (req.method() === "GET" && path === "/telemetry/summary")
+      return state.summary
+        ? route.fulfill({ json: state.summary })
+        : route.fulfill({
+            status: 404,
+            json: { error: { code: "NOT_FOUND", message: "Not found" } },
+          });
+    if (req.method() === "GET" && path === "/releases")
+      return route.fulfill({ json: state.releases });
+    unexpected.push(`${req.method()} ${path}`);
     return route.fulfill({
+      status: 500,
       json: {
-        devices_total: 1,
-        devices_online: 1,
-        configurations_total: 2,
-        deployments_active: 1,
-        issues_open: 0,
-        devices: [device],
-        recent_activity: entries,
+        error: { code: "UNEXPECTED", message: "Unexpected fixture request" },
       },
     });
-  unexpected.push(`${req.method()} ${path}`);
-  return route.fulfill({
-    status: 500,
-    json: {
-      error: {
-        code: "UNEXPECTED",
-        message: "Unexpected synthetic fixture request",
-      },
-    },
   });
-});
-const rows = page.locator(".fleet-activity-list > li");
+  await page.goto(`${origin}/__overview`);
+  return { context, page };
+}
 async function check(name, run) {
   await run();
   results.push({ name, passed: true });
+  console.log("PASS", name);
 }
-async function refresh(next) {
-  entries = next;
-  const response = page.waitForResponse(
-    (r) => new URL(r.url()).pathname === "/api/v1/overview",
-  );
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await response;
-  await expect(rows).toHaveCount(next.length);
-}
+let failure;
 try {
-  await page.goto("http://127.0.0.1:5204/__overview");
-  await expect(rows).toHaveCount(5);
   await check(
-    "typed targets use exact existing resource IDs; published version and compound raw IDs do not determine routes",
+    "KPI tiles and the health strip count live devices honestly and link to filtered lists",
     async () => {
-      await expect(
-        rows.nth(0).getByRole("link", { name: "Orders pipeline", exact: true }),
-      ).toHaveAttribute("href", `#/configurations/${uuid(3)}`);
-      await expect(
-        rows.nth(1).getByRole("link", { name: "Canary rollout", exact: true }),
-      ).toHaveAttribute("href", `#/deployments/${uuid(5)}`);
-      await expect(
-        rows.nth(2).getByRole("link", { name: device.name, exact: true }),
-      ).toHaveAttribute("href", `#/devices/${device.id}`);
-      await expect(
-        rows.nth(3).getByRole("link", { name: "Apply failed", exact: true }),
-      ).toHaveAttribute("href", `#/issues/${uuid(6)}`);
-      await expect(
-        rows
-          .nth(0)
-          .getByRole("link", { name: "Pipeline published", exact: true }),
-      ).toHaveAttribute("href", `#/audit/${uuid(101)}?page=1`);
-      expect(
-        await page.locator(`a[href*="/configurations/${uuid(4)}"]`).count(),
-      ).toBe(0);
-    },
-  );
-  await check(
-    "actor destinations are typed and identity-based; equal display names remain independently accessible",
-    async () => {
-      const actor = rows
-        .nth(0)
-        .getByRole("link", { name: user.name, exact: true });
-      await expect(actor).toHaveAttribute(
+      const { context, page } = await open();
+      const tiles = page.locator(".overview-kpi-tile");
+      await expect(tiles).toHaveCount(4);
+      // Six live devices; the revoked identity is left out everywhere.
+      await expect(tiles.nth(0)).toContainText("Devices online");
+      await expect(tiles.nth(0).locator(".overview-kpi-value")).toHaveText(
+        "5 / 6",
+      );
+      await expect(tiles.nth(0)).toContainText("1 offline");
+      await expect(tiles.nth(1).locator(".overview-kpi-value")).toHaveText(
+        "3 / 5",
+      );
+      await expect(tiles.nth(1)).toContainText("2 not yet verified");
+      await expect(tiles.nth(1)).toContainText("1 without a pipeline");
+      await expect(tiles.nth(1)).toHaveAttribute(
         "href",
-        `#/audit?actor_id=${user.id}&page=1`,
+        "#/devices?view=drift",
       );
-      await expect(actor).toHaveAttribute(
-        "title",
-        `View activity by ${user.name}`,
+      await expect(tiles.nth(2).locator(".overview-kpi-value")).toHaveText("1");
+      await expect(tiles.nth(2)).toContainText("1 scheduled in the next 24h");
+      await expect(tiles.nth(3).locator(".overview-kpi-value")).toHaveText("2");
+      await expect(tiles.nth(3).locator(".overview-kpi-value")).toHaveAttribute(
+        "data-tone",
+        "danger",
       );
+      const legend = page.getByRole("list", { name: "Devices by state" });
       await expect(
-        rows.nth(1).getByRole("link", { name: device.name, exact: true }),
-      ).toHaveAttribute("href", `#/devices/${device.id}`);
+        legend.getByRole("link", { name: /Applied\s*3/ }),
+      ).toHaveAttribute("href", "#/devices?status=applied");
       await expect(
-        rows.nth(4).getByRole("link", { name: user.name, exact: true }),
-      ).toHaveCount(2);
-      await expect(rows.nth(4).locator(".fleet-activity-meta")).toHaveText(
-        `${user.name} · by ${user.name}`,
+        legend.getByRole("link", { name: /Failed\s*1/ }),
+      ).toHaveAttribute("href", "#/devices?status=failed");
+      await expect(page.locator(".overview-health-bar")).toHaveAttribute(
+        "aria-label",
+        /6 devices: 3 applied, 1 failed, 1 offline, 1 no pipeline/,
       );
-      await actor.focus();
-      await expect(actor).toBeFocused();
-      await actor.press("Enter");
-      await expect(page).toHaveURL(
-        new RegExp(`#/audit\\?actor_id=${user.id}&page=1$`),
-      );
-      // Real anchors retain ordinary browser new-tab semantics; the destination is not replaced by click-only JS.
-      const popupEvent = context.waitForEvent("page");
-      await rows
-        .nth(0)
-        .getByRole("link", { name: "Orders pipeline", exact: true })
-        .click({ button: "middle" });
-      const popup = await popupEvent;
-      await popup.waitForLoadState("domcontentloaded");
-      expect(new URL(popup.url()).hash).toBe(`#/configurations/${uuid(3)}`);
-      await popup.close();
+      await context.close();
     },
   );
   await check(
-    "identical typed actor and target are shown once without collapsing distinct same-named identities",
+    "Needs you groups problems by cause with the reported reason and typed next steps",
     async () => {
+      const { context, page } = await open();
+      const items = page.locator(".overview-attention-item");
+      await expect(items).toHaveCount(3);
+      await expect(items.nth(0)).toContainText("Orders v3 failed on 1 device");
       await expect(
-        rows.nth(4).getByRole("link", { name: user.name, exact: true }),
-      ).toHaveCount(2);
-      await refresh([
-        entry(6, {
-          action: "login",
-          target: user.id,
-          target_id: user.id.toUpperCase(),
-          target_kind: "user",
-          target_name: user.name,
-        }),
-      ]);
-      await expect(rows.first().locator(".fleet-activity-meta")).toHaveText(
-        `by ${user.name}`,
+        items.nth(0).locator(".overview-attention-reason"),
+      ).toHaveText('data_dir "/var/lib/vector/" does not exist');
+      await expect(
+        items.nth(0).getByRole("link", { name: "Review devices" }),
+      ).toHaveAttribute("href", `#/devices?status=failed&version=${version}`);
+      await expect(
+        items.nth(0).getByRole("link", { name: "Open pipeline" }),
+      ).toHaveAttribute("href", `#/configurations/${pipeline}`);
+      await expect(items.nth(1)).toContainText("1 device offline");
+      await expect(items.nth(1)).toContainText(
+        "Longest without a check-in: 2h",
       );
-      await expect(rows.first().locator(".fleet-activity-meta a")).toHaveCount(
-        1,
-      );
       await expect(
-        rows.first().getByRole("link", { name: user.name, exact: true }),
-      ).toHaveAttribute("href", `#/audit?actor_id=${user.id}&page=1`);
-      await expect(
-        rows.first().getByRole("link", { name: "Sign-in", exact: true }),
-      ).toHaveAttribute("href", `#/audit/${uuid(106)}?page=1`);
+        items.nth(2).getByRole("link", { name: "Deploy a pipeline" }),
+      ).toHaveAttribute("href", "#/configurations");
+      await context.close();
     },
   );
   await check(
-    "deleted, missing, malformed, compound and unknown identities stay plain without action/name inference",
+    "Rollouts show stacked progress, scheduled starts and deployment links",
     async () => {
-      const fallback = [
-        entry(11, {
-          target_name: "Deleted pipeline",
-          target_exists: false,
-          actor_kind: "unknown",
-        }),
-        entry(12, {
-          target_name: "Legacy pipeline",
-          target_exists: undefined,
-          actor_kind: undefined,
-        }),
-        entry(13, {
-          target_name: "Malformed device",
-          target_kind: "device",
-          target_id: "javascript:alert(1)",
-          actor_id: "javascript:alert(2)",
-          actor_kind: "user",
-        }),
-        entry(14, {
-          target_name: "Compound deployment",
-          target_kind: "deployment",
-          target_id: `${uuid(5)}:${device.id}`,
-          actor_id: `${user.id}:other`,
-          actor_kind: "device",
-        }),
-        entry(15, {
-          target_name: "Unknown resource",
-          target_kind: "unknown",
-          actor_id: "external-process",
-          actor_kind: "unknown",
-          actor: "External process",
-        }),
-      ];
-      await refresh(fallback);
-      await expect(rows.nth(0)).toContainText("Deleted pipeline");
-      await expect(rows.nth(4)).toContainText("External process");
-      await expect(page.locator(".fleet-activity-meta a")).toHaveCount(0);
-      await expect(page.locator(".fleet-activity-link")).toHaveCount(5);
+      const { context, page } = await open();
+      const rollouts = page.locator(".overview-rollout-item");
+      await expect(rollouts).toHaveCount(2);
+      await expect(rollouts.nth(0)).toHaveAttribute(
+        "href",
+        `#/deployments/${rolloutId}`,
+      );
+      await expect(rollouts.nth(0)).toContainText("Orders v3");
+      await expect(rollouts.nth(0)).toContainText("Canary");
+      await expect(
+        rollouts.nth(0).locator(".overview-rollout-meta"),
+      ).toHaveText("3 of 7 devices applied · 1 failed");
+      await expect(
+        rollouts.nth(0).locator(".overview-rollout-bar"),
+      ).toHaveAttribute(
+        "aria-label",
+        "7 devices: 3 applied, 1 applying, 1 failed, 2 waiting",
+      );
+      await expect(rollouts.nth(1)).toContainText("Agent settings");
+      await expect(
+        rollouts.nth(1).locator(".overview-rollout-meta"),
+      ).toContainText(/Starts in (2h 5\dm|3h)/);
+      await context.close();
+    },
+  );
+  await check(
+    "Recent changes read as sentences, link only typed identities and keep sign-ins out",
+    async () => {
+      const { context, page } = await open();
+      const rows = page.locator(".overview-activity-item");
+      await expect(rows).toHaveCount(6);
+      await expect(rows.nth(0)).toContainText(
+        "edge-fra-01, edge-nyc-01 and 1 more applied their pipeline",
+      );
+      await expect(rows.nth(0).locator(".activity-glyph")).toHaveAttribute(
+        "data-tone",
+        "success",
+      );
+      await expect(rows.nth(1).locator(".activity-glyph")).toHaveAttribute(
+        "data-tone",
+        "danger",
+      );
+      await expect(
+        rows.nth(1).getByRole("link", { name: "edge-lon-01" }),
+      ).toHaveAttribute("href", `#/devices/${uuid(5)}`);
+      await expect(rows.nth(2)).toContainText(
+        "Morgan Lee deployed Orders v3 to 7 devices as a canary",
+      );
+      await expect(
+        rows.nth(2).getByRole("link", { name: "Orders v3" }),
+      ).toHaveAttribute("href", `#/deployments/${rolloutId}`);
+      await expect(
+        rows.nth(3).getByRole("link", { name: "Orders v3" }),
+      ).toHaveAttribute("href", `#/configurations/${pipeline}`);
+      // Deleted and malformed identities stay plain text.
+      await expect(
+        rows.nth(4).locator(".overview-activity-text a"),
+      ).toHaveCount(0);
+      await expect(
+        rows.nth(5).locator(".overview-activity-text a"),
+      ).toHaveCount(0);
       await expect(page.locator('a[href^="javascript:"]')).toHaveCount(0);
-    },
-  );
-  await check(
-    "next action aligns with its message, stays actionable, and wraps below the copy on mobile",
-    async () => {
-      await refresh(normal);
-      const row = page.locator(".overview-next-action"),
-        copy = row.locator(":scope > div"),
-        action = row.getByRole("button", {
-          name: "Choose pipeline",
-          exact: true,
-        });
-      for (const width of [1280, 899]) {
-        await page.setViewportSize({ width, height: 900 });
-        const wide = {
-          row: await row.boundingBox(),
-          copy: await copy.boundingBox(),
-          action: await action.boundingBox(),
-        };
-        expect(wide.action.x).toBeGreaterThan(wide.copy.x + wide.copy.width);
-        expect(
-          Math.abs(
-            wide.action.x + wide.action.width - wide.row.x - wide.row.width,
-          ),
-        ).toBeLessThan(2);
-        actionGeometry.push({ width, layout: "beside", ...wide });
-        if (width === 899)
-          await page.screenshot({
-            path: resolve(output, "overview-899-light.png"),
-            fullPage: true,
-            animations: "disabled",
-          });
-      }
-      await action.click();
-      await expect(page).toHaveURL(/#\/configurations$/);
-      await page.setViewportSize({ width: 390, height: 844 });
-      const narrow = {
-        copy: await copy.boundingBox(),
-        action: await action.boundingBox(),
-      };
-      expect(narrow.action.y).toBeGreaterThanOrEqual(
-        narrow.copy.y + narrow.copy.height,
+      await expect(
+        rows.nth(0).locator("a.overview-activity-time"),
+      ).toHaveAttribute("href", `#/audit/${uuid(101)}?page=1`);
+      await expect(page.locator(".recent-changes")).not.toContainText(
+        "Signed in",
       );
-      expect(Math.abs(narrow.action.x - narrow.copy.x)).toBeLessThan(2);
-      actionGeometry.push({ width: 390, layout: "below", ...narrow });
+      const security = page.getByRole("link", { name: "Security activity" });
+      await expect(security).toHaveAttribute("href", "#/audit?scope=security");
+      await expect(page.locator(".overview-activity-footer")).toContainText(
+        "4 recent",
+      );
+      // Entity links are quiet until hover or focus.
+      const link = rows.nth(2).getByRole("link", { name: "Orders v3" });
+      expect(
+        await link.evaluate(
+          (node) => getComputedStyle(node).textDecorationLine,
+        ),
+      ).toBe("none");
+      await link.hover();
+      expect(
+        await link.evaluate(
+          (node) => getComputedStyle(node).textDecorationLine,
+        ),
+      ).toBe("underline");
+      await context.close();
     },
   );
   await check(
-    "desktop and mobile Overview remain readable and keyboard accessible in both themes",
+    "Throughput uses fresh device samples, never zeros, and says how to enable metrics",
     async () => {
+      let { context, page } = await open();
+      const card = page.locator(".throughput");
+      await expect(card).toContainText("2 of 6 devices reporting");
+      // Only fresh samples count: 120.5 + 80, not the stale 999.
+      await expect(
+        card.locator(".overview-throughput-stats dd").first(),
+      ).toHaveText("201/s");
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "Not reported",
+      );
+      await expect(card.locator(".overview-busiest li")).toHaveCount(2);
+      await expect(card.locator(".overview-busiest li").first()).toContainText(
+        "edge-fra-01",
+      );
+      await expect(card.locator(".overview-chart-legend")).toHaveCount(0);
+      await context.close();
+      const silent = devices.map(({ telemetry, ...rest }) => rest);
+      silent[1].effective_policy = {
+        ...silent[1].effective_policy,
+        telemetry_enabled: false,
+      };
+      ({ context, page } = await open({
+        overview: overview({ devices: silent }),
+      }));
+      const howTo = page.locator(".overview-throughput-howto");
+      await expect(howTo).toContainText("No device is reporting metrics");
+      await expect(howTo).toContainText(
+        "1 device has metrics turned off in Agent settings.",
+      );
+      await expect(howTo).toContainText("internal_metrics");
+      await expect(
+        howTo.getByRole("link", { name: /Enable metrics step by step/ }),
+      ).toHaveAttribute("href", "/help/telemetry/#enable-real-metrics");
+      await expect(page.locator(".overview-throughput-stats")).toHaveCount(0);
+      await context.close();
+    },
+  );
+  await check(
+    "The fleet summary drives a two-series chart with a legend and a keyboard readout",
+    async () => {
+      const { context, page } = await open({ summary });
+      const card = page.locator(".throughput");
+      await expect(card.locator(".fleet-chart-line")).toHaveCount(2);
+      await expect(card.getByRole("list", { name: "Series" })).toContainText(
+        "Events in",
+      );
+      await expect(card.getByRole("list", { name: "Series" })).toContainText(
+        "Events out",
+      );
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "201/s",
+      );
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "190/s",
+      );
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "1.5/min",
+      );
+      // A missing point breaks the line instead of dropping to zero.
+      const out = await card
+        .locator('.fleet-chart-line[data-series="2"]')
+        .getAttribute("d");
+      expect(out.match(/M/g)).toHaveLength(2);
+      const frame = card.getByRole("group", { name: /Fleet throughput/ });
+      await frame.focus();
+      await page.keyboard.press("End");
+      await expect(card.locator('[aria-live="polite"]')).toContainText(
+        "in 204/s",
+      );
+      await page.keyboard.press("ArrowLeft");
+      await expect(card.locator(".fleet-chart-tooltip")).toBeVisible();
+      await context.close();
+    },
+  );
+  await check(
+    "The first-run checklist follows real state and disappears when setup is complete",
+    async () => {
+      let { context, page } = await open({ overview: empty(), releases: [] });
+      const list = page.locator(".overview-checklist");
+      await expect(list).toContainText("0 of 5 done");
+      await expect(list.locator('li[data-state="current"]')).toContainText(
+        "Make agent downloads available",
+      );
+      await expect(
+        list.getByRole("link", { name: /How to add releases/ }),
+      ).toHaveAttribute("href", "/help/administer/#start-a-new-server");
+      await expect(
+        page.getByRole("button", { name: "Add device", exact: true }),
+      ).toHaveCount(1);
+      await expect(page.locator(".page-actions")).toHaveCount(0);
+      await context.close();
+      ({ context, page } = await open({
+        overview: empty(),
+        releases: [
+          {
+            name: "vectory-linux-amd64",
+            os: "linux",
+            arch: "amd64",
+            sha256: "a".repeat(64),
+            url: "/api/v1/releases/vectory-linux-amd64",
+            signed: true,
+          },
+        ],
+      }));
+      await expect(page.locator(".overview-checklist")).toContainText(
+        "1 of 5 done",
+      );
+      await expect(
+        page.locator('.overview-checklist li[data-state="current"]'),
+      ).toContainText("Connect your first device");
+      await context.close();
+      ({ context, page } = await open());
+      await expect(page.locator(".overview-kpis")).toBeVisible();
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
+      await context.close();
+    },
+  );
+  await check(
+    "Desktop and mobile Overview stay readable and accessible in both themes",
+    async () => {
+      const { context, page } = await open();
       for (const width of [1280, 390]) {
         await page.setViewportSize({
           width,
@@ -384,6 +718,7 @@ try {
           const violations = axe.violations.map((item) => ({
             id: item.id,
             impact: item.impact,
+            targets: item.nodes.map((node) => node.target),
           }));
           accessibility.push({ width, theme, violations });
           expect(violations).toEqual([]);
@@ -397,34 +732,39 @@ try {
           });
         }
       }
+      await context.close();
     },
   );
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   expect(requests.every((request) => request.method === "GET")).toBe(true);
+} catch (error) {
+  failure = error;
+  console.error(error);
+} finally {
   await writeFile(
     resolve(output, "report.json"),
     JSON.stringify(
       {
         generated_at: new Date().toISOString(),
         scope:
-          "Actual Overview component with isolated synthetic transport. Typed resource existence and identity are server claims; no backend mutations, preview state, or actual fleet used.",
+          "Actual Overview component with isolated synthetic transport. Server aggregates are fixtures; no backend, preview state or real fleet is used.",
+        passed: !failure,
         results,
-        actionGeometry,
         accessibility,
         requests,
         errors,
         unexpected,
+        ...(failure ? { failure: failure.message } : {}),
       },
       null,
       2,
     ) + "\n",
   );
-  console.log(
-    `PASS ${results.length} Overview checks; evidence: ${relative(repository, resolve(output, "report.json"))}`,
-  );
-} finally {
-  await context.close();
   await browser.close();
   await server.close();
+  console.log(
+    `Evidence: ${relative(repository, resolve(output, "report.json"))}`,
+  );
 }
+if (failure) throw failure;

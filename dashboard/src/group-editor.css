@@ -72,3 +72,147 @@
   max-width: 100%;
   white-space: normal;
 }
+
+/* Overview and edit tabs */
+.group-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 18px;
+  padding: 0 25px;
+  border-bottom: 1px solid var(--line);
+}
+.group-tabs button {
+  padding: 12px 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.group-tabs button:hover {
+  color: var(--ink);
+}
+.group-tabs button[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.group-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.group-overview {
+  display: grid;
+  gap: 26px;
+}
+.group-overview section {
+  display: grid;
+  gap: 10px;
+}
+.group-overview h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.group-overview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+.group-overview-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.group-overview ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.group-overview li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 1.3fr) auto;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.group-overview li + li {
+  border-top: 1px solid var(--line);
+}
+.group-overview li a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-ink);
+  font-weight: 550;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.group-overview-devices li small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+.group-overview-running {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.group-overview-devices {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* What a membership edit changes */
+.group-effects {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-hover);
+  font-size: 13px;
+}
+.group-effects h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.group-effects ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.5;
+}
+.group-effects li[data-change="removed"]::marker {
+  color: var(--muted);
+}
+.group-effects p {
+  margin: 0;
+}
+.group-effects-blocker {
+  color: var(--rollout-danger-ink, var(--ink));
+  font-weight: 550;
+}
+.group-overview li > .rollout-chip {
+  justify-self: end;
+}
+@media (max-width: 720px) {
+  .group-overview li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .group-overview-running,
+  .group-overview-assignments li > .control-muted,
+  .group-overview-rollouts li > .control-muted {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

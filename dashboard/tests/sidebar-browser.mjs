@@ -295,6 +295,7 @@ await context.route("**/*", async (route) => {
       instance_name: "Synthetic workspace label must not appear in the rail",
     });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/overview")
     return reply({
       devices_total: 1,
@@ -306,6 +307,13 @@ await context.route("**/*", async (route) => {
       recent_activity: activity,
     });
   if (path === "/devices") return reply([device]);
+  // The search directory and device pages list groups and recent deployments.
+  if (path === "/groups") return reply([]);
+  if (path === "/deployments/history")
+    return reply({ items: [], total: 0, page: 1, page_size: 12 });
+  // A server without the fleet summary answers 404; the Overview falls back.
+  if (path === "/telemetry/summary")
+    return reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
   if (path === "/configurations/library")
     return reply({
       items: [
@@ -349,18 +357,31 @@ async function check(name, run) {
 }
 const sidebar = page.locator("#main-navigation");
 const accountMenu = () => page.getByRole("menu");
+// The rail's account button when the navigation shows, else the phone
+// header's avatar (which opens the drawer with the account menu).
 const accountTrigger = () =>
-  page.getByRole("button", {
-    name: "Your account",
-    exact: true,
-    includeHidden: true,
-  });
+  page
+    .locator(
+      '#main-navigation button[aria-label="Your account"]:visible, .mobile-header button[aria-label="Your account"]:visible',
+    )
+    .first();
+const mobileToggle = () =>
+  page.getByRole("button", { name: "Open navigation", exact: true });
+const palette = () =>
+  page.getByRole("dialog", { name: "Search Vectory", exact: true });
+// Let a resize finish moving the rail into (or out of) the phone drawer.
+async function settle() {
+  // Only finite transitions matter; status pulses and spinners loop forever.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .filter((animation) => animation instanceof CSSTransition)
+      .every((animation) => animation.playState !== "running"),
+  );
+}
 async function openAccount() {
-  await expect(accountTrigger()).toBeAttached();
-  if (!(await accountTrigger().isVisible()))
-    await page
-      .getByRole("button", { name: "Toggle navigation", exact: true })
-      .click();
+  await settle();
+  await expect(accountTrigger()).toBeVisible();
   if (!(await accountMenu().isVisible())) await accountTrigger().click();
   await expect(accountMenu()).toBeVisible();
 }
@@ -377,34 +398,8 @@ const expand = () =>
   page.getByRole("button", { name: "Expand sidebar", exact: true });
 async function compact(value) {
   const target = value ? collapse() : expand();
-  if (await target.isVisible()) {
-    await sidebar.hover({ position: { x: 20, y: 120 } });
-    await expect(target).toHaveCSS("opacity", "1");
-    await target.click();
-  }
+  if (await target.isVisible()) await target.click();
   await expect(value ? expand() : collapse()).toBeVisible();
-}
-async function edgeGeometry(control, label) {
-  const rail = await sidebar.boundingBox();
-  const button = await control.boundingBox();
-  expect(
-    Math.abs(button.x + button.width / 2 - rail.x - rail.width),
-  ).toBeLessThanOrEqual(1);
-  expect(button.width).toBeGreaterThanOrEqual(24);
-  expect(button.height).toBeGreaterThanOrEqual(24);
-  const outside = {
-    x: rail.x + rail.width + 8,
-    y: button.y + button.height / 2,
-  };
-  expect(
-    await control.evaluate(
-      (element, point) =>
-        element.contains(document.elementFromPoint(point.x, point.y)),
-      outside,
-    ),
-  ).toBe(true);
-  measurements.push({ label, rail, button, outside_hit_test: true });
-  return outside;
 }
 async function noOverflow() {
   const measure = await page.evaluate(() => ({
@@ -438,9 +433,11 @@ try {
     page.getByRole("heading", { name: "Overview", exact: true }),
   ).toBeVisible();
   await check(
-    "desktop edge toggle hides at rest, reveals on hover or keyboard focus and preserves both widths and named controls",
+    "desktop collapse control is always visible, keeps both widths and the rail names every control",
     async () => {
       await expect(collapse()).toBeVisible();
+      await expect(collapse()).toHaveAttribute("aria-expanded", "true");
+      await expect(collapse()).toHaveAttribute("aria-keyshortcuts", "[");
       await expect(
         sidebar.getByText(
           "Synthetic workspace label must not appear in the rail",
@@ -449,78 +446,46 @@ try {
       ).toHaveCount(0);
       const expanded = await sidebar.boundingBox();
       expect(expanded.width).toBeGreaterThanOrEqual(180);
-      const brand = sidebar.getByRole("button", {
-        name: "Vectory overview",
-        exact: true,
-      });
-      await brand.focus();
-      await page.mouse.move(1200, 300);
-      await expect(collapse()).toHaveCSS("opacity", "0");
-      await expect(collapse()).toHaveCSS("pointer-events", "none");
-      await sidebar.hover({ position: { x: 20, y: 120 } });
-      await expect(collapse()).toHaveCSS("opacity", "1");
-      await expect(collapse()).toHaveAttribute("aria-expanded", "true");
       await page.screenshot({
-        path: resolve(output, "sidebar-edge-expanded.png"),
+        path: resolve(output, "sidebar-expanded.png"),
         animations: "disabled",
       });
-      let edge = await edgeGeometry(collapse(), "expanded page-facing edge");
-      await page.mouse.click(edge.x, edge.y);
+      await collapse().click();
       await expect(expand()).toHaveAttribute("aria-expanded", "false");
-      await brand.focus();
-      await page.mouse.move(1200, 300);
-      await expect(expand()).toHaveCSS("opacity", "0");
-      await sidebar.hover({ position: { x: 20, y: 120 } });
-      await expect(expand()).toHaveCSS("opacity", "1");
-      edge = await edgeGeometry(expand(), "collapsed page-facing edge");
-      await page.mouse.click(edge.x, edge.y);
-      await expect(collapse()).toHaveAttribute("aria-expanded", "true");
-
-      // A fixed edge control must remain clickable when a short viewport scrolls the rail.
-      await page.setViewportSize({ width: 1440, height: 240 });
-      await sidebar.evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-      });
-      expect(
-        await sidebar.evaluate((element) => element.scrollTop),
-      ).toBeGreaterThan(0);
-      await sidebar.hover({ position: { x: 20, y: 120 } });
-      await expect(collapse()).toHaveCSS("opacity", "1");
-      await edgeGeometry(collapse(), "scrolled rail page-facing edge");
-      await page.setViewportSize({ width: 1440, height: 960 });
-      await sidebar.evaluate((element) => {
-        element.scrollTop = 0;
-      });
-      await page.mouse.move(1200, 300);
-      await brand.focus();
-      await expect(collapse()).toHaveCSS("opacity", "0");
-      await page.keyboard.press("Tab");
-      await expect(collapse()).toBeFocused();
-      await expect(collapse()).toHaveCSS("opacity", "1");
-      await page.keyboard.press("Enter");
       await expect(expand()).toBeFocused();
-      await expect(expand()).toHaveCSS("opacity", "1");
       await expect
         .poll(async () => Math.round((await sidebar.boundingBox()).width))
-        .toBe(68);
-      for (const name of [
-        "Overview",
-        "Pipelines",
-        "Devices",
-        "Activity",
-        "Find a page",
-        "Your account",
-      ]) {
-        const control = sidebar.getByRole("button", { name, exact: true });
-        await expect(control).toBeVisible();
-        expect(await control.getAttribute("title")).toBeTruthy();
-      }
+        .toBe(64);
+      const navigation = sidebar.getByRole("navigation", {
+        name: "Main navigation",
+      });
+      for (const name of ["Overview", "Pipelines", "Devices", "Activity"])
+        await expect(
+          navigation.getByRole("link", { name, exact: true }),
+        ).toBeVisible();
+      for (const name of ["Search", "Your account"])
+        await expect(
+          sidebar.getByRole("button", { name, exact: true }),
+        ).toBeVisible();
+      // The collapsed rail explains each icon with a styled tooltip.
+      await navigation.getByRole("link", { name: "Devices" }).hover();
+      const tip = page.getByRole("tooltip");
+      await expect(tip).toContainText("Devices");
+      await expect(tip.locator(".kbd")).toHaveText("G D");
+      await page.mouse.move(1200, 300);
+      await expect(tip).toHaveCount(0);
       await expect(
         sidebar.getByRole("link", { name: "Help center (opens in a new tab)" }),
       ).toHaveCount(0);
       await expect(
-        sidebar.getByRole("button", { name: "Overview", exact: true }),
+        navigation.getByRole("link", { name: "Overview", exact: true }),
       ).toHaveAttribute("aria-current", "page");
+      // "[" toggles the rail when focus isn't in a field.
+      await page.locator("#main-content").focus();
+      await page.keyboard.press("[");
+      await expect(collapse()).toBeVisible();
+      await page.keyboard.press("[");
+      await expect(expand()).toBeVisible();
       await noOverflow();
       await axe("collapsed desktop sidebar", "#main-navigation");
       await page.screenshot({
@@ -540,21 +505,21 @@ try {
       await page.reload();
       await expect(expand()).toBeVisible();
       await sidebar
-        .getByRole("button", { name: "Pipelines", exact: true })
+        .getByRole("link", { name: "Pipelines", exact: true })
         .focus();
       await page.keyboard.press("Enter");
       await expect(
         page.getByRole("heading", { name: "Pipelines", exact: true }),
       ).toBeVisible();
       await expect(expand()).toBeVisible();
-      await sidebar
-        .getByRole("button", { name: "Find a page", exact: true })
-        .click();
-      await expect(page.getByRole("dialog")).toBeVisible();
+      const search = sidebar.getByRole("button", {
+        name: "Search",
+        exact: true,
+      });
+      await search.click();
+      await expect(palette()).toBeVisible();
       await page.keyboard.press("Escape");
-      await expect(
-        sidebar.getByRole("button", { name: "Find a page", exact: true }),
-      ).toBeFocused();
+      await expect(search).toBeFocused();
       await sidebar
         .getByRole("button", { name: "Your account", exact: true })
         .click();
@@ -578,34 +543,33 @@ try {
     "899px keeps a usable desktop rail; mobile opens complete labels independently and contains keyboard focus",
     async () => {
       await sidebar
-        .getByRole("button", { name: "Overview", exact: true })
+        .getByRole("link", { name: "Overview", exact: true })
         .click();
       await page.setViewportSize({ width: 899, height: 900 });
       await expect(expand()).toBeVisible();
       await noOverflow();
       await page.setViewportSize({ width: 375, height: 812 });
       await expect(sidebar).not.toBeVisible();
-      const toggle = page.getByRole("button", {
-        name: "Toggle navigation",
-        exact: true,
-      });
+      // The phone header names the page and keeps search and the account.
+      const header = page.locator(".mobile-header");
+      await expect(header).toContainText("Overview");
+      await expect(
+        header.getByRole("button", { name: "Search", exact: true }),
+      ).toBeVisible();
+      const toggle = mobileToggle();
       await toggle.click();
       await expect(sidebar).toBeVisible();
-      await expect
-        .poll(() =>
-          sidebar.evaluate((element) =>
-            element.contains(document.activeElement),
-          ),
-        )
-        .toBe(true);
+      await expect(
+        sidebar.getByRole("button", { name: "Close navigation", exact: true }),
+      ).toBeFocused();
       for (const name of ["Overview", "Pipelines", "Devices", "Activity"])
         await expect(
           sidebar
-            .locator(".nav-label")
+            .locator(".sidebar-label")
             .filter({ hasText: new RegExp(`^${name}$`) }),
         ).toBeVisible();
-      await expect(collapse()).not.toBeVisible();
-      await expect(expand()).not.toBeVisible();
+      await expect(collapse()).toHaveCount(0);
+      await expect(expand()).toHaveCount(0);
       for (let n = 0; n < 15; n++) {
         await page.keyboard.press("Tab");
         expect(
@@ -645,7 +609,7 @@ try {
         animations: "disabled",
       });
       await sidebar
-        .getByRole("button", { name: "Pipelines", exact: true })
+        .getByRole("link", { name: "Pipelines", exact: true })
         .click();
       await expect(sidebar).not.toBeVisible();
       await expect(
@@ -667,13 +631,10 @@ try {
     },
   );
   await check(
-    "mobile account menu retains the drawer and handles Escape before it; search keeps its dialog handoff",
+    "mobile account menu handles Escape before the drawer; search hands focus back to the navigation toggle",
     async () => {
       await page.setViewportSize({ width: 375, height: 812 });
-      const toggle = page.getByRole("button", {
-        name: "Toggle navigation",
-        exact: true,
-      });
+      const toggle = mobileToggle();
       await toggle.click();
       const account = sidebar.getByRole("button", {
         name: "Your account",
@@ -704,31 +665,33 @@ try {
       await toggle.click();
       await account.click();
       await page.keyboard.press("Control+k");
-      await expect(
-        page.getByRole("dialog", { name: "Find a page", exact: true }),
-      ).toBeVisible();
+      await expect(palette()).toBeVisible();
       await expect(accountMenu()).toHaveCount(0);
       await expect(sidebar).not.toBeVisible();
       await page.keyboard.press("Escape");
       await expect(toggle).toBeFocused();
       await toggle.click();
       await sidebar
-        .getByRole("button", { name: "Find a page", exact: true })
+        .getByRole("button", { name: "Search", exact: true })
         .click();
-      const search = page.getByRole("dialog", {
-        name: "Find a page",
-        exact: true,
-      });
-      await expect(search).toBeVisible();
+      await expect(palette()).toBeVisible();
       await expect(sidebar).not.toBeVisible();
       await page.keyboard.press("Escape");
       await expect(toggle).toBeFocused();
       await toggle.click();
       await page.keyboard.press("Control+k");
-      await expect(search).toBeVisible();
+      await expect(palette()).toBeVisible();
       await expect(sidebar).not.toBeVisible();
       await page.keyboard.press("Escape");
       await expect(toggle).toBeFocused();
+      // The header's own search returns focus to itself.
+      const headerSearch = page
+        .locator(".mobile-header")
+        .getByRole("button", { name: "Search", exact: true });
+      await headerSearch.click();
+      await expect(palette()).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(headerSearch).toBeFocused();
       await page.setViewportSize({ width: 1440, height: 960 });
     },
   );
@@ -768,11 +731,11 @@ try {
     },
   );
   await check(
-    "activity names use only existing typed destinations while verbs keep exact audit links",
+    "Overview activity links only existing typed destinations while every event keeps its exact audit link",
     async () => {
       await page.setViewportSize({ width: 1440, height: 960 });
       await page.goto(origin + "/__sidebar-fixture#/overview");
-      const rows = page.locator(".fleet-activity-list li");
+      const rows = page.locator(".overview-activity-item");
       await expect(rows).toHaveCount(5);
       await expect(
         rows
@@ -791,7 +754,7 @@ try {
         [4, "Unknown target kind"],
       ]) {
         await expect(
-          rows.nth(index).locator(".fleet-activity-meta"),
+          rows.nth(index).locator(".overview-activity-text"),
         ).toContainText(name);
         await expect(
           rows.nth(index).getByRole("link", { name, exact: true }),
@@ -799,13 +762,11 @@ try {
       }
       for (let index = 0; index < activity.length; index++)
         await expect(
-          rows.nth(index).locator("a.fleet-activity-link"),
+          rows.nth(index).locator("a.overview-activity-time"),
         ).toHaveAttribute("href", `#/audit/${activity[index].id}?page=1`);
+      // People are named, not linked; device actors open their device.
       await expect(
         rows.nth(0).getByRole("link", { name: user.name, exact: true }),
-      ).toHaveAttribute("href", `#/audit?actor_id=${ids.user}&page=1`);
-      await expect(
-        rows.nth(3).getByRole("link", { name: user.name, exact: true }),
       ).toHaveCount(0);
       await expect(
         rows.nth(4).getByRole("link", { name: device.name, exact: true }),
@@ -818,7 +779,7 @@ try {
     },
   );
   await check(
-    "account menu anchors above expanded and compact triggers with named keyboard choices and contained mobile layout",
+    "account menu anchors above the rail's trigger in both widths with named keyboard choices and a contained mobile layout",
     async () => {
       await page.setViewportSize({ width: 1440, height: 960 });
       for (const collapsed of [false, true]) {
@@ -865,6 +826,8 @@ try {
       });
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 375, height: 812 });
+      // Wait for the rail to become the closed phone drawer.
+      await expect(sidebar).not.toBeVisible();
       await chooseAppearance("Dark");
       const menu = await accountMenu().boundingBox();
       expect(menu.x).toBeGreaterThanOrEqual(0);
@@ -875,7 +838,6 @@ try {
         path: resolve(output, "account-menu-mobile-dark.png"),
         animations: "disabled",
       });
-      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1440, height: 960 });
     },
@@ -921,10 +883,11 @@ try {
       ).toBe("auto");
       await page.emulateMedia({ colorScheme: "light" });
       await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+      await page.keyboard.press("Escape");
     },
   );
   await check(
-    "documentation and sign-out retain draft guards; confirmation cancellation, failure and retry preserve the isolated session",
+    "documentation and sign-out retain draft guards; a failed sign-out checks the session before a deliberate retry",
     async () => {
       await page.goto(
         origin + `/__sidebar-fixture#/configurations/${ids.pipeline}`,
@@ -937,9 +900,13 @@ try {
       const pending = '{"unsaved-account-menu":';
       await code.fill(pending);
       await openAccount();
+      // Account shortcuts: security settings and the shortcut sheet.
       await expect(
         page.getByRole("menuitem", { name: "People & security", exact: true }),
-      ).toHaveCount(0);
+      ).toHaveCount(1);
+      await expect(
+        page.getByRole("menuitem", { name: /^Keyboard shortcuts/ }),
+      ).toHaveCount(1);
       await expect(
         page.getByRole("menuitem", {
           name: "Vector documentation (opens in a new tab)",
@@ -976,24 +943,9 @@ try {
           await dialog.dismiss();
         });
         await page.getByRole("menuitem", { name, exact: true }).click();
-        if (name === "Sign out") {
-          const confirmation = page.getByRole("alertdialog", {
-            name: "Sign out of Vectory?",
-          });
-          await expect(confirmation).toBeVisible();
-          await expect(
-            confirmation.getByRole("button", { name: "Cancel", exact: true }),
-          ).toBeFocused();
-          expect(rejected).toBe(false);
-          expect(
-            requests.filter((request) => request.method !== "GET"),
-          ).toEqual([]);
-          await confirmation
-            .getByRole("button", { name: "Sign out", exact: true })
-            .click();
-          await expect(confirmation).toHaveCount(0);
-        }
-        expect(rejected).toBe(true);
+        // Sign-out asks only through the draft guard; declining keeps everything.
+        await expect.poll(() => rejected).toBe(true);
+        await expect(page.getByRole("alertdialog")).toHaveCount(0);
         expect(await code.innerText()).toBe(pending);
         await expect(page).toHaveURL(
           new RegExp(`#/configurations/${ids.pipeline}$`),
@@ -1012,92 +964,58 @@ try {
       await expect(page).toHaveURL(/#\/settings$/);
       await page
         .getByRole("navigation", { name: "Settings sections", exact: true })
-        .getByRole("button", { name: "People & security", exact: true })
+        .getByRole("link", { name: "People & security", exact: true })
         .click();
       await expect(page).toHaveURL(/#\/users$/);
       await page.setViewportSize({ width: 375, height: 812 });
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
-      const confirmation = page.getByRole("alertdialog");
-      await expect(confirmation).toHaveAccessibleName("Sign out of Vectory?");
-      await expect(confirmation).toBeVisible();
-      await expect(
-        confirmation.getByRole("button", { name: "Cancel", exact: true }),
-      ).toBeFocused();
       expect(requests.filter((request) => request.method !== "GET")).toEqual(
         [],
       );
-      await axe("mobile sign-out confirmation");
-      await page.screenshot({
-        path: resolve(output, "account-signout-confirmation-mobile.png"),
-        animations: "disabled",
-      });
-      await confirmation
-        .getByRole("button", { name: "Cancel", exact: true })
-        .click();
-      await expect(confirmation).toHaveCount(0);
-      await expect(accountTrigger()).toBeFocused();
-      await expect(sidebar).toBeVisible();
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
-      await expect(confirmation).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(confirmation).toHaveCount(0);
-      await expect(accountTrigger()).toBeFocused();
-      await expect(sidebar).toBeVisible();
-      expect(signedIn).toBe(true);
-      expect(requests.filter((request) => request.method !== "GET")).toEqual(
-        [],
-      );
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
+      // No draft: sign-out starts at once. A slow one shows its progress; a
+      // failure checks the session itself before offering a deliberate retry.
       failLogout = true;
       holdLogout = true;
-      await confirmation
-        .getByRole("button", { name: "Sign out", exact: true })
-        .evaluate((button) => {
-          button.click();
-          button.click();
-        });
+      await openAccount();
+      await page
+        .getByRole("menuitem", { name: "Sign out", exact: true })
+        .click();
       await expect.poll(() => pendingLogout.length).toBe(1);
       expect(
         requests.filter((request) => request.path === "/logout"),
       ).toHaveLength(1);
+      const progress = page.getByRole("alertdialog", { name: "Signing out…" });
+      await expect(progress).toBeVisible();
       await expect(
-        confirmation.getByRole("button", { name: "Stop waiting", exact: true }),
+        progress.getByRole("button", { name: "Stop waiting", exact: true }),
       ).toBeEnabled();
-      await expect(
-        confirmation.getByRole("button", { name: "Close dialog", exact: true }),
-      ).toBeEnabled();
-      await expect(confirmation).toBeVisible();
       await pendingLogout.shift()();
-      await expect(confirmation).toHaveAccessibleName("Sign-out not confirmed");
-      await expect(confirmation.getByRole("alert")).toContainText(
-        "The response did not confirm sign-out",
-      );
+      const retry = page.getByRole("alertdialog", {
+        name: "Couldn't sign out",
+      });
+      await expect(retry).toBeVisible();
+      await expect(retry).toContainText("Your session is still active.");
       await expect(
-        confirmation.getByRole("button", {
-          name: "Retry sign out",
-          exact: true,
-        }),
-      ).toHaveCount(0);
-      await confirmation
-        .getByRole("button", { name: "Check sign-out status", exact: true })
-        .click();
-      await expect(confirmation).toHaveAccessibleName(
-        "This session is still active",
-      );
+        retry.getByRole("button", { name: "Try again", exact: true }),
+      ).toBeFocused();
       expect(signedIn).toBe(true);
+      expect(
+        requests.filter((request) => request.path === "/logout"),
+      ).toHaveLength(1);
+      await axe("mobile sign-out retry");
+      await page.screenshot({
+        path: resolve(output, "account-signout-retry-mobile.png"),
+        animations: "disabled",
+      });
+      await retry
+        .getByRole("button", { name: "Keep working", exact: true })
+        .click();
+      await expect(retry).toHaveCount(0);
       await expect(accountTrigger()).toBeAttached();
+      expect(signedIn).toBe(true);
       failLogout = false;
-      await confirmation
-        .getByRole("button", { name: "Retry sign out", exact: true })
+      await openAccount();
+      await page
+        .getByRole("menuitem", { name: "Sign out", exact: true })
         .click();
       await expect.poll(() => pendingLogout.length).toBe(1);
       expect(
@@ -1107,9 +1025,14 @@ try {
       await pendingLogout.shift()();
       holdLogout = false;
       await expect(
-        page.getByRole("heading", { name: "Sign in", exact: true }),
+        page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
       ).toBeVisible();
       expect(signedIn).toBe(false);
+      // The account just signed out is offered again; the password is next.
+      await expect(
+        page.getByLabel("Email address", { exact: true }),
+      ).toHaveValue(user.email);
+      await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
       await expect(accountTrigger()).toHaveCount(0);
       expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
         "hidden",
@@ -1122,9 +1045,7 @@ try {
         .getByLabel("Password", { exact: true })
         .fill("synthetic-unused-password");
       await page.getByRole("button", { name: "Sign in", exact: true }).click();
-      await expect(
-        page.getByRole("button", { name: "Toggle navigation", exact: true }),
-      ).toBeVisible();
+      await expect(mobileToggle()).toBeVisible();
       await expect(sidebar).not.toBeVisible();
       expect(signedIn).toBe(true);
       expect(

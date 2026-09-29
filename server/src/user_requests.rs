@@ -51,6 +51,14 @@ async fn status(db: &mut SqliteConnection, key: &str, prior: Option<Entry>) -> R
     }
 }
 
+pub(crate) fn already_used() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::CONFLICT,
+        "REQUEST_ALREADY_USED",
+        "This request already finished. Check its status.",
+    )
+}
+
 pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Result<Json<Value>> {
     let actor = auth::authorize(s, h, &["admin"], true).await?;
     let actor_id = actor["id"].as_str().unwrap();
@@ -64,47 +72,51 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
             .fetch_optional(&s.pool)
             .await?;
     if existing.is_some() {
-        return Err(ApiError::conflict(
-            "This user creation request already finished. Check its status.",
-        ));
+        return Err(already_used());
     }
+    // Either set a password now, or invite the person to choose their own.
+    let invite = v.get("invite").is_some();
     if v.as_object().is_none_or(|fields| {
         fields.len() != 5
             || fields.keys().any(|field| {
                 !matches!(
                     field.as_str(),
-                    "request_id" | "name" | "email" | "password" | "role"
+                    "request_id" | "name" | "email" | "role" | "password" | "invite"
                 )
             })
+            || (invite && (v["invite"] != true || fields.contains_key("password")))
     }) {
         return Err(ApiError::invalid(
-            "A keyed user creation requires request_id, name, email, password, and role",
+            "A keyed user creation requires request_id, name, email, role, and either password or invite:true",
         ));
     }
     let email = auth::user_email(v)?;
-    let name = db::string(v, "name", 100)?;
-    let password = db::string(v, "password", 256)?;
-    auth::check_password(password)?;
+    let name = auth::user_name(v)?;
     let role = db::string(v, "role", 20)?;
     if !["viewer", "editor", "operator", "admin"].contains(&role) {
         return Err(ApiError::invalid("Invalid role"));
     }
-    let password_hash = auth::password_hash(password.to_owned()).await?;
+    let password_hash = if invite {
+        // No usable verifier until the invited person chooses a password.
+        String::new()
+    } else {
+        let password = auth::password_field(v, "password")?;
+        auth::check_new_password(password, &[&email, &name])?;
+        auth::password_hash(password.to_owned()).await?
+    };
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
     let actor = auth::authorize_in(&mut tx, h, &["admin"], true).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if entry(&mut tx, actor_id, key).await?.is_some() {
-        return Err(ApiError::conflict(
-            "This user creation request already finished. Check its status.",
-        ));
+        return Err(already_used());
     }
     let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
         .bind(&email)
         .fetch_one(&mut *tx)
         .await?;
     if exists > 0 {
-        return Err(ApiError::conflict("Email is already registered"));
+        return Err(auth::email_taken(&email));
     }
     let id = db::id();
     let user = json!({"id":id,"email":email,"name":name,"role":role,"enabled":true,"revision":1});
@@ -113,7 +125,7 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
     )
     .bind(&id)
     .bind(&email)
-    .bind(name)
+    .bind(&name)
     .bind(role)
     .bind(password_hash)
     .bind(db::now())
@@ -127,8 +139,15 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
         .execute(&mut *tx)
         .await?;
     db::audit(&mut tx, actor_id, "user.create", &id, "success").await?;
+    let mut out = json!({"request_id":key,"user":user});
+    if invite {
+        let (code, _, expires_at) =
+            crate::accounts::issue_code(&mut tx, &id, Some(actor_id), "invite").await?;
+        db::audit(&mut tx, actor_id, "user.invite.issue", &id, "success").await?;
+        out["invite"] = json!({"code":code,"expires_at":expires_at});
+    }
     tx.commit().await?;
-    Ok(Json(json!({"request_id":key,"user":user})))
+    Ok(Json(out))
 }
 
 pub async fn lookup(

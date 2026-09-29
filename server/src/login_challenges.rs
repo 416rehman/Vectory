@@ -18,7 +18,15 @@ fn expired() -> ApiError {
     ApiError::new(
         StatusCode::UNAUTHORIZED,
         "MFA_CHALLENGE_EXPIRED",
-        "Sign in again to request a new verification challenge",
+        "This verification expired. Sign in with your password again.",
+    )
+}
+
+fn too_many_attempts() -> ApiError {
+    ApiError::new(
+        StatusCode::UNAUTHORIZED,
+        "MFA_TOO_MANY_ATTEMPTS",
+        "Too many incorrect codes. For your security, sign in with your password again.",
     )
 }
 
@@ -69,6 +77,7 @@ fn non_null_factor<'de, D: serde::Deserializer<'de>>(
 pub async fn complete(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
     body: std::result::Result<Json<Completion>, JsonRejection>,
 ) -> Result<(HeaderMap, Json<Value>)> {
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
@@ -134,7 +143,11 @@ pub async fn complete(
         format!("login-mfa:{id}"),
         10,
         std::time::Duration::from_secs(300),
-    )?;
+    )
+    .map_err(|error| match error.retry_after {
+        Some(wait) => auth::signin_throttled(wait),
+        None => error,
+    })?;
     if let Err(error) = crate::mfa::verify_login(
         &s,
         &mut tx,
@@ -162,16 +175,18 @@ pub async fn complete(
         db::audit(&mut tx, &id, "login.mfa", "", "denied").await?;
         tx.commit().await?;
         return Err(if attempts >= 5 {
-            expired()
+            too_many_attempts()
         } else {
             ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 "INVALID_MFA_CODE",
-                "Authenticator or recovery code is invalid or already used",
+                "That code didn't work. Enter the current code from your authenticator app.",
             )
         });
     }
-    let response = auth::finish_login(&s, &mut tx, &h, auth::public_user(&user.unwrap())).await?;
+    let client = s.client_key(&h, peer);
+    let response =
+        auth::finish_login(&s, &mut tx, &h, &client, auth::public_user(&user.unwrap())).await?;
     tx.commit().await?;
     Ok(response)
 }

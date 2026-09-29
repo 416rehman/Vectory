@@ -52,6 +52,32 @@ export const TokenRecordSchema = z
     created_at: z.string().datetime({ offset: true }),
     recovery_device_id: uuid.optional(),
     recovery_name: z.string().min(1).max(100).optional(),
+    // Usage the token list adds; absent from creation and request receipts.
+    created_by: z
+      .object({ id: z.string().min(1).max(128), name: z.string().nullable() })
+      .strict()
+      .nullable()
+      .optional(),
+    last_used_at: z.string().datetime({ offset: true }).nullable().optional(),
+    device_count: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    devices: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(128),
+            name: z.string().min(1).max(256),
+            revoked: z.boolean(),
+            enrolled_at: z.string().datetime({ offset: true }).nullable(),
+          })
+          .strict(),
+      )
+      .max(20)
+      .optional(),
   })
   .strict();
 const identityFields = {

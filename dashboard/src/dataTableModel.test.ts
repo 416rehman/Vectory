@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { matchesTableFilter, sortTableRows } from "./dataTableModel";
+import {
+  clampPage,
+  matchesTableFilter,
+  nextSort,
+  optionCounts,
+  sortTableRows,
+} from "./dataTableModel";
 
 describe("table order", () => {
   const rows = [
@@ -58,5 +64,39 @@ describe("table filters", () => {
     expect(matchesTableFilter(false, "false", true)).toBe(true);
     expect(matchesTableFilter(0, "0", true)).toBe(true);
     expect(matchesTableFilter(null, "null", true)).toBe(false);
+  });
+});
+
+describe("table interaction model", () => {
+  it("sorts time columns newest first on the first click, then toggles", () => {
+    const first = nextSort(null, "last_seen", "desc");
+    expect(first).toEqual({ column: "last_seen", direction: "desc" });
+    expect(nextSort(first, "last_seen", "desc")).toEqual({
+      column: "last_seen",
+      direction: "asc",
+    });
+    expect(nextSort(first, "name")).toEqual({
+      column: "name",
+      direction: "asc",
+    });
+  });
+
+  it("counts how many rows each filter option keeps", () => {
+    const rows = [
+      { state: "online", groups: ["edge", "eu"] },
+      { state: "offline", groups: ["edge"] },
+      { state: "online", groups: [] },
+      { state: null, groups: ["eu", "eu"] },
+    ];
+    const byState = optionCounts(rows, (row) => row.state);
+    expect(Object.fromEntries(byState)).toEqual({ online: 2, offline: 1 });
+    const byGroup = optionCounts(rows, (row) => row.groups);
+    expect(Object.fromEntries(byGroup)).toEqual({ edge: 2, eu: 2 });
+  });
+
+  it("clamps pages to the available range", () => {
+    expect(clampPage(5, 30, 25)).toBe(2);
+    expect(clampPage(0, 30, 25)).toBe(1);
+    expect(clampPage(3, 0, 25)).toBe(1);
   });
 });

@@ -62,6 +62,14 @@ pub struct Filters {
         skip_serializing_if = "Option::is_none"
     )]
     pub target_id: Option<String>,
+    /// `changes` hides sign-in activity; `security` shows only sign-in,
+    /// account and signing-key events. Absent means every event.
+    #[serde(
+        default,
+        deserialize_with = "optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scope: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_string",
@@ -85,6 +93,7 @@ pub struct HistoryQuery {
     actor_id: Option<String>,
     device_id: Option<String>,
     target_id: Option<String>,
+    scope: Option<String>,
     from: Option<String>,
     to: Option<String>,
     page: Option<u64>,
@@ -141,6 +150,14 @@ impl Filters {
                 return Err(ApiError::invalid(
                     "Invalid action, family or outcome filter",
                 ));
+            }
+        }
+        if let Some(scope) = &mut self.scope {
+            *scope = scope.trim().to_owned();
+            match scope.as_str() {
+                "" => self.scope = None,
+                "changes" | "security" => {}
+                _ => return Err(ApiError::invalid("Invalid scope filter")),
             }
         }
         if self.action.is_some() && self.family.is_some() {
@@ -214,7 +231,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -235,7 +252,15 @@ fn base(details: bool) -> String {
             number("details.browser_sessions"),
             number("details.password_reset_codes"),
             number("details.enrollment_tokens_to_revoke"),
-            number("details.mfa_recovery_codes")
+            number("details.mfa_recovery_codes"),
+            text("details.reason_code", 64),
+            text("details.name", 100),
+            text("details.token_id", 128),
+            text("details.agent_os", 64),
+            text("details.agent_arch", 64),
+            text("details.agent_version", 64),
+            text("details.configuration_mode", 16),
+            text("details.client_address", 64)
         )
     } else {
         String::new()
@@ -330,6 +355,15 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
                 .push("=")
                 .push_bind(value.clone());
         }
+    }
+    match f.scope.as_deref() {
+        Some("changes") => {
+            q.push(" AND NOT (action IN ('login','logout') OR substr(action,1,6)='login.')");
+        }
+        Some("security") => {
+            q.push(" AND (action IN ('bootstrap','login','logout') OR substr(action,1,6)='login.' OR substr(action,1,8)='account.' OR substr(action,1,5)='user.' OR substr(action,1,4)='mfa.' OR substr(action,1,8)='signing.' OR substr(action,1,22)='server.restore_access.')");
+        }
+        _ => {}
     }
     if let Some(family) = &f.family {
         q.push(" AND (action=")
@@ -508,6 +542,17 @@ fn details(v: &Value, extra: &Value) -> Value {
             "enrollment_tokens_to_revoke",
             "mfa_recovery_codes",
         ],
+        // Written by the enrollment endpoint from bounded, secret-free fields.
+        "device.enroll" => &[
+            "reason_code",
+            "name",
+            "token_id",
+            "agent_os",
+            "agent_arch",
+            "agent_version",
+            "configuration_mode",
+            "client_address",
+        ],
         _ => &[],
     };
     for key in keys {
@@ -559,6 +604,7 @@ pub async fn history(
         actor_id: q.actor_id,
         device_id: q.device_id,
         target_id: q.target_id,
+        scope: q.scope,
         from: q.from,
         to: q.to,
     }

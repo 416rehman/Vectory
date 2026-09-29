@@ -294,6 +294,16 @@ async function load({
           state_counts: { verified_applied: 1 },
         });
       }
+      // The device page also shows telemetry, open issues and recent activity.
+      if (path === `/devices/${id(1)}/telemetry`)
+        return reply({ device_id: id(1), samples: [] });
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
     }
     unexpected.push(`${method} ${path}`);
     return reply(

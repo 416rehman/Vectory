@@ -403,6 +403,17 @@ async function load({
           review_token: reviewToken,
           ready: true,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       const summaryMatch = /^\/deployments\/([^/]+)\/summary$/.exec(path);
       if (summaryMatch) {
         const deploymentId = summaryMatch[1];
@@ -718,9 +729,9 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
     await page
-      .getByLabel("Schedule (optional)", { exact: true })
+      .getByLabel("Start at", { exact: true })
       .fill("2030-01-01T12:30");
   }
   await page
@@ -737,7 +748,7 @@ async function check(name, run) {
   console.log("PASS", name);
 }
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const rollbackConfirm = () =>
   page.getByRole("dialog", { name: "Review rollback", exact: true });
 const recovery = () =>
@@ -781,7 +792,7 @@ async function reloadApp() {
 async function leaveDetails() {
   await expect(details()).toBeVisible();
   await details()
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
   await expect(page).toHaveURL(/#\/deployments\?page=1$/);
@@ -1405,7 +1416,8 @@ try {
         .getByRole("button", { name: "Close", exact: true })
         .click();
       await expect(details()).toBeVisible();
-      await expect(page.getByRole("dialog")).toHaveCount(1);
+      // The rollout is a page, so closing recovery leaves no dialog open.
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect
         .poll(() =>
           details().evaluate((element) =>

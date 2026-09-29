@@ -150,7 +150,14 @@ await context.route("**/*", async (route) => {
   if (path === "/settings")
     return reply({ instance_name: "Synthetic help workspace" });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/users") return reply([user]);
+  // A server without the fleet summary answers 404; the Overview falls back.
+  if (path === "/telemetry/summary")
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "NOT_FOUND", message: "Not found" } },
+    });
   if (path === "/overview")
     return reply({
       devices_total: 1,
@@ -167,12 +174,26 @@ await context.route("**/*", async (route) => {
     return reply({ device_id: deviceId, samples: [] });
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))
     return reply([]);
+  if (path === "/agent-install")
+    return reply({
+      agent_url: null,
+      agent_url_configured: false,
+      listener_enabled: false,
+      dashboard_url: null,
+      certificate: null,
+      downloads_enabled: true,
+      installer: null,
+      default_install_dir: "/usr/local/bin",
+      releases: [],
+      catalog_problems: [],
+    });
   if (
     [
       "/configurations/library",
       "/deployments/history",
       "/audit/history",
       "/issues/history",
+      "/issues/groups",
       `/configurations/${pipelineId}/history`,
     ].includes(path)
   )

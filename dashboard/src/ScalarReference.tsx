@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PanelsTopLeft, Server } from "lucide-react";
+import { ExternalLink, PanelsTopLeft, Server } from "lucide-react";
 import {
   ApiReferenceReact,
   type AnyApiReferenceConfiguration,
@@ -9,12 +9,41 @@ import "@scalar/api-reference-react/style.css";
 import spec from "../../contracts/openapi.json";
 import { scalarFetch } from "./scalarTransport";
 import TabLabel from "./TabLabel";
-import { ExternalDocLink } from "./DocLink";
+import "./help-link.css";
 import "./scalar-reference.css";
 
 function documentFor(agent: boolean) {
+  const paths = Object.fromEntries(
+    Object.entries(spec.paths).filter(([path]) =>
+      path.startsWith(agent ? "/agent/v1/" : "/api/v1/"),
+    ),
+  );
+  const used = new Set(
+    Object.values(paths).flatMap((methods) =>
+      Object.values(methods).flatMap((operation) => operation.tags ?? []),
+    ),
+  );
+  const schemes = spec.components.securitySchemes;
   return {
     ...spec,
+    tags: spec.tags.filter((tag) => used.has(tag.name)),
+    security: agent ? [{ deviceMTLS: [] }] : spec.security,
+    components: {
+      ...spec.components,
+      securitySchemes: {
+        // Shown in the authentication panel, which otherwise invites pasting
+        // an HttpOnly cookie that this page already sends.
+        sessionCookie: {
+          ...schemes.sessionCookie,
+          description:
+            "Your signed-in session, sent for you. Leave the value empty.",
+        },
+        deviceMTLS: {
+          ...schemes.deviceMTLS,
+          description: "Only the agent can present the device certificate.",
+        },
+      },
+    },
     info: {
       ...spec.info,
       title: agent ? "Vectory agent protocol" : "Vectory dashboard API",
@@ -31,31 +60,40 @@ function documentFor(agent: boolean) {
           },
         ]
       : [{ url: window.location.origin, description: "This Vectory instance" }],
-    paths: Object.fromEntries(
-      Object.entries(spec.paths).filter(([path]) =>
-        path.startsWith(agent ? "/agent/v1/" : "/api/v1/"),
-      ),
-    ),
+    paths,
   };
 }
 
 function Reference() {
   const [agent, setAgent] = useState(false);
   useEffect(() => {
-    // Scalar 0.9.74's icon-only code copy controls lack accessible names.
-    // Scope this compatibility fix to that known control, including lazy content.
-    const nameCopyButtons = () =>
+    // Scalar 0.9.74's icon-only code copy controls and the cookie-name editor in
+    // its authentication panel lack accessible names, and that editor's
+    // combobox role lacks aria-expanded (its suggestion list is only for
+    // {{variables}}). Scope these compatibility fixes to those known controls,
+    // including lazy content.
+    const nameControls = () => {
       document
         .querySelectorAll<HTMLButtonElement>(
           "button.scalar-code-copy:not([aria-label])",
         )
         .forEach((button) => button.setAttribute("aria-label", "Copy code"));
-    const observer = new MutationObserver(nameCopyButtons);
+      document
+        .querySelectorAll<HTMLElement>(
+          '.code-input-lite__editor[role="combobox"][data-placeholder="api-key"]:not([aria-label])',
+        )
+        .forEach((editor) => {
+          editor.setAttribute("aria-label", "Cookie name");
+          if (!editor.hasAttribute("aria-expanded"))
+            editor.setAttribute("aria-expanded", "false");
+        });
+    };
+    const observer = new MutationObserver(nameControls);
     observer.observe(document.getElementById("root")!, {
       childList: true,
       subtree: true,
     });
-    nameCopyButtons();
+    nameControls();
     return () => observer.disconnect();
   }, []);
   const configuration = useMemo<AnyApiReferenceConfiguration>(
@@ -102,12 +140,21 @@ function Reference() {
           >
             <TabLabel icon={Server}>Agent protocol</TabLabel>
           </button>
-          <ExternalDocLink
-            href="/api/v1/openapi.json"
+          <a
             className="scalar-openapi-link"
+            href="/api/v1/openapi.json"
+            target="_blank"
+            rel="noopener noreferrer"
           >
             OpenAPI JSON
-          </ExternalDocLink>
+            <ExternalLink
+              className="doc-link-indicator"
+              size={12}
+              aria-hidden="true"
+              focusable="false"
+            />
+            <span className="scalar-sr-only"> (opens in a new tab)</span>
+          </a>
         </nav>
       </header>
       <p className="scalar-vectory-context">

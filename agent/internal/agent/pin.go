@@ -1,0 +1,139 @@
+package agent
+
+import (
+	"context"
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// ServerCAFile is where a pinned server CA is kept inside the state directory.
+// After enrollment, later connections use it as an ordinary trusted CA file.
+const ServerCAFile = "server-ca.pem"
+
+// ParseCAFingerprint accepts a SHA-256 fingerprint as 64 hex digits, with or
+// without colons or spaces (as shown on the Add device page).
+func ParseCAFingerprint(value string) ([]byte, error) {
+	clean := strings.NewReplacer(":", "", " ", "", "-", "").Replace(strings.TrimSpace(value))
+	clean = strings.TrimPrefix(strings.TrimPrefix(clean, "sha256"), "SHA256")
+	sum, err := hex.DecodeString(clean)
+	if err != nil || len(sum) != 32 {
+		return nil, errors.New("--ca-sha256 must be the 64-character SHA-256 fingerprint shown on the Add device page")
+	}
+	return sum, nil
+}
+
+// ProbePinnedCA returns the server certificate whose SHA-256 equals pin, after
+// proving that the server's presented chain verifies against it as the only
+// root, including the host name and validity period. No token or credential is
+// ever sent: when this host doesn't already trust the server, the handshake is
+// abandoned before any request, and verification uses the presented chain.
+// This is the specification's "trust fingerprint obtained through a separately
+// trusted channel": the fingerprint comes from the authenticated dashboard,
+// and a certificate is never trusted merely because it was presented.
+func ProbePinnedCA(ctx context.Context, server string, pin []byte) (*x509.Certificate, error) {
+	base, err := NormalizeServer(server)
+	if err != nil {
+		return nil, err
+	}
+	target, _ := url.Parse(base)
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	var presented []*x509.Certificate
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+		DisableKeepAlives:     true,
+		DisableCompression:    true,
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots,
+			// Runs only after ordinary verification against this host's roots succeeded.
+			VerifyConnection: func(state tls.ConnectionState) error {
+				presented = state.PeerCertificates
+				return nil
+			}},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, base+"/agent/v1/install.sh", nil)
+	if err != nil {
+		return nil, errors.New("invalid server address")
+	}
+	request.Header.Set("User-Agent", "Vectory/"+Version)
+	response, err := client.Do(request)
+	var verification *tls.CertificateVerificationError
+	var unknown x509.UnknownAuthorityError
+	switch {
+	case err == nil:
+		// This host already trusts the server; the pin must still match.
+		response.Body.Close()
+	case errors.As(err, &verification) && errors.As(verification.Err, &unknown):
+		presented = verification.UnverifiedCertificates
+	default:
+		proxy, _ := http.ProxyFromEnvironment(request)
+		return nil, classifyTransport(target, proxy, false, err)
+	}
+	return verifyPinnedChain(target, presented, pin, time.Now())
+}
+
+func verifyPinnedChain(target *url.URL, chain []*x509.Certificate, pin []byte, now time.Time) (*x509.Certificate, error) {
+	if len(chain) == 0 {
+		return nil, &ConnectionError{Code: "TLS_NO_CERTIFICATE", Message: "The server presented no certificate.", Fix: "Check the agent listener's TLS configuration.", Delivery: NotSent}
+	}
+	var pinned *x509.Certificate
+	for _, certificate := range chain {
+		if subtle.ConstantTimeCompare(certificateSHA256(certificate), pin) == 1 {
+			pinned = certificate
+			break
+		}
+	}
+	if pinned == nil {
+		return nil, &ConnectionError{
+			Code:     "TLS_PIN_MISMATCH",
+			Message:  fmt.Sprintf("The server's certificates don't match the pinned CA (expected %s, received %s).", ShortFingerprint(pin), ShortFingerprint(certificateSHA256(chain[len(chain)-1]))),
+			Fix:      "Copy the command again from Add device. If it still doesn't match, this address may lead to a different server; don't continue.",
+			Delivery: NotSent,
+		}
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(pinned)
+	intermediates := x509.NewCertPool()
+	for _, certificate := range chain[1:] {
+		intermediates.AddCert(certificate)
+	}
+	if _, err := chain[0].Verify(x509.VerifyOptions{DNSName: target.Hostname(), Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		var unknown x509.UnknownAuthorityError
+		if errors.As(err, &unknown) {
+			return nil, &ConnectionError{
+				Code:     "TLS_PIN_NOT_ISSUER",
+				Message:  fmt.Sprintf("The pinned certificate %q didn't issue the server's certificate.", certificateName(pinned)),
+				Fix:      "Copy the command again from Add device; the server's certificate may have changed.",
+				Delivery: NotSent,
+				cause:    err,
+			}
+		}
+		return nil, classifyCertificate(target, err, chain)
+	}
+	return pinned, nil
+}
+
+// PinnedCAPEM encodes a pinned certificate for the state directory.
+func PinnedCAPEM(certificate *x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+}
+
+func savePinnedCA(dir string, certificate *x509.Certificate) (string, error) {
+	path := filepath.Join(dir, ServerCAFile)
+	return path, AtomicWrite(path, PinnedCAPEM(certificate))
+}

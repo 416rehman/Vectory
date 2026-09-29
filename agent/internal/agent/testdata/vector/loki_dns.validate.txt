@@ -1,0 +1,6 @@
+√ Loaded ["loki_dns.json"]
+√ Transforms configuration
+√ Component configuration
+2026-09-29T02:47:41.885286Z  WARN vector::internal_events::http_client: HTTP error. error=error trying to connect: dns error: failed to lookup address information: Name or service not known error_type="request_failed" stage="processing"
+2026-09-29T02:47:41.885330Z ERROR vector::topology::builder: msg="Healthcheck failed." error=Failed to make HTTP(S) request: error trying to connect: dns error: failed to lookup address information: Name or service not known component_kind="sink" component_type="loki" component_id=lk
+x Health check for "lk" failed: Failed to make HTTP(S) request: error trying to connect: dns error: failed to lookup address information: Name or service not known

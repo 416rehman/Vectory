@@ -5,8 +5,12 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import http from "node:http";
+import { existsSync, readdirSync } from "node:fs";
 const root = path.resolve(import.meta.dirname, ".."),
-  local = path.join(root, ".local/preview");
+  local = process.env.VECTORY_PREVIEW_DIR || path.join(root, ".local/preview"),
+  windows = process.platform === "win32",
+  webPort = process.env.VECTORY_PREVIEW_WEB_PORT || "8080",
+  agentPort = process.env.VECTORY_PREVIEW_AGENT_PORT || "8443";
 const priorRun = await fs
   .readFile(path.join(local, "native-run.json"), "utf8")
   .then(JSON.parse)
@@ -27,7 +31,7 @@ if (priorRun) {
       "A prior synthetic fixture PID is still running. Verify its executable and state path, then stop it before repeating this test.",
     );
 }
-const base = "http://127.0.0.1:8080/api/v1";
+const base = `http://127.0.0.1:${webPort}/api/v1`;
 const credentials = JSON.parse(
   await fs.readFile(path.join(local, "credentials.json"), "utf8"),
 );
@@ -87,9 +91,23 @@ await fs.writeFile(
   policyPath,
   JSON.stringify({ allowed_file_roots: [dataDir] }),
 );
+function officialVector() {
+  if (process.env.VECTORY_VECTOR_BIN) return process.env.VECTORY_VECTOR_BIN;
+  if (windows) return path.join(root, ".local/tools/vector-0.58.0/bin/vector.exe");
+  const tools = path.join(root, ".local/tools");
+  const found = existsSync(tools)
+    ? readdirSync(tools)
+        .map((entry) => path.join(tools, entry, "bin", "vector"))
+        .find((candidate) => existsSync(candidate))
+    : undefined;
+  if (!found)
+    throw Error("Place the verified official Vector 0.58.0 build under .local/tools or set VECTORY_VECTOR_BIN");
+  return found;
+}
 const binary =
-    process.env.VECTORY_AGENT_BIN || path.join(root, "agent/vectory.exe"),
-  vector = path.join(root, ".local/tools/vector-0.58.0/bin/vector.exe");
+    process.env.VECTORY_AGENT_BIN ||
+    path.join(root, windows ? "agent/vectory.exe" : "agent/vectory"),
+  vector = officialVector();
 const binaryDigest = crypto
   .createHash("sha256")
   .update(await fs.readFile(binary))
@@ -170,7 +188,7 @@ try {
     secondSecret = crypto.randomBytes(24).toString("base64url");
   await fs.writeFile(secretFile, firstSecret, { mode: 0o600 });
   await fs.writeFile(bindings, JSON.stringify({ API_TOKEN: secretFile }));
-  await new Promise((resolve, reject) => {
+  if (windows) await new Promise((resolve, reject) => {
     const p = spawn(
       "powershell",
       [
@@ -201,7 +219,7 @@ try {
     name: `Native verification ${runId}`,
     expires_hours: 1,
     max_uses: 1,
-    name_prefix: "local-win-",
+    name_prefix: `local-${process.platform}-`,
   });
   await cli(
     [
@@ -209,23 +227,23 @@ try {
       "--state-dir",
       state,
       "--server",
-      "https://localhost:8443",
+      `https://localhost:${agentPort}`,
       "--ca-file",
       path.join(root, ".local/pki/ca.pem"),
       "--id",
-      `local-win-${runId}`,
+      `local-${process.platform}-${runId}`,
       "--token-stdin",
       "--json",
     ],
     token.token + "\n",
   );
   const device = (await api("/devices")).find(
-    (d) => d.name === `local-win-${runId}`,
+    (d) => d.name === `local-${process.platform}-${runId}`,
   );
   if (!device) throw Error("Enrollment not visible in authenticated fleet");
   console.log("PASS trusted TLS enrollment -> real device in SQLite.");
   const configuration = await api("/configurations", {
-    name: `Synthetic Windows pipeline ${runId}`,
+    name: `Synthetic ${process.platform} pipeline ${runId}`,
     description:
       "Real native integration fixture. Synthetic events only; console output is discarded locally.",
     config,
@@ -352,8 +370,11 @@ try {
     throw Error("Drift was not actually repaired");
   await cli(["pause", "--state-dir", state, "--json"]);
   await until(
-    "local emergency pause acknowledged",
-    (d) => d.apply_state === "paused" || d.pause_acknowledged,
+    "local emergency pause reported without losing verified state",
+    (d) =>
+      d.local_paused === true &&
+      d.status === "paused" &&
+      d.apply_state === "verified_applied",
     35000,
   );
   await fs.writeFile(managed, JSON.stringify(drift));
@@ -465,7 +486,7 @@ try {
         component_count: metricDevice.telemetry.components.length,
         actual_events_per_second: metricDevice.telemetry.events_per_second,
         scope:
-          "Real Rust TLS API + Go agent + pinned Windows Vector + explicit loopback synthetic receiver/exporter.",
+          `Real Rust TLS API + Go agent + pinned ${process.platform} Vector + explicit loopback synthetic receiver/exporter.`,
       },
       null,
       2,

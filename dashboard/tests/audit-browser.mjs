@@ -395,7 +395,7 @@ try {
           "Synthetic Alpha 13",
         );
         const opener = f.page
-          .getByRole("button", { name: "Details: Pipeline published" })
+          .getByRole("link", { name: "Pipeline published", exact: true })
           .first();
         await opener.click();
         const dialog = f.page.getByRole("dialog", { name: "Event details" });
@@ -436,7 +436,7 @@ try {
           f.page.getByRole("button", { name: "Export results" }),
         ).toBeDisabled();
         f.state.failHistory = false;
-        await f.page.getByRole("button", { name: /Try again/ }).click();
+        await f.page.getByRole("button", { name: "Retry", exact: true }).click();
         await expect(f.page.locator(".audit-table tbody tr")).toHaveCount(12);
         f.state.heldSearch = "Alpha";
         await f.page
@@ -456,13 +456,13 @@ try {
         );
         f.state.heldId = id(25);
         await f.page
-          .getByRole("button", { name: "Details: Pipeline published" })
+          .getByRole("link", { name: "Pipeline published", exact: true })
           .first()
           .click();
         await expect.poll(() => f.state.held.length).toBe(1);
         await f.page.keyboard.press("Escape");
         await f.page
-          .getByRole("button", { name: "Details: Issue acknowledged" })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .first()
           .click();
         await expect(
@@ -536,12 +536,21 @@ try {
         );
         f.state.records = f.state.records.slice(0, 3);
         await f.page
-          .getByRole("button", { name: "Refresh", exact: true })
+          .getByRole("button", { name: "Refresh now", exact: true })
           .click();
         await expect(f.page.locator(".audit-table tbody tr")).toHaveCount(3);
+        // Page 2 clamps to the only page, and a single page needs no pager.
+        await expect
+          .poll(
+            () =>
+              f.state.calls
+                .filter((call) => call.path === "/audit/history")
+                .at(-1).query.page,
+          )
+          .toBe("1");
         await expect(
           f.page.getByRole("button", { name: "Previous", exact: true }),
-        ).toBeDisabled();
+        ).toHaveCount(0);
       } finally {
         await f.close();
       }
@@ -580,24 +589,32 @@ try {
         await expect(f.page.locator(".audit-target").first()).toHaveText(
           "Synthetic Beta 25",
         );
-        for (const [label, column] of [
-          ["By", "actor"],
-          ["Result", "outcome"],
-          ["Time", "created_at"],
+        // Time sorts newest first on its first click; other columns A to Z.
+        for (const [label, column, direction] of [
+          ["By", "actor", "asc"],
+          ["Result", "outcome", "asc"],
+          ["Time", "created_at", "desc"],
         ]) {
           await f.page
             .getByRole("button", { name: new RegExp(`^Sort by ${label}`) })
             .click();
           await expect
             .poll(() => f.state.calls.at(-1).query)
-            .toMatchObject({ page: "1", sort: column, direction: "asc" });
+            .toMatchObject(
+              direction === "asc"
+                ? { page: "1", sort: column, direction }
+                : { page: "1" },
+            );
           await expect(
             f.page.getByRole("columnheader").filter({
               has: f.page.getByRole("button", {
                 name: new RegExp(`^Sort by ${label}`),
               }),
             }),
-          ).toHaveAttribute("aria-sort", "ascending");
+          ).toHaveAttribute(
+            "aria-sort",
+            direction === "asc" ? "ascending" : "descending",
+          );
         }
         await f.page.getByRole("button", { name: "Export results" }).click();
         await f.page.getByRole("button", { name: "Prepare export" }).click();
@@ -605,7 +622,8 @@ try {
           f.page.getByRole("heading", { name: "File ready" }),
         ).toBeVisible();
         const body = f.state.calls.find((call) => call.method === "POST").body;
-        expect(body).toEqual({ search: "Synthetic" });
+        // Exports keep the visible scope: sign-ins stay out by default.
+        expect(body).toEqual({ scope: "changes", search: "Synthetic" });
         await f.page.keyboard.press("Escape");
         await f.page
           .getByPlaceholder("Search activity")
@@ -888,7 +906,7 @@ try {
             });
           }
         await f.page
-          .getByRole("button", { name: "Details: Issue acknowledged" })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .first()
           .click();
         await expect(

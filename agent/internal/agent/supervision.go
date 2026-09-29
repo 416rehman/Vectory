@@ -34,7 +34,7 @@ func (e *Engine) observeProcessExit() error {
 	// A newer candidate's validation error remains in ConfigurationAttempt instead.
 	issue := e.State.Error
 	if issue == nil || (issue.Stage != "startup" && issue.Stage != "recovery" && !(issue.Stage == "rollback" && (issue.Code == "ROLLBACK_FAILED" || issue.Code == "ROLLBACK_UNAVAILABLE"))) {
-		issue = &Issue{"PROCESS_EXITED", "observation", "Owned Vector process is not running; local recovery waits for sync resume or its bounded retry interval"}
+		issue = &Issue{Code: "PROCESS_EXITED", Stage: "observation", Message: "Owned Vector process is not running; local recovery waits for sync resume or its bounded retry interval"}
 	}
 	if e.State.ApplyState == "verification_unknown" && e.State.Error == issue {
 		return nil

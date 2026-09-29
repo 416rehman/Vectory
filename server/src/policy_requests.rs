@@ -94,8 +94,119 @@ impl<'de> serde::Deserialize<'de> for UniqueValue {
         d.deserialize_any(Visitor)
     }
 }
-pub async fn list(state: AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
-    api::list(state, h, Path("policies".to_owned())).await
+// Devices currently governed by a saved template: their winning settings
+// assignment was applied from it, or (for assignments made before templates
+// were linked) carries exactly the same settings.
+const APPLIED: &str = "applied AS MATERIALIZED (SELECT dv.id AS device_id,substr(dv.name,1,240) AS device_name,json_extract(dep.data,'$.policy_id') AS policy_id,json_extract(dep.data,'$.policy.heartbeat_seconds') AS heartbeat,json_extract(dep.data,'$.policy.sync_paused') AS paused,json_extract(dep.data,'$.policy.telemetry_enabled') AS telemetry FROM devices dv JOIN records dep ON dep.kind='deployment' AND dep.id=dv.policy_assignment_id WHERE dv.revoked=0)";
+const APPLIED_MATCH: &str = "(a.policy_id=p.id OR (a.policy_id IS NULL AND a.heartbeat=json_extract(p.data,'$.policy.heartbeat_seconds') AND a.paused=json_extract(p.data,'$.policy.sync_paused') AND a.telemetry=json_extract(p.data,'$.policy.telemetry_enabled')))";
+fn saved_settings_query(single: bool) -> String {
+    format!(
+        "WITH {APPLIED} SELECT json_object('id',p.id,'name',json_extract(p.data,'$.name'),'policy',json_extract(p.data,'$.policy'),'created_at',json_extract(p.data,'$.created_at'),\
+         'updated_at',json_extract(p.data,'$.updated_at'),'revision',COALESCE(json_extract(p.data,'$.revision'),0),\
+         'applied_device_count',(SELECT count(*) FROM applied a WHERE {APPLIED_MATCH}),\
+         'outdated_device_count',(SELECT count(*) FROM applied a WHERE a.policy_id=p.id AND NOT (a.heartbeat IS json_extract(p.data,'$.policy.heartbeat_seconds') AND a.paused IS json_extract(p.data,'$.policy.sync_paused') AND a.telemetry IS json_extract(p.data,'$.policy.telemetry_enabled'))),\
+         'applied_devices',json(COALESCE((SELECT json_group_array(json_object('id',x.device_id,'name',x.device_name)) FROM (SELECT a.device_id,a.device_name FROM applied a WHERE {APPLIED_MATCH} ORDER BY a.device_name COLLATE NOCASE,a.device_id LIMIT 20) x),'[]'))) \
+         FROM records p WHERE p.kind='policy'{} ORDER BY p.created_at DESC,p.id",
+        if single { " AND p.id=?" } else { "" }
+    )
+}
+pub async fn list(AppState(s): AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &[], false).await?;
+    let mut conn = s.pool.acquire().await?;
+    let rows: Vec<String> = sqlx::query_scalar(&saved_settings_query(false))
+        .fetch_all(&mut *conn)
+        .await?;
+    Ok(Json(json!(
+        rows.iter()
+            .map(|row| saved_row(row))
+            .collect::<Result<Vec<_>>>()?
+    )))
+}
+fn saved_row(row: &str) -> Result<Value> {
+    let mut value = db::parse(row)?;
+    if value["updated_at"].is_null() {
+        value.as_object_mut().unwrap().remove("updated_at");
+    }
+    Ok(value)
+}
+async fn saved(db: &mut SqliteConnection, id: &str) -> Result<Value> {
+    let row: Option<String> = sqlx::query_scalar(&saved_settings_query(true))
+        .bind(id)
+        .fetch_optional(&mut *db)
+        .await?;
+    saved_row(&row.ok_or_else(ApiError::missing)?)
+}
+pub async fn detail(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &[], false).await?;
+    let mut conn = s.pool.acquire().await?;
+    Ok(Json(saved(&mut conn, &id).await?))
+}
+/// Editing a saved template never changes a device. Devices keep the settings
+/// they were given until someone applies the template again.
+pub async fn edit(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["operator"], true).await?;
+    if raw.is_some_and(|r| !r.is_empty()) {
+        return Err(ApiError::invalid(
+            "Saved settings updates do not accept query parameters",
+        ));
+    }
+    let request: UniqueValue = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::invalid("Provide a JSON object without duplicate keys"))?;
+    let request = request.0;
+    if request.as_object().is_none_or(|fields| {
+        fields.len() != 3
+            || ["name", "policy", "revision"]
+                .iter()
+                .any(|key| !fields.contains_key(*key))
+    }) {
+        return Err(ApiError::invalid(
+            "Provide exactly name, policy and revision",
+        ));
+    }
+    let expected = request["revision"]
+        .as_u64()
+        .filter(|n| *n <= 9_007_199_254_740_991)
+        .ok_or_else(|| ApiError::invalid("revision must be a nonnegative safe integer"))?;
+    let name = db::string(&request, "name", 120)?.to_owned();
+    db::validate_policy(&request["policy"])?;
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
+    let mut record = db::record(&mut tx, "policy", &id).await?;
+    let current = record["revision"].as_u64().unwrap_or(0);
+    if current != expected {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "STALE_REVISION",
+            "These settings changed since you opened them. Review the latest values before saving.",
+        ));
+    }
+    record["name"] = json!(name);
+    record["policy"] = request["policy"].clone();
+    record["revision"] = json!(current + 1);
+    record["updated_at"] = json!(db::now());
+    db::update(&mut tx, "policy", &record).await?;
+    db::audit(
+        &mut tx,
+        api::text(&actor, "id"),
+        "policy.update",
+        &id,
+        "success",
+    )
+    .await?;
+    let result = saved(&mut tx, &id).await?;
+    tx.commit().await?;
+    Ok(Json(result))
 }
 pub async fn post(
     AppState(s): AppState<State>,

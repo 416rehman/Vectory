@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,9 +103,18 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Vectory/"+Version)
+	// A request that never reached WroteHeaders/WroteRequest provably left no
+	// byte on the connection; enrollment uses that to tell unsent from maybe-sent.
+	var wrote atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { wrote.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { wrote.Store(true) },
+	}))
 	res, e := c.HTTP.Do(req)
 	if e != nil {
-		return nil, errors.New("verified HTTPS request failed; check trust, reachability, proxy, credentials and clock")
+		target, _ := url.Parse(c.Base)
+		proxy, _ := http.ProxyFromEnvironment(req)
+		return nil, classifyTransport(target, proxy, wrote.Load(), e)
 	}
 	defer res.Body.Close()
 	c.RetryAfter = 0
@@ -116,7 +127,9 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 				c.RetryAfter = min(max(time.Until(at), 0), time.Hour)
 			}
 		}
-		return nil, fmt.Errorf("server rejected request (HTTP %d)", res.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		target, _ := url.Parse(c.Base)
+		return nil, classifyStatus(target, path, res.StatusCode, c.RetryAfter, body)
 	}
 	b, e := io.ReadAll(io.LimitReader(res.Body, MaxArtifact+1))
 	if e != nil {
@@ -247,21 +260,45 @@ func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c
 	var pending enrollmentPending
 	pendingPath := filepath.Join(dir, "enrollment.json")
 	e = ReadJSON(pendingPath, &pending)
-	if os.IsNotExist(e) {
-		pending.RequestID = RandomID()
-		pending.Name = s.Name
-		pending.Server = s.Server
+	// previous is what the server can have seen before this attempt.
+	previous := "maybe"
+	switch {
+	case os.IsNotExist(e), e == nil && pending.rebindable() && (pending.Delivery == "refused" || pending.Name != s.Name || pending.Server != s.Server):
+		// Nothing under the old request can exist on the server: start afresh.
+		pending, previous = enrollmentPending{RequestID: RandomID(), Name: s.Name, Server: s.Server}, "no"
+	case e != nil:
+		return e
+	case pending.Name != s.Name || pending.Server != s.Server:
+		return pendingBindingError(pending)
+	case pending.Delivery == "no":
+		previous = "no"
+	}
+	// Persist before sending: a crash mid-request must leave the conservative
+	// "maybe" record, never one that permits rebinding.
+	if pending.Delivery != "maybe" {
+		pending.Delivery = "maybe"
 		if e = WriteJSON(pendingPath, pending); e != nil {
 			return e
 		}
-	} else if e != nil {
-		return e
-	}
-	if pending.Name != s.Name || pending.Server != s.Server {
-		return errors.New("pending enrollment belongs to a different server or name; preserve identity and retry the original request")
 	}
 	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
 	if e != nil {
+		if ce, ok := AsConnectionError(e); ok {
+			outcome := pending
+			switch {
+			case ce.Delivery == NotSent:
+				outcome.Delivery = previous
+			case ce.Code == "ENROLLMENT_REFUSED":
+				// The server looks up this request before checking the token, so
+				// a refusal means no device exists for it.
+				outcome.Delivery = "refused"
+			}
+			outcome.LastFailure = ce.Code
+			if outcome != pending {
+				// Best effort: if this write fails, the "maybe" record stays.
+				_ = WriteJSON(pendingPath, outcome)
+			}
+		}
 		return e
 	}
 	var cred Credentials

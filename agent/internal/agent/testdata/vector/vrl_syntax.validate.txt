@@ -1,0 +1,34 @@
+√ Loaded ["vrl_syntax.json"]
+
+Transform errors
+----------------
+x Transform "t": 
+error[E204]: syntax error
+  ┌─ :2:7
+  │
+2 │ .b = (
+  │       ^
+  │
+  │       unexpected end of program
+  │       expected one of: "identifier", "string literal", "raw string literal", "integer literal", "float literal", "regex literal", "timestamp literal", "function call", "path literal", "null", "true", "false", "_", "!", "[", "{", "("
+  │
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
+Component errors
+----------------
+x Transform "t": 
+error[E204]: syntax error
+  ┌─ :2:7
+  │
+2 │ .b = (
+  │       ^
+  │
+  │       unexpected end of program
+  │       expected one of: "identifier", "string literal", "raw string literal", "integer literal", "float literal", "regex literal", "timestamp literal", "function call", "path literal", "null", "true", "false", "_", "!", "[", "{", "("
+  │
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+

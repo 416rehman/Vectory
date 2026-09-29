@@ -1,4 +1,5 @@
-//! Operator acknowledgement is distinct from verified runtime resolution.
+//! Apply failures as operator issues. Acknowledgement is an operator
+//! disposition, distinct from verified runtime resolution.
 use crate::{
     State, auth, db,
     error::{ApiError, Result},
@@ -15,7 +16,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
-pub(crate) const MESSAGE: &str = "Device reported an operational failure. Inspect the local agent status for sanitized diagnostics.";
 const MAX_INTEGER: u64 = 9_007_199_254_740_991;
 const DISPOSITION: &str = "CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'resolved' WHEN json_type(i.data,'$.acknowledged')='true' THEN 'acknowledged' ELSE 'open' END";
 // Keep these expressions equivalent to the indexes in migration 0011. Only
@@ -72,11 +72,20 @@ pub struct HistoryQuery {
     sort: Option<String>,
     direction: Option<String>,
 }
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupQuery {
+    search: Option<String>,
+    state: Option<String>,
+    page: Option<u64>,
+    page_size: Option<u64>,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Command {
     revision: u64,
-    reason: String,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 pub(crate) fn clear_acknowledgement(issue: &mut Value) {
@@ -102,24 +111,166 @@ pub(crate) fn advance_revision(issue: &mut Value) -> Result<()> {
     Ok(())
 }
 
+/// A failure report to persist as an issue.
+pub(crate) struct Failure<'a> {
+    pub device_id: &'a str,
+    /// Allowlisted error from `configuration_attempt::safe_error`.
+    pub error: &'a Value,
+    /// Version the failure belongs to; part of the issue identity.
+    pub version_id: Option<&'a str>,
+    /// Identity of the failed attempt: a new identity is a new occurrence.
+    pub attempt: Value,
+    pub deployment_id: Option<String>,
+}
+
+fn counter(issue: &Value, key: &str) -> u64 {
+    issue[key]
+        .as_u64()
+        .filter(|n| *n <= MAX_INTEGER)
+        .unwrap_or(0)
+}
+fn increment(value: u64) -> Result<Value> {
+    value
+        .checked_add(1)
+        .filter(|n| *n <= MAX_INTEGER)
+        .map(|n| json!(n))
+        .ok_or_else(|| ApiError::conflict("Issue occurrence count is exhausted"))
+}
+
+/// Record one failure report. Issues are keyed by device, version, code and
+/// stage. `count` counts distinct failed attempts (a new generation or local
+/// materialization); `reports` counts every report. Only a new attempt or a
+/// recurrence after resolution advances the revision and clears an
+/// acknowledgement, so repeated check-ins never undo an operator's decision.
+pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) -> Result<()> {
+    let code = f.error["code"].as_str().unwrap_or("APPLY_FAILED");
+    let stage = f.error["stage"].as_str().unwrap_or("apply");
+    let version = f.version_id.unwrap_or("");
+    let id = db::hash(format!("{}:{version}:{code}:{stage}", f.device_id));
+    let now = db::now();
+    let (mut issue, new) = match db::record(db, "issue", &id).await {
+        Ok(v) => (v, false),
+        Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => (
+            json!({"id":id,"device_id":f.device_id,"code":code,"stage":stage,"count":0,"reports":0,"first_seen":now,"resolved":false,"revision":1}),
+            true,
+        ),
+        Err(e) => return Err(e),
+    };
+    if new || issue["resolved"] == true || issue["last_attempt"] != f.attempt {
+        if !new {
+            advance_revision(&mut issue)?;
+        }
+        clear_acknowledgement(&mut issue);
+        issue["count"] = increment(counter(&issue, "count"))?;
+        issue["resolved"] = json!(false);
+        if let Some(o) = issue.as_object_mut() {
+            o.remove("resolved_reason");
+            o.remove("resolved_at");
+        }
+    }
+    let reports = counter(&issue, "reports").max(counter(&issue, "count").saturating_sub(1));
+    issue["reports"] = increment(reports)?;
+    issue["last_seen"] = json!(now);
+    issue["last_attempt"] = f.attempt;
+    // The reason is rendered on read from the code and validated diagnostics,
+    // so a stored free-text message (from any server version) is never shown.
+    if let Some(o) = issue.as_object_mut() {
+        o.remove("message");
+    }
+    match f.error.get("diagnostics") {
+        Some(d) => issue["diagnostics"] = d.clone(),
+        None => {
+            issue.as_object_mut().unwrap().remove("diagnostics");
+        }
+    }
+    issue["desired_version_id"] = json!(f.version_id);
+    issue["deployment_id"] = json!(f.deployment_id);
+    if new {
+        db::insert(db, "issue", &issue).await
+    } else {
+        db::update(db, "issue", &issue).await
+    }
+}
+
+/// Resolve a device's open issues: `verified` when it verified a
+/// configuration after the failure, `unassigned` when its assignment was
+/// removed. Acknowledgement context stays as history.
+pub(crate) async fn resolve_device(
+    db: &mut SqliteConnection,
+    device_id: &str,
+    reason: &str,
+) -> Result<()> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0")
+        .bind(device_id)
+        .fetch_all(&mut *db)
+        .await?;
+    for row in rows {
+        let mut issue = db::parse(&row)?;
+        advance_revision(&mut issue)?;
+        issue["resolved"] = json!(true);
+        issue["resolved_reason"] = json!(reason);
+        issue["resolved_at"] = json!(db::now());
+        db::update(db, "issue", &issue).await?;
+    }
+    Ok(())
+}
+
+const COUNT: &str = "CASE WHEN json_type(i.data,'$.count')='integer' AND json_extract(i.data,'$.count') BETWEEN 0 AND 9007199254740991 THEN json_extract(i.data,'$.count') ELSE 0 END";
+const REPORTS: &str = "CASE WHEN json_type(i.data,'$.reports')='integer' AND json_extract(i.data,'$.reports') BETWEEN 0 AND 9007199254740991 THEN json_extract(i.data,'$.reports') ELSE NULL END";
+const CODE: &str = "CASE WHEN json_type(i.data,'$.code')='text' THEN substr(json_extract(i.data,'$.code'),1,128) ELSE 'APPLY_FAILED' END";
+const VERSION: &str = "CASE WHEN json_type(i.data,'$.desired_version_id')='text' THEN substr(json_extract(i.data,'$.desired_version_id'),1,128) ELSE '' END";
+/// SQL for the plain-language title, so search matches what operators read.
+fn title_sql() -> String {
+    let mut sql = format!("CASE {CODE}");
+    for code in crate::configuration_attempt::CODES {
+        let title = crate::configuration_attempt::title(code).replace('\'', "''");
+        sql.push_str(&format!(" WHEN '{code}' THEN '{title}'"));
+    }
+    sql.push_str(" END");
+    sql
+}
+const JOINS: &str = " LEFT JOIN devices d ON d.id=json_extract(i.data,'$.device_id') LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(i.data,'$.desired_version_id') LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')";
+
 fn projection(q: &mut QueryBuilder<'_, Sqlite>) {
     q.push("SELECT json_object(\
         'id',i.id,'device_id',CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END,\
         'device_name',substr(d.name,1,256),'device_revoked',CASE WHEN d.id IS NULL THEN NULL ELSE json(CASE WHEN d.revoked=1 THEN 'true' ELSE 'false' END) END,\
-        'code',CASE WHEN json_type(i.data,'$.code')='text' THEN substr(json_extract(i.data,'$.code'),1,128) ELSE 'APPLY_FAILED' END,\
+        'code',").push(CODE).push(",\
         'stage',CASE WHEN json_type(i.data,'$.stage')='text' THEN substr(json_extract(i.data,'$.stage'),1,64) ELSE 'apply' END,\
-        'message',").push_bind(MESSAGE).push(",\
-        'count',CASE WHEN json_type(i.data,'$.count')='integer' AND json_extract(i.data,'$.count') BETWEEN 0 AND 9007199254740991 THEN json_extract(i.data,'$.count') ELSE 0 END,\
+        'diagnostics',CASE WHEN json_type(i.data,'$.diagnostics')='array' AND json_array_length(i.data,'$.diagnostics')<=10 AND length(json_extract(i.data,'$.diagnostics'))<=6000 THEN json(json_extract(i.data,'$.diagnostics')) ELSE json('[]') END,\
+        'count',").push(COUNT).push(",\
+        'reports',COALESCE(").push(REPORTS).push(",").push(COUNT).push("),\
         'first_seen',").push(first_seen()).push(",'last_seen',").push(last_seen()).push(",\
         'desired_version_id',CASE WHEN json_type(i.data,'$.desired_version_id')='text' THEN substr(json_extract(i.data,'$.desired_version_id'),1,128) ELSE NULL END,\
+        'version_number',CASE WHEN json_type(v.data,'$.number')='integer' AND json_extract(v.data,'$.number') BETWEEN 1 AND 9007199254740991 THEN json_extract(v.data,'$.number') ELSE NULL END,\
+        'configuration_id',CASE WHEN json_type(v.data,'$.configuration_id')='text' THEN substr(json_extract(v.data,'$.configuration_id'),1,128) ELSE NULL END,\
+        'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) ELSE NULL END,\
+        'deployment_id',CASE WHEN json_type(i.data,'$.deployment_id')='text' THEN substr(json_extract(i.data,'$.deployment_id'),1,128) ELSE NULL END,\
         'resolved',json(CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'true' ELSE 'false' END),\
+        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
+        'resolved_at',").push(timestamp("json_extract(i.data,'$.resolved_at')")).push(",\
         'revision',CASE WHEN json_type(i.data,'$.revision')='integer' AND json_extract(i.data,'$.revision') BETWEEN 1 AND 9007199254740991 THEN json_extract(i.data,'$.revision') ELSE 1 END,\
         'acknowledged',json(CASE WHEN json_type(i.data,'$.acknowledged')='true' THEN 'true' ELSE 'false' END),\
         'acknowledged_at',").push(timestamp("json_extract(i.data,'$.acknowledged_at')")).push(",\
         'acknowledged_by',CASE WHEN json_type(i.data,'$.acknowledged_by')='text' THEN substr(json_extract(i.data,'$.acknowledged_by'),1,128) ELSE NULL END,\
         'acknowledged_by_name',CASE WHEN json_type(i.data,'$.acknowledged_by_name')='text' THEN substr(json_extract(i.data,'$.acknowledged_by_name'),1,120) ELSE NULL END,\
         'acknowledgement_reason',CASE WHEN json_type(i.data,'$.acknowledgement_reason')='text' THEN substr(json_extract(i.data,'$.acknowledgement_reason'),1,1000) ELSE NULL END,\
-        'disposition',").push(DISPOSITION).push(") FROM records i LEFT JOIN devices d ON d.id=json_extract(i.data,'$.device_id')");
+        'disposition',").push(DISPOSITION).push(") FROM records i").push(JOINS);
+}
+/// Render the plain-language title and reason from the code and the
+/// diagnostics, which are revalidated so imported records cannot inject
+/// unbounded or unexpected content.
+fn render(mut issue: Value) -> Value {
+    let code = issue["code"].as_str().unwrap_or("APPLY_FAILED").to_owned();
+    let diagnostics = crate::configuration_attempt::diagnostics(&issue["diagnostics"])
+        .unwrap_or_else(|_| json!([]));
+    issue["title"] = json!(crate::configuration_attempt::title(&code));
+    issue["message"] = json!(crate::configuration_attempt::summary(&code, &diagnostics));
+    issue["diagnostics"] = diagnostics;
+    issue
+}
+fn rendered(rows: &[String]) -> Result<Vec<Value>> {
+    rows.iter().map(|row| db::parse(row).map(render)).collect()
 }
 fn filter(q: &mut QueryBuilder<'_, Sqlite>, state: &str, device: Option<&str>, search: &str) {
     q.push(" WHERE i.kind='issue'");
@@ -136,13 +287,13 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, state: &str, device: Option<&str>, s
     if !search.is_empty() {
         // Only advertised bounded fields are searchable. Operator reasons and
         // imported raw diagnostic bodies cannot become a covert search index.
-        q.push(" AND instr(lower(COALESCE(substr(d.name,1,256),'')||' '||CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END||' '||CASE WHEN json_type(i.data,'$.code')='text' THEN substr(json_extract(i.data,'$.code'),1,128) ELSE 'APPLY_FAILED' END||' '||CASE WHEN json_type(i.data,'$.stage')='text' THEN substr(json_extract(i.data,'$.stage'),1,64) ELSE 'apply' END||' '||").push_bind(MESSAGE).push("),lower(").push_bind(search.to_owned()).push("))>0");
+        q.push(" AND instr(lower(COALESCE(substr(d.name,1,256),'')||' '||CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END||' '||").push(CODE).push("||' '||COALESCE(").push(title_sql()).push(",'')||' '||CASE WHEN json_type(i.data,'$.stage')='text' THEN substr(json_extract(i.data,'$.stage'),1,64) ELSE 'apply' END||' '||COALESCE(CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END,'')),lower(").push_bind(search.to_owned()).push("))>0");
     }
 }
 fn count_query(state: &str, device: Option<&str>, search: &str) -> QueryBuilder<'static, Sqlite> {
     let mut q = QueryBuilder::new("SELECT count(*) FROM records i");
     if !search.is_empty() {
-        q.push(" LEFT JOIN devices d ON d.id=json_extract(i.data,'$.device_id')");
+        q.push(JOINS);
     }
     filter(&mut q, state, device, search);
     q
@@ -167,6 +318,7 @@ fn page_query(
     q
 }
 pub(crate) async fn open_count(db: &mut SqliteConnection) -> Result<i64> {
+    // Search is empty here, so the count reads the state index only.
     Ok(count_query("open", None, "")
         .build_query_scalar()
         .fetch_one(db)
@@ -178,7 +330,7 @@ pub(crate) async fn legacy(db: &mut SqliteConnection) -> Result<Vec<Value>> {
     filter(&mut q, "all", None, "");
     q.push(" ORDER BY ").push(order());
     let rows: Vec<String> = q.build_query_scalar().fetch_all(db).await?;
-    rows.iter().map(|row| db::parse(row)).collect()
+    rendered(&rows)
 }
 async fn read(db: &mut SqliteConnection, id: &str) -> Result<Value> {
     let mut q = QueryBuilder::new("");
@@ -186,7 +338,7 @@ async fn read(db: &mut SqliteConnection, id: &str) -> Result<Value> {
     q.push(" WHERE i.kind='issue' AND i.id=")
         .push_bind(id.to_owned());
     let row: Option<String> = q.build_query_scalar().fetch_optional(db).await?;
-    db::parse(&row.ok_or_else(ApiError::missing)?)
+    db::parse(&row.ok_or_else(ApiError::missing)?).map(render)
 }
 pub async fn history(
     AppState(s): AppState<State>,
@@ -226,10 +378,112 @@ pub async fn history(
         .build_query_scalar()
         .fetch_all(&mut *tx)
         .await?;
-    let items = rows
-        .iter()
-        .map(|row| db::parse(row))
-        .collect::<Result<Vec<_>>>()?;
+    let items = rendered(&rows)?;
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":size}),
+    ))
+}
+
+/// `GET /issues/groups`: issues grouped by (version, code), newest first,
+/// with up to 50 devices per group. Groups count devices, distinct failed
+/// attempts and reports across the group.
+pub async fn groups(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    RawQuery(raw): RawQuery,
+    parsed: std::result::Result<Query<GroupQuery>, QueryRejection>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &[], false).await?;
+    let input = crate::deployment_history::query(raw.as_deref(), parsed)?;
+    let (search, page, size, offset) =
+        crate::deployment_history::bounds(input.search.as_deref(), input.page, input.page_size)?;
+    let state = input.state.as_deref().unwrap_or("open");
+    if !matches!(state, "open" | "acknowledged" | "resolved" | "all") {
+        return Err(ApiError::invalid(
+            "state must be open, acknowledged, resolved or all",
+        ));
+    }
+    let mut tx = s.pool.begin().await?;
+    let mut total = QueryBuilder::new("SELECT count(*) FROM (SELECT 1 FROM records i");
+    total.push(JOINS);
+    filter(&mut total, state, None, search);
+    total
+        .push(" GROUP BY ")
+        .push(VERSION)
+        .push(",")
+        .push(CODE)
+        .push(")");
+    let total: i64 = total.build_query_scalar().fetch_one(&mut *tx).await?;
+    let mut keys = QueryBuilder::new("SELECT ");
+    keys.push(VERSION)
+        .push(" AS version,")
+        .push(CODE)
+        .push(" AS code,count(DISTINCT json_extract(i.data,'$.device_id')) AS devices,count(*) AS issues,sum(")
+        .push(COUNT)
+        .push(") AS attempts,sum(COALESCE(")
+        .push(REPORTS)
+        .push(",")
+        .push(COUNT)
+        .push(")) AS reports,min(")
+        .push(first_seen())
+        .push(") AS oldest,max(")
+        .push(last_seen())
+        .push(") AS newest FROM records i")
+        .push(JOINS);
+    filter(&mut keys, state, None, search);
+    keys.push(" GROUP BY version,code ORDER BY newest DESC NULLS LAST,version,code LIMIT ")
+        .push_bind(size)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let keys = keys.build().fetch_all(&mut *tx).await?;
+    let mut items = Vec::with_capacity(keys.len());
+    for key in keys {
+        use sqlx::Row;
+        let version: String = key.get("version");
+        let code: String = key.get("code");
+        let mut q = QueryBuilder::new("");
+        projection(&mut q);
+        filter(&mut q, state, None, search);
+        q.push(" AND ")
+            .push(VERSION)
+            .push("=")
+            .push_bind(version.clone())
+            .push(" AND ")
+            .push(CODE)
+            .push("=")
+            .push_bind(code.clone())
+            .push(" ORDER BY ")
+            .push(order())
+            .push(" LIMIT 50");
+        let rows: Vec<String> = q.build_query_scalar().fetch_all(&mut *tx).await?;
+        let devices = rendered(&rows)?;
+        let first = devices.first().cloned().unwrap_or(Value::Null);
+        let mut deployments: Vec<&str> = devices
+            .iter()
+            .filter_map(|d| d["deployment_id"].as_str())
+            .collect();
+        deployments.sort_unstable();
+        deployments.dedup();
+        items.push(json!({
+            "key": db::hash(format!("{version}:{code}")),
+            "code": code,
+            "title": first["title"],
+            "message": first["message"],
+            "diagnostics": first["diagnostics"],
+            "version_id": if version.is_empty() { Value::Null } else { json!(version) },
+            "version_number": first["version_number"],
+            "configuration_id": first["configuration_id"],
+            "configuration_name": first["configuration_name"],
+            "deployment_ids": deployments,
+            "device_count": key.get::<i64, _>("devices"),
+            "issue_count": key.get::<i64, _>("issues"),
+            "attempts": key.get::<Option<i64>, _>("attempts").unwrap_or(0),
+            "reports": key.get::<Option<i64>, _>("reports").unwrap_or(0),
+            "first_seen": key.get::<Option<String>, _>("oldest"),
+            "last_seen": key.get::<Option<String>, _>("newest"),
+            "devices": devices,
+        }));
+    }
     Ok(Json(
         json!({"items":items,"total":total,"page":page,"page_size":size}),
     ))
@@ -270,15 +524,16 @@ async fn command(
     acknowledge: bool,
 ) -> Result<Json<Value>> {
     auth::authorize(&s, &h, &["operator"], true).await?;
-    let Json(input) = input.map_err(|_| ApiError::invalid("Provide revision and a reason"))?;
-    let reason = input.reason.trim();
+    let Json(input) = input.map_err(|_| ApiError::invalid("Provide the issue revision"))?;
+    let reason = input.reason.as_deref().unwrap_or("").trim().to_owned();
+    // An acknowledgement note is optional; reopening states why.
     if !(1..=MAX_INTEGER).contains(&input.revision)
-        || reason.is_empty()
+        || (!acknowledge && reason.is_empty())
         || reason.chars().count() > 1000
         || reason.contains('\0')
     {
         return Err(ApiError::invalid(
-            "Provide a current positive revision and a reason of 1..1000 characters",
+            "Provide a current positive revision; a note is at most 1000 characters and required to reopen",
         ));
     }
     let _guard = s.writer.lock().await;
@@ -292,20 +547,20 @@ async fn command(
     }
     if issue["resolved"] == true {
         return Err(ApiError::conflict(
-            "Verified resolved issues cannot be acknowledged or reopened",
+            "Resolved issues cannot be acknowledged or reopened",
         ));
     }
     let device_id = issue["device_id"]
         .as_str()
         .ok_or_else(|| ApiError::conflict("The original device identity is unavailable"))?
         .to_owned();
-    let revoked: Option<bool> = sqlx::query_scalar("SELECT revoked FROM devices WHERE id=?")
+    let exists: Option<bool> = sqlx::query_scalar("SELECT revoked FROM devices WHERE id=?")
         .bind(&device_id)
         .fetch_optional(&mut *tx)
         .await?;
-    if revoked != Some(true) {
+    if exists.is_none() {
         return Err(ApiError::conflict(
-            "Only unresolved issues on the original revoked device identity can be acknowledged or reopened",
+            "The original device identity is unavailable",
         ));
     }
     if (issue["acknowledged"] == true) == acknowledge {
@@ -318,10 +573,14 @@ async fn command(
         issue["acknowledged_at"] = json!(db::now());
         issue["acknowledged_by"] = actor["id"].clone();
         issue["acknowledged_by_name"] = actor["name"].clone();
-        issue["acknowledgement_reason"] = json!(reason);
+        issue["acknowledgement_reason"] = if reason.is_empty() {
+            Value::Null
+        } else {
+            json!(reason)
+        };
     }
     db::update(&mut tx, "issue", &issue).await?;
-    db::insert(&mut tx,"audit",&json!({"id":db::id(),"actor":actor["id"],"action":if acknowledge {"issue.acknowledge"} else {"issue.reopen"},"target":id,"device_id":device_id,"issue_revision":issue["revision"],"reason":reason,"outcome":"success","created_at":db::now()})).await?;
+    db::insert(&mut tx,"audit",&json!({"id":db::id(),"actor":actor["id"],"action":if acknowledge {"issue.acknowledge"} else {"issue.reopen"},"target":id,"device_id":device_id,"issue_revision":issue["revision"],"reason":if reason.is_empty() { Value::Null } else { json!(reason) },"outcome":"success","created_at":db::now()})).await?;
     let out = read(&mut tx, &id).await?;
     tx.commit().await?;
     Ok(Json(out))

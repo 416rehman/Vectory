@@ -2,31 +2,52 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
-
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
-
+	"strings"
 	"time"
 )
 
-// Metrics must be explicitly provisioned by the host operator and represented in
-// the published pipeline; the agent never silently inserts monitoring components.
+// Metrics come from Vector's own Prometheus exporter on a loopback address:
+// either the host operator's explicit --metrics-url, or a prometheus_exporter
+// sink that the published pipeline itself declares (visible and versioned).
+// The agent never inserts monitoring components.
 type MetricsCollector struct {
-	url               string
-	client            *http.Client
-	previous          float64
-	sampled           time.Time
-	hadEvents         bool
-	componentPrevious map[string]float64
-	uptime            *float64
+	url       string
+	namespace string
+	// internal lists sinks carrying only Vector's own telemetry.
+	internal map[string]bool
+	client   *http.Client
+	counters counterSet
+	sampled  time.Time
+	uptime   *float64
 }
 
-func NewMetricsCollector(endpoint string) (*MetricsCollector, error) {
+// Metrics endpoint sources reported in host_runtime.metrics_source.
+const (
+	metricsExplicit   = "explicit"
+	metricsDiscovered = "discovered"
+	metricsNone       = "none"
+)
+
+func metricsClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DisableCompression = true
+	transport.MaxConnsPerHost = 1
+	return &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("telemetry redirects forbidden") }}
+}
+
+// checkMetricsURL accepts only http://<literal loopback IP>:<port>/metrics.
+func checkMetricsURL(endpoint string) (*url.URL, error) {
 	u, e := url.Parse(endpoint)
 	if e != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/metrics" {
 		return nil, errors.New("metrics endpoint must be http://<loopback-IP>:<port>/metrics")
@@ -39,11 +60,44 @@ func NewMetricsCollector(endpoint string) (*MetricsCollector, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return nil, errors.New("metrics endpoint port must be 1..65535")
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DisableCompression = true
-	transport.MaxConnsPerHost = 1
-	return &MetricsCollector{url: u.String(), client: &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("telemetry redirects forbidden") }}}, nil
+	return u, nil
+}
+
+func NewMetricsCollector(endpoint string) (*MetricsCollector, error) {
+	u, err := checkMetricsURL(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return &MetricsCollector{url: u.String(), namespace: "vector", client: metricsClient()}, nil
+}
+
+// setEndpoint points the collector at a new endpoint. Rates restart so a
+// counter from one exporter is never subtracted from another's.
+func (c *MetricsCollector) setEndpoint(endpoint, namespace string) error {
+	if namespace == "" {
+		namespace = "vector"
+	}
+	if endpoint == c.url && namespace == c.namespace {
+		return nil
+	}
+	u, err := checkMetricsURL(endpoint)
+	if err != nil {
+		return err
+	}
+	c.url, c.namespace = u.String(), namespace
+	c.counters, c.uptime, c.sampled = nil, nil, time.Time{}
+	return nil
+}
+
+// setInternalSinks updates the sinks left out of "events out". A changed set
+// changes what the device totals count, so their next rate starts over.
+func (c *MetricsCollector) setInternalSinks(internal map[string]bool) {
+	if maps.Equal(internal, c.internal) {
+		return
+	}
+	c.internal = internal
+	delete(c.counters, "d:out")
+	delete(c.counters, "d:out_bytes")
 }
 
 var metricLine = regexp.MustCompile(`^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)(?:\s+[0-9]+)?$`)
@@ -63,6 +117,36 @@ func parseMetrics(data []byte) (events, failures float64, hasEvents, hasFailures
 	}
 	return
 }
+
+// rate returns the per-second rate of a counter since the previous sample,
+// or nil when there is no comparable previous value.
+func rate(current, previous counterSet, key string, seconds float64, zeroMissingPrevious bool) *float64 {
+	now, ok := current[key]
+	if !ok || previous == nil || seconds <= 0 {
+		return nil
+	}
+	before, had := previous[key]
+	if !had {
+		if !zeroMissingPrevious {
+			return nil
+		}
+		before = 0
+	}
+	if now < before {
+		return nil
+	}
+	v := (now - before) / seconds
+	return &v
+}
+
+func perMinute(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	m := *v * 60
+	return &m
+}
+
 func (c *MetricsCollector) Collect(ctx context.Context, now time.Time) *Telemetry {
 	req, e := http.NewRequestWithContext(ctx, "GET", c.url, nil)
 	if e != nil {
@@ -80,35 +164,259 @@ func (c *MetricsCollector) Collect(ctx context.Context, now time.Time) *Telemetr
 	if e != nil || len(data) > MaxArtifact {
 		return nil
 	}
-	observed, e := parseMetricObservation(data)
+	observed, e := parseMetricObservationWithNamespace(data, c.namespace, c.internal)
 	if e != nil || (observed.Events == nil && observed.Errors == nil && observed.UptimeSeconds == nil && observed.BufferBytes == nil && observed.DiscardedEvents == nil && len(observed.Components) == 0) {
 		return nil
 	}
 	sample := &observed.Telemetry
 	sample.SampledAt = now.UTC()
-	continuous := now.After(c.sampled) && (c.uptime == nil || sample.UptimeSeconds == nil || *sample.UptimeSeconds >= *c.uptime)
-	if observed.Events != nil && c.hadEvents && continuous && *observed.Events >= c.previous {
-		rate := (*observed.Events - c.previous) / now.Sub(c.sampled).Seconds()
-		sample.EventsPerSecond = &rate
+	// A restarted Vector resets its counters; never compute a rate across it.
+	continuous := !c.sampled.IsZero() && now.After(c.sampled) && (c.uptime == nil || sample.UptimeSeconds == nil || *sample.UptimeSeconds >= *c.uptime)
+	var previous counterSet
+	seconds := 0.0
+	if continuous {
+		previous, seconds = c.counters, now.Sub(c.sampled).Seconds()
 	}
-	for i := range sample.Components {
-		comp := &sample.Components[i]
-		counter, found := observed.ComponentEvents[comp.ID]
-		previous, had := c.componentPrevious[comp.ID]
-		if found && had && continuous && counter >= previous {
-			rate := (counter - previous) / now.Sub(c.sampled).Seconds()
-			comp.EventsPerSecond = &rate
+	// Error and discard counters appear on first use, so a counter missing
+	// from the previous sample of the same process started at zero.
+	cumulative := counterSet{"d:errors": value(sample.Errors), "d:intentional": value(sample.DiscardedIntentional), "d:unintentional": value(sample.DiscardedError)}
+	for key, v := range cumulative {
+		if v >= 0 {
+			observed.Counters[key] = v
 		}
 	}
-	if observed.Events != nil {
-		c.previous = *observed.Events
+	sample.EventsPerSecond = rate(observed.Counters, previous, "d:in", seconds, false)
+	sample.EventsOutPerSecond = rate(observed.Counters, previous, "d:out", seconds, false)
+	sample.BytesInPerSecond = rate(observed.Counters, previous, "d:in_bytes", seconds, false)
+	sample.BytesOutPerSecond = rate(observed.Counters, previous, "d:out_bytes", seconds, false)
+	sample.ErrorsPerMinute = perMinute(rate(observed.Counters, previous, "d:errors", seconds, true))
+	sample.FilteredPerMinute = perMinute(rate(observed.Counters, previous, "d:intentional", seconds, true))
+	sample.DroppedPerMinute = perMinute(rate(observed.Counters, previous, "d:unintentional", seconds, true))
+	for i := range sample.Components {
+		comp := &sample.Components[i]
+		key := "c:" + comp.ID + ":"
+		for field, v := range map[string]*float64{"errors": comp.Errors, "intentional": comp.DiscardedIntentional, "unintentional": comp.DiscardedError} {
+			if v != nil {
+				observed.Counters[key+field] = *v
+			}
+		}
+		comp.EventsPerSecond = rate(observed.Counters, previous, key+"sent", seconds, false)
+		comp.ReceivedEventsPerSecond = rate(observed.Counters, previous, key+"recv", seconds, false)
+		comp.ReceivedBytesPerSecond = rate(observed.Counters, previous, key+"recv_bytes", seconds, false)
+		comp.SentBytesPerSecond = rate(observed.Counters, previous, key+"sent_bytes", seconds, false)
+		comp.ErrorsPerMinute = perMinute(rate(observed.Counters, previous, key+"errors", seconds, true))
+		comp.FilteredPerMinute = perMinute(rate(observed.Counters, previous, key+"intentional", seconds, true))
+		comp.DroppedPerMinute = perMinute(rate(observed.Counters, previous, key+"unintentional", seconds, true))
+		outputs := map[string]float64{}
+		for counter := range observed.Counters {
+			if name, ok := strings.CutPrefix(counter, key+"out:"); ok {
+				if r := rate(observed.Counters, previous, counter, seconds, false); r != nil {
+					outputs[name] = *r
+				}
+			}
+		}
+		if len(outputs) > 0 {
+			comp.SentByOutput = outputs
+		}
 	}
-	c.componentPrevious = observed.ComponentEvents
+	c.counters = observed.Counters
 	c.uptime = sample.UptimeSeconds
 	c.sampled = now
-	c.hadEvents = observed.Events != nil
 	return sample
 }
+
+func value(v *float64) float64 {
+	if v == nil {
+		return -1
+	}
+	return *v
+}
+
+// discoverExporter finds a prometheus_exporter sink in the effective
+// configuration that exports Vector's own internal_metrics on a literal
+// loopback address. It returns that address and the metrics namespace.
+// Exporters with TLS or authentication are not scraped.
+func discoverExporter(config []byte, policy CapabilityPolicy) (address, namespace string) {
+	var root struct {
+		Sources    map[string]map[string]any `json:"sources"`
+		Transforms map[string]map[string]any `json:"transforms"`
+		Sinks      map[string]map[string]any `json:"sinks"`
+	}
+	if json.Unmarshal(config, &root) != nil {
+		return "", ""
+	}
+	namespaces := map[string]string{}
+	for id, source := range root.Sources {
+		if source["type"] == "internal_metrics" {
+			ns, _ := source["namespace"].(string)
+			if ns == "" {
+				ns = "vector"
+			}
+			namespaces[id] = ns
+		}
+	}
+	if len(namespaces) == 0 {
+		return "", ""
+	}
+	// Walk inputs upstream (through transforms) to an internal_metrics source.
+	var reaches func(id string, depth int) string
+	reaches = func(id string, depth int) string {
+		id, _, _ = strings.Cut(id, ".")
+		if ns, ok := namespaces[id]; ok {
+			return ns
+		}
+		transform, ok := root.Transforms[id]
+		if !ok || depth > 8 {
+			return ""
+		}
+		inputs, _ := transform["inputs"].([]any)
+		for _, input := range inputs {
+			if name, ok := input.(string); ok {
+				if ns := reaches(name, depth+1); ns != "" {
+					return ns
+				}
+			}
+		}
+		return ""
+	}
+	ids := make([]string, 0, len(root.Sinks))
+	for id := range root.Sinks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		sink := root.Sinks[id]
+		if sink["type"] != "prometheus_exporter" || sink["tls"] != nil || sink["auth"] != nil {
+			continue
+		}
+		addr, _ := sink["address"].(string)
+		host, port, err := net.SplitHostPort(addr)
+		ip := net.ParseIP(host)
+		n, perr := strconv.Atoi(port)
+		if err != nil || ip == nil || !ip.IsLoopback() || perr != nil || n < 1 || n > 65535 {
+			continue
+		}
+		if !policy.FullVectorConfig && !policy.listenerAllowed(addr) {
+			continue
+		}
+		inputs, _ := sink["inputs"].([]any)
+		for _, input := range inputs {
+			if name, ok := input.(string); ok {
+				if ns := reaches(name, 0); ns != "" {
+					return addr, ns
+				}
+			}
+		}
+	}
+	return "", ""
+}
+
+// metricsEndpoint picks the explicit endpoint, else one discovered in the
+// running configuration.
+func (e *Engine) metricsEndpoint(running []byte) (endpoint, source, address, namespace string) {
+	_, ns := discoverExporter(running, CapabilityPolicy{FullVectorConfig: true})
+	if e.Settings.MetricsURL != "" {
+		if u, err := url.Parse(e.Settings.MetricsURL); err == nil {
+			address = u.Host
+		}
+		return e.Settings.MetricsURL, metricsExplicit, address, ns
+	}
+	address, namespace = discoverExporter(running, e.Settings.CapabilityPolicy)
+	if address == "" {
+		return "", metricsNone, "", ""
+	}
+	host, port, _ := net.SplitHostPort(address)
+	return "http://" + net.JoinHostPort(host, port) + "/metrics", metricsDiscovered, address, namespace
+}
+
+// collectTelemetry samples metrics when the policy allows it, reporting
+// where the sample came from for host_runtime.
+func (e *Engine) collectTelemetry(ctx context.Context, running []byte) (*Telemetry, string, string) {
+	endpoint, source, address, namespace := e.metricsEndpoint(running)
+	if !e.State.Policy.TelemetryEnabled || endpoint == "" {
+		return nil, source, address
+	}
+	if e.Metrics == nil {
+		e.Metrics = &MetricsCollector{client: metricsClient()}
+	}
+	if e.Metrics.setEndpoint(endpoint, namespace) != nil {
+		return nil, source, address
+	}
+	e.Metrics.setInternalSinks(telemetrySinks(running))
+	sample := e.Metrics.Collect(ctx, e.now())
+	if sample != nil {
+		sample.Components = runningComponents(sample.Components, running)
+	}
+	return sample, source, address
+}
+
+// telemetrySinks lists the sinks of a configuration that carry only Vector's
+// own telemetry: every source upstream of them, through transforms, is
+// internal_metrics or internal_logs. Their events are not the pipeline's
+// output, just as those sources are not its input. An input that cannot be
+// resolved (a wildcard, a missing component) counts as pipeline data.
+func telemetrySinks(config []byte) map[string]bool {
+	var root struct {
+		Sources    map[string]map[string]any `json:"sources"`
+		Transforms map[string]map[string]any `json:"transforms"`
+		Sinks      map[string]map[string]any `json:"sinks"`
+	}
+	if json.Unmarshal(config, &root) != nil {
+		return nil
+	}
+	var internal func(inputs any, depth int) bool
+	internal = func(inputs any, depth int) bool {
+		list, _ := inputs.([]any)
+		if len(list) == 0 || depth > 16 {
+			return false
+		}
+		for _, input := range list {
+			name, _ := input.(string)
+			id, _, _ := strings.Cut(name, ".")
+			if source, ok := root.Sources[id]; ok {
+				if source["type"] != "internal_metrics" && source["type"] != "internal_logs" {
+					return false
+				}
+			} else if transform, ok := root.Transforms[id]; !ok || !internal(transform["inputs"], depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	sinks := map[string]bool{}
+	for id, sink := range root.Sinks {
+		if internal(sink["inputs"], 0) {
+			sinks[id] = true
+		}
+	}
+	return sinks
+}
+
+// runningComponents keeps components of the running configuration. Vector
+// retains the internal metrics of components a reload removed until the
+// process restarts; they would otherwise linger as idle rows. Device totals
+// are unaffected: removed components no longer move any rate.
+func runningComponents(components []ComponentTelemetry, running []byte) []ComponentTelemetry {
+	var root struct {
+		Sources    map[string]json.RawMessage `json:"sources"`
+		Transforms map[string]json.RawMessage `json:"transforms"`
+		Sinks      map[string]json.RawMessage `json:"sinks"`
+	}
+	if json.Unmarshal(running, &root) != nil || len(root.Sources)+len(root.Transforms)+len(root.Sinks) == 0 {
+		return components
+	}
+	kept := components[:0:0]
+	for _, c := range components {
+		_, source := root.Sources[c.ID]
+		_, transform := root.Transforms[c.ID]
+		_, sink := root.Sinks[c.ID]
+		if source || transform || sink {
+			kept = append(kept, c)
+		}
+	}
+	return kept
+}
+
 func ConfigureMetrics(dir, endpoint string) error {
 	return configureMetrics(dir, &endpoint, false)
 }
@@ -124,11 +432,9 @@ func validateMetricsChange(endpoint *string, clear bool) error {
 		return errors.New("metrics URL and explicit clear are mutually exclusive")
 	}
 	if endpoint != nil {
-		collector, err := NewMetricsCollector(*endpoint)
-		if err != nil {
+		if _, err := checkMetricsURL(*endpoint); err != nil {
 			return err
 		}
-		collector.client.CloseIdleConnections()
 	}
 	return nil
 }

@@ -24,7 +24,7 @@ func secretTemplate(uri string) []byte {
 func secretFixture(t *testing.T) (*Engine, Manifest, *fakeDriver, string) {
 	t.Helper()
 	e, m, d := fixture(t, secretTemplate("https://sink.example/events"))
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	if err := AtomicWrite(p, []byte("first-sensitive-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func secretFixture(t *testing.T) (*Engine, Manifest, *fakeDriver, string) {
 	return e, m, d, p
 }
 func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	value := "x\"},\"sources\":{\"evil\":{}}\nline2"
 	if err := AtomicWrite(p, []byte(value+"\n")); err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
 func TestSecretPrivateFileAndBounds(t *testing.T) {
 	for name, value := range map[string][]byte{"empty": {}, "oversized": bytes.Repeat([]byte("x"), MaxSecret+1), "nul": {'x', 0}, "nonutf8": {0xff}} {
 		t.Run(name, func(t *testing.T) {
-			p := filepath.Join(t.TempDir(), "token")
+			p := filepath.Join(privateTempDir(t), "token")
 			if err := AtomicWrite(p, value); err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +94,7 @@ func TestSecretPrivateFileAndBounds(t *testing.T) {
 			}
 		})
 	}
-	p := filepath.Join(t.TempDir(), "token")
+	p := filepath.Join(privateTempDir(t), "token")
 	if err := AtomicWrite(p, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}

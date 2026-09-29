@@ -1,4 +1,5 @@
-// Actual Enrollment UI with disposable synthetic transport; no real tokens or devices.
+// Actual Add device page with disposable synthetic transport; no real tokens,
+// devices or installs. The enrollment activity and inventory are scripted.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -30,12 +31,17 @@ const server = await createServer({
   plugins: [
     {
       name: "synthetic-enrollment-fixture",
+      // `proxy: {}` merges into vite.config.ts's /api proxy instead of
+      // replacing it; drop it so no request can leave the fixture.
+      config(config) {
+        delete config.server.proxy;
+      },
       resolveId(id) {
         if (id === "virtual:enrollment-fixture") return virtual;
       },
       load(id) {
         if (id !== virtual) return;
-        return `import React from 'react';import {createRoot} from 'react-dom/client';import {Enrollment} from '/src/Control.tsx';import '/src/styles.css';const root=createRoot(document.getElementById('root'));window.mountEnrollment=()=>root.render(React.createElement(Enrollment,{key:Math.random(),user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:()=>{},navigate:path=>window.lastNavigation=path}));window.mountEnrollment();`;
+        return `import React from 'react';import {createRoot} from 'react-dom/client';import {Enrollment} from '/src/Enrollment.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));window.mountEnrollment=(role='admin')=>root.render(React.createElement(Enrollment,{key:Math.random(),user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role,enabled:true,revision:1},notify:message=>(window.notices=[...(window.notices||[]),message]),navigate:path=>window.lastNavigation=path}));`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
@@ -44,7 +50,7 @@ const server = await createServer({
           response.end(
             await vite.transformIndexHtml(
               "/__enrollment-fixture",
-              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic enrollment verification</title></head><body><main style="padding:24px"><div id="root"></div></main><script type="module">import "virtual:enrollment-fixture";</script></body></html>',
+              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic Add device verification</title></head><body><main style="padding:24px 16px"><div id="root"></div></main><script type="module">import "virtual:enrollment-fixture";</script></body></html>',
             ),
           );
         });
@@ -63,56 +69,138 @@ const results = [],
   screenshots = [];
 let failure;
 const serverTime = Date.now();
+const iso = (offset = 0) =>
+  new Date(serverTime + offset).toISOString().replace(/\.\d+Z$/, "Z");
 const tokenId = "8b64e164-3e33-4574-b8f9-829d7b77c2b7";
-const device = (status = "online") => ({
-  id: "synthetic-device-uuid",
+const secret = "synthetic-unused-enrollment-secret-0123456789abcdef";
+const pin = "1f3c" + "0".repeat(56) + "9ab0";
+const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
+const windowsSha = "e".repeat(64);
+const deviceId = "5e7a9c2d-0000-4000-8000-000000000001";
+const release = (os, arch, sha, source = "bundled") => ({
+  name: `vectory-0.1.0-dev-${os}-${arch}${os === "windows" ? ".exe" : ""}`,
+  os,
+  arch,
+  version: "0.1.0-dev",
+  sha256: sha,
+  size: 7_626_878,
+  url: `/api/v1/releases/vectory-0.1.0-dev-${os}-${arch}${os === "windows" ? ".exe" : ""}`,
+  signed: false,
+  source,
+});
+const agentInstall = (overrides = {}) => ({
+  agent_url: "https://vectory.example.test:8443",
+  agent_url_configured: true,
+  listener_enabled: true,
+  dashboard_url: "https://vectory.example.test",
+  certificate: {
+    available: true,
+    publicly_trusted: false,
+    ca_sha256: pin,
+    ca_fingerprint: null,
+    ca_name: "Synthetic agent CA",
+    ca_issuer: "Synthetic agent CA",
+    ca_not_after: iso(86400000 * 30),
+    problem: null,
+  },
+  downloads_enabled: true,
+  installer: {
+    url: "https://vectory.example.test:8443/agent/v1/install.sh",
+    sha256: installerSha,
+    platforms: ["linux/amd64", "linux/arm64", "darwin/arm64"],
+  },
+  default_install_dir: "/usr/local/bin",
+  releases: [
+    release("linux", "amd64", "a".repeat(64)),
+    release("linux", "arm64", "b".repeat(64), "mirror"),
+    release("darwin", "arm64", "c".repeat(64)),
+    release("windows", "amd64", windowsSha),
+  ],
+  catalog_problems: [],
+  ...overrides,
+});
+const device = (overrides = {}) => ({
+  id: deviceId,
   name: "edge-01",
   os: "linux",
   arch: "amd64",
-  agent_version: "synthetic",
+  agent_version: "0.1.0-dev",
   vector_version: "0.58.0",
-  status,
-  created_at: new Date(serverTime).toISOString(),
-  last_seen: new Date(serverTime).toISOString(),
-  configuration_mode: "full",
+  status: "online",
+  created_at: iso(1000),
+  last_seen: null,
+  configuration_mode: "restricted",
   labels: {},
   desired_generation: 0,
   reported_generation: 0,
   apply_state: "unmanaged",
   sync_paused: false,
   pause_acknowledged: false,
+  ...overrides,
 });
+const event = (overrides = {}) => ({
+  id: `event-${Math.random()}`,
+  created_at: iso(500),
+  outcome: "failure",
+  reason_code: null,
+  device_id: null,
+  device_name: "edge-01",
+  token_id: tokenId,
+  agent_os: "linux",
+  agent_arch: "amd64",
+  agent_version: "0.1.0-dev",
+  configuration_mode: "restricted",
+  client_address: "10.0.4.17",
+  ...overrides,
+});
+
 async function fixture({
-  skew = 0,
   initial = [],
-  fail = false,
+  failDevices = false,
   width = 1280,
   theme = "light",
+  install = agentInstall(),
+  role = "admin",
+  tokens = [],
+  platform = "Linux",
 } = {}) {
   const context = await browser.newContext({
     viewport: { width, height: 900 },
     colorScheme: theme,
   });
   await context.addInitScript((value) => {
-    const now = Date.now.bind(Date);
-    Date.now = () => now() + value;
-  }, skew);
+    Object.defineProperty(navigator, "userAgentData", {
+      get: () => ({ platform: value }),
+    });
+  }, platform);
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   const state = {
     devices: initial,
-    fail,
-    tokens: [],
+    failDevices,
+    tokens,
+    events: [],
+    install,
     posts: 0,
     holdToken: false,
     releaseToken: null,
     tokenRequest: null,
+    activity: [],
+    revokes: [],
   };
   await context.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname.replace("/api/v1", "");
-    const reply = (json, status = 200) => route.fulfill({ status, json });
+    const url = new URL(route.request().url());
+    const path = url.pathname.replace("/api/v1", "");
+    const method = route.request().method();
+    const reply = async (json, status = 200) => {
+      try {
+        await route.fulfill({ status, json });
+      } catch {
+        /* The page was closed while this read was pending. */
+      }
+    };
     if (path === "/devices")
-      return state.fail
+      return state.failDevices
         ? reply(
             {
               error: {
@@ -123,31 +211,30 @@ async function fixture({
             503,
           )
         : reply(state.devices);
-    if (path === "/releases")
-      return reply(
-        ["windows", "linux", "darwin"].map((os) => ({
-          name: "synthetic",
-          version: "synthetic",
-          os,
-          arch: os === "darwin" ? "arm64" : "amd64",
-          size: 12,
-          sha256: "a".repeat(64),
-          signed: false,
-          url: "/unused-synthetic-download",
-        })),
-      );
-    if (path === "/tokens" && route.request().method() === "GET")
-      return reply(state.tokens);
-    if (
-      path.startsWith("/tokens/requests/") &&
-      route.request().method() === "GET"
-    )
+    if (path === "/agent-install") return reply(state.install);
+    if (path === "/agent-install/activity") {
+      state.activity.push({
+        at: Date.now(),
+        since: url.searchParams.get("since"),
+      });
+      return reply({ events: state.events, now: iso() });
+    }
+    if (path === "/tokens" && method === "GET") return reply(state.tokens);
+    if (path.startsWith("/tokens/requests/") && method === "GET")
       return reply({
         request_id: path.split("/").at(-1),
         request_correlation: true,
         found: false,
       });
-    if (path === "/tokens" && route.request().method() === "POST") {
+    if (path.endsWith("/revoke") && method === "POST") {
+      const id = path.split("/")[2];
+      state.revokes.push(id);
+      state.tokens = state.tokens.map((token) =>
+        token.id === id ? { ...token, revoked: true } : token,
+      );
+      return reply({ ok: true });
+    }
+    if (path === "/tokens" && method === "POST") {
       state.posts++;
       state.tokenRequest = route.request().postDataJSON();
       if (state.holdToken)
@@ -157,22 +244,22 @@ async function fixture({
       const record = {
         id: tokenId,
         name: state.tokenRequest.name,
-        created_at: new Date(serverTime).toISOString(),
-        expires_at: new Date(serverTime + 7 * 86400000).toISOString(),
+        created_at: iso(),
+        expires_at: iso(3600000),
         uses: 0,
         max_uses: state.tokenRequest.max_uses,
         name_prefix: state.tokenRequest.name_prefix,
         revoked: false,
       };
-      state.tokens = [record];
+      state.tokens = [record, ...state.tokens];
       return reply({
         request_id: state.tokenRequest.request_id,
         request_correlation: true,
-        token: "synthetic-unused-token",
+        token: secret,
         record,
       });
     }
-    unexpected.push(path);
+    unexpected.push(`${method} ${path}`);
     return reply(
       {
         error: { code: "UNEXPECTED", message: "Unexpected synthetic request" },
@@ -181,117 +268,101 @@ async function fixture({
     );
   });
   await page.goto(`${origin}/__enrollment-fixture`);
-  await page.evaluate((value) => {
-    document.documentElement.dataset.theme = value;
-  }, theme);
-  const connection = async (mode = "full") => {
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.getByLabel("Vector configuration mode", { exact: true }).click();
-    await page
-      .getByRole("menuitemradio", {
-        name:
-          mode === "full"
-            ? "Full Vector configuration"
-            : "Restricted components and resources",
-        exact: true,
-      })
-      .click();
+  await page.evaluate(
+    ({ value, role }) => {
+      document.documentElement.dataset.theme = value;
+      window.mountEnrollment(role);
+    },
+    { value: theme, role },
+  );
+  const create = page.getByRole("button", {
+    name: "Create install command",
+    exact: true,
+  });
+  const command = page.getByRole("region", { name: "Install command" });
+  const chooseMode = (label = "Restricted") =>
+    page.getByRole("radio", { name: new RegExp(`^${label}`) }).check();
+  const advanced = () => page.locator(".enroll-advanced > summary").click();
+  const createCommand = async (mode = "Restricted") => {
+    await chooseMode(mode);
+    await create.click();
+    await expect(page.locator(".enroll-command pre").first()).toBeVisible();
   };
-  const commands = async (mode = "full") => {
-    await connection(mode);
-    await page
-      .getByRole("button", { name: "Create enrollment token", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "I've saved the token", exact: true })
-      .click();
+  return {
+    context,
+    page,
+    state,
+    create,
+    command,
+    chooseMode,
+    advanced,
+    createCommand,
   };
-  return { context, page, state, connection, commands };
 }
 async function check(name, run) {
   await run();
   results.push({ name, passed: true });
   console.log("PASS", name);
 }
+const commandText = (page) =>
+  page.locator(".enroll-command pre").first().innerText();
+
 try {
   await check(
-    "pending token creation locks connection and token inputs until matching commands are ready",
+    "a mode choice is required, and the command carries the checksum, pin and choices but never the token",
     async () => {
       const f = await fixture();
       try {
-        await f.page.getByRole("radio", { name: "Linux", exact: true }).check();
-        await f.connection();
+        await expect(f.create).toBeDisabled();
+        await expect(f.page.getByRole("status").first()).toContainText(
+          "Choose Restricted or Full Vector first.",
+        );
+        expect(f.state.posts).toBe(0);
+        await f.createCommand();
+        expect(f.state.posts).toBe(1);
+        expect(f.state.tokenRequest.max_uses).toBe(1);
+        expect(f.state.tokenRequest.expires_hours).toBe(1);
+        const text = await commandText(f.page);
+        expect(text).toBe(
+          [
+            "curl -fsSLk https://vectory.example.test:8443/agent/v1/install.sh -o vectory-install.sh",
+            `echo '${installerSha}  vectory-install.sh' | sha256sum -c - &&`,
+            "  sudo sh vectory-install.sh --mode restricted --create-user",
+          ].join("\n"),
+        );
+        await expect(f.page.locator("body")).not.toContainText(secret);
+        await f.page.getByRole("button", { name: "Show", exact: true }).click();
+        await expect(f.page.locator(".enroll-secret code")).toHaveText(secret);
+        expect(await commandText(f.page)).not.toContain(secret);
+        const receipt = f.page.getByRole("definition");
+        await expect(receipt.nth(0)).toContainText("c0f4e1b7…9d19ab");
+        await expect(receipt.nth(1)).toContainText("1F:3C:...:9A:B0");
+        await expect(receipt.nth(1)).toContainText("Synthetic agent CA");
+        await expect(receipt.nth(2)).toContainText("Works once");
+        // Choices change the command, never the token.
+        await f.chooseMode("Full Vector");
+        await f.advanced();
+        await f.page.getByLabel("Device name", { exact: true }).fill("edge-42");
         await f.page
-          .getByLabel("Machine name", { exact: true })
-          .fill("edge-locked");
+          .getByLabel("Run the agent as a systemd service", { exact: true })
+          .uncheck();
+        expect(await commandText(f.page)).toContain(
+          "sudo sh vectory-install.sh --mode full --name edge-42 --service none",
+        );
+        expect(f.state.posts).toBe(1);
         await f.page
-          .getByLabel("Server URL", { exact: true })
-          .fill("https://synthetic.example.test:8443");
-        await f.page
-          .getByLabel("Server certificate trust", {
-            exact: true,
-          })
+          .getByRole("button", { name: "Copy token", exact: true })
           .click();
         await f.page
-          .getByRole("menuitemradio", {
-            name: "Provide a certificate file",
-            exact: true,
-          })
+          .locator("summary")
+          .filter({ hasText: "I already have the agent" })
           .click();
-        await f.page
-          .getByLabel("CA certificate path on the device", { exact: true })
-          .fill("/synthetic/ca.pem");
-        await f.page.getByText("Token settings", { exact: true }).click();
-        await f.page
-          .getByLabel("Allowed machine name prefix (optional)", { exact: true })
-          .fill("edge-");
-        f.state.holdToken = true;
-        await f.page
-          .getByRole("button", { name: "Create enrollment token", exact: true })
-          .click();
-        await expect.poll(() => f.state.posts).toBe(1);
-        for (const name of [
-          "Machine name",
-          "Server URL",
-          "Vector configuration mode",
-          "CA certificate path on the device",
-          "Token name",
-          "Expires in (hours)",
-          "Maximum uses",
-          "Allowed machine name prefix (optional)",
-        ])
-          await expect(f.page.getByLabel(name, { exact: true })).toBeDisabled();
-        await expect(
-          f.page.getByLabel("Server certificate trust", { exact: true }),
-        ).toBeDisabled();
-        expect(f.state.tokenRequest.name_prefix).toBe("edge-");
-        expect(f.state.tokenRequest.name).toBe("edge-locked enrollment");
-        f.state.releaseToken();
-        f.state.releaseToken = null;
-        await f.page
-          .getByRole("button", { name: "I've saved the token", exact: true })
-          .click();
-        await expect(
-          f.page.getByRole("heading", {
-            name: "Run the agent on edge-locked",
-            exact: true,
-          }),
-        ).toBeVisible();
-        await expect(
-          f.page
-            .locator(".enroll-command-step")
-            .filter({ hasText: "3. Enroll this device" }),
-        ).toContainText("--id 'edge-locked'");
-        await expect(
-          f.page
-            .locator(".enroll-command-step")
-            .filter({ hasText: "3. Enroll this device" }),
-        ).toContainText("--server 'https://synthetic.example.test:8443'");
-        await expect(
-          f.page
-            .locator(".enroll-command-step")
-            .filter({ hasText: "3. Enroll this device" }),
-        ).toContainText("--ca-file '/synthetic/ca.pem'");
+        await expect(f.page.locator(".enroll-command pre").nth(1)).toHaveText(
+          `sudo vectory setup --server https://vectory.example.test:8443 --ca-sha256 ${pin} --mode full --name edge-42 --service none`,
+        );
+        await expect(f.page.locator(".enroll-builds")).toContainText(
+          "Operator mirror",
+        );
       } finally {
         f.state.releaseToken?.();
         await f.context.close();
@@ -299,27 +370,123 @@ try {
     },
   );
   await check(
-    "new device verification is independent of browser clock being a day ahead",
+    "a pending token request locks the host choices until its command is ready",
     async () => {
-      const f = await fixture({ skew: 86400000 });
+      const f = await fixture();
       try {
-        await f.commands();
-        f.state.devices = [device()];
-        await f.page
-          .getByRole("button", { name: "Check connection", exact: true })
-          .click();
+        await f.chooseMode();
+        f.state.holdToken = true;
+        await f.create.click();
+        await expect.poll(() => f.state.posts).toBe(1);
+        for (const label of ["Linux", "macOS", "Windows"])
+          await expect(
+            f.page.getByRole("radio", { name: label, exact: true }),
+          ).toBeDisabled();
         await expect(
-          f.page.getByRole("heading", {
-            name: "edge-01 is enrolled",
-            exact: true,
-          }),
+          f.page.getByRole("radio", { name: /^Full Vector/ }),
+        ).toBeDisabled();
+        f.state.releaseToken();
+        f.state.releaseToken = null;
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
         ).toBeVisible();
+        await expect(
+          f.page.getByRole("radio", { name: "macOS", exact: true }),
+        ).toBeEnabled();
+      } finally {
+        f.state.releaseToken?.();
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "live status explains refusals, follows the device to its first check-in and hands off to deployment",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        const watch = f.page.getByRole("region", {
+          name: "3. Watch it connect",
+        });
+        await expect(watch).toContainText("Waiting for the device to enroll…");
+        const started = f.state.activity.length;
+        await f.page.waitForTimeout(4500);
+        const polls = f.state.activity.length - started;
+        expect(polls).toBeGreaterThanOrEqual(2);
+        expect(polls).toBeLessThanOrEqual(4);
+        expect(f.state.activity.at(-1).since).toBe(
+          f.state.tokens[0].created_at,
+        );
+        f.state.events = [
+          event({
+            reason_code: "TOKEN_UNKNOWN",
+            token_id: null,
+            created_at: iso(400),
+          }),
+          event({ reason_code: "NAME_TAKEN", created_at: iso(500) }),
+          event({
+            reason_code: "TOKEN_EXPIRED",
+            token_id: "another-token",
+            created_at: iso(550),
+          }),
+        ].reverse();
+        await expect(watch).toContainText(
+          'Refused "edge-01": that name belongs to an existing device.',
+        );
+        await expect(watch).toContainText("the token wasn't recognized");
+        await expect(watch).not.toContainText("the token expired");
+        await expect(watch).toContainText(
+          "from 10.0.4.17 · linux/amd64, agent 0.1.0-dev",
+        );
+        f.state.events = [
+          event({
+            outcome: "success",
+            reason_code: null,
+            device_id: deviceId,
+            device_name: "edge-02",
+            created_at: iso(900),
+          }),
+          ...f.state.events,
+        ];
+        f.state.devices = [device({ name: "edge-02" })];
+        await expect(watch).toContainText(
+          "Enrolled as edge-02, restricted mode",
+        );
+        await expect(watch).toContainText(
+          "Waiting for edge-02's first check-in…",
+        );
+        await expect(f.page.locator(".enroll-secret")).toBeVisible();
+        f.state.devices = [device({ name: "edge-02", last_seen: iso(2000) })];
+        await expect(
+          f.page.getByRole("heading", { name: "edge-02 is connected" }),
+        ).toBeVisible();
+        await expect(watch).toContainText("First check-in");
+        // The token did its job: the page no longer holds it or a reminder.
+        await expect(f.page.locator(".enroll-secret")).toHaveCount(0);
+        await expect(f.page.locator("body")).not.toContainText(secret);
+        expect(
+          await f.page.evaluate(() =>
+            Object.keys(localStorage).filter((key) =>
+              key.startsWith("vectory:enrollment-token-request:"),
+            ),
+          ),
+        ).toEqual([]);
+        await expect(
+          f.page.getByRole("region", { name: "Enrollment token requests" }),
+        ).toHaveCount(0);
+        const settled = f.state.activity.length;
+        await f.page.waitForTimeout(2500);
+        expect(f.state.activity.length).toBe(settled);
         await f.page
-          .getByRole("button", { name: "Open device", exact: true })
+          .getByRole("button", { name: "Deploy a pipeline to edge-02" })
           .click();
         expect(await f.page.evaluate(() => window.lastNavigation)).toBe(
-          "devices/synthetic-device-uuid",
+          `configurations?device=${deviceId}`,
         );
+        await f.page
+          .getByRole("button", { name: "Add another device", exact: true })
+          .click();
+        await expect(f.create).toBeVisible();
         expect(f.state.posts).toBe(1);
       } finally {
         await f.context.close();
@@ -327,26 +494,58 @@ try {
     },
   );
   await check(
-    "existing device remains a conflict with a slow clock and has a continuation path after reload",
+    "macOS and Windows hosts get their own verified commands",
     async () => {
-      const f = await fixture({ skew: -86400000, initial: [device()] });
+      const f = await fixture({ platform: "macOS" });
       try {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          if (attempt) await f.page.reload();
-          await f.connection();
-          await expect(
-            f.page.getByRole("button", {
-              name: "Create enrollment token",
-              exact: true,
-            }),
-          ).toBeDisabled();
-          await f.page
-            .getByRole("button", { name: "Open existing device", exact: true })
-            .click();
-          expect(await f.page.evaluate(() => window.lastNavigation)).toBe(
-            "devices/synthetic-device-uuid",
-          );
-        }
+        await expect(
+          f.page.getByRole("radio", { name: "macOS", exact: true }),
+        ).toBeChecked();
+        await f.createCommand();
+        expect(await commandText(f.page)).toContain(
+          "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh --mode restricted --create-user",
+        );
+        await f.page
+          .getByRole("radio", { name: "Windows", exact: true })
+          .check();
+        await expect(
+          f.page.getByRole("link", { name: /Download vectory\.exe/ }),
+        ).toHaveAttribute(
+          "href",
+          "/api/v1/releases/vectory-0.1.0-dev-windows-amd64.exe",
+        );
+        expect(await commandText(f.page)).toBe(
+          [
+            `if ((Get-FileHash .\\vectory.exe -Algorithm SHA256).Hash -ne '${windowsSha}') { throw 'vectory.exe does not match its SHA-256. Download it again.' }`,
+            `.\\vectory.exe setup --server https://vectory.example.test:8443 --ca-sha256 ${pin} --mode restricted`,
+          ].join("\n"),
+        );
+        await expect(f.page.getByRole("definition").first()).toContainText(
+          "eeeeeeee…eeeeee",
+        );
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "an existing device name blocks the command and leads to that device",
+    async () => {
+      const f = await fixture({ initial: [device({ last_seen: iso() })] });
+      try {
+        await f.chooseMode();
+        await f.advanced();
+        await f.page.getByLabel("Device name", { exact: true }).fill("EDGE-01");
+        await expect(f.create).toBeDisabled();
+        await expect(f.page.locator(".enroll-actions")).toContainText(
+          "Choose another device name.",
+        );
+        await f.page
+          .getByRole("button", { name: "Open existing device", exact: true })
+          .click();
+        expect(await f.page.evaluate(() => window.lastNavigation)).toBe(
+          `devices/${deviceId}`,
+        );
         expect(f.state.posts).toBe(0);
       } finally {
         await f.context.close();
@@ -354,36 +553,18 @@ try {
     },
   );
   await check(
-    "failed initial inventory cannot be treated as an empty fleet and retry establishes the baseline",
+    "a failed inventory is not an empty fleet, and retry establishes the baseline",
     async () => {
-      const f = await fixture({ fail: true, initial: [device()] });
+      const f = await fixture({ failDevices: true });
       try {
-        await f.connection();
-        await expect(f.page.getByRole("alert")).toContainText(
+        await f.chooseMode();
+        await expect(f.page.getByRole("alert").first()).toContainText(
           "Synthetic inventory unavailable",
         );
-        await expect(
-          f.page.getByRole("button", {
-            name: "Create enrollment token",
-            exact: true,
-          }),
-        ).toBeDisabled();
-        f.state.fail = false;
-        await f.page
-          .getByRole("button", { name: "Try again", exact: true })
-          .click();
-        await expect(
-          f.page.getByRole("button", {
-            name: "Open existing device",
-            exact: true,
-          }),
-        ).toBeVisible();
-        await expect(
-          f.page.getByRole("button", {
-            name: "Create enrollment token",
-            exact: true,
-          }),
-        ).toBeDisabled();
+        await expect(f.create).toBeDisabled();
+        f.state.failDevices = false;
+        await f.page.getByRole("button", { name: "Try again" }).first().click();
+        await expect(f.create).toBeEnabled();
         expect(f.state.posts).toBe(0);
       } finally {
         await f.context.close();
@@ -391,266 +572,270 @@ try {
     },
   );
   await check(
-    "a newly observed revoked identity is not reported as successfully enrolled",
+    "a device revoked after enrolling is never reported as connected",
     async () => {
       const f = await fixture();
       try {
-        await f.commands();
-        f.state.devices = [device("revoked")];
-        await f.page
-          .getByRole("button", { name: "Check connection", exact: true })
-          .click();
-        await expect(
-          f.page.getByRole("heading", {
-            name: "edge-01 access is revoked",
-            exact: true,
+        await f.createCommand();
+        f.state.events = [
+          event({
+            outcome: "success",
+            device_id: deviceId,
+            reason_code: null,
           }),
-        ).toBeVisible();
+        ];
+        f.state.devices = [device({ status: "revoked", last_seen: iso(2000) })];
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "edge-01's access is revoked",
+        );
         await expect(
-          f.page.getByRole("heading", {
-            name: "edge-01 is enrolled",
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toHaveCount(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "public trust, turned-off downloads and missing builds explain themselves",
+    async () => {
+      const trusted = agentInstall();
+      trusted.certificate.publicly_trusted = true;
+      let f = await fixture({ install: trusted });
+      try {
+        await f.createCommand();
+        expect(await commandText(f.page)).toMatch(
+          /^curl -fsSL https:\/\/vectory\.example\.test:8443\/agent/,
+        );
+        await expect(f.page.getByRole("definition").nth(1)).toContainText(
+          "publicly trusted",
+        );
+      } finally {
+        await f.context.close();
+      }
+      f = await fixture({
+        install: agentInstall({
+          downloads_enabled: false,
+          installer: null,
+          releases: [],
+          catalog_problems: [
+            "vectory-0.1.0-dev-linux-amd64 in the release mirror is missing or doesn't match its size and SHA-256, so it isn't offered.",
+          ],
+        }),
+      });
+      try {
+        await f.chooseMode();
+        await f.create.click();
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "Agent downloads for devices are turned off on this server.",
+        );
+        await f.page
+          .locator("summary")
+          .filter({ hasText: "I already have the agent" })
+          .click();
+        await expect(f.page.locator(".enroll-manual")).toContainText(
+          "This server has no agent builds for this platform.",
+        );
+        await expect(f.page.locator(".enroll-problems")).toContainText(
+          "isn't offered",
+        );
+        await f.page
+          .getByRole("radio", { name: "Windows", exact: true })
+          .check();
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "This server has no Windows agent build.",
+        );
+      } finally {
+        await f.context.close();
+      }
+      f = await fixture({
+        role: "operator",
+        install: agentInstall({ releases: [], installer: null }),
+      });
+      try {
+        await f.page
+          .locator("summary")
+          .filter({ hasText: "I already have the agent" })
+          .click();
+        await expect(f.page.locator(".enroll-manual")).toContainText(
+          "Agent downloads aren't set up on this server. Ask an administrator.",
+        );
+      } finally {
+        await f.context.close();
+      }
+      f = await fixture({
+        install: agentInstall({ agent_url: null, installer: null }),
+      });
+      try {
+        await expect(f.page.locator(".enroll-page")).toContainText(
+          "The agent listener is off",
+        );
+        await expect(f.create).toHaveCount(0);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "tokens show their creator and devices, hide inactive ones by default and revoke only active ones",
+    async () => {
+      const active = {
+        id: "3c0c3b5e-3a51-4f43-9c5d-000000000001",
+        name: "Rack 7 fleet",
+        created_at: iso(-86400000),
+        expires_at: iso(86400000),
+        uses: 2,
+        max_uses: 10,
+        name_prefix: "rack-7-",
+        revoked: false,
+        created_by: { id: "u1", name: "Ada Admin" },
+        last_used_at: iso(-3600000),
+        device_count: 2,
+        devices: [
+          {
+            id: deviceId,
+            name: "rack-7-a",
+            revoked: false,
+            enrolled_at: iso(-3600000),
+          },
+          {
+            id: "5e7a9c2d-0000-4000-8000-000000000002",
+            name: "rack-7-b",
+            revoked: true,
+            enrolled_at: iso(-7200000),
+          },
+        ],
+      };
+      const expired = {
+        ...active,
+        id: "3c0c3b5e-3a51-4f43-9c5d-000000000002",
+        name: "Old token",
+        expires_at: iso(-60000),
+        devices: [],
+        device_count: 0,
+        uses: 0,
+      };
+      const f = await fixture({ tokens: [active, expired] });
+      try {
+        const summary = f.page.locator(".enroll-token-management > summary");
+        await expect(summary).toHaveText("Manage enrollment tokens (1 active)");
+        await summary.click();
+        const rows = f.page
+          .getByRole("table", { name: "Enrollment tokens" })
+          .locator("tbody tr");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toContainText("Names starting with rack-7-");
+        await expect(rows.first()).toContainText("by Ada Admin");
+        await expect(rows.first()).toContainText("2 of 10");
+        await expect(rows.first()).toContainText("rack-7-b (revoked)");
+        await rows
+          .first()
+          .getByRole("button", { name: "rack-7-a", exact: true })
+          .click();
+        expect(await f.page.evaluate(() => window.lastNavigation)).toBe(
+          `devices/${deviceId}`,
+        );
+        await f.page
+          .getByLabel("Show expired, used and revoked tokens", { exact: true })
+          .check();
+        await expect(rows).toHaveCount(2);
+        await expect(
+          rows.filter({ hasText: "Old token" }).getByRole("button", {
+            name: "Revoke",
             exact: true,
           }),
         ).toHaveCount(0);
-        await expect(
-          f.page.getByRole("button", { name: "Open device", exact: true }),
-        ).toBeEnabled();
-      } finally {
-        await f.context.close();
-      }
-    },
-  );
-  await check(
-    "adoption prepares the sole managed JSON before stopping the old supervisor on all three platforms",
-    async () => {
-      for (const platform of [
-        {
-          name: "Windows",
-          path: "C:\\ProgramData\\VectoryConfig\\managed.json",
-          custom: "C:\\ProgramData\\Owner's Vector\\managed.json",
-          flag: "'C:\\ProgramData\\Owner''s Vector\\managed.json'",
-          binary: ".\\vectory.exe",
-        },
-        {
-          name: "Linux",
-          path: "/etc/vector/vectory-managed/managed.json",
-          custom: "/srv/owner's-vector/managed.json",
-          flag: "'/srv/owner'\"'\"'s-vector/managed.json'",
-          binary: "./vectory",
-        },
-        {
-          name: "macOS",
-          path: "/Library/Application Support/VectoryConfig/managed.json",
-          custom: "/Library/Application Support/Owner's Vector/managed.json",
-          flag: "'/Library/Application Support/Owner'\"'\"'s Vector/managed.json'",
-          binary: "./vectory",
-        },
-      ]) {
-        const f = await fixture();
-        try {
-          await f.page
-            .getByRole("radio", { name: platform.name, exact: true })
-            .check();
-          await f.commands("restricted");
-          await expect(
-            f.page.getByLabel("Starting workload", { exact: true }),
-          ).toHaveValue("existing");
-          await expect(
-            f.page.getByLabel("Managed configuration file", { exact: true }),
-          ).toHaveValue(platform.path);
-          const preparation = f.page.locator(
-            '[data-enrollment-preparation="existing"]',
-          );
-          await expect(preparation).toContainText(
-            "No local allowance file was selected",
-          );
-          await expect(preparation).toContainText(
-            "before stopping Vector",
-          );
-          const instructions = await preparation
-            .locator("li")
-            .allTextContents();
-          expect(instructions).toHaveLength(3);
-          expect(instructions[0]).toMatch(
-            /Back up.*configuration and service definition\s+outside the managed directory/s,
-          );
-          expect(instructions[1]).toMatch(
-            /While Vector is still running.*copy or combine all.*configuration files.*managed JSON/s,
-          );
-          expect(instructions[2]).toMatch(
-            /Only after that file is ready, stop and disable the old\s+supervisor/s,
-          );
-          await expect(preparation).toContainText("does not discover or copy");
-          await expect(preparation).toContainText(
-            "local permissions for restricted mode",
-          );
-          await expect(
-            preparation.getByRole("link", {
-              name: /adoption preparation steps/,
-            }),
-          ).toHaveAttribute(
-            "href",
-            "/help/installation/#keep-an-existing-workload",
-          );
-          const headings = await f.page
-            .locator(".enroll-command-step h3")
-            .allTextContents();
-          expect(headings).toEqual([
-            "1. Prepare the workload before stopping Vector",
-            "2. Install the agent",
-            "3. Enroll this device",
-            "4. Keep the agent running",
-          ]);
-          await f.page
-            .getByLabel("Managed configuration file", { exact: true })
-            .fill(platform.custom);
-          const installation = f.page
-            .locator(".enroll-command-step")
-            .filter({ hasText: "2. Install the agent" });
-          await expect(installation).toContainText(
-            `${platform.binary} install`,
-          );
-          await expect(installation).toContainText(
-            `--managed-config ${platform.flag}`,
-          );
-          await expect(installation).toContainText(
-            "--adopt --allow-full-vector-config=false",
-          );
-          await expect(
-            f.page.locator(".enroll-command-step").last(),
-          ).toContainText("A missing file starts no Vector process");
-          await expect(f.page.locator("body")).not.toContainText(
-            "synthetic-unused-token",
-          );
-          expect(f.state.posts).toBe(1);
-        } finally {
-          await f.context.close();
-        }
-      }
-    },
-  );
-  await check(
-    "new unmanaged enrollment has explicit no-process behavior and switching instructions preserves paths and token",
-    async () => {
-      const f = await fixture();
-      try {
-        await f.commands();
+        await rows
+          .filter({ hasText: "Rack 7 fleet" })
+          .getByRole("button", { name: "Revoke", exact: true })
+          .click();
         await f.page
-          .getByLabel("Managed configuration file", { exact: true })
-          .fill("C:\\ProgramData\\Prepared\\managed.json");
-        const before = await f.page
-          .locator(".control-command code")
-          .allTextContents();
-        await f.page
-          .getByLabel("Starting workload", { exact: true })
-          .selectOption("new");
-        const preparation = f.page.locator(
-          '[data-enrollment-preparation="new"]',
-        );
-        await expect(preparation).toContainText("without starting Vector");
-        await expect(preparation).toContainText(
-          "No pipeline is assigned automatically",
-        );
-        await expect(preparation).toContainText(
-          "does not contain an existing workload",
-        );
-        await expect(preparation).not.toContainText("stop and disable");
-        await expect(
-          preparation.getByRole("link", { name: /preparing a new device/ }),
-        ).toHaveAttribute(
-          "href",
-          "/help/installation/#start-without-a-workload",
-        );
-        expect(
-          await f.page.locator(".control-command code").allTextContents(),
-        ).toEqual(before);
-        await f.page.getByRole("button", { name: "Back", exact: true }).click();
-        await f.page
-          .getByRole("button", {
-            name: "Continue with saved token",
-            exact: true,
-          })
+          .getByRole("dialog", { name: "Revoke token" })
+          .getByRole("button", { name: "Revoke token", exact: true })
           .click();
         await expect(
-          f.page.getByLabel("Starting workload", { exact: true }),
-        ).toHaveValue("new");
-        await expect(
-          f.page.getByLabel("Managed configuration file", { exact: true }),
-        ).toHaveValue("C:\\ProgramData\\Prepared\\managed.json");
-        await f.page
-          .getByLabel("Starting workload", { exact: true })
-          .selectOption("existing");
-        await expect(
-          f.page.getByRole("heading", {
-            name: "1. Prepare the workload before stopping Vector",
-            exact: true,
-          }),
+          f.page.getByRole("dialog", { name: "Token revoked" }),
         ).toBeVisible();
-        expect(
-          await f.page.locator(".control-command code").allTextContents(),
-        ).toEqual(before);
-        expect(f.state.posts).toBe(1);
+        expect(f.state.revokes).toEqual([active.id]);
       } finally {
         await f.context.close();
       }
     },
   );
   await check(
-    "preparation and commands remain accessible without horizontal page overflow on desktop and mobile in both themes",
+    "the page stays accessible and inside the viewport at desktop and phone widths in both themes",
     async () => {
-      for (const width of [1280, 375]) {
+      for (const width of [1280, 390]) {
         for (const theme of ["light", "dark"]) {
           const f = await fixture({ width, theme });
           try {
-            await f.commands();
-            const workflow = width === 375 ? "new" : "existing";
+            await f.createCommand();
             await f.page
-              .getByLabel("Starting workload", { exact: true })
-              .selectOption(workflow);
-            const measured = await f.page.evaluate(() => ({
-              width: innerWidth,
-              scrollWidth: document.documentElement.scrollWidth,
-            }));
-            geometry.push({ width, theme, workflow, ...measured });
-            expect(measured.scrollWidth).toBeLessThanOrEqual(width);
-            await f.page
-              .getByLabel("Starting workload", { exact: true })
-              .focus();
-            await f.page.keyboard.press("Tab");
-            await expect(
-              f.page.getByLabel("Managed configuration file", { exact: true }),
-            ).toBeFocused();
-            const audit = await new AxeBuilder({ page: f.page })
-              .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-              .analyze();
-            accessibility.push({
-              width,
-              theme,
-              violations: audit.violations.map(({ id, impact }) => ({
-                id,
-                impact,
-              })),
-            });
-            expect(audit.violations).toEqual([]);
-            // Capture only after the one-time synthetic token modal has been dismissed.
-            await expect(f.page.getByRole("dialog")).toHaveCount(0);
-            await expect(f.page.locator("body")).not.toContainText(
-              "synthetic-unused-token",
+              .getByRole("button", { name: "Show", exact: true })
+              .click();
+            f.state.events = [
+              event({ reason_code: "NAME_TAKEN", created_at: iso(500) }),
+            ];
+            await expect(f.page.locator(".enroll-timeline")).toContainText(
+              "Refused",
             );
+            const shot = async (name) => {
+              const measured = await f.page.evaluate(() => ({
+                width: innerWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+              }));
+              geometry.push({ width, theme, state: name, ...measured });
+              expect(measured.scrollWidth).toBeLessThanOrEqual(width);
+              const audit = await new AxeBuilder({ page: f.page })
+                .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+                .analyze();
+              accessibility.push({
+                width,
+                theme,
+                state: name,
+                violations: audit.violations.map(({ id, impact, nodes }) => ({
+                  id,
+                  impact,
+                  nodes: nodes.map(({ target }) => target),
+                })),
+              });
+              expect(audit.violations).toEqual([]);
+              const filename = `add-device-${name}-${width === 390 ? "phone" : "desktop"}-${theme}.png`;
+              await f.page.screenshot({
+                path: resolve(output, filename),
+                fullPage: true,
+                animations: "disabled",
+              });
+              screenshots.push(relative(repository, resolve(output, filename)));
+            };
+            await shot("waiting");
+            f.state.events = [
+              event({
+                outcome: "success",
+                reason_code: null,
+                device_id: deviceId,
+                created_at: iso(900),
+              }),
+              ...f.state.events,
+            ];
+            f.state.devices = [device({ last_seen: iso(2000) })];
+            await expect(
+              f.page.getByRole("heading", { name: "edge-01 is connected" }),
+            ).toBeVisible();
+            await shot("connected");
+            await f.advanced();
+            await f.page.locator(".enroll-token-management > summary").click();
             await f.page
-              .getByRole("heading", {
-                name: "Run the agent on edge-01",
+              .getByLabel("Show expired, used and revoked tokens", {
                 exact: true,
               })
-              .scrollIntoViewIfNeeded();
-            const filename = `enrollment-${width === 375 ? "mobile" : "desktop"}-${theme}.png`;
-            await f.page.screenshot({
-              path: resolve(output, filename),
-              fullPage: true,
-              animations: "disabled",
-            });
-            screenshots.push(relative(repository, resolve(output, filename)));
-            expect(f.state.posts).toBe(1);
+              .check();
+            await expect(
+              f.page
+                .getByRole("table", { name: "Enrollment tokens" })
+                .locator("tbody tr"),
+            ).toHaveCount(1);
+            await shot("details");
           } finally {
             await f.context.close();
           }
@@ -667,10 +852,12 @@ try {
   await server.close();
   const source_sha256 = {};
   for (const path of [
-    "dashboard/src/Control.tsx",
+    "dashboard/src/Enrollment.tsx",
+    "dashboard/src/EnrollmentConnection.tsx",
+    "dashboard/src/EnrollmentTokenFlow.tsx",
+    "dashboard/src/enrollmentCommands.ts",
+    "dashboard/src/enrollmentActivity.ts",
     "dashboard/tests/enrollment-browser.mjs",
-    "docs/user/installation.md",
-    "agent/internal/agent/reconcile.go",
   ])
     source_sha256[path] = createHash("sha256")
       .update(await readFile(resolve(repository, path)))
@@ -680,9 +867,10 @@ try {
     JSON.stringify(
       {
         recorded_at: new Date().toISOString(),
-        source: "actual React Enrollment with isolated synthetic HTTP fixtures",
+        source:
+          "actual React Add device page with isolated synthetic HTTP fixtures",
         scope:
-          "Browser instructions and generated commands only. No preview, real token, device, filesystem adoption, native startup or activation was exercised.",
+          "Browser instructions, generated commands and scripted live status only. No preview, real token, device, installer run or activation was exercised.",
         passed: !failure,
         source_sha256,
         results,

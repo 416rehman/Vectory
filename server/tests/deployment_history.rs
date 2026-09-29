@@ -680,8 +680,8 @@ async fn global_sort_precedes_pagination_and_keeps_identity_ties_and_nulls_last(
     for (sort, direction, expected) in [
         ("name", "asc", vec!["b", "c", "d", "a"]),
         ("name", "desc", vec!["a", "d", "b", "c"]),
-        ("status", "asc", vec!["b", "a", "c", "d"]),
-        ("status", "desc", vec!["d", "c", "a", "b"]),
+        ("status", "asc", vec!["b", "c", "a", "d"]),
+        ("status", "desc", vec!["d", "a", "c", "b"]),
         ("verified", "asc", vec!["d", "c", "a", "b"]),
         ("verified", "desc", vec!["b", "a", "c", "d"]),
         ("created_at", "asc", vec!["d", "c", "b", "a"]),

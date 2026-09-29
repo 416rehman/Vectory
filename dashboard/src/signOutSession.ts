@@ -37,3 +37,19 @@ export function matchesSignOutSession(
     session.csrf_token === intent.csrfToken
   );
 }
+
+let signingOut = false;
+/** Whether this tab is deliberately signing out right now. */
+export function isSigningOut() {
+  return signingOut;
+}
+/**
+ * While a deliberate sign-out runs, an ended session is the expected outcome,
+ * so the re-sign-in dialog stays out of the way.
+ */
+export function setSigningOut(active: boolean) {
+  if (signingOut === active) return;
+  signingOut = active;
+  if (typeof window !== "undefined")
+    window.dispatchEvent(new Event("vectory:sign-out-activity"));
+}

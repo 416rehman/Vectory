@@ -765,8 +765,9 @@ try {
             .length,
           4,
         );
+        // The fifth wrong factor exhausts the challenge with a distinct code.
         assert.equal(
-          replies.filter((r) => r.body.error.code === "MFA_CHALLENGE_EXPIRED")
+          replies.filter((r) => r.body.error.code === "MFA_TOO_MANY_ATTEMPTS")
             .length,
           1,
         );

@@ -245,6 +245,17 @@ async function load({
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       if (path === `/deployments/${id(40)}/summary`)
         return reply({
           id: id(40),
@@ -349,6 +360,18 @@ async function load({
         })),
       });
     }
+    // The device page also shows telemetry, open issues and recent activity.
+    if (method === "GET") {
+      const telemetry = path.match(/^\/devices\/([^/]+)\/telemetry$/);
+      if (telemetry) return reply({ device_id: telemetry[1], samples: [] });
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
+    }
     unexpected.push(`${method} ${path}`);
     return reply(
       {
@@ -404,9 +427,9 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
     await page
-      .getByLabel("Schedule (optional)", { exact: true })
+      .getByLabel("Start at", { exact: true })
       .fill("2030-01-01T12:30");
   }
   await page
@@ -431,7 +454,8 @@ try {
       const row = table()
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
-      await expect(row).toContainText("Higher priority wins (200)");
+      await expect(row).toContainText("Keeps current");
+      await expect(row).toContainText("Priority 200 wins");
       expect(state.previews[0].priority).toBe(100);
       expect(state.creates).toEqual([]);
       await load({ kind: "version" });
@@ -440,8 +464,8 @@ try {
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
       await expect(configRow).toContainText("Version 1");
-      await expect(configRow).not.toContainText("Higher priority wins");
-      await expect(configRow).toContainText("No current priority conflict");
+      await expect(configRow).not.toContainText("Keeps current");
+      await expect(configRow).toContainText("No pipeline assigned");
     },
   );
   await check(
@@ -476,20 +500,20 @@ try {
       const row = table()
         .locator("tbody tr")
         .filter({ hasText: "Synthetic alpha" });
-      await expect(row).toContainText("Higher priority wins (300)");
+      await expect(row).toContainText("Priority 300 wins");
       await expect(
-        row.getByRole("link", { name: "View assignment", exact: true }),
+        row.getByRole("link", { name: /^View assignment/ }),
       ).toHaveAttribute("href", `#/deployments/${id(82)}?page=1`);
       await load();
       state.legacyPreview = true;
       await preview();
       await expect(table().locator("tbody tr").first()).toContainText(
-        "Priority outcome unavailable",
+        "Outcome unavailable",
       );
       await expect(
-        page.getByText(/This server does not report priority outcomes/),
+        page.getByText(/This server doesn.t report outcomes/),
       ).toBeVisible();
-      await expect(table()).not.toContainText("No current priority conflict");
+      await expect(table()).not.toContainText("No settings assigned");
       await load();
       state.conflicts = [
         {
@@ -505,7 +529,7 @@ try {
       ];
       await preview();
       await expect(table().locator("tbody tr").first()).toContainText(
-        "Conflicting assignment",
+        "Conflict",
       );
       await expect(
         page.getByRole("button", { name: "Apply settings", exact: true }),
@@ -686,7 +710,7 @@ try {
         new RegExp(`#/deployments/${id(40)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
       expect(state.creates).toHaveLength(1);
     },
@@ -718,8 +742,7 @@ try {
         .click();
       await expect.poll(() => state.holds.length).toBe(1);
       const assignmentLink = page.getByRole("link", {
-        name: "View assignment",
-        exact: true,
+        name: /^View assignment/,
       });
       await expect(assignmentLink).toHaveAttribute("aria-disabled", "true");
       await assignmentLink.click({ force: true });
@@ -756,7 +779,7 @@ try {
         new RegExp(`#/deployments/${id(40)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
     },
   );

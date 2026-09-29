@@ -9,6 +9,18 @@ import {
   MfaSetupSchema,
   MfaStatusSchema,
 } from "./mfaActionModel";
+import {
+  ConfigurationTelemetrySchema,
+  DiagnosticsSchema,
+  HostRuntimeSchema,
+  TelemetryHistorySchema,
+  TelemetrySummarySchema,
+  VectorLogSummarySchema,
+  VersionTelemetrySchema,
+  type HostRuntime,
+  type TelemetrySample,
+  type VectorLogSummary,
+} from "./runtimeModel";
 
 export class APIError extends Error {
   constructor(
@@ -16,9 +28,21 @@ export class APIError extends Error {
     message: string,
     public status: number,
     public serverRejection = false,
+    /** Seconds from a 429 response's Retry-After header. */
+    public retryAfter?: number,
+    /** GET /session 401 only: why this browser's session ended. */
+    public reason?: string,
   ) {
     super(message);
   }
+}
+/** A protected read or write stopped because the browser session ended. */
+export function isSessionInterruption(error: unknown) {
+  return (
+    error instanceof APIError &&
+    (error.code === "SESSION_ENDED" ||
+      (error.status === 401 && error.code === "UNAUTHENTICATED"))
+  );
 }
 // Shape validation cannot establish which record a singleton response belongs
 // to. Check the raw envelope even when a caller supplies a projection schema.
@@ -140,6 +164,8 @@ export async function api<T = unknown>(
     "/login/mfa",
     "/bootstrap",
     "/password-reset",
+    "/invite/preview",
+    "/invite/accept",
   ].includes(route);
   if (!publicRoute && !sessionValid) throw sessionFailure();
   const sentCSRF = csrf;
@@ -192,21 +218,29 @@ export async function api<T = unknown>(
         data?.error?.code === "UNAUTHENTICATED" &&
         sentCSRF &&
         sentCSRF === csrf &&
-        !["/login", "/login/mfa", "/bootstrap", "/password-reset"].includes(
-          route,
-        )
+        ![
+          "/login",
+          "/login/mfa",
+          "/bootstrap",
+          "/password-reset",
+          "/invite/preview",
+          "/invite/accept",
+        ].includes(route)
       ) {
         // Keep this request's authoritative401 error, while interrupting every
         // other protected request, including work stalled in response.text().
         sessionInterruptions.delete(interrupt);
         invalidateSession();
       }
+      const retryAfter = Number(response.headers.get("retry-after"));
       throw new APIError(
         data?.error?.code || "REQUEST_FAILED",
         data?.error?.message || `Request failed (${response.status}).`,
         response.status,
         typeof data?.error?.code === "string" &&
           typeof data?.error?.message === "string",
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+        typeof data?.error?.reason === "string" ? data.error.reason : undefined,
       );
     }
     const expected = schema || responseSchema(path, method);
@@ -297,7 +331,27 @@ export const UserSchema = z.object({
 export const SessionSchema = z.object({
   user: UserSchema,
   csrf_token: z.string(),
+  /** When this sign-in ends; absent from older servers. */
+  expires_at: z.string().optional(),
 });
+/** GET /users rows: the account plus its sign-in security state. */
+export const PersonSchema = UserSchema.extend({
+  status: z.enum(["invited", "active", "disabled"]).optional(),
+  mfa_enabled: z.boolean().optional(),
+  last_login_at: z.string().nullable().optional(),
+  invite_expires_at: z.string().nullable().optional(),
+});
+export type Person = z.infer<typeof PersonSchema>;
+export const SessionSummarySchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  current: z.boolean(),
+  created_at: z.string().nullable(),
+  last_seen_at: z.string().nullable(),
+  expires_at: z.string(),
+  user_agent: z.string().nullable(),
+  client_address: z.string().nullable(),
+});
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export const LoginChallengeSchema = z.object({
   mfa_required: z.literal(true),
   challenge_token: z.string().regex(/^[a-f0-9]{64}$/),
@@ -357,11 +411,15 @@ export const PublishReceiptSchema = z
     source_revision: publishRevision,
     graph: z.object({ nodes: z.array(z.any()), edges: z.array(z.any()) }),
     config: z.record(z.string(), z.any()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     artifact: z.string(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     size: z.number().int().nonnegative().max(1048576),
@@ -415,19 +473,68 @@ export const PublishRequestPageSchema = z
   })
   .strict();
 export type PublishRequestPage = z.infer<typeof PublishRequestPageSchema>;
-export type Assignment = { id: string; priority: number; reason: string };
+export type Assignment = {
+  id: string;
+  priority: number;
+  reason: string;
+  /** Display provenance; absent on older servers. */
+  name?: string | null;
+  target_mode?: string;
+  status?: string;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  created_at?: string | null;
+  created_by_name?: string | null;
+};
+/** Names and numbers for an assignment; never selectors, targets or values. */
+export type AssignmentDescription = {
+  id: string;
+  name: string | null;
+  resource: "configuration" | "policy";
+  priority: number;
+  target_mode: string;
+  status: string;
+  created_at: string | null;
+  version_id: string | null;
+  version_number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
+  policy: Policy | null;
+  policy_id: string | null;
+  policy_name: string | null;
+  created_by_name?: string | null;
+};
 export type DeploymentPreviewOutcome = {
   device_id: string;
   resource: "configuration" | "policy";
-  outcome: "requested" | "higher_priority" | "conflict";
+  outcome: "requested" | "higher_priority" | "conflict" | "replace";
   assignment?: Assignment;
+  winner?: AssignmentDescription;
+  replaces?: AssignmentDescription;
+};
+export type PreviewConflict = {
+  device_id: string;
+  assignment_ids: string[];
+  priority: number;
+  resource: "configuration" | "policy";
+  assignments?: AssignmentDescription[];
+};
+export type PreviewReplacement = {
+  assignment: AssignmentDescription;
+  device_ids: string[];
+  retires_assignment?: boolean;
 };
 export type DeploymentPreview = {
   request_correlation?: boolean;
   devices: Device[];
-  conflicts: unknown[];
+  conflicts: PreviewConflict[];
   warnings: string[];
   outcomes?: DeploymentPreviewOutcome[];
+  replacements?: PreviewReplacement[];
+  suggested_replaces?: PreviewReplacement[];
+  suggested_priority?: number | null;
+  winning_priority?: number | null;
+  paused_device_ids?: string[];
   create_idempotency?: boolean;
   artifact_previews?: {
     device_id: string;
@@ -472,14 +579,23 @@ export type Device = {
   sync_paused: boolean;
   local_paused?: boolean;
   pause_acknowledged: boolean;
-  telemetry?: {
-    sampled_at: string;
-    events_per_second?: number | null;
-    errors?: number | null;
-  };
+  telemetry?: TelemetrySample | null;
+  host_runtime?: HostRuntime;
+  vector_log_summary?: VectorLogSummary;
   assignment?: Assignment;
   policy_assignment?: Assignment;
   created_at: string;
+  /** Current check-in interval; the longer one until a change is acknowledged. */
+  check_in_seconds?: number;
+  desired_version?: VersionLabel | null;
+  /** Last verified managed version; null means the adopted local config. */
+  running_version?: (VersionLabel & { generation?: number }) | null;
+};
+export type VersionLabel = {
+  id: string;
+  number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
 };
 export type Group = {
   id: string;
@@ -792,6 +908,29 @@ export type DeploymentSummary = Omit<
   verified_count: number;
   state_counts: Record<string, number>;
   canary_gate?: unknown;
+  created_by_name?: string | null;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  rollback_available?: boolean;
+  completed_at?: string | null;
+  failed_at?: string | null;
+  failure_reason?: string | null;
+  cancelled_at?: string | null;
+  removed_at?: string | null;
+  status_before_removal?: string | null;
+  status_before_rollback?: string | null;
+  rolled_back_at?: string | null;
+  rolled_back_by?: string | null;
+  rolled_back_to_version?: number | null;
+  rollback_of?: string | null;
+  rollback_of_version?: number | null;
+  replaced_by?: {
+    deployment_id: string;
+    device_count: number;
+    at: string;
+    version_number: number | null;
+  }[];
+  replaces?: { deployment_id: string; version_number: number | null }[];
 };
 export type DeploymentPage = {
   request_history?: boolean;
@@ -848,6 +987,126 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   device_name: string | null;
   error: string | null;
   original: boolean;
+  released_at?: string | null;
+  verified_at?: string | null;
+  last_seen?: string | null;
+  replaced_by?: string | null;
+  diagnostic?: string | null;
+  check_in_seconds?: number | null;
+  timeline?: { state: string; at: string }[];
+};
+export type RolloutLane = {
+  kind: "canary" | "batch" | "all" | "added" | "not_released";
+  index: number;
+  state: "verified" | "in_progress" | "failed" | "queued" | "stopped";
+  released_at: string | null;
+  verified_at: string | null;
+  size: number;
+  counts: Record<string, number>;
+  devices: { device_id: string; device_name: string | null; state: string }[];
+  more: number;
+};
+export type RolloutFailure = {
+  state: string;
+  message: string | null;
+  diagnostic: string | null;
+  count: number;
+  /** Every device in the group (bounded); `devices` names the first few. */
+  device_ids?: string[];
+  devices: { device_id: string; device_name: string | null }[];
+};
+export type RolloutLanes = {
+  deployment_id: string;
+  status: string;
+  evaluated_at: string;
+  stages: RolloutLane[];
+  failures: RolloutFailure[];
+  removed_count: number;
+  check_in_seconds: number | null;
+  next_admission_at: string | null;
+};
+export type SavedPolicyListItem = SavedPolicy & {
+  revision?: number;
+  updated_at?: string;
+  applied_device_count?: number;
+  /** Given this template before its latest edit; still on the earlier values. */
+  outdated_device_count?: number;
+  applied_devices?: { id: string; name: string }[];
+};
+export type GroupMembershipState = {
+  assignment_id: string | null;
+  assignment_name: string | null;
+  version_id: string | null;
+  configuration_name: string | null;
+  version_number: number | null;
+  generation: number;
+  policy: Policy | null;
+} | null;
+export type GroupMembershipPreview = {
+  group_id: string;
+  revision: number;
+  stale: boolean;
+  ready: boolean;
+  blockers: { code: string; reason: string }[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    change: "added" | "removed";
+    configuration: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+    policy: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+  }[];
+};
+const membershipState = z
+  .object({ assignment_id: z.string().nullable() })
+  .passthrough()
+  .nullable();
+const membershipPart = z
+  .object({
+    changed: z.boolean(),
+    before: membershipState,
+    after: membershipState,
+    pending: z.object({ id: z.string() }).passthrough().nullable(),
+  })
+  .passthrough();
+const GroupMembershipPreviewSchema = z
+  .object({
+    group_id: z.string(),
+    revision: z.number().int().nonnegative(),
+    stale: z.boolean(),
+    ready: z.boolean(),
+    blockers: z.array(z.object({ code: z.string(), reason: z.string() })),
+    devices: z
+      .array(
+        z
+          .object({
+            device_id: z.string(),
+            device_name: z.string().nullable(),
+            change: z.enum(["added", "removed"]),
+            configuration: membershipPart,
+            policy: membershipPart,
+          })
+          .passthrough(),
+      )
+      .max(10000),
+  })
+  .passthrough() as unknown as z.ZodType<GroupMembershipPreview>;
+/** Values each device already uses for a new version of the same pipeline. */
+export type BindingSuggestions = {
+  devices: Record<string, Record<string, string | number | boolean>>;
+  sources: Record<
+    string,
+    { deployment_id: string; version_number: number | null }
+  >;
 };
 export type DeploymentTargetPage = {
   items: DeploymentTarget[];
@@ -965,6 +1224,7 @@ export const AuditExportFiltersSchema = z.object({
     .regex(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i)
     .optional(),
   target_id: auditFilterText(256).optional(),
+  scope: z.enum(["changes", "security"]).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
 });
@@ -991,12 +1251,23 @@ export const IssueSchema = z.object({
   device_revoked: z.boolean().nullable(),
   code: z.string(),
   stage: z.string(),
+  // Rendered by the server from the code and first diagnostic.
+  title: z.string().max(120).optional(),
   message: z.string(),
+  diagnostics: DiagnosticsSchema.default([]),
+  // Distinct failed attempts; `reports` counts every check-in.
   count: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative().optional(),
   first_seen: z.string().nullable(),
   last_seen: z.string().nullable(),
   desired_version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable().optional(),
+  configuration_id: z.string().nullable().optional(),
+  configuration_name: z.string().nullable().optional(),
+  deployment_id: z.string().nullable().optional(),
   resolved: z.boolean(),
+  resolved_reason: z.enum(["verified", "unassigned"]).nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
   revision: z.number().int().positive(),
   acknowledged: z.boolean(),
   acknowledged_at: z.string().nullable(),
@@ -1013,6 +1284,34 @@ export const IssueHistoryPageSchema = z.object({
   page_size: z.number().int().min(1).max(50),
 });
 export type IssueHistoryPage = z.infer<typeof IssueHistoryPageSchema>;
+/** Issues of one version failing with one code, across devices. */
+export const IssueGroupSchema = z.object({
+  key: z.string(),
+  code: z.string(),
+  title: z.string(),
+  message: z.string(),
+  diagnostics: DiagnosticsSchema,
+  version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+  deployment_ids: z.array(z.string()).max(50),
+  device_count: z.number().int().nonnegative(),
+  issue_count: z.number().int().nonnegative(),
+  attempts: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative(),
+  first_seen: z.string().nullable(),
+  last_seen: z.string().nullable(),
+  devices: z.array(IssueSchema).max(50),
+});
+export type IssueGroup = z.infer<typeof IssueGroupSchema>;
+export const IssueGroupPageSchema = z.object({
+  items: z.array(IssueGroupSchema).max(50),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(50),
+});
+export type IssueGroupPage = z.infer<typeof IssueGroupPageSchema>;
 export type Token = {
   id: string;
   name: string;
@@ -1022,6 +1321,18 @@ export type Token = {
   name_prefix?: string | null;
   revoked: boolean;
   created_at: string;
+  recovery_device_id?: string;
+  recovery_name?: string;
+  /** Usage added by the token list: who created it and what it enrolled. */
+  created_by?: { id: string; name: string | null } | null;
+  last_used_at?: string | null;
+  device_count?: number;
+  devices?: {
+    id: string;
+    name: string;
+    revoked: boolean;
+    enrolled_at: string | null;
+  }[];
 };
 export type Release = {
   name: string;
@@ -1032,7 +1343,77 @@ export type Release = {
   size: number;
   url: string;
   signed: boolean;
+  /** "bundled" with the server image, or from the operator "mirror". */
+  source?: "bundled" | "mirror";
 };
+const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
+// Values reach copyable shell commands, so every field is checked strictly.
+const ReleaseSchema = z.object({
+  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,149}$/),
+  os: z.enum(["linux", "darwin", "windows"]),
+  arch: z.enum(["amd64", "arm64"]),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/),
+  sha256: sha256Hex,
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  url: z.string().regex(/^\/api\/v1\/releases\/[A-Za-z0-9._-]+$/),
+  signed: z.boolean(),
+  source: z.enum(["bundled", "mirror"]).optional(),
+});
+const agentOrigin = z
+  .string()
+  .regex(
+    /^https:\/\/(?:[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\[[0-9a-f:.]+\])(?::\d{1,5})?$/,
+  );
+export const AgentInstallSchema = z.object({
+  agent_url: agentOrigin.nullable(),
+  agent_url_configured: z.boolean(),
+  listener_enabled: z.boolean(),
+  dashboard_url: z.string().nullable(),
+  certificate: z
+    .object({
+      available: z.boolean(),
+      publicly_trusted: z.boolean(),
+      ca_sha256: sha256Hex.nullable(),
+      ca_fingerprint: z.string().max(95).nullable().optional(),
+      ca_name: z.string().max(200).nullable().optional(),
+      ca_issuer: z.string().max(200).nullable().optional(),
+      ca_not_after: z.string().nullable().optional(),
+      problem: z.string().max(1000).nullable(),
+    })
+    .nullable(),
+  downloads_enabled: z.boolean(),
+  installer: z
+    .object({
+      url: z.string(),
+      sha256: sha256Hex,
+      platforms: z.array(z.string()),
+    })
+    .nullable(),
+  default_install_dir: z.string(),
+  releases: z.array(ReleaseSchema).max(100),
+  catalog_problems: z.array(z.string()).max(200),
+});
+export type AgentInstall = z.infer<typeof AgentInstallSchema>;
+const boundedText = (max: number) => z.string().max(max).nullable();
+export const EnrollmentEventSchema = z.object({
+  id: boundedText(128),
+  created_at: boundedText(64),
+  outcome: z.enum(["success", "failure"]),
+  reason_code: boundedText(64),
+  device_id: boundedText(128),
+  device_name: boundedText(100),
+  token_id: boundedText(128),
+  agent_os: boundedText(64),
+  agent_arch: boundedText(64),
+  agent_version: boundedText(64),
+  configuration_mode: boundedText(16),
+  client_address: boundedText(64),
+});
+export type EnrollmentEvent = z.infer<typeof EnrollmentEventSchema>;
+export const EnrollmentActivitySchema = z.object({
+  events: z.array(EnrollmentEventSchema).max(50),
+  now: z.string(),
+});
 export const ConfigurationAttemptSchema = z
   .object({
     generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
@@ -1061,6 +1442,7 @@ export const ConfigurationAttemptSchema = z
         code: z.string().min(1).max(128),
         stage: z.string().min(1).max(128),
         message: z.string().max(1000),
+        diagnostics: DiagnosticsSchema.optional(),
       })
       .strict()
       .optional(),
@@ -1085,6 +1467,7 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     policy_assignment: z
       .object({
@@ -1092,15 +1475,22 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     name: z.string(),
     status: z.string(),
     apply_state: z.string(),
     reported_apply_state: z.string().optional(),
     configuration_attempt: ConfigurationAttemptSchema.optional(),
+    host_runtime: HostRuntimeSchema.optional(),
+    vector_log_summary: VectorLogSummarySchema.optional(),
     desired_generation: z.number(),
     reported_generation: z.number(),
-    desired_sha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+    desired_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .optional(),
   })
   .passthrough();
 export const ConfigurationSchema = z
@@ -1111,11 +1501,15 @@ export const ConfigurationSchema = z
     archived: z.boolean().default(false),
     archived_at: z.string().nullable().optional(),
     config: z.record(z.string(), z.unknown()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     graph: z.object({
       nodes: z.array(z.unknown()),
       edges: z.array(z.unknown()),
@@ -1239,32 +1633,6 @@ export const PipelineLibraryPageSchema = z.object({
 });
 export type PipelineSummary = z.infer<typeof PipelineSummarySchema>;
 export type PipelineLibraryPage = z.infer<typeof PipelineLibraryPageSchema>;
-const metricSchema = z.number().min(0).max(1e15).nullable().optional();
-const telemetrySchema = z
-  .object({
-    sampled_at: z.string(),
-    events_per_second: metricSchema,
-    errors: metricSchema,
-    uptime_seconds: metricSchema,
-    memory_bytes: metricSchema,
-    cpu_seconds: metricSchema,
-    discarded_events: metricSchema,
-    buffer_bytes: metricSchema,
-    components: z
-      .array(
-        z.object({
-          id: z.string().max(100),
-          type: z.string().max(100).optional(),
-          events_per_second: metricSchema,
-          errors: metricSchema,
-          discarded_events: metricSchema,
-          buffer_bytes: metricSchema,
-        }),
-      )
-      .max(50)
-      .optional(),
-  })
-  .passthrough();
 function responseSchema(path: string, method: string): z.ZodType | undefined {
   path = path.split("?")[0];
   if (path === "/policies/requests" && method === "GET")
@@ -1290,6 +1658,8 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return GroupRequestLookupSchema;
   if (path === "/groups")
     return method === "POST" ? GroupSchema : z.array(GroupSchema);
+  if (path === "/groups/membership-preview" && method === "POST")
+    return GroupMembershipPreviewSchema;
   if (/^\/groups\/[^/]+$/.test(path)) return GroupSchema;
   if (path === "/login") return LoginSchema;
   if (path === "/mfa" && method === "GET") return MfaStatusSchema;
@@ -1306,6 +1676,7 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return AuditDetailSchema;
   if (/^\/issues\/[^/]+\/(acknowledge|reopen)$/.test(path)) return IssueSchema;
   if (path === "/issues/history") return IssueHistoryPageSchema;
+  if (path === "/issues/groups") return IssueGroupPageSchema;
   if (path === "/issues") return z.array(IssueSchema);
   if (/^\/issues\/[^/]+$/.test(path)) return IssueSchema;
   if (
@@ -1345,11 +1716,12 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
   if (/^\/deployments\/requests\/[^/]+$/.test(path))
     return DeploymentRequestLookupSchema;
   if (path === "/devices") return z.array(DeviceSchema);
-  if (/^\/devices\/[^/]+\/telemetry$/.test(path))
-    return z.object({
-      device_id: z.string(),
-      samples: z.array(telemetrySchema).max(120),
-    });
+  if (/^\/devices\/[^/]+\/telemetry$/.test(path)) return TelemetryHistorySchema;
+  if (path === "/telemetry/summary") return TelemetrySummarySchema;
+  if (/^\/versions\/[^/]+\/telemetry$/.test(path))
+    return VersionTelemetrySchema;
+  if (/^\/configurations\/[^/]+\/telemetry$/.test(path))
+    return ConfigurationTelemetrySchema;
   if (/^\/devices\/[^/]+$/.test(path)) return DeviceSchema;
   if (path === "/configurations") return z.array(ConfigurationSchema);
   if (path === "/configurations/library") return PipelineLibraryPageSchema;
@@ -1382,7 +1754,9 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
       })
       .passthrough();
   if (/^\/configurations\/[^/]+$/.test(path)) return ConfigurationSchema;
-  if (path === "/users") return z.array(UserSchema);
+  if (path === "/users") return z.array(PersonSchema);
+  if (path === "/account/sessions" && method === "GET")
+    return z.object({ sessions: z.array(SessionSummarySchema) });
   const record = z.object({ id: z.string() }).passthrough();
   if (
     ["/deployments", "/policies", "/tokens", "/issues", "/audit"].includes(path)

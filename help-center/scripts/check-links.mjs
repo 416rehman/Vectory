@@ -4,7 +4,29 @@ import { parse } from "parse5";
 import { markdownReferences } from "./markdown.mjs";
 import { createHash } from "node:crypto";
 
-export async function checkLinks(output, htmlFiles, dashboardSrc, markdown = []) {
+// Help destinations named in dashboard source: DocLink and HelpLink elements,
+// page-header help={{ topic, section }} descriptors, and literal /help/ paths.
+export function dashboardHelpTargets(source) {
+  const targets = [];
+  const add = (topic, section, index) =>
+    targets.push({ href: `/help/${topic}/${section ? "#" + section : ""}`, line: source.slice(0, index).split("\n").length });
+  for (const match of source.matchAll(/<(?:DocLink|HelpLink)\b([\s\S]*?)>/g)) {
+    const topic = match[1].match(/\btopic="([^"]+)"/)?.[1];
+    const section = match[1].match(/\bsection="([^"]+)"/)?.[1];
+    if (topic) add(topic, section, match.index);
+  }
+  for (const match of source.matchAll(/\bhelp=\{\{([\s\S]*?)\}\}/g)) {
+    const topic = match[1].match(/\btopic:\s*"([^"]+)"/)?.[1];
+    const section = match[1].match(/\bsection:\s*"([^"]+)"/)?.[1];
+    if (topic) add(topic, section, match.index);
+  }
+  for (const match of source.matchAll(/["'`]\/help\/([a-z][a-z-]*)\/(?:#([a-z0-9-]+))?["'`]/g))
+    add(match[1], match[2], match.index);
+  return targets;
+}
+
+// legacy: { page: { "old-section": "new-page#new-section" } }
+export async function checkLinks(output, htmlFiles, dashboardSrc, markdown = [], { legacy = {}, texts = [] } = {}) {
   const documents = new Map();
   const references = [];
   const origin = "https://vectory.invalid";
@@ -34,15 +56,8 @@ export async function checkLinks(output, htmlFiles, dashboardSrc, markdown = [])
     file.endsWith(".tsx"),
   )) {
     const source = await fs.readFile(path.join(dashboardSrc, file), "utf8");
-    for (const match of source.matchAll(/<DocLink\b([\s\S]*?)>/g)) {
-      const topic = match[1].match(/\btopic="([^"]+)"/)?.[1];
-      const section = match[1].match(/\bsection="([^"]+)"/)?.[1];
-      if (topic)
-        references.push({
-          href: `/help/${topic}/${section ? "#" + section : ""}`,
-          from: file,
-        });
-    }
+    for (const { href, line } of dashboardHelpTargets(source))
+      references.push({ href, from: `${file}:${line}` });
   }
   const errors = [];
   for (const entry of markdown) {
@@ -53,13 +68,40 @@ export async function checkLinks(output, htmlFiles, dashboardSrc, markdown = [])
       throw new Error(`Markdown asset does not match its authored source: ${entry.path}`);
     for (const href of markdownReferences(source)) references.push({href, from: entry.path});
   }
+  for (const text of texts) {
+    const source = await fs.readFile(path.join(output, text.slice("/help/".length)), "utf8");
+    for (const href of markdownReferences(source)) references.push({ href, from: text });
+  }
+  const pageOf = (pathname) => pathname.match(/^\/help\/(?:([a-z][a-z-]*)\/)?$/)?.[1] || "index";
+  const pathOf = (page) => `/help/${page === "index" ? "" : page + "/"}`;
+  // Every legacy entry must point at a real section and must not shadow one.
+  for (const [page, sections] of Object.entries(legacy)) {
+    const ids = documents.get(pathOf(page));
+    if (!ids) {
+      errors.push(`legacy-anchors.json: unknown page ${page}`);
+      continue;
+    }
+    for (const [old, target] of Object.entries(sections)) {
+      if (ids.has(old)) errors.push(`legacy-anchors.json: ${page}#${old} still exists on the page; remove the entry`);
+      const [targetPage, targetSection = ""] = target.split("#");
+      const targetIds = documents.get(pathOf(targetPage));
+      if (!targetIds || (targetSection && !targetIds.has(targetSection)))
+        errors.push(`legacy-anchors.json: ${page}#${old} points to missing ${target}`);
+    }
+  }
+  let legacyReferences = 0;
   for (const { href, from } of references) {
     const url = new URL(href, origin + (from.startsWith("/") ? from : "/"));
     if (url.origin !== origin || !url.pathname.startsWith("/help/")) continue;
     const ids = documents.get(url.pathname);
     if (ids) {
-      if (url.hash && !ids.has(decodeURIComponent(url.hash.slice(1))))
-        errors.push(`${from}: missing section ${href}`);
+      const section = decodeURIComponent(url.hash.slice(1));
+      if (!section || ids.has(section)) continue;
+      if (legacy[pageOf(url.pathname)]?.[section]) {
+        legacyReferences++;
+        continue;
+      }
+      errors.push(`${from}: missing section ${href}`);
     } else {
       const target = path.resolve(
         output,
@@ -76,6 +118,7 @@ export async function checkLinks(output, htmlFiles, dashboardSrc, markdown = [])
       "Help link check failed:\n" + [...new Set(errors)].join("\n"),
     );
   console.log(
-    `Verified ${references.length} help links and assets, including application context links.`,
+    `Verified ${references.length} help links and assets, including application context links` +
+      (legacyReferences ? ` (${legacyReferences} through legacy-anchors.json).` : "."),
   );
 }

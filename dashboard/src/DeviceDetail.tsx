@@ -1,0 +1,1199 @@
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  ArrowRight,
+  Check,
+  CircleAlert,
+  CircleHelp,
+  CircleX,
+  LoaderCircle,
+  Pause,
+  Rocket,
+  TriangleAlert,
+  WifiOff,
+  X,
+} from "lucide-react";
+import {
+  type AuditHistoryPage,
+  type Configuration,
+  type Device,
+  type Group,
+  type IssueHistoryPage,
+  type Policy,
+  type User,
+  type Version,
+} from "./api";
+import { roleAllows } from "./roleAccess";
+import DocLink from "./DocLink";
+import ActivityGlyph from "./ActivityGlyph";
+import AgentUpgrade from "./AgentUpgrade";
+import TargetDialog from "./TargetDialog";
+import TelemetryPanel from "./TelemetryPanel";
+import DeviceRevocation from "./DeviceAccessRevocation";
+import { DeviceIdentityRecovery, DeviceRetryAction } from "./RecoveryActions";
+import {
+  currentConfigurationAttempt,
+  deviceApplicationExplanation,
+} from "./deviceApplication";
+import { deploymentRoute, isDeploymentId } from "./deploymentRouting";
+import { auditRoute, defaultAuditQuery } from "./auditModel";
+import {
+  describeActivity,
+  activityTone,
+  type ActivityItem,
+} from "./activityModel";
+import { rememberRecent } from "./CommandPalette";
+import {
+  Button,
+  Disclosure,
+  EmptyState,
+  InlineError,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  TimeAgo,
+  useResource,
+} from "./ui";
+import { connectionState, deviceDisplayStatus, statusLabel } from "./status";
+import { exactLocal } from "./time";
+import { runsDesired } from "./deviceModel";
+import "./devices.css";
+
+type Navigate = (path: string) => void;
+const platform = (device: Device) =>
+  [device.os, device.arch].filter(Boolean).join(" / ") ||
+  "Platform not reported";
+const assignmentLink = (assignmentId?: string) =>
+  typeof assignmentId === "string" && isDeploymentId(assignmentId)
+    ? `#/${deploymentRoute(false, assignmentId, {
+        search: "",
+        status: "all",
+        page: 1,
+      })}`
+    : null;
+
+/* ---------- Apply progress ---------- */
+
+const steps = [
+  { state: "desired", label: "Released" },
+  { state: "downloaded", label: "Downloaded" },
+  { state: "validated", label: "Validated" },
+  { state: "written", label: "Written" },
+  { state: "reload_requested", label: "Vector reloaded" },
+  { state: "verified_applied", label: "Verified running" },
+];
+const stageStep: Record<string, number> = {
+  download: 1,
+  downloaded: 1,
+  verify: 1,
+  validation: 2,
+  validate: 2,
+  validated: 2,
+  secrets: 2,
+  write: 3,
+  written: 3,
+  reload: 4,
+  startup: 4,
+  start: 4,
+  reload_requested: 4,
+  verification: 5,
+};
+type StepState = "done" | "current" | "failed" | "unknown" | "todo" | "paused";
+export function applySteps(device: Device, version?: Version | null) {
+  const attempt = currentConfigurationAttempt(device, version);
+  const state =
+    attempt?.state ??
+    (device.reported_generation >= device.desired_generation
+      ? device.apply_state
+      : "desired");
+  let reached = steps.findIndex((step) => step.state === state);
+  let failedAt = -1;
+  let outcome: StepState | null = null;
+  if (state === "verified_applied" || device.status === "verified") {
+    reached = steps.length - 1;
+    outcome = "done";
+  } else if (state === "failed" || state === "rolled_back") {
+    failedAt =
+      stageStep[(attempt?.error?.stage || "").toLowerCase()] ??
+      (state === "rolled_back" ? 4 : 2);
+    reached = failedAt;
+  } else if (state === "verification_unknown") {
+    reached = steps.length - 1;
+    outcome = "unknown";
+  } else if (state === "paused" || device.sync_paused || device.local_paused) {
+    reached = Math.max(0, reached);
+    outcome = "paused";
+  }
+  if (reached < 0) reached = 0;
+  return steps.map((step, index): { label: string; state: StepState } => {
+    if (failedAt === index) return { label: step.label, state: "failed" };
+    if (index < reached) return { label: step.label, state: "done" };
+    if (index === reached)
+      return {
+        label: step.label,
+        state:
+          outcome === "done"
+            ? "done"
+            : outcome === "unknown"
+              ? "unknown"
+              : outcome === "paused"
+                ? "paused"
+                : "current",
+      };
+    return { label: step.label, state: "todo" };
+  });
+}
+function ApplyProgress({
+  device,
+  version,
+}: {
+  device: Device;
+  version: Version | null;
+}) {
+  const list = applySteps(device, version);
+  const current = list.find((step) => step.state !== "done") ?? list.at(-1)!;
+  return (
+    <div className="device-apply-progress">
+      <p className="device-apply-progress-title">
+        Apply progress
+        <span className="sr-only">
+          : {current.label}{" "}
+          {current.state === "done" ? "complete" : current.state}
+        </span>
+      </p>
+      <ol>
+        {list.map((step) => (
+          <li key={step.label} data-state={step.state}>
+            <span className="device-apply-step-marker" aria-hidden="true">
+              {step.state === "done" ? (
+                <Check size={11} strokeWidth={3} />
+              ) : step.state === "failed" ? (
+                <X size={11} strokeWidth={3} />
+              ) : step.state === "unknown" ? (
+                <CircleHelp size={12} />
+              ) : step.state === "paused" ? (
+                <Pause size={10} />
+              ) : step.state === "current" ? (
+                <LoaderCircle size={11} className="spin" />
+              ) : null}
+            </span>
+            <span className="device-apply-step-label">
+              {step.label}
+              <span className="sr-only">
+                {" "}
+                (
+                {step.state === "todo"
+                  ? "not reached"
+                  : step.state === "current"
+                    ? "in progress"
+                    : step.state}
+                )
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/* ---------- Running vs desired ---------- */
+
+function RunningLine({ device, number }: { device: Device; number?: number }) {
+  const v = number ? `v${number}` : "the assigned version";
+  const attempt = device.configuration_attempt;
+  if (device.status === "revoked")
+    return (
+      <span className="device-muted">Unknown. Device access is revoked.</span>
+    );
+  if (!device.desired_version_id)
+    return (
+      <span className="device-muted">
+        Not managed by Vectory. An adopted local workload may still be running.
+      </span>
+    );
+  if (device.status === "verified")
+    return (
+      <span className="device-running-value" data-tone="success">
+        <Check size={14} aria-hidden="true" />
+        {v}, verified running by the agent
+      </span>
+    );
+  if (runsDesired(device))
+    return (
+      <span className="device-running-value">
+        <Check size={14} aria-hidden="true" />
+        {v} at the last report
+        {device.last_seen && (
+          <>
+            {" "}
+            (<TimeAgo value={device.last_seen} />)
+          </>
+        )}
+      </span>
+    );
+  if (device.status === "failed" || device.status === "rolled_back")
+    return (
+      <span className="device-running-value" data-tone="danger">
+        <CircleX size={14} aria-hidden="true" />
+        Its last working configuration.{" "}
+        {device.status === "rolled_back"
+          ? `${v} was rolled back.`
+          : `${v} failed to apply.`}
+      </span>
+    );
+  if (device.status === "verification_unknown")
+    return (
+      <span className="device-running-value" data-tone="warning">
+        <CircleHelp size={14} aria-hidden="true" />
+        {v} was written, but Vector wasn't confirmed running
+      </span>
+    );
+  if (device.sync_paused || device.local_paused || device.status === "paused")
+    return (
+      <span className="device-running-value">
+        <Pause size={14} aria-hidden="true" />
+        Unchanged while sync is paused
+      </span>
+    );
+  if (device.status === "offline")
+    return (
+      <span className="device-running-value" data-tone="warning">
+        <WifiOff size={14} aria-hidden="true" />
+        Unknown while the device is offline
+      </span>
+    );
+  return (
+    <span className="device-running-value" data-tone="info">
+      <LoaderCircle size={14} className="spin" aria-hidden="true" />
+      Its previous configuration while {v} is{" "}
+      {attempt && attempt.version_id === device.desired_version_id
+        ? statusLabel("apply", attempt.state).toLowerCase()
+        : "on its way"}
+    </span>
+  );
+}
+function FailureDetails({
+  device,
+  version,
+}: {
+  device: Device;
+  version: Version | null;
+}) {
+  const attempt = currentConfigurationAttempt(device, version);
+  if (!attempt?.error || !["failed", "rolled_back"].includes(attempt.state))
+    return null;
+  return (
+    <div className="device-failure-details" role="note">
+      <div className="device-failure-details-head">
+        <CircleAlert size={15} aria-hidden="true" />
+        <strong>
+          {attempt.state === "rolled_back" ? "Rolled back" : "Apply failed"} at{" "}
+          {attempt.error.stage.replaceAll("_", " ")}
+        </strong>
+        <code>{attempt.error.code}</code>
+      </div>
+      {/* The reason is explained from the code above; agent messages are
+          never shown, even the server's substituted ones. */}
+      <DocLink
+        topic="troubleshooting"
+        section="a-pipeline-is-rejected-or-rolled-back"
+      >
+        Troubleshoot a rejected pipeline
+      </DocLink>
+    </div>
+  );
+}
+
+/* ---------- Vector log summary (reported by newer agents) ---------- */
+
+type LogItem = {
+  key: string;
+  level: string;
+  message: string;
+  component: string | null;
+  count: number | null;
+  last: string | null;
+};
+function logItems(value: unknown): {
+  items: LogItem[];
+  reportedAt: string | null;
+} {
+  const raw = (value && typeof value === "object" ? value : {}) as Record<
+    string,
+    unknown
+  >;
+  const list = Array.isArray(raw.items)
+    ? raw.items
+    : Array.isArray(value)
+      ? value
+      : [];
+  const items = list.slice(0, 20).flatMap((entry, index): LogItem[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const item = entry as Record<string, unknown>;
+    if (typeof item.message !== "string" || !item.message) return [];
+    return [
+      {
+        key:
+          typeof item.fingerprint === "string"
+            ? item.fingerprint
+            : String(index),
+        level: typeof item.level === "string" ? item.level : "error",
+        message: item.message.slice(0, 500),
+        component:
+          typeof item.component_id === "string" ? item.component_id : null,
+        count:
+          typeof item.count === "number" && Number.isSafeInteger(item.count)
+            ? item.count
+            : null,
+        last: typeof item.last_seen === "string" ? item.last_seen : null,
+      },
+    ];
+  });
+  return {
+    items,
+    reportedAt: typeof raw.reported_at === "string" ? raw.reported_at : null,
+  };
+}
+function VectorLogs({ device }: { device: Device }) {
+  const { items, reportedAt } = logItems(
+    (device as Device & { vector_log_summary?: unknown }).vector_log_summary,
+  );
+  if (!items.length) return null;
+  return (
+    <section className="device-card" aria-labelledby="device-logs-title">
+      <div className="device-card-head">
+        <div>
+          <h2 id="device-logs-title">Recent Vector errors</h2>
+          {reportedAt && (
+            <p className="device-card-subtitle">
+              Reported <TimeAgo value={reportedAt} />. Messages are redacted on
+              the host.
+            </p>
+          )}
+        </div>
+      </div>
+      <ul className="device-vector-logs">
+        {items.map((item) => (
+          <li key={item.key} data-level={item.level}>
+            {item.level === "warn" || item.level === "warning" ? (
+              <TriangleAlert size={14} aria-hidden="true" />
+            ) : (
+              <CircleX size={14} aria-hidden="true" />
+            )}
+            <div>
+              <p>{item.message}</p>
+              <small>
+                {[
+                  item.component && `Component ${item.component}`,
+                  item.count &&
+                    item.count > 1 &&
+                    `${item.count.toLocaleString()} times`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                {item.last && (
+                  <>
+                    {item.component || (item.count && item.count > 1)
+                      ? " · last "
+                      : "Last "}
+                    <TimeAgo value={item.last} />
+                  </>
+                )}
+              </small>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* ---------- Activity ---------- */
+
+function DeviceActivity({ device }: { device: Device }) {
+  const id = device.id;
+  const issues = useResource<IssueHistoryPage>(
+    `/issues/history?state=open&device_id=${encodeURIComponent(id)}&page_size=5`,
+    { items: [], total: 0, page: 1, page_size: 5 },
+  );
+  const audit = useResource<AuditHistoryPage>(
+    `/audit/history?device_id=${encodeURIComponent(id)}&page_size=12`,
+    { items: [], total: 0, page: 1, page_size: 12 },
+  );
+  const reports = issues.data.items;
+  // Name this device in its own events; the history rows carry only its ID.
+  const entries = (audit.data.items as unknown as ActivityItem[]).map(
+    (entry) =>
+      entry.device_id && entry.device_id.toLowerCase() === id.toLowerCase()
+        ? { ...entry, device_names: [device.name] }
+        : entry,
+  );
+  return (
+    <section className="device-card" aria-labelledby="device-activity-title">
+      <div className="device-card-head">
+        <div>
+          <h2 id="device-activity-title">Activity</h2>
+          <p className="device-card-subtitle">
+            Open issues and recent changes for this device
+          </p>
+        </div>
+        <a
+          className="device-card-link"
+          href={`#/${auditRoute(null, { ...defaultAuditQuery, device_id: id })}`}
+        >
+          All device activity <ArrowRight size={14} aria-hidden="true" />
+        </a>
+      </div>
+      {(issues.error || audit.error) && (
+        <InlineError
+          title="Couldn't load all device activity."
+          error={issues.error || audit.error}
+          retry={() => {
+            void issues.reload();
+            void audit.reload();
+          }}
+        />
+      )}
+      {issues.loading && !issues.updatedAt ? (
+        <Skeleton width="60%" height={12} />
+      ) : reports.length ? (
+        <div className="device-issues">
+          <p className="device-subheading">
+            Open issues
+            {issues.data.total > reports.length
+              ? ` · latest ${reports.length} of ${issues.data.total}`
+              : ""}
+          </p>
+          <ul>
+            {reports.map((issue) => (
+              <li key={issue.id}>
+                <a href={`#/issues/${encodeURIComponent(issue.id)}`}>
+                  {issue.code.replaceAll("_", " ")}
+                </a>
+                <p>{issue.message}</p>
+                <small>
+                  Last reported{" "}
+                  {issue.last_seen ? (
+                    <TimeAgo value={issue.last_seen} />
+                  ) : (
+                    "at an unavailable time"
+                  )}
+                  {issue.count > 1 ? ` · ${issue.count} reports` : ""}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : issues.error ? null : (
+        <p className="device-quiet">No open issues for this device.</p>
+      )}
+      <p className="device-subheading">Recent changes</p>
+      {audit.loading && !audit.updatedAt ? (
+        <div className="device-skeleton-lines" aria-hidden="true">
+          <Skeleton width="80%" height={12} />
+          <Skeleton width="65%" height={12} />
+          <Skeleton width="72%" height={12} />
+        </div>
+      ) : entries.length ? (
+        <ol className="device-activity-list">
+          {entries.map((entry) => (
+            <li key={entry.id} data-tone={activityTone(entry)}>
+              <ActivityGlyph item={entry} />
+              <p>
+                {describeActivity(entry).map((part, index) =>
+                  part.href ? (
+                    <a key={index} href={part.href}>
+                      {part.text}
+                    </a>
+                  ) : part.strong ? (
+                    <strong key={index}>{part.text}</strong>
+                  ) : (
+                    <span key={index}>{part.text}</span>
+                  ),
+                )}
+              </p>
+              {entry.created_at ? (
+                <a
+                  className="device-activity-time"
+                  href={`#/${auditRoute(entry.id, { ...defaultAuditQuery, device_id: id })}`}
+                  title={`${exactLocal(entry.created_at)} · Open in the audit log`}
+                >
+                  <TimeAgo value={entry.created_at} />
+                </a>
+              ) : (
+                <span className="device-activity-time">Time unavailable</span>
+              )}
+            </li>
+          ))}
+        </ol>
+      ) : audit.error ? null : (
+        <p className="device-quiet">
+          No events have been recorded for this device identity.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/* ---------- Page ---------- */
+
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+export default function DeviceDetail({
+  id,
+  user,
+  notify,
+  navigate,
+}: {
+  id: string;
+  user: User;
+  notify: (message: string) => void;
+  navigate: Navigate;
+}) {
+  const [fast, setFast] = useState(false);
+  const resource = useResource<Device | null>(`/devices/${id}`, null, 0, {
+    interval: fast ? 5000 : 15000,
+  });
+  const device = resource.data;
+  const applying = device?.status === "applying";
+  useEffect(() => setFast(!!applying), [applying]);
+  const [policy, setPolicy] = useState<Policy | null>(null);
+  const canReviewPolicy =
+    roleAllows(user, "operate") && device?.status !== "revoked";
+  useEffect(() => {
+    if (!device || !canReviewPolicy) setPolicy(null);
+  }, [device, canReviewPolicy]);
+  const version = useResource<Version | null>(
+    device?.desired_version_id
+      ? `/versions/${device.desired_version_id}`
+      : null,
+    null,
+  );
+  const configuration = useResource<Configuration | null>(
+    version.data?.configuration_id
+      ? `/configurations/${version.data.configuration_id}`
+      : null,
+    null,
+  );
+  const groups = useResource<Group[]>("/groups", []);
+  useEffect(() => {
+    if (device?.id && device.name)
+      rememberRecent(user.id, {
+        key: `device:${device.id}`,
+        kind: "device",
+        title: device.name,
+        href: `#/devices/${device.id}`,
+      });
+  }, [device?.id, device?.name, user.id]);
+  const afterAction = (message: string) => {
+    notify(message);
+    void resource.reload();
+  };
+  const refresh = async () => {
+    await resource.reload();
+  };
+  const pipelineAssignment = assignmentLink(device?.assignment?.id);
+  const settingsAssignment = assignmentLink(device?.policy_assignment?.id);
+  const breadcrumb = [{ label: "Devices", href: "#/devices" }];
+  const live = {
+    updatedAt: resource.updatedAt,
+    error: resource.error,
+    loading: resource.loading,
+    refreshing: resource.refreshing,
+    onRefresh: () => {
+      void resource.reload();
+      void version.reload();
+      void configuration.reload();
+    },
+  };
+  if (!device)
+    return (
+      <div className="device-page">
+        <PageHeader
+          title={resource.loading ? "Device" : "Device unavailable"}
+          breadcrumb={breadcrumb}
+          live={live}
+          help={{
+            topic: "troubleshooting",
+            section: "a-device-page-shows-mismatched-details",
+            label: "Help loading this device",
+          }}
+          description={
+            resource.loading
+              ? undefined
+              : "Try again to load this device, or return to the device list."
+          }
+        />
+        {resource.loading ? (
+          <div className="device-layout" aria-busy="true">
+            <div className="device-main">
+              <div
+                className="device-card device-card-skeleton"
+                aria-hidden="true"
+              >
+                <Skeleton width={140} height={14} />
+                <Skeleton width="70%" height={12} />
+                <Skeleton width="55%" height={12} />
+              </div>
+            </div>
+            <aside className="device-side">
+              <div
+                className="device-card device-card-skeleton"
+                aria-hidden="true"
+              >
+                <Skeleton width={100} height={14} />
+                <Skeleton width="80%" height={12} />
+              </div>
+            </aside>
+          </div>
+        ) : (
+          // No stale device to keep, so the failure itself is the alert.
+          <div role="alert">
+            <EmptyState
+              variant="error"
+              title="This device couldn't be loaded"
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => void resource.reload()}
+                >
+                  Try again
+                </Button>
+              }
+              secondaryAction={
+                <Button variant="ghost" onClick={() => navigate("devices")}>
+                  Back to devices
+                </Button>
+              }
+            >
+              {resource.error || "The device may have been removed."}
+            </EmptyState>
+          </div>
+        )}
+      </div>
+    );
+  const display = deviceDisplayStatus(device);
+  const connection = connectionState(device);
+  const memberOf = groups.data.filter((group) =>
+    group.device_ids.includes(device.id),
+  );
+  const number =
+    version.data?.number ?? device.desired_version?.number ?? undefined;
+  const pipelineName =
+    configuration.data?.name ||
+    device.desired_version?.configuration_name ||
+    null;
+  const pipelineId =
+    configuration.data?.id ||
+    version.data?.configuration_id ||
+    device.desired_version?.configuration_id ||
+    null;
+  const operate = roleAllows(user, "operate");
+  const labels = Object.entries(device.labels || {});
+  return (
+    <div className="device-page">
+      <PageHeader
+        title={device.name}
+        breadcrumb={breadcrumb}
+        live={live}
+        description={[
+          platform(device),
+          device.vector_version ? `Vector ${device.vector_version}` : null,
+          device.agent_version ? `Agent ${device.agent_version}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        help={{
+          topic: "telemetry",
+          section: "investigate-a-change",
+          label: "Help for this device",
+        }}
+        meta={
+          <>
+            <StatusBadge domain="device" value={display} />
+            <StatusBadge
+              domain="connection"
+              value={connection}
+              appearance="text"
+              label={
+                connection === "online"
+                  ? "Online"
+                  : connection === "never"
+                    ? "Never connected"
+                    : connection === "revoked"
+                      ? "Access revoked"
+                      : "Offline"
+              }
+            />
+            {device.last_seen && (
+              <span className="device-meta-note">
+                Last check-in <TimeAgo value={device.last_seen} />
+              </span>
+            )}
+          </>
+        }
+      >
+        {pipelineAssignment && (
+          <a className="button secondary" href={pipelineAssignment}>
+            Open rollout
+          </a>
+        )}
+        {operate && device.status !== "revoked" && (
+          <Button
+            icon={Rocket}
+            variant={device.desired_version_id ? "secondary" : ""}
+            onClick={() =>
+              navigate(`configurations?device=${encodeURIComponent(device.id)}`)
+            }
+          >
+            Deploy a pipeline
+          </Button>
+        )}
+      </PageHeader>
+      {resource.error && (
+        <InlineError
+          title="Couldn't refresh this device."
+          error={resource.error}
+          updatedAt={resource.updatedAt}
+          retry={() => void resource.reload()}
+          retrying={resource.refreshing}
+        />
+      )}
+      {(device.sync_paused || device.local_paused) && (
+        <div className="device-banner" data-tone="neutral" role="note">
+          <Pause size={16} aria-hidden="true" />
+          <div>
+            <strong>
+              {device.local_paused
+                ? "Sync paused on this host"
+                : device.pause_acknowledged
+                  ? "Sync paused by agent settings"
+                  : "Waiting for the agent to confirm the pause"}
+            </strong>
+            <p>
+              {device.local_paused ? (
+                "A host operator paused sync locally. Remote changes can't remove this pause; run vectory resume on the host."
+              ) : (
+                <>
+                  The current workload keeps running. New versions wait until
+                  sync resumes.
+                  {device.policy_assignment && settingsAssignment && (
+                    <>
+                      {" "}
+                      The pause comes from a{" "}
+                      <a href={settingsAssignment}>settings assignment</a> with
+                      priority {device.policy_assignment.priority}.
+                    </>
+                  )}
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+      {device.status === "offline" && (
+        <div className="device-banner" data-tone="warning" role="note">
+          <WifiOff size={16} aria-hidden="true" />
+          <div>
+            <strong>This device is offline</strong>
+            <p>
+              No check-in for three heartbeat intervals. What it runs now can't
+              be confirmed.{" "}
+              <DocLink
+                topic="troubleshooting"
+                section="a-device-is-offline-or-never-connects"
+              >
+                Troubleshoot a device that is offline
+              </DocLink>
+            </p>
+          </div>
+        </div>
+      )}
+      <div className="device-layout">
+        <div className="device-main">
+          <section
+            className="device-card device-pipeline"
+            aria-labelledby="device-running-title"
+          >
+            <div className="device-card-head">
+              <h2 id="device-running-title">Running vs desired</h2>
+              {device.desired_version_id && (
+                <StatusBadge domain="device" value={display} />
+              )}
+            </div>
+            {(version.error || configuration.error) && (
+              <InlineError
+                title="Pipeline details couldn't be loaded."
+                error={version.error || configuration.error}
+                retry={() => {
+                  void version.reload();
+                  void configuration.reload();
+                }}
+              />
+            )}
+            <dl className="device-running-lines">
+              <div>
+                <dt>Desired</dt>
+                <dd>
+                  {device.desired_version_id ? (
+                    <span className="device-running-value">
+                      {pipelineId ? (
+                        <a
+                          href={`#/configurations/${encodeURIComponent(pipelineId)}`}
+                        >
+                          {pipelineName || "Assigned pipeline"}
+                        </a>
+                      ) : (
+                        <span>
+                          {pipelineName ||
+                            (version.loading || configuration.loading
+                              ? "Loading pipeline…"
+                              : "Assigned pipeline")}
+                        </span>
+                      )}
+                      {number !== undefined && (
+                        <span className="device-running-version">
+                          v{number}
+                        </span>
+                      )}
+                      {version.data?.created_at && (
+                        <span className="device-muted">
+                          published <TimeAgo value={version.data.created_at} />
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="device-muted">No pipeline assigned</span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Running</dt>
+                <dd>
+                  <RunningLine device={device} number={number} />
+                </dd>
+              </div>
+            </dl>
+            {version.data?.message && (
+              <p className="device-running-note">“{version.data.message}”</p>
+            )}
+            <p className="device-explanation">
+              {device.desired_version_id
+                ? deviceApplicationExplanation(device, version.data)
+                : "No published pipeline is assigned. An adopted local workload may continue running; a device without a managed configuration waits without starting Vector. An agent check-in alone does not confirm a running workload."}
+            </p>
+            {device.uses_local_secrets && (
+              <p className="device-secret-note">
+                This pipeline uses credentials stored on the device. Secret
+                values are never sent to this dashboard.
+              </p>
+            )}
+            <FailureDetails device={device} version={version.data} />
+            <DeviceRetryAction
+              device={device}
+              user={user}
+              onDone={afterAction}
+              onRefresh={refresh}
+            />
+            {device.desired_version_id && device.status !== "revoked" && (
+              <ApplyProgress device={device} version={version.data} />
+            )}
+            <div className="device-card-actions">
+              {pipelineAssignment && (
+                <a className="device-card-link" href={pipelineAssignment}>
+                  View pipeline assignment{" "}
+                  <ArrowRight size={14} aria-hidden="true" />
+                </a>
+              )}
+              {device.assignment && !pipelineAssignment && (
+                <span className="device-muted">
+                  Pipeline assignment link unavailable.
+                </span>
+              )}
+            </div>
+          </section>
+          <TelemetryPanel device={device} />
+          <VectorLogs device={device} />
+          <DeviceActivity device={device} />
+        </div>
+        <aside className="device-side">
+          <section className="device-card" aria-labelledby="device-about-title">
+            <div className="device-card-head">
+              <h2 id="device-about-title">About this device</h2>
+            </div>
+            <dl className="device-facts">
+              <Fact label="Platform">{platform(device)}</Fact>
+              <Fact label="Vector">
+                {device.vector_version || "Not reported"}
+              </Fact>
+              <Fact label="Agent">
+                <span className="device-fact-stack">
+                  {device.agent_version || "Not reported"}
+                  <AgentUpgrade key={device.id} device={device} />
+                </span>
+              </Fact>
+              <Fact label="Configuration">
+                {device.configuration_mode === "full"
+                  ? "Full Vector configuration"
+                  : "Restricted components"}
+              </Fact>
+              <Fact label="Enrolled">
+                {device.created_at ? (
+                  <TimeAgo value={device.created_at} />
+                ) : (
+                  "Unknown"
+                )}
+              </Fact>
+              <Fact label="Groups">
+                {memberOf.length ? (
+                  <span className="device-groups">
+                    {memberOf.map((group) => (
+                      <a
+                        key={group.id}
+                        className="device-group-chip"
+                        href={`#/devices?group=${encodeURIComponent(group.id)}`}
+                      >
+                        {group.name}
+                      </a>
+                    ))}
+                  </span>
+                ) : (
+                  <span className="device-muted">
+                    {groups.loading ? "Loading…" : "None"}
+                  </span>
+                )}
+              </Fact>
+              {labels.length > 0 && (
+                <Fact label="Labels">
+                  <span className="device-groups">
+                    {labels.map(([key, value]) => (
+                      <span key={key} className="device-label-chip">
+                        {key}: {value}
+                      </span>
+                    ))}
+                  </span>
+                </Fact>
+              )}
+            </dl>
+          </section>
+          <section
+            className="device-card"
+            aria-labelledby="device-agent-settings-heading"
+          >
+            <div className="device-card-head">
+              <h2 id="device-agent-settings-heading">Agent settings</h2>
+            </div>
+            <p className="device-card-text">
+              {device.policy_assignment
+                ? `Current server policy comes from an assignment with priority ${device.policy_assignment.priority}.`
+                : "No settings assignment reported."}
+            </p>
+            {device.effective_policy ? (
+              <dl className="control-summary-list">
+                <div>
+                  <dt>Check-in interval</dt>
+                  <dd>{device.effective_policy.heartbeat_seconds} seconds</dd>
+                </div>
+                <div>
+                  <dt>Metrics</dt>
+                  <dd>
+                    {device.effective_policy.telemetry_enabled
+                      ? "Enabled"
+                      : "Disabled"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Server sync policy</dt>
+                  <dd>
+                    {device.effective_policy.sync_paused ? "Paused" : "Enabled"}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="device-card-text">
+                Current agent settings have not been reported.
+              </p>
+            )}
+            {settingsAssignment ? (
+              <a className="device-card-link" href={settingsAssignment}>
+                View settings assignment{" "}
+                <ArrowRight size={14} aria-hidden="true" />
+              </a>
+            ) : device.policy_assignment ? (
+              <p className="device-card-text">
+                Settings assignment link unavailable.
+              </p>
+            ) : null}
+          </section>
+          {(operate || roleAllows(user, "admin")) && (
+            <Disclosure
+              summary="Sync, recovery and access"
+              className="device-disclosure device-manage"
+            >
+              <div className="device-management">
+                <h3>Configuration sync</h3>
+                <p>
+                  Pause incoming configuration changes while you work on this
+                  host. Its check-in interval and metrics settings stay as they
+                  are.
+                </p>
+                {operate && device.status !== "revoked" && (
+                  <Button
+                    variant="secondary"
+                    disabled={!device.effective_policy}
+                    onClick={() =>
+                      device.effective_policy &&
+                      setPolicy({
+                        ...device.effective_policy,
+                        sync_paused: !device.sync_paused,
+                      })
+                    }
+                  >
+                    {device.sync_paused
+                      ? "Review resume policy…"
+                      : "Review pause policy…"}
+                  </Button>
+                )}
+                {!device.effective_policy && (
+                  <p>
+                    Refresh this device to load its current agent settings
+                    before pausing or resuming sync.
+                  </p>
+                )}
+                <DeviceIdentityRecovery
+                  device={device}
+                  user={user}
+                  onDone={afterAction}
+                  onRefresh={refresh}
+                />
+                <DeviceRevocation
+                  key={`${user.id}:${user.role}:${device.id}`}
+                  device={device}
+                  user={user}
+                  onRefresh={refresh}
+                />
+              </div>
+            </Disclosure>
+          )}
+          <Disclosure summary="Technical details" className="device-disclosure">
+            <dl className="device-technical">
+              <div>
+                <dt>Device ID</dt>
+                <dd>{device.id}</dd>
+              </div>
+              <div>
+                <dt>Last heartbeat</dt>
+                <dd>
+                  {device.last_seen ? exactLocal(device.last_seen) : "Never"}
+                </dd>
+              </div>
+              <div>
+                <dt>Desired generation</dt>
+                <dd>{device.desired_generation}</dd>
+              </div>
+              <div>
+                <dt>Last verified generation</dt>
+                <dd>{device.reported_generation}</dd>
+              </div>
+              <div>
+                <dt>Assignment progress</dt>
+                <dd>{statusLabel("apply", device.apply_state)}</dd>
+              </div>
+              {device.reported_apply_state && (
+                <div>
+                  <dt>Reported workload state</dt>
+                  <dd>{statusLabel("apply", device.reported_apply_state)}</dd>
+                </div>
+              )}
+              <div>
+                <dt>Current assignment attempt</dt>
+                <dd>
+                  {currentConfigurationAttempt(device, version.data)
+                    ? `Generation ${device.configuration_attempt!.generation} · ${statusLabel("apply", device.configuration_attempt!.state)}`
+                    : "Not reported"}
+                </dd>
+              </div>
+              <div>
+                <dt>Desired version ID</dt>
+                <dd>{device.desired_version_id || "None"}</dd>
+              </div>
+              {device.desired_sha256 !== undefined && (
+                <div>
+                  <dt>Desired artifact SHA-256</dt>
+                  <dd>{device.desired_sha256 || "None"}</dd>
+                </div>
+              )}
+              <div>
+                <dt>Actual file SHA-256</dt>
+                <dd>{device.actual_sha256 || "Not reported"}</dd>
+              </div>
+              {device.uses_local_secrets && (
+                <>
+                  <div>
+                    <dt>Applied template SHA-256</dt>
+                    <dd>{device.applied_template_sha256 || "Not reported"}</dd>
+                  </div>
+                  <div>
+                    <dt>Local secret attempt revision</dt>
+                    <dd>{device.secret_revision ?? "Not reported"}</dd>
+                  </div>
+                </>
+              )}
+              {device.assignment && (
+                <>
+                  <div>
+                    <dt>Assignment</dt>
+                    <dd>{device.assignment.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Priority</dt>
+                    <dd>{device.assignment.priority}</dd>
+                  </div>
+                  <div>
+                    <dt>Selection reason</dt>
+                    <dd>{device.assignment.reason}</dd>
+                  </div>
+                </>
+              )}
+              {device.policy_assignment && (
+                <>
+                  <div>
+                    <dt>Settings assignment</dt>
+                    <dd>{device.policy_assignment.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Settings priority</dt>
+                    <dd>{device.policy_assignment.priority}</dd>
+                  </div>
+                  <div>
+                    <dt>Settings selection reason</dt>
+                    <dd>{device.policy_assignment.reason}</dd>
+                  </div>
+                </>
+              )}
+            </dl>
+          </Disclosure>
+        </aside>
+      </div>
+      {policy && canReviewPolicy && (
+        <TargetDialog
+          key={user.id}
+          open
+          userId={user.id}
+          onClose={() => setPolicy(null)}
+          policy={policy}
+          preserveExistingSettings
+          initialDeviceIds={[device.id]}
+          onDone={afterAction}
+        />
+      )}
+    </div>
+  );
+}

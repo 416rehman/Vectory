@@ -1,0 +1,63 @@
+{
+  "administer": {
+    "plan-the-installation": "install-server",
+    "start-a-new-server": "install-server",
+    "restore-or-upgrade": "administer#restore-a-backup"
+  },
+  "api": {
+    "dashboard-requests": "api#authenticate"
+  },
+  "compatibility": {
+    "choose-a-platform": "compatibility#devices",
+    "check-component-and-host-requirements": "compatibility#components",
+    "server-browser-and-offline-use": "compatibility#server",
+    "reference-sources": "compatibility#references"
+  },
+  "deployments": {
+    "save-and-recover-agent-settings": "deployments#save-and-apply-agent-settings",
+    "check-active-canaries": "deployments#choose-a-rollout",
+    "recover-a-lost-deployment-response": "interrupted-requests#pipelines-and-deployments",
+    "pause-cancel-and-unassign": "deployments#pause-cancel-and-remove"
+  },
+  "getting-started": {
+    "open-your-workspace": "troubleshooting#you-cannot-sign-in",
+    "your-first-deployment": "first-pipeline",
+    "sign-out-of-your-workspace": "interrupted-requests#accounts-and-sign-in",
+    "if-a-device-does-not-apply": "troubleshooting#a-pipeline-is-rejected-or-rolled-back"
+  },
+  "installation": {
+    "prepare-the-host": "installation#before-you-start",
+    "choose-configuration-capabilities": "installation#choose-restricted-or-full-mode",
+    "save-the-enrollment-token": "installation#install-and-enroll",
+    "run-enrollment-commands": "installation#install-manually",
+    "update-a-devices-local-allowances": "agents#update-restricted-allowances",
+    "update-local-agent-settings": "agents#change-local-settings",
+    "upgrade-an-existing-agent": "agents#upgrade-the-agent",
+    "replace-the-adopted-vector-binary": "agents#replace-the-vector-binary",
+    "change-an-existing-devices-mode": "agents#switch-between-restricted-and-full-mode",
+    "local-maintenance-and-recovery": "agents#pause-configuration-sync",
+    "recover-a-device-identity": "agents#recover-a-device-identity"
+  },
+  "pipelines": {
+    "recover-a-creation-or-duplication": "interrupted-requests#pipelines-and-deployments"
+  },
+  "telemetry": {
+    "understand-the-devices-assignments": "telemetry#read-a-device",
+    "troubleshoot-in-order": "troubleshooting"
+  },
+  "troubleshooting": {
+    "a-token-request-is-interrupted": "interrupted-requests#devices-and-tokens",
+    "a-device-recovery-request-is-interrupted": "interrupted-requests#devices-and-tokens",
+    "an-enrollment-command-fails": "troubleshooting#enrollment-fails",
+    "a-dashboard-page-keeps-loading": "troubleshooting#a-page-is-blank-or-cannot-load",
+    "device-controls-change-while-a-request-is-pending": "interrupted-requests#devices-and-tokens",
+    "a-device-revocation-is-unconfirmed": "interrupted-requests#devices-and-tokens",
+    "sign-out-is-not-confirmed": "interrupted-requests#accounts-and-sign-in",
+    "an-account-change-fails-or-signs-you-out": "interrupted-requests#accounts-and-sign-in",
+    "account-creation-is-not-confirmed": "interrupted-requests#accounts-and-sign-in",
+    "an-administrator-reset-code-is-not-confirmed": "interrupted-requests#accounts-and-sign-in",
+    "a-password-change-or-session-sign-out-is-not-confirmed": "interrupted-requests#accounts-and-sign-in",
+    "an-authenticator-change-is-not-confirmed": "interrupted-requests#accounts-and-sign-in",
+    "access-changes-and-rejected-requests": "interrupted-requests#accounts-and-sign-in"
+  }
+}
