@@ -1,0 +1,36 @@
+# What's new
+
+Vectory 0.1 is a developer preview. The whole loop works today against real Vector 0.58.0: build, publish, canary, apply and roll back.
+
+## In this update
+
+<!-- verify-after-merge: every item below landed as described (W1-W6); remove any that didn't -->
+- **One-command device install.** **Add device** gives you a single command per operating system. It downloads the agent from your server, checks its SHA-256, pins your server's certificate and starts the service. Agents ship inside the server image, so there's no release step.
+- **Readable agent CLI.** `vectory setup`, `--help` for every command, a human-readable `status`, `doctor` checks that test the connection to your server, and `vectory logs`.
+- **Real reasons for failures.** Issues and device pages show Vector's own message, with secrets removed. Vector gets a data directory automatically when a pipeline doesn't set one.
+- **Shipping is the default.** Deploying a new version of a pipeline replaces the older one on those devices. Each deployment has a live rollout page.
+- **Faster pipeline building.** A template gallery, one-click **Add monitoring**, a VRL editor with autocomplete and sample tests, and a publish review that shows exactly what changed.
+- **A calmer, faster workspace.** A command palette (**Ctrl K** / **⌘ K**), consistent status labels, and a first-run checklist on the Overview.
+- **Smoother accounts.** A guided first run, invite links, and a way back in when an administrator is locked out.
+- **A reorganized Help center** with a quickstart, a security model, and references for the agent CLI, server configuration and ports.
+
+## In Vectory 0.1
+
+- **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export, VRL and pipeline tests, and immutable history with diffs.
+- **Safe publishing.** Every version is checked by a sandboxed Vector before it can be published.
+- **Controlled rollouts.** Target devices and groups with a preview, set priorities, release as a canary or on a schedule, pause, cancel and roll back.
+- **Outbound-only agents.** Mutual TLS, per-device signed configurations, protection against rollback to older versions, and automatic restore of the last working configuration.
+- **Host-owned safety.** Restricted and full modes, local allowances, and credentials that stay on the device.
+- **Operations.** Device metrics, issues, and an exportable audit log.
+- **Accounts.** Roles, two-factor sign-in with recovery codes, and administrator-issued reset codes.
+- **This Help center**, bundled with your server, searchable offline and available as Markdown.
+
+## Known limits
+
+- Images and packages aren't published yet; the server builds from source.
+- Agent downloads carry SHA-256 checksums but aren't signed.
+- Service, reboot and upgrade tests are still to come on some platforms. See [Compatibility](compatibility.md).
+- The API uses session cookies; API tokens are planned.
+- One server per installation.
+
+The full list of changes is in the repository's `CHANGELOG.md`.
