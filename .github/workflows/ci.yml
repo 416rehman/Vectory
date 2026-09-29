@@ -72,6 +72,13 @@ jobs:
           node --test scripts/check-doc-links.test.mjs
           node scripts/check-doc-links.mjs
         working-directory: .
+      - name: Check the requirements checklist against the specification and the repository
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-requirements.test.mjs
+          node scripts/check-requirements.mjs
+        working-directory: .
       - id: build
         if: ${{ !cancelled() }}
         run: npm run build

@@ -4,6 +4,7 @@ Engineering history and test evidence, kept for review and audit. These document
 
 | Document | What it records |
 | --- | --- |
+| [REQUIREMENTS.md](REQUIREMENTS.md) | The requirements-to-tests checklist: each requirement of the specification, its status and the test or CI step behind it. CI checks it. |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | Historical acceptance record of 2026-09-26 to 2026-09-28. Most evidence files it names were not committed. |
 | [HANDOFF.md](HANDOFF.md) | The current handoff: what works and what proves it, tested platforms, capacity, open defects and release prerequisites. |
 | [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md) | The earlier narrative handoff, kept as a historical record. Most evidence files it names were not committed. |

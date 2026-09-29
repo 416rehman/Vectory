@@ -1,6 +1,6 @@
 # Vectory handoff
 
-This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in `REQUIREMENTS.md` in this folder. The earlier narrative handoff is kept as a historical record in [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md); most of the evidence it names was never committed.
+This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in [REQUIREMENTS.md](REQUIREMENTS.md). The earlier narrative handoff is kept as a historical record in [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md); most of the evidence it names was never committed.
 
 ## What works, and what proves it
 
