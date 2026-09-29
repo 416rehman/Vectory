@@ -3,7 +3,7 @@
 // state. Screenshots land in .local/secret-picker (light, dark and 390 px).
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "./axe.mjs";
+import AxeBuilder, { settleTransitions } from "./axe.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,8 @@ async function theme(name) {
 }
 async function snap(name) {
   const path = resolve(output, `${name}.png`);
+  // A theme or state change fades colors; capture what people see after it.
+  await settleTransitions(page);
   await page.screenshot({ path, fullPage: true });
   screenshots.push(path);
 }
