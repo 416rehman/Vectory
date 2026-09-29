@@ -155,7 +155,9 @@ This test belongs to the [complete example](pipelines.md#try-a-complete-example)
 
 You should see **Pipeline tests passed**. Change `"edge"` to `"wrong"` and run again to see a failure, then change it back. For filters and routes, also try `no_outputs_from`. See [Vector unit tests](https://vector.dev/docs/reference/configuration/unit-tests/).
 
-The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Tests at the top level of a pipeline need full-mode devices.
+The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
+
+The server never sends network requests from samples or tests. A program that calls `http_request`, `dns_lookup` or `reverse_dns` isn't run there, and the tester says so. A device in full mode runs it for real.
 
 To run the tests yourself, export the configuration as JSON and run the pinned Vector with the device's service account:
 

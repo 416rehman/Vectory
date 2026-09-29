@@ -93,14 +93,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
                 if text.contains("SECRET[") {
                     reasons.insert("native secret references".into());
                 }
-                if [
-                    "get_env_var",
-                    "get_secret",
-                    "get_enrichment_table",
-                    "find_enrichment_table",
-                ]
-                .iter()
-                .any(|function| text.contains(function))
+                if DEVICE_VRL_FUNCTIONS
+                    .iter()
+                    .any(|function| text.contains(function))
                 {
                     reasons.insert("VRL access to device resources".into());
                 }
@@ -1122,6 +1117,81 @@ pub fn testable_transform(transform: &Value) -> std::result::Result<&str, &'stat
         return Err("Enter a VRL program to test.");
     }
     Ok(kind)
+}
+
+/// VRL functions that reach outside the event. A device refuses them in
+/// restricted mode, and a pipeline that calls one needs full mode.
+pub const DEVICE_VRL_FUNCTIONS: &[&str] = &[
+    "get_env_var",
+    "get_secret",
+    "set_secret",
+    "remove_secret",
+    "get_enrichment_table",
+    "find_enrichment_table",
+    "dns_lookup",
+    "reverse_dns",
+    "http_request",
+];
+
+/// The device functions that send network requests. Samples, unit tests and the
+/// VRL tester execute in the isolated worker, which must never send a request
+/// that an author wrote (it would read anything the worker can reach and return
+/// the answer); a device runs these for real.
+pub const NETWORK_VRL_FUNCTIONS: &[&str] = &["http_request", "dns_lookup", "reverse_dns"];
+
+/// The network functions called anywhere in the strings of a JSON document: a
+/// `name(` or `name!(` that is not part of a longer identifier or a field path.
+pub fn network_vrl_calls(value: &Value) -> BTreeSet<&'static str> {
+    fn calls(text: &str, name: &str) -> bool {
+        text.match_indices(name).any(|(start, _)| {
+            let before = text[..start].chars().next_back();
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                return false;
+            }
+            let rest = text[start + name.len()..].trim_start();
+            rest.strip_prefix('!')
+                .unwrap_or(rest)
+                .trim_start()
+                .starts_with('(')
+        })
+    }
+    fn walk(value: &Value, found: &mut BTreeSet<&'static str>) {
+        match value {
+            Value::String(text) => {
+                for name in NETWORK_VRL_FUNCTIONS {
+                    if calls(text, name) {
+                        found.insert(*name);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
+            Value::Object(fields) => fields.values().for_each(|item| walk(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = BTreeSet::new();
+    walk(value, &mut found);
+    found
+}
+
+/// The diagnostic for a program the worker will not execute because it sends
+/// network requests. `error` when nothing can run, `warning` when only tests
+/// are skipped.
+pub fn network_call_diagnostic(
+    found: &BTreeSet<&'static str>,
+    severity: &'static str,
+) -> Diagnostic {
+    let names = found.iter().copied().collect::<Vec<_>>().join(", ");
+    let mut diagnostic = Diagnostic::error(format!(
+        "This program calls {names}, which sends network requests. The server never sends requests from samples or tests."
+    ));
+    diagnostic.severity = severity;
+    diagnostic.code = Some("vrl_function_unavailable".into());
+    diagnostic.hint = Some(
+        "A device in full mode runs it for real. Test the rest of the program here, or check it on a device."
+            .into(),
+    );
+    diagnostic
 }
 
 fn port_name(name: &str) -> bool {
@@ -2193,6 +2263,38 @@ pub fn validate(config: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn network_calls_are_found_by_call_syntax_only() {
+        let call = |text: &str| network_vrl_calls(&json!({"source": text}));
+        assert_eq!(
+            call("resp, err = http_request(\"http://example.test\")"),
+            BTreeSet::from(["http_request"])
+        );
+        assert_eq!(
+            call(".a = http_request!( \"http://example.test\" )"),
+            BTreeSet::from(["http_request"])
+        );
+        assert_eq!(
+            call("dns_lookup!(.host)\n.name = reverse_dns!(.ip)"),
+            BTreeSet::from(["dns_lookup", "reverse_dns"])
+        );
+        // Field paths, longer identifiers and prose are not calls.
+        assert!(call(".http_request = 1").is_empty());
+        assert!(call("my_http_request(1)").is_empty());
+        assert!(call("http_request_count = 3").is_empty());
+        assert!(call("# the http_request function is not used").is_empty());
+        // Calls are found wherever a program sits in the document.
+        let nested =
+            json!({"tests":[{"outputs":[{"conditions":[{"source":"http_request(\"u\")"}]}]}]});
+        assert_eq!(network_vrl_calls(&nested), BTreeSet::from(["http_request"]));
+        // Every network function is also a device function.
+        assert!(
+            NETWORK_VRL_FUNCTIONS
+                .iter()
+                .all(|name| DEVICE_VRL_FUNCTIONS.contains(name))
+        );
+    }
+
     use super::*;
     #[test]
     fn devices_may_run_any_patch_release_of_the_pinned_series() {
