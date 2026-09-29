@@ -30,7 +30,7 @@ The dashboard build also builds this Help center. The server build takes a few m
 
 ## 2. Download Vector 0.58.0
 
-Vectory manages Vector; it never installs it for you. Download the official release and check its SHA-256 before you run it:
+Vectory manages Vector; it never installs it for you. Download the official release, check its SHA-256, and install it:
 
 <!-- tabs:platform -->
 #### Linux x86-64
@@ -40,7 +40,8 @@ BASE=https://github.com/vectordotdev/vector/releases/download/v0.58.0
 V=vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
 curl -fsSLO "$BASE/$V"
 curl -fsSL "$BASE/vector-0.58.0-SHA256SUMS" | grep " $V\$" | sha256sum -c -
-mkdir -p .local/tools && tar -xzf "$V" -C .local/tools
+mkdir -p .local/tools && tar -xzf "$V" -C .local/tools && rm "$V"
+sudo install -m 0755 .local/tools/vector-*/bin/vector /usr/local/bin/vector
 ```
 
 #### Linux Arm64
@@ -50,7 +51,8 @@ BASE=https://github.com/vectordotdev/vector/releases/download/v0.58.0
 V=vector-0.58.0-aarch64-unknown-linux-gnu.tar.gz
 curl -fsSLO "$BASE/$V"
 curl -fsSL "$BASE/vector-0.58.0-SHA256SUMS" | grep " $V\$" | sha256sum -c -
-mkdir -p .local/tools && tar -xzf "$V" -C .local/tools
+mkdir -p .local/tools && tar -xzf "$V" -C .local/tools && rm "$V"
+sudo install -m 0755 .local/tools/vector-*/bin/vector /usr/local/bin/vector
 ```
 
 #### macOS
@@ -60,11 +62,21 @@ BASE=https://github.com/vectordotdev/vector/releases/download/v0.58.0
 V=vector-0.58.0-arm64-apple-darwin.tar.gz
 curl -fsSLO "$BASE/$V"
 curl -fsSL "$BASE/vector-0.58.0-SHA256SUMS" | grep " $V\$" | shasum -a 256 -c -
-mkdir -p .local/tools && tar -xzf "$V" -C .local/tools
+mkdir -p .local/tools && tar -xzf "$V" -C .local/tools && rm "$V"
+sudo mkdir -p /usr/local/bin
+sudo install -m 0755 .local/tools/vector-*/bin/vector /usr/local/bin/vector
 ```
 <!-- /tabs -->
 
 You should see the archive name followed by `OK`. Anything else means the download is not the official release: delete it and try again.
+
+The last line puts Vector in `/usr/local/bin`, where setup looks for it in step 4. Check it:
+
+```sh
+vector --version
+```
+
+You should see `vector 0.58.0`. To keep Vector somewhere else, add `--vector-binary /path/to/vector` to the command in step 4 instead.
 
 ## 3. Start the server
 
@@ -73,24 +85,23 @@ scripts/preview.sh
 ```
 
 ```text
-Preview running at http://127.0.0.1:8080 (agent TLS https://localhost:8443).
+Preview running at http://127.0.0.1:8080 (agent TLS https://127.0.0.1:8443).
 Bootstrap secret: /home/you/Vectory/.local/preview/bootstrap.secret
 ```
 
-The first start also creates a test certificate authority in `.local/pki/`. The preview uses the Vector binary you downloaded to check pipelines, just like a real server's validator.
+The first start also creates a test certificate authority in `.local/pki/` and builds the agent for every platform. That takes a few minutes; set `VECTORY_PREVIEW_AGENT_TARGETS="linux/amd64"` (or `darwin/arm64`) to build only yours. The preview uses the Vector you downloaded to check pipelines, just like a real server's validator.
 
-Open **http://127.0.0.1:8080**. Paste the bootstrap secret (`cat .local/preview/bootstrap.secret`), then choose your name, email and password. That account is the workspace's first administrator.
+Open **http://127.0.0.1:8080**. Paste the setup secret (the bootstrap secret: run `cat .local/preview/bootstrap.secret`), then choose your name, email and password. That account is the workspace's first administrator. **Vectory is ready** then offers **Add device**, which takes you to step 4.
 
 ## 4. Connect this machine
 
-<!-- verify-after-merge: Add device offers OS tabs and one copyable install command that works against the preview (bundled agents, CA pin, hidden token prompt) -->
 <!-- steps -->
 1. In the dashboard, open [**Devices → Add device**](/#/enrollment).
-2. Choose your operating system and copy the command.
-3. Run it in a terminal on this machine. It downloads the agent from your server, checks its SHA-256, and connects using the server's pinned certificate. Paste the enrollment token when asked; typing stays hidden.
+2. Choose your operating system and **Restricted**, then **Create install command** and copy it.
+3. Run it in a terminal on this machine. It downloads the agent from your server, checks its SHA-256, and connects using the server's pinned certificate. Setup finds Vector at `/usr/local/bin/vector`.
+4. When setup asks for the enrollment token, choose **Copy token** on the same page and paste it. Typing stays hidden.
 
-<!-- verify-after-merge: the Add device page shows the new device and its first check-in live -->
-Keep the page open. Within a few seconds your machine appears as a new device and reports its first check-in.
+Keep the tab open until setup asks for the token: the token is shown only on this page. Within a few seconds of pasting it, your machine appears as a new device and reports its first check-in.
 
 > [!TIP]
 > Enrolling never deploys anything. A new device waits, without starting Vector, until you give it a pipeline.
@@ -98,16 +109,16 @@ Keep the page open. Within a few seconds your machine appears as a new device an
 ## 5. Deploy your first pipeline
 
 <!-- steps -->
-1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**. Pick **Try a synthetic example**, name it, and choose **Create pipeline**. The example generates demo logs, tags them with VRL and prints them to the console. It reads no files and sends nothing anywhere.
+1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**. Pick **Try a synthetic example**, name it, and choose **Create pipeline**. The example generates demo logs and tags them with VRL. It reads no files and sends nothing anywhere.
 2. Choose **Review & publish**, then **Publish version**.
-3. Choose **Choose devices**, select your machine, then **Review deployment** and **Deploy to devices**.
+3. Select **Choose devices** and your machine, then **Review deployment** and **Deploy to devices**.
 4. Open your device. Its pipeline status moves through the rollout and ends at **Applied**.
 
-**Applied** means the agent watched Vector start with the new version and keep running. The step-by-step version of this, with what each screen means, is [Deploy your first pipeline](first-pipeline.md).
+**Applied** means the agent verified Vector runs the new version. The step-by-step version of this, with what each screen means, is [Deploy your first pipeline](first-pipeline.md).
 
 ## Try a whole fleet instead
 
-On a fresh checkout, one command builds everything and starts a demo fleet: the preview plus real agents running real Vector with synthetic `demo_logs` events.
+After step 1, one command starts a demo fleet: the preview plus real agents running real Vector with synthetic `demo_logs` events.
 
 ```sh
 node scripts/demo.mjs --agents 4
@@ -122,13 +133,15 @@ node scripts/demo.mjs --stop   # if you started the demo fleet
 scripts/preview.sh stop
 ```
 
-<!-- verify-after-merge: default agent state directory and service commands after W1's path unification; setup may also offer a single uninstall step -->
-To remove the agent from this machine, stop and unregister its service, then delete its state:
+To remove the agent and Vector from this machine, stop and unregister the agent's service, delete its state, then remove the files and account setup created:
 
 ```sh
 sudo vectory service-stop
 sudo vectory service-uninstall
 sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
+sudo rm -f /usr/local/bin/vectory /usr/local/bin/vector
+sudo rm -rf /etc/vectory/managed
+sudo userdel vectory
 ```
 
 State, logs and the test certificate authority stay in `.local/` until you delete that folder.

@@ -14,4 +14,4 @@ The short version, from a clone of this repository:
 node scripts/demo.mjs --agents 4
 ```
 
-That builds everything and starts a local preview with four real agents running real Vector 0.58.0 on synthetic data. Open `http://127.0.0.1:8080` and sign in as `operator@vectory.local`; the password is in `.local/preview/credentials.json`. Stop it with `node scripts/demo.mjs --stop`.
+After the dashboard build, that one command builds the server and agent if needed and starts a local preview with four real agents running real Vector 0.58.0 on synthetic data. Open `http://127.0.0.1:8080` and sign in as `operator@vectory.local`; the password is in `.local/preview/credentials.json`. Stop it with `node scripts/demo.mjs --stop`.
