@@ -10,9 +10,28 @@ Page failures stay inside the main content area so navigation and account contro
 
 We inspected Base44's rendered page, loaded CSS, font declarations and client scripts on 2026-09-26. Its hierarchy comes from tightly tracked display type, warm neutral surfaces, decisive dark text, restrained borders and short, purposeful transitions. The reference uses Dazzed display type and Geist UI text. Vectory applies those principles to a working configuration tool; its layout follows pipeline tasks rather than Base44's marketing cards. No Base44 font files, source code or branding are bundled.
 
-Vectory uses self-hosted Instrument Sans, including variable weights, under the SIL Open Font License. The wordmark and V symbol are local SVG. Warm paper (`#f5f3ef`), white surfaces, dark ink (`#252429`), charcoal actions (`#302e2e`) and cobalt selection (`#4055dc`) form the light palette. Dark mode uses warm charcoal surfaces and a lighter blue focus accent. Color has a job: selection, action or actual state. Orange is not the brand color.
+Vectory uses self-hosted Instrument Sans, including variable weights, under the SIL Open Font License. The wordmark and V symbol are local SVG. Warm paper (`#f5f3ef`), white surfaces, dark ink (`#232227`), charcoal actions (`#2f2d2d`) and cobalt selection (`#4055dc`) form the light palette. Dark mode uses layered warm charcoal surfaces and a lighter cobalt (`#a5afff`). Color has a job: selection, action or actual state. Orange is not the brand color. The result should feel calm: quiet chrome, strong data, one accent.
 
-Use the shared scale, compact six-pixel control corners, hairline separators and clear text hierarchy. Avoid decorative status dots, excessive pills, marketing copy, uppercase micro-labels and repeated explanations. Make actual values and useful actions easy to see. Motion is short and honors reduced-motion preferences.
+## Design system
+
+`dashboard/src/tokens.css` is the only place for raw values. Components use semantic tokens, each with a light and a dark value:
+
+- **Surfaces** `--bg`, `--bg-subtle` (sidebar), `--surface`, `--surface-raised` (dialogs, popovers), `--surface-sunken` (table heads, code), `--surface-hover`, `--overlay`.
+- **Borders** `--border`, `--border-strong`, and `--border-input`, which keeps a 3:1 control boundary on every surface.
+- **Text** `--text`, `--text-muted`, `--text-subtle` (all at least 4.5:1). **Accent** `--accent`, `--accent-text`, `--accent-soft`, `--focus`. **Action** `--action`, `--action-hover`, `--action-text`, `--danger-solid`.
+- **Status** `--{success|warning|danger|info|neutral}-{text|bg|border}` for chips and `--mark-*` for dots, bars and chart segments (3:1 on surface). Every pair is validated in both themes.
+- **Type** 11/12/13/14/16/20/24 px with weights 400/500/600; 650 only for the wordmark. Page titles are 24/32 semibold. Tables and timestamps use tabular figures; large standalone numbers keep proportional figures.
+- **Space** a 4 px grid (`--space-1` … `--space-12`). **Radius** 4 (chips), 6 (controls), 8 (cards, tables), 12 (dialogs). **Controls** 28/32/36 px; controls in one row share a height. **Elevation** `--shadow-xs` … `--shadow-lg`. **Motion** 120/160/240 ms with `--ease`; reduced motion removes it. **Layers** sticky 10, sidebar 30, overlay 50, dialog 60, popover 70, toast 80, tooltip 85, skip link 90.
+
+The theme is applied before first paint by `public/theme-init.js` (the CSP forbids inline scripts), with `color-scheme` and per-scheme `theme-color` metadata, so dark users never see a light flash.
+
+**One status language.** `dashboard/src/status.ts` defines every backend state once per domain (device, connection, apply progress, deployment, deployment target, issue, audit outcome, canary gate, telemetry) with a label, tone, icon and one-line description. `StatusBadge` renders it as icon plus label, never color alone. A unit test checks every state in the contracts and the server's status derivation has exactly one label, and that shared states read the same in every domain.
+
+**Page layout contract.** Every page stacks the same zones: a 24 px context row (breadcrumb on the left, live status on the right), `PageHeader` (title, one-sentence description, primary action on the right), section tabs directly under the header, `PageToolbar` (320 px search, filters, filter chips) and the content in one table card. The title sits at the same height on every page. Lists run up to 1440 px wide, forms and wizards 960 px.
+
+**Feedback.** Data polls every 15 seconds while the tab is visible and refreshes on return; `LiveStatus` says when it last updated and turns amber when a read fails. Loading keeps the final layout with skeletons, never a spinner that shifts content. A failed refresh keeps the last data with one inline retry. Empty collections use `EmptyState`: first-run replaces the table card and hides the header action, filtered results offer Clear filters, errors offer Retry. Toasts stack up to three, bottom-right; errors persist and are announced as alerts. Dialogs focus the first field (or the safe action), return focus to their opener, and become bottom sheets on phones.
+
+Use the shared scale, hairline separators and clear text hierarchy. Avoid decorative status dots, excessive pills, marketing copy, uppercase micro-labels and repeated explanations. Make actual values and useful actions easy to see.
 
 Schema fields share one ordered list across curated and native settings. Each field has a clear boundary and a header containing its label, required marker, a tiny help control and one actions menu. Help appears on hover, focus or tap; null, JSON and removal actions stay inside the field menu. Optional fields are selected from a compact searchable floating dropdown, then join the same list; meaningful field icons are used where known without generic icons on every result. JSON values share a highlighted editor with local diagnostics, formatting and explicit apply/discard actions. Text links to documentation carry an outward-link indicator; circle-help icon actions do not.
 
