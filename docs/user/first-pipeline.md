@@ -57,7 +57,7 @@ The device picks up the version at its next check-in, within 60 seconds by defau
 <!-- diagram: apply-states -->
 ```mermaid
 flowchart LR
-  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Restarting Vector"] --> OK["Applied"]
+  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Loading in Vector"] --> OK["Applied"]
   V --> F["Failed"]
   A --> F
   R --> RB["Rolled back"]
@@ -68,7 +68,7 @@ flowchart LR
 | --- | --- |
 | **Waiting for agent** | Released; the device picks it up at its next check-in. |
 | **Downloaded**, **Validated** | The device fetched the signed version and Vector accepted it on the host. |
-| **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. |
+| **Applying**, **Loading in Vector** | The configuration is written and Vector is loading it. |
 | **Applied** | The agent verified Vector runs this version. |
 | **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. |
 | **Rolled back** | The new version failed to start; the agent restored the last working one. |
