@@ -488,7 +488,7 @@ try {
           await expect.poll(() => f.holds.length).toBe(1);
           expect(writes(f)).toHaveLength(1);
           const controls = page.getByRole("button", {
-            name: /^(Resume|Pause|Cancel)( rollout)?$|^Roll back$/,
+            name: /^(Resume|Pause|Cancel|Stop)( rollout)?$|^Roll back$/,
           });
           for (const button of await controls.all())
             await expect(button).toBeDisabled();
@@ -500,9 +500,10 @@ try {
             .toBeGreaterThanOrEqual(2);
           await expect(action(page)).toHaveCount(0);
           await expect(details(page)).toBeVisible();
+          // A running rollout's Pause is in the Stop rollout menu.
           await expect(
             details(page).getByRole("button", {
-              name: mode === "lost" ? "Pause" : "Resume",
+              name: mode === "lost" ? "Stop rollout" : "Resume",
               exact: true,
             }),
           ).toBeEnabled();
@@ -544,7 +545,7 @@ try {
         );
         for (const button of await details(page)
           .getByRole("button", {
-            name: /^(Resume|Pause|Cancel)( rollout)?$|^Roll back$/,
+            name: /^(Resume|Pause|Cancel|Stop)( rollout)?$|^Roll back$/,
           })
           .all())
           await expect(button).toBeDisabled();
@@ -554,9 +555,10 @@ try {
           .getByRole("button", { name: "Check current status", exact: true })
           .click();
         await expect(action(page)).toHaveCount(0);
+        // Pause lives in the Stop rollout menu, available again.
         await expect(
           details(page).getByRole("button", {
-            name: "Pause",
+            name: "Stop rollout",
             exact: true,
           }),
         ).toBeEnabled();
@@ -608,9 +610,10 @@ try {
         await action(page)
           .getByRole("button", { name: "Check current status", exact: true })
           .click();
+        // Pause lives in the Stop rollout menu, available again.
         await expect(
           details(page).getByRole("button", {
-            name: "Pause",
+            name: "Stop rollout",
             exact: true,
           }),
         ).toBeEnabled();

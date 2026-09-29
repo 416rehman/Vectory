@@ -17,11 +17,13 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:deployments-fixture";
+const port = Number(process.env.VECTORY_DEPLOYMENTS_COMPONENT_PORT) || 5197;
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  server: { host: "127.0.0.1", port: 5197, strictPort: true, proxy: {} },
+  // A worker running beside others binds its own port.
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
       name: "synthetic-deployments-fixture",
@@ -218,7 +220,27 @@ await context.route("**/api/v1/**", async (route) => {
         status: item.status,
         evaluated_at: new Date().toISOString(),
         stages: [],
-        failures: [],
+        failures: item.state_counts.failed
+          ? [
+              {
+                state: "failed",
+                message: "Vector validation failed",
+                diagnostic: null,
+                code: null,
+                component_id: null,
+                field: null,
+                buffer_utilization: null,
+                count: item.state_counts.failed,
+                device_ids: [`${id}-failed-device`],
+                devices: [
+                  {
+                    device_id: `${id}-failed-device`,
+                    device_name: `${id} failed device`,
+                  },
+                ],
+              },
+            ]
+          : [],
         removed_count: 0,
         check_in_seconds: 60,
         next_admission_at: null,
@@ -395,7 +417,7 @@ async function closeDetails() {
   await expect(details()).toHaveCount(0);
 }
 try {
-  await page.goto("http://127.0.0.1:5197/__deployments-fixture");
+  await page.goto(`http://127.0.0.1:${port}/__deployments-fixture`);
   await page.waitForFunction(() => window.ready);
   await check(
     "initial browsing has one bounded summary request and no eager version, device or target hydration",
@@ -738,9 +760,13 @@ try {
         "synthetic device 1000",
       );
       const before = requests.filter((r) => r.method === "POST").length;
-      await details()
-        .getByRole("button", { name: "Pause", exact: true })
-        .click();
+      const stop = async (action) => {
+        await details()
+          .getByRole("button", { name: "Stop rollout", exact: true })
+          .click();
+        await page.getByRole("menuitem", { name: action, exact: true }).click();
+      };
+      await stop("Pause");
       let modal = page.getByRole("dialog", {
         name: "Pause rollout",
         exact: true,
@@ -777,11 +803,9 @@ try {
         .getByRole("button", { name: "Resume rollout", exact: true })
         .click();
       await expect(
-        details().getByRole("button", { name: "Pause", exact: true }),
-      ).toBeVisible();
-      await details()
-        .getByRole("button", { name: "Roll back", exact: true })
-        .click();
+        details().getByRole("button", { name: "Resume", exact: true }),
+      ).toHaveCount(0);
+      await stop("Roll back");
       await expect(
         page.getByRole("dialog", { name: "Review rollback", exact: true }),
       ).toContainText("Included (1001)");
@@ -827,9 +851,7 @@ try {
       await receipt.getByRole("button", { name: "Close", exact: true }).click();
       await expect(receipt).toHaveCount(0);
       await expect(details()).toBeVisible();
-      await details()
-        .getByRole("button", { name: "Remove assignment", exact: true })
-        .click();
+      await stop("Remove assignment");
       const removal = page.getByRole("dialog", {
         name: "Remove assignment",
         exact: true,
@@ -870,6 +892,9 @@ try {
           .getByRole("list", { name: "Device results", exact: true })
           .locator("li.data-list-item"),
       ).toHaveCount(12);
+      await expect(
+        details().getByRole("button", { name: "Stop rollout", exact: true }),
+      ).toHaveCount(0);
       await expect(
         details().getByRole("button", { name: "Pause", exact: true }),
       ).toHaveCount(0);

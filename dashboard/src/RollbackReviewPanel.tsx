@@ -2,32 +2,41 @@ import { useEffect, useRef, useState } from "react";
 import { api, withRequestDeadline } from "./api";
 import { Button, ErrorBox, Pagination, SearchBox, Spinner } from "./ui";
 import {
+  excludedDetail,
   locallyConfigured,
   nothingToRollBackTo,
+  restoredName,
+  rollbackStory,
+  stopsRollout,
   type RollbackPreview,
 } from "./rollbackReview";
 import "./rollback-review.css";
 
-const reasons = {
-  revoked: "Device revoked",
-  removed: "No longer targeted",
-  not_released: "Never released",
-  missing: "Device unavailable",
-};
+/** A short identity for a device without a name, never the whole UUID. */
+const unnamed = (id: string) => `Unnamed device ${id.slice(0, 8)}`;
 
 export default function RollbackReviewPanel({
   id,
   versionId,
+  source,
   supported,
   busy,
   invalidated,
+  revision = 0,
+  onCancelFirst,
   onChange,
 }: {
   id: string;
   versionId?: string | null;
+  /** What is rolled back, as the review names it: "r15-demo v1". */
+  source: string;
   supported: boolean;
   busy: boolean;
   invalidated: boolean;
+  /** Changes when the rollout changed underneath (it was cancelled). */
+  revision?: number;
+  /** Offered when a live rollout's rollback is blocked: stop it first. */
+  onCancelFirst?: () => void;
   onChange(preview: RollbackPreview | null): void;
 }) {
   const [preview, setPreview] = useState<RollbackPreview | null>(null);
@@ -77,7 +86,7 @@ export default function RollbackReviewPanel({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [id, versionId, supported, refresh]);
+  }, [id, versionId, supported, refresh, revision]);
   function refreshReview() {
     if (busy || loading) return;
     onChangeRef.current(null);
@@ -87,9 +96,8 @@ export default function RollbackReviewPanel({
   if (!supported)
     return (
       <p className="control-muted">
-        This server cannot provide a reviewed rollback. Update the server before
-        using this action. Existing request reminders remain available for
-        recovery.
+        This server cannot provide a reviewed rollback. Update the server to
+        roll back from here. Saved request reminders stay available.
       </p>
     );
   const query = search.trim().toLocaleLowerCase();
@@ -105,6 +113,7 @@ export default function RollbackReviewPanel({
   );
   const sharedDigest =
     digests.size === 1 && local.length === 0 ? [...digests][0] : null;
+  const restored = preview ? restoredName(preview) : "";
   const rows = preview
     ? (scope === "eligible"
         ? preview.eligible_devices.map((d) => ({ ...d, reason: null }))
@@ -115,11 +124,18 @@ export default function RollbackReviewPanel({
           .includes(query),
       )
     : [];
+  const released = (preview?.eligible_devices || []).map(
+    (device) => device.device_name || unnamed(device.device_id),
+  );
+  const releasedNames =
+    released.length <= 2
+      ? released.join(" and ")
+      : `${released.slice(0, 2).join(", ")} and ${released.length - 2} more`;
   return (
     <div className="rollback-review">
       {loading && (
         <p role="status" className="rollback-review-loading">
-          <Spinner /> Checking rollback scope…
+          <Spinner /> Checking what each device runs afterwards…
         </p>
       )}
       {error && <ErrorBox message={error} retry={refreshReview} />}
@@ -146,12 +162,11 @@ export default function RollbackReviewPanel({
         <>
           <div className="rollback-review-heading">
             <div>
-              <span className="control-muted">Restore</span>
+              <span className="control-muted">Restores</span>
               <strong>
-                {preview.previous_configuration_name || "Previous pipeline"}
-                {preview.previous_version_number !== null
-                  ? ` · Version ${preview.previous_version_number}`
-                  : ""}
+                {preview.previous_version_id
+                  ? restored
+                  : "Previous version unavailable"}
               </strong>
               {preview.previous_version_id &&
                 (preview.previous_configuration_name === null ||
@@ -160,11 +175,6 @@ export default function RollbackReviewPanel({
                     Version ID <code>{preview.previous_version_id}</code>
                   </span>
                 )}
-              {!preview.previous_version_id && (
-                <span className="control-muted">
-                  Previous version unavailable
-                </span>
-              )}
             </div>
             <Button
               variant="secondary compact"
@@ -174,37 +184,49 @@ export default function RollbackReviewPanel({
               Refresh review
             </Button>
           </div>
+          <ul className="rollback-story" aria-label="What changes">
+            {rollbackStory(preview, source).map((line) => (
+              <li key={line.text} data-tone={line.tone}>
+                {line.text}
+              </li>
+            ))}
+          </ul>
           <p className="rollback-review-effect">
             {preview.source_action === "unassign"
-              ? "Removes this assignment and restores each device's exact previous artifact at the same priority."
-              : "Stops further releases here and restores each device's exact previous artifact at a higher priority."}{" "}
-            Each device verifies it again. This rollout's history stays.
+              ? "This assignment is removed, and the restored version takes over at the same priority."
+              : "The restored version takes over one priority above this rollout."}{" "}
+            Each device verifies it again, and this rollout's history stays.
           </p>
           {invalidated && (
             <p role="status" className="rollback-review-stale">
-              Refresh review before confirming again.
+              Refresh the review before confirming again.
             </p>
           )}
           {otherBlockers.length > 0 && (
             <div className="rollback-review-blockers" role="status">
-              <strong>Rollback is not ready</strong>
+              <strong>Rollback isn't ready</strong>
               <ul>
                 {otherBlockers.map((blocker, index) => (
                   <li key={`${blocker.code}-${index}`}>{blocker.reason}</li>
                 ))}
               </ul>
+              {onCancelFirst && stopsRollout(preview) && (
+                <div className="rollback-cancel-first">
+                  <p>
+                    Cancel keeps {releasedNames || "the devices it reached"} on{" "}
+                    {source} until you roll{" "}
+                    {released.length === 1 ? "it" : "them"} back.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    disabled={busy || loading}
+                    onClick={onCancelFirst}
+                  >
+                    Cancel rollout, then review rollback
+                  </Button>
+                </div>
+              )}
             </div>
-          )}
-          {sharedDigest && (
-            <p className="rollback-shared-digest">
-              {preview.eligible_devices.length === 1
-                ? "Restores its"
-                : `All ${preview.eligible_devices.length} devices restore the same`}{" "}
-              prior artifact · SHA-256{" "}
-              <code title={sharedDigest} data-digest={sharedDigest}>
-                {sharedDigest.slice(0, 8)}…{sharedDigest.slice(-8)}
-              </code>
-            </p>
           )}
           <div
             className="rollback-scope-switch"
@@ -236,9 +258,20 @@ export default function RollbackReviewPanel({
           </div>
           <p className="control-muted rollback-scope-note">
             {scope === "eligible"
-              ? "Only these devices are included if you confirm. Offline devices remain included."
-              : "These devices will not receive the rollback. Replacement identities are not added automatically."}
+              ? `These devices return to ${restored}. Offline ones stay included and apply it when they reconnect.`
+              : `These devices never received ${source}, or no longer follow it. The rollback leaves them out; each one says what it runs afterwards.`}
           </p>
+          {sharedDigest && scope === "eligible" && (
+            <p className="rollback-shared-digest">
+              {preview.eligible_devices.length === 1
+                ? "Restores its"
+                : `All ${preview.eligible_devices.length} devices restore the same`}{" "}
+              exact earlier artifact · SHA-256{" "}
+              <code title={sharedDigest} data-digest={sharedDigest}>
+                {sharedDigest.slice(0, 8)}…{sharedDigest.slice(-8)}
+              </code>
+            </p>
+          )}
           <SearchBox
             value={search}
             onChange={(value) => {
@@ -254,46 +287,54 @@ export default function RollbackReviewPanel({
               scope === "eligible" ? "Included devices" : "Excluded devices"
             }
           >
-            {rows.slice((page - 1) * 8, page * 8).map((device) => (
-              <li key={device.device_id}>
-                <span>
-                  <strong>{device.device_name || "Unnamed device"}</strong>
-                  {"artifact_sha256" in device &&
-                    !sharedDigest &&
-                    (device.artifact_sha256 ? (
-                      <small className="rollback-device-digest">
-                        Prior artifact SHA-256{" "}
-                        <code
-                          title={device.artifact_sha256}
-                          data-digest={device.artifact_sha256}
-                        >
-                          {device.artifact_sha256.slice(0, 12)}…
-                          {device.artifact_sha256.slice(-8)}
-                        </code>
-                      </small>
-                    ) : (
-                      <span className="rollback-local">
-                        Ran its local config
-                      </span>
-                    ))}
-                  <small className="rollback-device-id">
-                    Device ID <code>{device.device_id}</code>
-                  </small>
-                </span>
-                {device.reason && (
-                  <span className="rollback-exclusion-reason">
-                    {reasons[device.reason]}
+            {rows.slice((page - 1) * 8, page * 8).map((device) => {
+              const excluded = "effect" in device || device.reason !== null;
+              const detail =
+                device.reason !== null
+                  ? excludedDetail(device, source)
+                  : `Returns to ${restored}`;
+              const tone =
+                "effect" in device &&
+                (device.effect === "fallback" || device.effect === "unmanaged")
+                  ? "danger"
+                  : undefined;
+              return (
+                <li key={device.device_id} data-tone={tone}>
+                  <span>
+                    <strong title={device.device_id}>
+                      {device.device_name || unnamed(device.device_id)}
+                    </strong>
+                    <small className="rollback-device-detail">{detail}</small>
+                    {!excluded &&
+                      "artifact_sha256" in device &&
+                      !sharedDigest &&
+                      (device.artifact_sha256 ? (
+                        <small className="rollback-device-digest">
+                          Earlier artifact SHA-256{" "}
+                          <code
+                            title={device.artifact_sha256}
+                            data-digest={device.artifact_sha256}
+                          >
+                            {device.artifact_sha256.slice(0, 12)}…
+                            {device.artifact_sha256.slice(-8)}
+                          </code>
+                        </small>
+                      ) : (
+                        <span className="rollback-local">
+                          Ran its local config
+                        </span>
+                      ))}
                   </span>
-                )}
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
           {rows.length === 0 && (
             <p className="control-muted">
               {query
                 ? "No reviewed devices match your search."
                 : scope === "excluded"
-                  ? "No devices excluded."
+                  ? "No devices left out."
                   : "No eligible devices."}
             </p>
           )}

@@ -351,9 +351,10 @@
 }
 .rollout-failure-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
 }
 .rollout-failure-reason {
   margin: 0;
@@ -363,15 +364,64 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.rollout-failure-reason code {
-  display: block;
-  padding: 8px 10px;
-  border-radius: 6px;
+.rollout-failure-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rollout-failure-actions a.button {
+  text-decoration: none;
+}
+.rollout-failure-origin {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  overflow-wrap: anywhere;
+}
+.rollout-failure-origin code {
+  font-size: 12px;
   color: var(--ink);
-  background: var(--surface-soft);
+}
+/* What a retry does, inside the card that offers one. */
+.rollout-failure-footer {
+  margin: 4px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
   font-size: 12.5px;
-  font-weight: 500;
-  white-space: pre-wrap;
+  line-height: 1.5;
+}
+/* A device still runs the version and isn't delivering (P1-6). */
+.rollout-delivery-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--rollout-failed) 40%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rollout-failed) 7%, var(--surface));
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.rollout-delivery-banner > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--rollout-failed);
+}
+.rollout-delivery-banner > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rollout-delivery-banner strong {
+  font-weight: 600;
+}
+.rollout-delivery-banner span {
+  color: var(--muted);
+  font-size: 13px;
 }
 .rollout-delivery {
   display: grid;
