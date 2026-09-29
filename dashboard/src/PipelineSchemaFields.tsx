@@ -2221,6 +2221,12 @@ export default function PipelineSchemaFields({
   fieldSections?: readonly SchemaPropertySection[];
   onPendingChange?: (id: string, dirty: boolean) => void;
 }) {
+  // `graph` only styles `vector graph` output; keep it out of the way unless
+  // this step already sets it.
+  const hidden =
+    component.graph === undefined
+      ? ["type", "inputs", "graph"]
+      : ["type", "inputs"];
   return (
     <PendingFieldsContext.Provider value={onPendingChange}>
       {hasRootSchemaVariants(schema, root, component) ? (
@@ -2233,7 +2239,7 @@ export default function PipelineSchemaFields({
           editable={editable}
           fieldPickerTarget={fieldPickerTarget}
           fieldSections={fieldSections}
-          exclude={["type", "inputs", ...exclude]}
+          exclude={[...hidden, ...exclude]}
           unboxed
           depth={0}
         />
@@ -2246,7 +2252,7 @@ export default function PipelineSchemaFields({
           editable={editable}
           fieldPickerTarget={fieldPickerTarget}
           fieldSections={fieldSections}
-          exclude={["type", "inputs", ...exclude]}
+          exclude={[...hidden, ...exclude]}
         />
       )}
     </PendingFieldsContext.Provider>

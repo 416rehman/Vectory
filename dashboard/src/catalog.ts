@@ -30,6 +30,15 @@ export type Component = {
     options?: string[];
   }[];
 };
+/**
+ * A new remap step: a short guide in comments and one line that runs.
+ */
+export const REMAP_STARTER = `# Runs once for every event; "." is the event.
+# Set a field:      .environment = "production"
+# Remove a field:   del(.password)
+# Parse JSON text:  . = merge(., object!(parse_json!(.message)))
+.environment = "development"
+`;
 const curatedCatalog: Component[] = [
   {
     type: "demo_logs",
@@ -109,7 +118,7 @@ const curatedCatalog: Component[] = [
     label: "Edit fields",
     kind: "transforms",
     description: "Parse, enrich, and reshape events with VRL.",
-    defaults: { source: '.environment = "development"' },
+    defaults: { source: REMAP_STARTER },
     fields: [
       { key: "source", label: "VRL program", type: "vrl", required: true },
     ],
@@ -187,11 +196,15 @@ const curatedCatalog: Component[] = [
     defaults: {
       endpoint: "",
       encoding: { codec: "json" },
-      labels: { service: "vectory" },
+      labels: { job: "vector" },
     },
     fields: [{ key: "endpoint", label: "Endpoint", required: true }],
   },
 ];
+// Starting values for schema-only components where Vector needs a choice.
+const schemaDefaults: Record<string, Config> = {
+  "sinks:aws_s3": { encoding: { codec: "json" }, compression: "gzip" },
+};
 export const catalog: Component[] = [
   ...curatedCatalog.map(
     (item) =>
@@ -217,7 +230,9 @@ export const catalog: Component[] = [
         ({
           ...component,
           kind: component.kind as Kind,
-          defaults: {},
+          defaults: structuredClone(
+            schemaDefaults[`${component.kind}:${component.type}`] ?? {},
+          ),
           fields: [],
           curated: false,
         }) as Component,
