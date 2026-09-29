@@ -70,6 +70,12 @@ import {
   unsupervisedLine,
 } from "./enrollmentActivity";
 import {
+  deviceName,
+  parseLabels,
+  parsePreapprovedNames,
+  scopeText,
+} from "./enrollmentScope";
+import {
   resolveTokenRequests,
   useTokenRequests,
 } from "./enrollmentTokenRequests";
@@ -91,13 +97,6 @@ function tokenStatus(token: Token) {
       : token.max_uses && token.uses >= token.max_uses
         ? "Used up"
         : "Available";
-}
-function tokenScope(token: Token) {
-  return token.recovery_name
-    ? `Recovery for ${token.recovery_name}`
-    : token.name_prefix
-      ? `Names starting with ${token.name_prefix}`
-      : "Any unique device name";
 }
 function clock(value?: string | null) {
   if (!value) return "";
@@ -387,6 +386,8 @@ export function Enrollment({
   const [hours, setHours] = useState(1);
   const [maxUses, setMaxUses] = useState("1");
   const [prefix, setPrefix] = useState("");
+  const [namesText, setNamesText] = useState("");
+  const [labelsText, setLabelsText] = useState("");
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [secret, setSecret] = useState<ReadyToken | null>(null);
@@ -458,6 +459,16 @@ export function Enrollment({
   const prefixValid = /^[a-z0-9-]{0,80}$/.test(prefix);
   const prefixMatches =
     !prefix || !trimmedName || trimmedName.toLowerCase().startsWith(prefix);
+  const preapproved = parsePreapprovedNames(
+    namesText,
+    prefixValid ? prefix : "",
+  );
+  const labels = parseLabels(labelsText);
+  // With a list, this command's own device name must be on it.
+  const nameListed =
+    !preapproved.value ||
+    !trimmedName ||
+    preapproved.value.includes(deviceName(trimmedName) || "");
   const usesValid =
     !maxUses ||
     (Number.isInteger(Number(maxUses)) &&
@@ -476,6 +487,9 @@ export function Enrollment({
     !pathProblem(vectorBinary) &&
     prefixValid &&
     prefixMatches &&
+    !preapproved.error &&
+    nameListed &&
+    !labels.error &&
     usesValid &&
     hoursValid &&
     baseline !== null &&
@@ -560,6 +574,8 @@ export function Enrollment({
         expires_hours: hours,
         max_uses: maxUses ? Number(maxUses) : null,
         name_prefix: prefix || null,
+        ...(preapproved.value ? { allowed_names: preapproved.value } : {}),
+        ...(labels.value ? { labels: labels.value } : {}),
       },
       { inline: true },
     );
@@ -1000,6 +1016,46 @@ export function Enrollment({
                     onChange={(event) => setPrefix(event.target.value)}
                     placeholder="Any name"
                     autoComplete="off"
+                  />
+                </Field>
+              </div>
+              <div className="control-two-col">
+                <Field
+                  label="Only these device names (optional)"
+                  hint={
+                    preapproved.error ||
+                    (nameListed
+                      ? "One per line or separated by commas. Each name can enroll once."
+                      : "Add this device's name to the list.")
+                  }
+                >
+                  <textarea
+                    value={namesText}
+                    rows={3}
+                    aria-invalid={!!preapproved.error || !nameListed}
+                    disabled={!!command}
+                    onChange={(event) => setNamesText(event.target.value)}
+                    placeholder={"edge-01\nedge-02"}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field
+                  label="Labels for enrolled devices (optional)"
+                  hint={
+                    labels.error ||
+                    "One key=value per line, up to 8. Labels describe a device; they don't add it to groups or deployments."
+                  }
+                >
+                  <textarea
+                    value={labelsText}
+                    rows={3}
+                    aria-invalid={!!labels.error}
+                    disabled={!!command}
+                    onChange={(event) => setLabelsText(event.target.value)}
+                    placeholder={"site=berlin\nrack=r12"}
+                    autoComplete="off"
+                    spellCheck={false}
                   />
                 </Field>
               </div>
@@ -1602,7 +1658,7 @@ export function Enrollment({
                   cell: (token) => (
                     <>
                       <strong>{token.name}</strong>
-                      <small>{tokenScope(token)}</small>
+                      <small>{scopeText(token)}</small>
                     </>
                   ),
                 },

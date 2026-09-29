@@ -59,7 +59,9 @@ Within those components, restricted mode also:
 4. **Revocation** in the dashboard blocks the identity's certificates immediately. It also removes the device from its groups and from deployments that follow group membership. It doesn't stop Vector on the host.
 5. **Recovery** replaces a lost identity. It needs an administrator's one-time authorization and a person on the host, and it creates a new device identity. See [Recover a device identity](agents.md#recover-a-device-identity).
 
-Enrollment tokens can be limited by use count, expiry and device-name prefix. A token can't take over a name that belongs to an existing device.
+Enrollment tokens can be limited by use count, expiry and device-name prefix, and to a list of up to 500 device names, each of which can enroll once. A token can't take over a name that belongs to an existing device.
+
+A token can also give the devices it enrolls up to 8 labels, such as `site=berlin`. Labels describe a device. They never add it to a group, target it with a deployment or give it secrets: every new device starts unmanaged until someone deploys to it. Someone who steals a token can enroll a device only within the token's limits, and that device receives nothing until an operator targets it. Revoke a token you no longer need in **Add device**.
 
 ## How a version reaches a device
 
