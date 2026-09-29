@@ -133,7 +133,7 @@ Devices check manifests with the server's signing key. To rotate it, back up, st
 - **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30). The audit log is kept separately and never pruned.
 - **Connections:** `VECTORY_MAX_AGENT_CONNECTIONS` (16,384 by default) limits concurrent agent connections. It protects the server; it isn't a supported fleet size.
 
-Short load tests reached 10,000 simulated devices on one development host without errors. There is no supported fleet size yet, so test with your own fleet before relying on large numbers.
+A 70-second load test on 2026-09-26 reached 10,000 simulated devices without errors. It measured check-ins only, with a debug build on a shared development host: no rollouts, downloads or real agents. There is no supported fleet size yet, so test with your own fleet before relying on large numbers.
 
 ## Review and export audit events
 
