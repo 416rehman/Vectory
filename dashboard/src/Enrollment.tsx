@@ -99,9 +99,11 @@ function tokenStatus(token: Token) {
 function tokenScope(token: Token) {
   return token.recovery_name
     ? `Recovery for ${token.recovery_name}`
-    : token.name_prefix
-      ? `Names starting with ${token.name_prefix}`
-      : "Any unique device name";
+    : token.device_name
+      ? `Only ${token.device_name}`
+      : token.name_prefix
+        ? `Names starting with ${token.name_prefix}`
+        : "Any unique device name";
 }
 /** The installer's --install-dir: a directory, so a trailing slash is fine. */
 function directoryPath(value: string) {
@@ -593,6 +595,9 @@ export function Enrollment({
         expires_hours: hours,
         max_uses: maxUses ? Number(maxUses) : null,
         name_prefix: prefix || null,
+        // The token enrolls only the typed name, so a copied command can't
+        // enroll a host under another one (servers before this ignore it).
+        ...(trimmedName ? { device_name: trimmedName.toLowerCase() } : {}),
       },
       { inline: true },
     );
