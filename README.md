@@ -48,7 +48,7 @@ flowchart LR
 
 ## Get started
 
-- **Try it on one machine** (Linux or macOS, about 15 minutes, mostly compiling): [Quickstart](docs/user/quickstart.md). Or run `node scripts/demo.mjs` for a local demo fleet of real agents on synthetic data.
+- **Try it on one machine** (Linux or macOS, about 15 minutes, mostly compiling): [Quickstart](docs/user/quickstart.md). After its first step, `node scripts/demo.mjs` starts a local demo fleet of real agents on synthetic data.
 - **Run it for real:** [Install the server](docs/user/install-server.md), [Connect a device](docs/user/installation.md), [Deploy your first pipeline](docs/user/first-pipeline.md).
 - **Understand the guarantees:** [Security model](docs/user/security.md).
 
@@ -58,7 +58,7 @@ The same guides ship inside every server as a searchable, offline Help center at
   <tr>
     <td width="33%"><img src="docs/screenshots/product-devices.png" alt="Devices: each demo agent with its connection and pipeline status"></td>
     <td width="33%"><img src="docs/screenshots/product-rollout.png" alt="A deployment's details: every device applied and verified the new version"></td>
-    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: download the agent, connect, install and verify"></td>
+    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: choose the OS and mode, run one command, and watch the device connect"></td>
   </tr>
   <tr>
     <td align="center">Every device, and what it runs</td>

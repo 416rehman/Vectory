@@ -59,8 +59,7 @@ The sidebar has four destinations:
 | [**Devices**](/#/devices) | Add devices, organize groups and apply agent settings. |
 | [**Activity**](/#/deployments) | Follow deployments and schedules, review issues and read the audit log. |
 
-<!-- verify-after-merge: Ctrl K / ⌘ K opens the new command palette and it searches devices, pipelines and actions -->
-Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device or pipeline from anywhere. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), this Help center and **Sign out**.
+Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device or pipeline from anywhere. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Keyboard shortcuts**, **Vectory documentation** (this Help center) and **Sign out**.
 
 Help links open beside your work in a new tab, so an unsaved pipeline stays exactly as you left it.
 

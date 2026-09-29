@@ -57,3 +57,33 @@ test("the CLI parser finds commands in switch statements, comparisons and comman
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+// The apply-state diagrams and tables must use the dashboard's own labels, the
+// ones badges, filters and search show (applyStates in dashboard/src/status.ts).
+test("apply-state labels in the docs and the ApplyStates diagram match dashboard/src/status.ts", async () => {
+  const status = await fs.readFile(path.join(repoRoot, "dashboard/src/status.ts"), "utf8");
+  const block = status.slice(status.indexOf("export const applyStates"), status.indexOf("} satisfies", status.indexOf("export const applyStates")));
+  const labels = new Set([...block.matchAll(/entry\(\s*"([^"]+)"/g)].map((match) => match[1]));
+  assert.ok(labels.has("Applied") && labels.size >= 8, "expected to read applyStates from dashboard/src/status.ts; did it move?");
+  const used = [];
+  for (const slug of ["first-pipeline", "deployments"]) {
+    const text = await page(slug);
+    const start = text.indexOf("<!-- diagram: apply-states -->");
+    assert.ok(start >= 0, `${slug}.md: expected the apply-states diagram`);
+    const rest = text.slice(start);
+    const mermaid = rest.slice(0, rest.indexOf("```", rest.indexOf("```mermaid") + 3));
+    const table = rest.slice(rest.indexOf("\n|")).split(/\n(?!\|)/)[0];
+    for (const [, label] of mermaid.matchAll(/\["([^"]+)"\]/g)) used.push([`${slug}.md diagram`, label]);
+    for (const row of table.split("\n").slice(2)) {
+      const first = row.split("|")[1] || "";
+      for (const [, label] of first.matchAll(/\*\*([^*]+)\*\*/g)) used.push([`${slug}.md table`, label]);
+    }
+  }
+  const astro = await fs.readFile(path.join(repoRoot, "help-center/src/components/ApplyStates.astro"), "utf8");
+  const steps = astro.match(/const steps = \[([^\]]*)\]/)[1];
+  for (const [, label] of steps.matchAll(/"([^"]+)"/g)) used.push(["ApplyStates.astro steps", label]);
+  for (const [, label] of astro.matchAll(/label: "([^"]+)"/g)) used.push(["ApplyStates.astro outcomes", label]);
+  assert.ok(used.length >= 20, "expected to find the apply-state labels in the docs");
+  const unknown = used.filter(([, label]) => !labels.has(label)).map(([where, label]) => `${where}: "${label}"`);
+  assert.deepEqual(unknown, [], `Use the labels from applyStates in dashboard/src/status.ts (${[...labels].join(", ")}):\n${unknown.join("\n")}`);
+});

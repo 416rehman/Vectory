@@ -26,6 +26,10 @@ sudo sh -c 'umask 337 && openssl rand -hex 32 > /etc/vectory/bootstrap'
 sudo chgrp 10001 /etc/vectory/bootstrap
 ```
 
+> [!IMPORTANT]
+> **Private CA?**
+> Append your CA's public certificate so devices can pin it: `cat fullchain.pem ca.pem | sudo install -m 0440 -g 10001 /dev/stdin /etc/vectory/server.pem`. **Add device** then shows the CA fingerprint devices will trust.
+
 The bootstrap secret creates the first administrator, once. It is not an enrollment token and it cannot sign anyone in after setup.
 
 ## 2. Configure
@@ -63,7 +67,6 @@ You should see `server`, `proxy` and `validator` running, with `server` reported
 docker compose logs --tail 100 server proxy validator
 ```
 
-<!-- verify-after-merge: the server image bundles agent downloads for every supported platform, so Add device works with no release step -->
 The server image includes the agent for every supported platform, so **Add device** works immediately.
 
 ## 4. Create the first administrator

@@ -12,12 +12,10 @@ vectory <command> [flags]
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
 - Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags.
 
-<!-- verify-after-merge: `vectory --help`, `vectory help <command>` and `vectory --version` print to stdout and exit 0 -->
 Run `vectory --help` for the command list, `vectory help <command>` for one command, and `vectory --version` for the version.
 
 ## Flags for every command
 
-<!-- verify-after-merge: default state directories after W1 unifies paths -->
 | Flag | Meaning |
 | --- | --- |
 | `--state-dir PATH` | The agent's private state: identity, settings and recovery copies. Defaults: `/var/lib/vectory-agent` on Linux, `/Library/Application Support/Vectory/agent` on macOS, `C:\ProgramData\Vectory\agent` on Windows. Must be absolute. |
@@ -33,7 +31,7 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 | [`run`](#run) | Run the agent in the foreground. | No |
 | [`status`](#status) | Show identity, server, pipeline and next step. | No |
 | [`doctor`](#doctor) | Check local setup and the server connection. | No |
-| [`logs`](#logs) | Show Vector's recent output. | No |
+| [`logs`](#logs) | Show Vector's own log (never your events). | No |
 | [`pause`, `resume`](#pause-and-resume) | Stop or restart applying new versions on this host. | No |
 | [`retry`](#retry) | Allow one more attempt at a rejected version. | Yes |
 | [`configure-metrics`](#configure-metrics) | Set or clear the local metrics endpoint. | Yes |
@@ -47,7 +45,6 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 
 ## setup
 
-<!-- verify-after-merge: `vectory setup` and every flag in this table exist with these meanings -->
 Install, enroll, register the service and wait for the first check-in, in one resumable step. The **Add device** installer runs it for you.
 
 ```sh
@@ -104,21 +101,20 @@ All options are checked together before anything is saved. Options you leave out
 Connect this host to a server using a one-time enrollment token.
 
 ```sh
-sudo vectory enroll --server https://vectory.example.com:8443 --id web-01
+sudo vectory enroll --server https://vectory.example.com:8443 --name web-01
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--server URL` | The agent listener. HTTPS only, and the certificate is always verified. |
-| `--id NAME` | A unique name for this device. |
+| `--name NAME` | Device name, unique in your fleet. |
 | `--ca-file PATH` | The CA certificate (PEM) to trust. Omit it to use the system trust store, or to keep the trust saved by an earlier attempt; `--ca-file=` switches back to the system trust store. |
 | `--ca-sha256 HEX` | Pin the server's CA by fingerprint. |
 | `--token-stdin` | Read the token from standard input. |
 | `--token-file PATH` | Read the token from a regular, local file that only you (or root) can read. |
 | `--token VALUE` | Compatibility only. Other users can read it from the process list. |
-| `--ip SERVER` | Compatibility alias for `--server`. |
+| `--ip SERVER`, `--id NAME` | Compatibility aliases for `--server` and `--name`. |
 
-<!-- verify-after-merge: `--ca-sha256` on enroll -->
 Without a token flag, `enroll` asks for the token with hidden input. The older form `vectory -ip SERVER -id NAME -token TOKEN` still works and means `enroll`.
 
 If an enrollment is interrupted, run the same command again with the same server, name and token. The agent reuses its pending request, so the server can't enroll the device twice.
@@ -133,7 +129,7 @@ sudo vectory run
 
 | Flag | Meaning |
 | --- | --- |
-| `--once` | Check in and reconcile once, then stop. For testing. |
+| `--once` | (Testing) Check in and reconcile once, then stop. |
 
 ## status
 
@@ -145,7 +141,6 @@ sudo vectory status
 
 ## doctor
 
-<!-- verify-after-merge: doctor checks DNS, TCP, TLS, clock skew and credential expiry against the server -->
 Check the local setup and the connection to the server, and print a fix for each problem. It checks the adopted Vector binary, the managed configuration, the mode and metrics settings, then DNS, TLS, clock and credentials.
 
 ```sh
@@ -165,10 +160,6 @@ sudo vectory logs --follow
 | `--lines N` | How many recent lines to print. Default 100. |
 | `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
 | `--raw` | Print Vector's JSON log lines unchanged. `--json` does the same. |
-
-| Flag | Meaning |
-| --- | --- |
-| `--follow` | Keep printing new lines until you press Ctrl-C. |
 
 ## pause and resume
 
@@ -232,11 +223,17 @@ sudo vectory re-adopt --expected-sha256 THE_SHA256
 
 ## recover-enrollment
 
-Replace a lost or unrenewable identity using a recovery token from an administrator. It takes the same flags as `enroll`, and must keep the same server and device name. Run it with the agent stopped.
+Replace a lost or unrenewable identity using a recovery token from an administrator. It keeps the enrolled server and device name. Run it with the agent stopped.
 
 ```sh
 sudo vectory recover-enrollment
 ```
+
+| Flag | Meaning |
+| --- | --- |
+| `--token-file PATH`, `--token-stdin` | Read the recovery token from a private file or standard input. Without either, it asks with hidden input. |
+| `--ca-file PATH` | The CA certificate (PEM) to trust. Omit it to keep the saved trust. |
+| `--json` | Print the result as JSON. |
 
 ## Service commands
 
@@ -267,7 +264,6 @@ sudo vectory unenroll
 
 Delete the agent's state directory. Stop and unregister the service first.
 
-<!-- verify-after-merge: default Linux state directory after W1 unifies paths -->
 ```sh
 sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 ```

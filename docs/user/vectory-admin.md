@@ -12,31 +12,30 @@ vectory-admin --data-dir PATH <command> [flags]
 - Run it as the server's operating-system account, against the server's data directory. The Compose image includes it at `/usr/local/bin/vectory-admin`; run it in a one-off container that mounts the same `data` volume as UID 10001.
 - Commands that change data preview first. Add `--apply` to make the change. Every applied change is recorded in the audit log.
 
-<!-- verify-after-merge: `vectory-admin --help` prints usage and exits 0 without a backtrace -->
 `vectory-admin --help` lists the commands.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| [`invalidate-restored-access`](#invalidate-restored-access) | After a restore, end every session and revoke reset codes, recovery codes and enrollment tokens. |
+| [`invalidate-restored-access`](#invalidate-restored-access) | After a restore, end every session and revoke reset links, recovery codes and enrollment tokens. |
 | [`generation-recovery-state`](#generation-recovery-state) | Export each device's configuration counters for review after a restore. |
 | [`recover-generations`](#recover-generations) | Raise configuration counters above what devices already accepted, from a reviewed report. |
 | [`rotate-signing-key`](#rotate-signing-key) | Create a new manifest signing key. |
 | [`prune-signing-keys`](#prune-signing-keys) | Delete old signing keys that no valid device credential still uses. |
-| [`reset-password`](#reset-password) | Issue a one-time password reset code for an account. |
+| [`reset-password`](#reset-password) | Create a single-use password reset link for an account. |
 | [`disable-mfa`](#disable-mfa) | Turn off two-factor sign-in for an account that lost its authenticator. |
 
 ## invalidate-restored-access
 
-A restored backup brings back old sessions, reset codes, recovery codes and tokens. This command removes them in one step.
+A restored backup brings back old sessions, reset links, recovery codes and tokens. This command removes them in one step.
 
 ```sh
 vectory-admin --data-dir /var/lib/vectory invalidate-restored-access
 vectory-admin --data-dir /var/lib/vectory invalidate-restored-access --apply
 ```
 
-The first command shows counts only. With `--apply` it signs out every browser session, deletes all password reset codes and two-factor recovery codes, and revokes all enrollment and device-recovery tokens. Passwords, roles, authenticators, devices and deployments stay as restored.
+The first command shows counts only. With `--apply` it signs out every browser session, deletes all password reset links and two-factor recovery codes, and revokes all enrollment and device-recovery tokens. Passwords, roles, authenticators, devices and deployments stay as restored.
 
 > [!WARNING]
 > **Saved recovery codes stop working**
@@ -56,7 +55,6 @@ The counters in the export are `null` on purpose, so an unreviewed report can't 
 
 Devices remember the highest configuration generation they accepted and refuse anything older. After restoring an older backup, raise the server's counters above theirs.
 
-<!-- verify-after-merge: key names in `vectory status --json` after W1's status redesign -->
 <!-- steps -->
 1. For each device, read its counters on the host with `sudo vectory status --json`: `state.highest_generation`, `state.highest_policy_generation` and `state.secret_revision`.
 2. In `report.json`, fill in `highest_generation`, `highest_policy_generation` and `highest_secret_revision` (from `secret_revision`) for each device. Leave nothing `null`.
@@ -112,22 +110,21 @@ At most four old keys are kept. Never delete a key by hand just because a newer 
 
 ## reset-password
 
-<!-- verify-after-merge: W4's break-glass command, its flags and output -->
-Issue a one-time password reset code when no administrator can sign in.
+Create a single-use password reset link when no administrator can sign in:
 
 ```sh
-vectory-admin --data-dir /var/lib/vectory reset-password --email admin@example.com
+vectory-admin --data-dir /var/lib/vectory reset-password \
+  --email admin@example.com --url https://vectory.example.com
 ```
 
-Give the code to the person through a trusted channel. They enter it under **Reset password** on the sign-in page. It works once, and it doesn't bypass two-factor sign-in.
+It prints a link and the bare code, valid for 1 hour. Start the server again, then send the link through a trusted channel. The person opens it, or chooses **Forgot password?** on the sign-in page and pastes the code. Two-factor sign-in stays on; if the authenticator is lost too, also run `disable-mfa`.
 
 ## disable-mfa
 
-<!-- verify-after-merge: W4's break-glass command, its flags and output -->
 Turn off two-factor sign-in for an account whose authenticator and recovery codes are both lost.
 
 ```sh
 vectory-admin --data-dir /var/lib/vectory disable-mfa --email admin@example.com
 ```
 
-The person can then sign in with their password and set up a new authenticator. The change is recorded in the audit log.
+The person can then sign in with their password and set up a new authenticator. Their sessions are signed out, and the change is recorded in the audit log. On an account without two-factor sign-in, the command changes nothing and exits 1.
