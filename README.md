@@ -8,7 +8,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/product-editor-dark.png">
-  <img src="docs/screenshots/product-editor.png" alt="Vectory's pipeline editor: a synthetic log source, a VRL parse step, a route by severity and three destinations" width="880">
+  <img src="docs/screenshots/product-editor.png" alt="Vectory's pipeline editor showing the demo pipeline: it parses synthetic syslog events with VRL, routes errors, samples the rest and exports Vector's own metrics" width="880">
 </picture>
 
 </div>
@@ -32,13 +32,13 @@ Vectory is an open-source control plane for [Vector](https://vector.dev/). Build
 flowchart LR
   B["Your browser"] -->|"HTTPS 443"| P["TLS proxy"]
   subgraph S["Vectory server (Docker Compose)"]
-    P --> V["vectory-server<br/>dashboard · API · Help center<br/>agent listener :8443 · SQLite"]
+    P --> V["vectory-server<br/>dashboard · API · help<br/>agent listener :8443<br/>SQLite"]
     V -->|"internal network only"| W["Validator<br/>sandboxed Vector 0.58"]
   end
-  subgraph H["Each managed host"]
-    A["vectory agent"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
+  subgraph H["Each device"]
+    A["vectory agent<br/>outbound HTTPS 8443<br/>mutual TLS"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
   end
-  A -->|"outbound HTTPS 8443, mutual TLS"| V
+  A --> V
   X -->|"your events"| D[("Your destinations")]
 ```
 
@@ -56,14 +56,14 @@ The same guides ship inside every server as a searchable, offline Help center at
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/screenshots/product-devices.png" alt="Devices: a fleet of agents with their pipeline status"></td>
-    <td width="33%"><img src="docs/screenshots/product-rollout.png" alt="A deployment rolling out to its devices"></td>
-    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: one install command per operating system"></td>
+    <td width="33%"><img src="docs/screenshots/product-devices.png" alt="Devices: each demo agent with its connection and pipeline status"></td>
+    <td width="33%"><img src="docs/screenshots/product-rollout.png" alt="A deployment's details: every device applied and verified the new version"></td>
+    <td width="33%"><img src="docs/screenshots/product-add-device.png" alt="Add device: download the agent, connect, install and verify"></td>
   </tr>
   <tr>
     <td align="center">Every device, and what it runs</td>
     <td align="center">Rollouts you can follow</td>
-    <td align="center">One command per device</td>
+    <td align="center">Guided setup for each device</td>
   </tr>
 </table>
 

@@ -73,13 +73,21 @@ node help-center/tests/ci.mjs
 
 ### Capture product screenshots
 
-With a preview and a demo fleet running:
+Start from a fresh demo, so recent activity shows the fleet rather than earlier test runs: stop the demo, then delete `.local/preview/state`, `.local/preview/credentials.json` and `.local/demo`. Build a Linux agent release first so **Add device** offers a download:
 
 ```sh
-node scripts/capture-screenshots.mjs
+python3 packaging/build-release.py --out artifacts/releases --target linux/amd64
+node scripts/demo.mjs --agents 4
+node scripts/capture-screenshots.mjs              # or name screens: editor overview
 ```
 
-It signs in as the demo administrator and writes 1440×900 screenshots to `docs/screenshots/`.
+It signs in as the demo administrator, changes nothing but its own session, and signs out again. It writes 1440×900 light screenshots of the demo pipeline in the editor, Overview, Devices, a device, the pipeline's rollout, Add device and the Help center, plus a dark editor for the README, to `docs/screenshots/product-*.png`. It warns when a device hasn't applied its pipeline yet, and refuses to save **Add device** if opening it issued an enrollment token.
+
+| Variable | Use |
+| --- | --- |
+| `VECTORY_PREVIEW_DIR`, `VECTORY_PREVIEW_WEB_PORT` | The same preview settings as `scripts/preview.sh`. |
+| `VECTORY_SCREENSHOTS_DIR` | Write somewhere else, for example to review before you replace the committed images. |
+| `VECTORY_CHROMIUM` | A Chromium executable, when Playwright's own browser isn't installed. |
 
 ## Windows (PowerShell)
 
