@@ -5316,6 +5316,20 @@
           ],
           "description": "Last verified managed version on the host, which keeps running after a failed update or a removed assignment. Null means no managed version was ever verified (the host runs its adopted local config)."
         },
+        "wake": {
+          "type": "object",
+          "properties": {
+            "listening": {
+              "type": "boolean",
+              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+            }
+          },
+          "required": [
+            "listening"
+          ],
+          "additionalProperties": false,
+          "description": "GET /api/v1/devices/{id} only, while the server offers wake-ups (absent when VECTORY_AGENT_WAKE_LIMIT=0). Read-only, from the in-memory wait registry."
+        },
         "groups": {
           "type": "object",
           "properties": {
@@ -6230,6 +6244,20 @@
             "additionalProperties": false
           },
           "description": "Recorded apply-state changes after release, oldest first. Heartbeats can skip states."
+        },
+        "wake": {
+          "type": "object",
+          "properties": {
+            "listening": {
+              "type": "boolean",
+              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+            }
+          },
+          "required": [
+            "listening"
+          ],
+          "additionalProperties": false,
+          "description": "Target pages only, while the server offers wake-ups: the same projection as Device wake, for this row's device."
         }
       },
       "required": [
@@ -9022,7 +9050,7 @@
             "type": "string",
             "pattern": "^[a-z0-9_]{1,64}$"
           },
-          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running). Agents send those fields only when listed, so older servers keep their strict validation. Unknown names are ignored."
+          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running), and wake while it holds GET /agent/v1/wait. Agents send those fields, and wait, only when listed, so older servers keep their strict validation. Unknown names are ignored."
         }
       },
       "required": [
@@ -12552,6 +12580,52 @@
       ],
       "additionalProperties": true,
       "description": "A device as GET /api/v1/devices and the Overview list it: the Device without host_runtime, vector_log_summary and telemetry.components, and with only the first open data-plane issue. GET /api/v1/devices/{id} returns the full Device."
+    },
+    "WaitAnswer": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean",
+          "description": "true: this device's desired or policy generation differs from the ones the agent sent, or its access was revoked: check in now. false: nothing changed (the hold ended, a newer wait from this device replaced this one, or the server is stopping)."
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "additionalProperties": false,
+      "description": "An unsigned hint, never authority: no configuration, no state change. The agent answers changed:true with an ordinary heartbeat, whose signed manifest is authoritative; a forged or stale answer can only cause an early heartbeat."
+    },
+    "WaitRefusal": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "const": "CAPACITY_BUSY"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "retry_after": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "description": "Seconds before the next wait; the same value as Retry-After."
+        }
+      },
+      "required": [
+        "error",
+        "retry_after"
+      ],
+      "additionalProperties": false
     },
     "SavedPolicyListItem": {
       "type": "object",
