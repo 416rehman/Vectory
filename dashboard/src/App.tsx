@@ -1057,6 +1057,7 @@ export default function App() {
           }
         />
         <div className="app-main" inert={mobileMenuOpen}>
+          {/* The session prompt has one mount point, above the page. */}
           {sessionEnded && (
             <div className="session-ended" role="alert">
               <span>Your session ended. Sign in again to continue.</span>

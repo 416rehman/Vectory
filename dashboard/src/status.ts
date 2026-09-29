@@ -278,6 +278,12 @@ export const auditOutcomes = {
   failure: entry("Failed", "danger", "x", "The request failed."),
   failed: entry("Failed", "danger", "x", "The action failed."),
   denied: entry("Denied", "danger", "ban", "The request was not permitted."),
+  throttled: entry(
+    "Throttled",
+    "warning",
+    "clock",
+    "Too many attempts. The request was refused for a while.",
+  ),
   conflict: entry(
     "Conflict",
     "warning",
