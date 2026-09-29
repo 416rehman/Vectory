@@ -1118,7 +1118,8 @@ export function ErrorBox({
 }
 /**
  * The one failed-read message: what couldn't load, how old the data on screen
- * is, the server's reason behind Details, and one retry.
+ * is, the server's reason (inline when nothing else is shown, otherwise behind
+ * Details), and one retry.
  */
 export function InlineError({
   title,
@@ -1141,8 +1142,11 @@ export function InlineError({
         <strong>{title}</strong>
         {updatedAt ? (
           <span> Showing data from {relativeTime(updatedAt, now)}.</span>
-        ) : null}
-        {error && (
+        ) : (
+          // Nothing else is on screen, so the reason is the message.
+          error && <span> {error}</span>
+        )}
+        {updatedAt && error && (
           <details>
             <summary>Details</summary>
             <span>{error}</span>

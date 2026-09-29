@@ -34,7 +34,7 @@ const server = await createServer({
       },
       load(id) {
         if (id !== virtual) return;
-        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import {AuditLog} from '/src/Control.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
+        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import {AuditLog} from '/src/AuditLog.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
@@ -439,23 +439,23 @@ async function fixture(props = {}, { layout = "list" } = {}) {
 }
 async function setStatus(page, value) {
   const button = page
-    .getByRole("group", { name: "Issue status", exact: true })
-    .getByRole("button", {
+    .getByRole("radiogroup", { name: "Issue status", exact: true })
+    .getByRole("radio", {
       name: value === "acknowledged" ? "Acknowledged" : "Open",
       exact: true,
     });
   await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await expect(button).toHaveAttribute("aria-checked", "true");
 }
 async function setLayout(page, value) {
   const button = page
-    .getByRole("group", { name: "Issue layout", exact: true })
-    .getByRole("button", {
+    .getByRole("radiogroup", { name: "Issue layout", exact: true })
+    .getByRole("radio", {
       name: value === "list" ? "All issues" : "By version and reason",
       exact: true,
     });
   await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await expect(button).toHaveAttribute("aria-checked", "true");
 }
 async function check(name, run) {
   await run();
@@ -477,9 +477,10 @@ try {
         await expect(f.page.locator(".issue-table tbody tr")).toHaveCount(1);
         await setStatus(f.page, "acknowledged");
         await expect(f.row(26)).toBeVisible();
-        const badge = f.row(26).locator(".badge");
+        const badge = f.row(26).locator(".status-badge");
         await expect(badge).toHaveText("Acknowledged");
-        expect(await badge.getAttribute("class")).not.toContain("positive");
+        // Acknowledged is a neutral state, never success.
+        await expect(badge).toHaveAttribute("data-tone", "neutral");
         f.state.records[0].first_seen = null;
         f.state.records[0].last_seen = null;
         await f.mount({ deviceId: f.state.records[0].device_id });
@@ -501,7 +502,7 @@ try {
         ).toBeVisible();
         f.state.listFailure = false;
         await f.page
-          .getByRole("button", { name: "Try again", exact: true })
+          .getByRole("button", { name: "Retry", exact: true })
           .click();
         await expect(f.row(1)).toBeVisible();
         await f.page.getByRole("button", { name: /^Sort by Attempts/ }).click();
@@ -524,19 +525,29 @@ try {
         await f.page
           .getByRole("button", { name: "Refresh now", exact: true })
           .click();
+        // The last page stays on screen, dimmed, with one message; the
+        // server's reason is behind Details, and nothing acts on stale rows.
+        await expect(f.page.getByRole("alert")).toContainText(
+          "Couldn't refresh issues. Showing data from",
+        );
+        await f.page.getByText("Details", { exact: true }).click();
         await expect(
           f.page.getByText("Synthetic issue history unavailable", {
             exact: true,
           }),
         ).toBeVisible();
+        await expect(f.row(12)).toBeVisible();
         await expect(
-          f.page.locator(".issue-table tbody tr .control-row-title"),
-        ).toHaveCount(0);
+          f.row(12).getByRole("button", { name: /^Acknowledge issue on / }),
+        ).toBeDisabled();
         f.state.listFailure = false;
         await f.page
-          .getByRole("button", { name: "Try again", exact: true })
+          .getByRole("button", { name: "Retry", exact: true })
           .click();
         await expect(f.row(12)).toBeVisible();
+        await expect(
+          f.row(12).getByRole("button", { name: /^Acknowledge issue on / }),
+        ).toBeEnabled();
         expect(f.state.postRequests).toHaveLength(0);
       } finally {
         await f.close();
