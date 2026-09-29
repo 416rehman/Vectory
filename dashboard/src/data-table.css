@@ -340,6 +340,15 @@
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
 }
+.data-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1-5);
+}
+.data-list-actions:empty {
+  display: none;
+}
 .data-list-status {
   flex-shrink: 0;
 }

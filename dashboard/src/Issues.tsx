@@ -397,6 +397,17 @@ export default function Issues({
                   }
             }
             empty={emptyState}
+            mobileCard={(issue) => ({
+              title:
+                issue.title || "The device couldn't apply the configuration",
+              status: <DispositionBadge issue={issue} />,
+              meta: [
+                <DeviceLine key="device" issue={issue} />,
+                `Last reported ${issueTime(issue.last_seen)}`,
+                attemptsLabel(issue.count, issue.reports, issue.code),
+              ],
+              actions: actions(issue),
+            })}
           />
         </div>
       ) : (
@@ -465,6 +476,19 @@ function DeviceCell({ issue }: { issue: Issue }) {
   );
 }
 
+/** The device an issue came from, as one line of a phone card. */
+function DeviceLine({ issue }: { issue: Issue }) {
+  return (
+    <>
+      <a href={`#/devices/${encodeURIComponent(issue.device_id)}`}>
+        {issue.device_name || "Open device"}
+      </a>
+      {issue.device_revoked && " · access revoked"}
+      {issue.device_revoked === null && " · no longer exists"}
+    </>
+  );
+}
+
 function IssueSummary({ issue }: { issue: Issue }) {
   const fix = leadingDiagnostic(issue.diagnostics)?.hint;
   return (
@@ -472,6 +496,8 @@ function IssueSummary({ issue }: { issue: Issue }) {
       <strong>
         {issue.title || "The device couldn't apply the configuration"}
       </strong>
+      {/* The column sorts by this code, so its order reads at a glance. */}
+      <code className="issue-code">{issue.code}</code>
       <p className="issue-context">
         {issue.desired_version_id && issue.configuration_id ? (
           <a

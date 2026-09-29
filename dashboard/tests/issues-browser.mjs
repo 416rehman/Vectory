@@ -428,8 +428,9 @@ async function fixture(props = {}, { layout = "list" } = {}) {
       await setLayout(page, "list");
   };
   await mount();
+  // A table row on wide screens, a card on phones.
   const row = (index) =>
-    page.locator(".issue-table tbody tr").filter({
+    page.locator(".issue-table tbody tr, .issue-page .data-list-item").filter({
       has: page.getByRole("link", {
         name: deviceName(index),
         exact: true,
@@ -1277,6 +1278,17 @@ try {
             );
             await setStatus(f.page, "acknowledged");
             await expect(f.row(26)).toBeVisible();
+            if (width === 390) {
+              // Phones read cards, each with its own actions.
+              await expect(f.page.locator(".issue-table")).toHaveCount(0);
+              await expect(
+                f.row(26).getByRole("button", {
+                  name: `Reopen issue on ${deviceName(26)}`,
+                  exact: true,
+                }),
+              ).toBeVisible();
+            } else
+              await expect(f.row(26).locator(".issue-code")).not.toBeEmpty();
             const geometry = await f.page.evaluate(() => ({
               width: innerWidth,
               scroll: document.documentElement.scrollWidth,
