@@ -140,6 +140,7 @@ async function load({
   await context.addInitScript((collapsed) => {
     localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   }, collapsed);
   await context.route("**/*", async (route) => {
     const request = route.request(),
@@ -170,6 +171,8 @@ async function load({
           },
           csrf_token: "synthetic-canvas-csrf",
         });
+      // The publish review shows where versions are assigned.
+      if (path === "/devices") return reply([]);
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated editor" });
       if (path === `/configurations/${pipelineId}`)

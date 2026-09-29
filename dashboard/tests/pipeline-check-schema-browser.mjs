@@ -127,6 +127,8 @@ async function load(config, expectedNodes = 2) {
           },
           csrf_token: "synthetic-check-csrf",
         });
+      // The publish review shows where versions are assigned.
+      if (path === "/devices") return reply([]);
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated editor" });
       if (path === `/configurations/${pipelineId}`)

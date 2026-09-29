@@ -75,6 +75,7 @@ import {
   when,
   type Config,
   type Configuration,
+  type Device,
   type Graph,
   type User,
   type Version,
@@ -114,6 +115,8 @@ import {
   type PublishOperation,
 } from "./publishRequests";
 import PipelineActions, { type PipelineAction } from "./PipelineActions";
+import PublishReview from "./PublishReview";
+import { deviceReach, reachLabel } from "./publishReview";
 import { pipelineConnectivity } from "./pipelineConnectivity";
 import SelectedDevice, { pipelineRoute } from "./SelectedDevice";
 import type {
@@ -460,6 +463,15 @@ export default function Editor({
     [saveNote, setSaveNote] = useState<string | null>(null),
     // Unsaved edits found in this browser, until restored or discarded.
     [recovery, setRecovery] = useState<RecoveryDraft | null>(null),
+    // Why the server definitively refused the last publish attempt.
+    [publishRejection, setPublishRejection] = useState<{
+      code: string;
+      message: string;
+    } | null>(null),
+    // The version just published, offered for deployment next.
+    [publishedResult, setPublishedResult] = useState<Version | null>(null),
+    // Where this pipeline's versions are assigned, for the publish review.
+    [publishReach, setPublishReach] = useState<string | null>(null),
     [historyOpen, setHistoryOpen] = useState(false),
     [historyVersion, setHistoryVersion] = useState<Version | null>(null),
     [publishNotice, setPublishNotice] = useState<
@@ -885,6 +897,16 @@ export default function Editor({
     );
   }, [draftProblems, check, checkedConfig, checkStale]);
   const problemCounts = countProblems(problems);
+  // Vector errors from a check of this exact draft block publishing: the
+  // server would refuse the same draft.
+  const freshVectorErrors =
+    !checkStale &&
+    problems.some(
+      (problem) =>
+        problem.origin === "vector" &&
+        problem.severity === "error" &&
+        !problem.stale,
+    );
   const nodeProblems = useMemo(() => componentProblems(problems), [problems]);
   const status = checkStatus({
     checking,
@@ -2045,6 +2067,35 @@ export default function Editor({
       }
     }
   }
+  // Clears the saved request after the server confirms nothing was
+  // committed under its key; false when that cannot be established.
+  async function rejectedWithoutCommit(
+    operation: PublishOperation,
+    signal: AbortSignal,
+  ) {
+    try {
+      const lookup = await withRequestDeadline(
+        (lookupSignal) =>
+          api(
+            `/configurations/publish-requests/${operation.id}`,
+            { signal: lookupSignal },
+            PublishRequestLookupSchema,
+          ),
+        15000,
+        signal,
+      );
+      if (lookup.request_id !== operation.id || lookup.found !== false)
+        return false;
+      finishPublishOperation(operation);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function closePublishedResult() {
+    setPublishedResult(null);
+    setPublishOpen(false);
+  }
   async function publish() {
     if (
       publishActive.current ||
@@ -2059,6 +2110,7 @@ export default function Editor({
     publishActive.current = controller;
     setBusy(true);
     setError("");
+    setPublishRejection(null);
     let operation: PublishOperation | null = null;
     const current = () =>
       publishMounted.current && publishActive.current === controller;
@@ -2152,14 +2204,30 @@ export default function Editor({
         );
         return;
       }
-      setPublishOpen(false);
       setMessage("");
-      notify(`Version ${version.number} published. It is ready to deploy.`);
+      setPublishRejection(null);
+      setPublishedResult(version);
     } catch (failure) {
       if (!current()) return;
-      // A peer can send this shared intent while our preflight or POST waits.
-      // Even a structured rejection (including the pre-writer stale check)
-      // cannot rule out a committed result under the same request key.
+      // A peer can send this shared intent while our preflight or POST waits,
+      // so a structured rejection alone cannot rule out a committed result
+      // under the same request key. It becomes definitive once the server
+      // confirms that no version was committed under that key.
+      if (
+        operation &&
+        failure instanceof APIError &&
+        failure.serverRejection &&
+        failure.status >= 400 &&
+        failure.status < 500 &&
+        failure.code !== "IDEMPOTENCY_CONFLICT" &&
+        (await rejectedWithoutCommit(operation, controller.signal))
+      ) {
+        if (!current()) return;
+        setPublishRejection({ code: failure.code, message: failure.message });
+        if (failure.code === "VALIDATION_FAILED") void validate();
+        return;
+      }
+      if (!current()) return;
       if (operation) {
         setPublishNotice("uncertain");
       }
@@ -2831,6 +2899,64 @@ export default function Editor({
     !!publishedVersion &&
     publishedDraft &&
     !importedCodeDirty.current;
+  const publishNotePlaceholder =
+    publishOpen && publishedVersion
+      ? draftSummary(
+          publishedVersion.config,
+          config,
+          publishedVersion.variables || [],
+          variables,
+        )
+      : "What changed in this version?";
+  // Opening the review checks the draft when auto-check is on and the last
+  // check does not describe it.
+  useEffect(() => {
+    if (
+      publishOpen &&
+      !publishedResult &&
+      autoCheck &&
+      checkable &&
+      (!check || checkStale) &&
+      !checking
+    )
+      void validate({ auto: true });
+  }, [publishOpen]);
+  // Where this pipeline's versions are assigned, read when the review opens.
+  useEffect(() => {
+    if (!publishOpen || publishedResult) return;
+    let alive = true;
+    const controller = new AbortController();
+    setPublishReach(null);
+    Promise.all([
+      withRequestDeadline(
+        (signal) => api<Device[]>("/devices", { signal }),
+        15000,
+        controller.signal,
+      ),
+      withRequestDeadline(
+        (signal) =>
+          api<{ items: { id: string; number: number }[] }>(
+            `/configurations/${id}/history?kind=versions&page=1&page_size=50`,
+            { signal },
+          ),
+        15000,
+        controller.signal,
+      ),
+    ])
+      .then(([devices, history]) => {
+        if (alive)
+          setPublishReach(
+            reachLabel(deviceReach(devices, history.items || [])),
+          );
+      })
+      .catch(() => {
+        if (alive) setPublishReach("Device assignments are unavailable.");
+      });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [publishOpen, publishedResult, id]);
   const saveIndicator = (
     <PipelineSaveStatus
       status={displaySaveStatus}
@@ -4628,7 +4754,31 @@ export default function Editor({
         )}
       </Modal>
       <Modal
-        open={publishOpen}
+        open={publishOpen && !!publishedResult}
+        onClose={closePublishedResult}
+        title={`Version ${publishedResult?.number ?? ""} published`}
+        description="Publishing changed no device. Choose devices to deploy this version now, or later from this pipeline."
+      >
+        <div className="modal-footer">
+          <Button variant="secondary" onClick={closePublishedResult}>
+            Done
+          </Button>
+          {publishedResult && (
+            <Button
+              icon={Server}
+              onClick={() => {
+                const version = publishedResult;
+                closePublishedResult();
+                setDeployVersion(version);
+              }}
+            >
+              Choose devices
+            </Button>
+          )}
+        </div>
+      </Modal>
+      <Modal
+        open={publishOpen && !publishedResult}
         onClose={() => !publishActive.current && !busy && setPublishOpen(false)}
         title="Review & publish"
         description="Publish a version of this draft, then choose which devices receive it."
@@ -4661,22 +4811,22 @@ export default function Editor({
               you deploy this version.
             </p>
           )}
-          {errors.length > 0 ? (
-            <div className="pipeline-field-errors">
-              <strong>Finish these items first</strong>
-              <ul>
-                {errors.map((message) => (
-                  <li key={message}>{message}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <p>
-              The server checks this draft before publishing. Some native checks
-              may wait for a device; each device validates the exact version
-              before applying it.
-            </p>
-          )}
+          <PublishReview
+            config={config}
+            published={publishedVersion}
+            reach={publishReach}
+            status={status}
+            statusLabel={statusLabel}
+            verdict={checking ? "Checking the pipeline with Vector…" : verdict}
+            problems={problems}
+            rejection={publishRejection}
+            onCheck={checkable ? () => void validate() : undefined}
+            onGoToProblem={(problem) => {
+              if (publishActive.current || busy) return;
+              setPublishOpen(false);
+              openProblem(problem);
+            }}
+          />
           {dirty && (
             <p>
               Publishing will save your unsaved changes as a draft revision
@@ -4689,7 +4839,7 @@ export default function Editor({
               value={message}
               disabled={busy || !!publishNotice || unresolvedPublish}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="What changed in this version?"
+              placeholder={publishNotePlaceholder}
             />
           </Field>
           <p>
@@ -4709,6 +4859,7 @@ export default function Editor({
             busy={busy}
             disabled={
               errors.length > 0 ||
+              freshVectorErrors ||
               hasPendingFields ||
               importedCodeDirty.current ||
               unresolvedPublish ||

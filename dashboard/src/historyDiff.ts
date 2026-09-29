@@ -60,10 +60,20 @@ function formattedValue(value: unknown): string {
 export function historyDifferenceLines(
   difference: Difference,
 ): HistoryDifferenceLine[] {
-  const before =
-    difference.kind === "added" ? "" : formattedValue(difference.before);
-  const after =
-    difference.kind === "removed" ? "" : formattedValue(difference.after);
+  // Programs (multi-line text such as VRL) compare line by line as written,
+  // not as one escaped JSON string.
+  const sides = [difference.before, difference.after];
+  const program =
+    sides.some((side) => typeof side === "string" && side.includes("\n")) &&
+    sides.every((side) => side === undefined || typeof side === "string");
+  // Each program line becomes a diff line; the added line break keeps a
+  // trailing newline (or its absence) visible as its own line.
+  const format = (value: unknown) =>
+    program
+      ? `${(value as string | undefined) ?? ""}\n`
+      : formattedValue(value);
+  const before = difference.kind === "added" ? "" : format(difference.before);
+  const after = difference.kind === "removed" ? "" : format(difference.after);
   const changes =
     before === after
       ? [{ value: before, added: false, removed: false }]
