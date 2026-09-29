@@ -1,4 +1,5 @@
-// Actual App/account forms with an isolated in-memory API; no real account writes.
+// Actual App People & security with an isolated in-memory API; no real account writes.
+// Covers the role picker, invitations, keyed request recovery and access edits.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -63,6 +64,10 @@ const admin = {
   role: "admin",
   enabled: true,
   revision: 1,
+  status: "active",
+  mfa_enabled: false,
+  last_login_at: new Date().toISOString(),
+  invite_expires_at: null,
 };
 const colleague = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -71,18 +76,21 @@ const colleague = {
   role: "viewer",
   enabled: true,
   revision: 4,
+  status: "active",
+  mfa_enabled: true,
+  last_login_at: null,
+  invite_expires_at: null,
 };
 const syntheticPassword = "synthetic-password-not-real";
+const inviteCode = "ab".repeat(32);
 const csrf = "synthetic-role-picker-csrf";
 const descriptions = {
-  Viewer:
-    "View devices, pipelines, deployments and activity; export audit history.",
-  Editor:
-    "Viewer access, plus create, edit, validate and organize pipeline drafts. Cannot publish or deploy.",
+  Viewer: "Sees devices, pipelines, deployments and activity.",
+  Editor: "Creates and changes pipeline drafts. Doesn't publish or deploy.",
   Operator:
-    "Viewer access, plus publish and deploy pipelines and manage schedules, groups, agent settings, enrollment tokens and device access. Cannot edit drafts.",
+    "Publishes and deploys, and manages devices, groups, agent settings and enrollment. Doesn't edit drafts.",
   Administrator:
-    "All permissions, including managing people and recovering device identities.",
+    "Everything, including managing people and recovering device identities.",
 };
 const results = [],
   requests = [],
@@ -92,10 +100,16 @@ const results = [],
   measurements = [];
 let page, state, failure;
 function safe(value) {
-  return String(value).replaceAll(syntheticPassword, "[synthetic credential]");
+  return String(value)
+    .replaceAll(syntheticPassword, "[synthetic credential]")
+    .replaceAll(inviteCode, "[synthetic invite]");
 }
 function release() {
   for (const done of state?.held.splice(0) || []) done();
+}
+function publicUser(person) {
+  const { id, name, email, role, enabled, revision } = person;
+  return { id, name, email, role, enabled, revision };
 }
 async function load({ width = 899, theme = "light" } = {}) {
   release();
@@ -103,8 +117,12 @@ async function load({ width = 899, theme = "light" } = {}) {
   state = {
     people: structuredClone([admin, colleague]),
     mutations: [],
+    creations: new Map(),
+    edits: new Map(),
     hold: false,
     held: [],
+    // "lose": commit, then drop the response; "drop": drop before commit.
+    createFault: null,
   };
   const current = state;
   const context = await browser.newContext({
@@ -128,68 +146,144 @@ async function load({ width = 899, theme = "light" } = {}) {
     const body = request.postData() ? request.postDataJSON() : null;
     requests.push({ method, path, keys: body ? Object.keys(body).sort() : [] });
     const reply = (json, status = 200) => route.fulfill({ status, json });
+    const fail = (code, message, status) =>
+      reply({ error: { code, message } }, status);
     if (method === "GET") {
       if (path === "/status")
-        return reply({ initialized: true, version: "synthetic" });
-      if (path === "/session") return reply({ user: admin, csrf_token: csrf });
+        return reply({
+          initialized: true,
+          version: "synthetic",
+          instance_name: "Synthetic role fixture",
+        });
+      if (path === "/session")
+        return reply({ user: publicUser(admin), csrf_token: csrf });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic role fixture" });
-      if (path === "/mfa") return reply({ enabled: false });
+      if (path === "/mfa")
+        return reply({ enabled: false, recovery_codes_remaining: null });
+      if (path === "/devices") return reply([]);
+      if (path === "/account/sessions")
+        return reply({
+          sessions: [
+            {
+              id: "0123456789abcdef0123456789abcdef",
+              current: true,
+              created_at: null,
+              last_seen_at: null,
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              user_agent: null,
+              client_address: null,
+            },
+          ],
+        });
       if (path === "/users") return reply(current.people);
-      const userRequest = path.match(/^\/users\/requests\/([^/]+)$/);
-      if (userRequest)
-        return reply({ request_id: userRequest[1], status: "not_found" });
+      const creation = path.match(/^\/users\/requests\/([^/]+)$/);
+      if (creation) {
+        const entry = current.creations.get(creation[1]);
+        return reply(
+          !entry
+            ? { request_id: creation[1], status: "not_found" }
+            : entry.status === "cancelled"
+              ? { request_id: creation[1], status: "cancelled" }
+              : {
+                  request_id: creation[1],
+                  status: "created",
+                  user: entry.user,
+                },
+        );
+      }
+      const edit = path.match(/^\/users\/([^/]+)\/access-requests\/([^/]+)$/);
+      if (edit) {
+        const entry = current.edits.get(edit[2]);
+        return reply(
+          entry
+            ? { request_id: edit[2], user_id: edit[1], ...entry }
+            : { request_id: edit[2], user_id: edit[1], status: "not_found" },
+        );
+      }
     }
     if (request.headers()["x-csrf-token"] !== csrf) {
       unexpected.push(`Missing CSRF ${method} ${path}`);
-      return reply(
-        { error: { code: "FORBIDDEN", message: "Fixture CSRF missing" } },
-        403,
-      );
+      return fail("FORBIDDEN", "Fixture CSRF missing", 403);
     }
     if (method === "POST" && path === "/users") {
-      current.mutations.push({ method, body });
+      current.mutations.push({ method, path, body });
       if (current.hold) await new Promise((done) => current.held.push(done));
+      if (current.people.some((person) => person.email === body.email))
+        return fail("EMAIL_TAKEN", `Someone already uses ${body.email}.`, 409);
+      if (current.createFault === "drop") return route.abort("failed");
+      const invited = body.invite === true;
       const created = {
-        id: "33333333-3333-4333-8333-333333333333",
+        id: "33333333-3333-4333-8333-33333333333" + current.people.length,
         name: body.name,
         email: body.email,
         role: body.role,
         enabled: true,
         revision: 1,
+        status: invited ? "invited" : "active",
+        mfa_enabled: false,
+        last_login_at: null,
+        invite_expires_at: invited
+          ? new Date(Date.now() + 86400000).toISOString()
+          : null,
       };
       current.people.push(created);
-      return reply({ request_id: body.request_id, user: created });
+      current.creations.set(body.request_id, {
+        status: "created",
+        user: publicUser(created),
+      });
+      if (current.createFault === "lose") return route.abort("failed");
+      return reply({
+        request_id: body.request_id,
+        user: publicUser(created),
+        ...(invited
+          ? {
+              invite: {
+                code: inviteCode,
+                expires_at: created.invite_expires_at,
+              },
+            }
+          : {}),
+      });
     }
-    if (method === "PUT" && path === `/users/${colleague.id}`) {
-      current.mutations.push({ method, body });
-      if (current.hold) await new Promise((done) => current.held.push(done));
-      const existing = current.people.find(
-        (person) => person.id === colleague.id,
+    const cancel = path.match(/^\/users\/requests\/([^/]+)\/cancel$/);
+    if (method === "POST" && cancel) {
+      current.mutations.push({ method, path, body });
+      const entry = current.creations.get(cancel[1]);
+      if (!entry) current.creations.set(cancel[1], { status: "cancelled" });
+      return reply(
+        entry?.status === "created"
+          ? { request_id: cancel[1], status: "created", user: entry.user }
+          : { request_id: cancel[1], status: "cancelled" },
       );
-      if (existing.revision !== body.revision)
-        return reply(
-          { error: { code: "STALE_REVISION", message: "Fixture changed" } },
-          409,
+    }
+    const put = path.match(/^\/users\/([^/]+)$/);
+    if (method === "PUT" && put) {
+      current.mutations.push({ method, path, body });
+      if (current.hold) await new Promise((done) => current.held.push(done));
+      const existing = current.people.find((person) => person.id === put[1]);
+      if (body.current_password !== syntheticPassword)
+        return fail(
+          "WRONG_PASSWORD",
+          "Your current password didn't match.",
+          403,
         );
+      if (existing.revision !== body.revision)
+        return fail("STALE_REVISION", "This account changed.", 409);
       Object.assign(existing, {
         name: body.name,
         role: body.role,
         enabled: body.enabled,
         revision: existing.revision + 1,
       });
-      return reply(existing);
+      current.edits.set(body.request_id, {
+        status: "applied",
+        user: publicUser(existing),
+      });
+      return reply({ request_id: body.request_id, user: publicUser(existing) });
     }
     unexpected.push(`${method} ${path}`);
-    return reply(
-      {
-        error: {
-          code: "UNEXPECTED_REQUEST",
-          message: "Fixture rejects this operation",
-        },
-      },
-      500,
-    );
+    return fail("UNEXPECTED_REQUEST", "Fixture rejects this operation", 500);
   });
   page = await context.newPage();
   page.setDefaultTimeout(8000);
@@ -211,16 +305,15 @@ const roleButton = (modal) =>
   modal.getByRole("button", { name: "Role", exact: true });
 const option = (label) =>
   menu().getByRole("menuitemradio", { name: new RegExp(`^${label}\\b`) });
+const row = (text) =>
+  page.locator(".people-table tbody tr", { hasText: text }).first();
 async function openAdd() {
   await page.getByRole("button", { name: "Add person", exact: true }).click();
-  return dialog("Add a workspace user");
+  return dialog("Add a person");
 }
-async function openEdit() {
+async function openEdit(name = "Synthetic colleague") {
   await page
-    .getByRole("button", {
-      name: "Edit access for Synthetic colleague",
-      exact: true,
-    })
+    .getByRole("button", { name: `Edit access for ${name}`, exact: true })
     .click();
   return dialog("Edit workspace access");
 }
@@ -229,6 +322,10 @@ async function choose(modal, label) {
   await option(label).click();
   await expect(menu()).toHaveCount(0);
   await expect(modal).toBeVisible();
+}
+async function fillPerson(modal, name, email) {
+  await modal.getByLabel("Name", { exact: true }).fill(name);
+  await modal.getByLabel("Email", { exact: true }).fill(email);
 }
 async function check(name, run) {
   const start = Date.now();
@@ -247,45 +344,28 @@ async function axe(label) {
       targets: item.nodes.map((node) => node.target),
     })),
   });
-  if (scan.violations.length) {
-    measurements.push({
-      label: `${label} accessibility diagnostic`,
-      focus: await page.evaluate(() => ({
-        active: document.activeElement?.outerHTML,
-        menu: [...document.querySelectorAll(".role-picker-menu")].map(
-          (element) => ({
-            scrollHeight: element.scrollHeight,
-            clientHeight: element.clientHeight,
-            scrollWidth: element.scrollWidth,
-            clientWidth: element.clientWidth,
-            tabIndex: element.tabIndex,
-            overflowY: getComputedStyle(element).overflowY,
-            children: [...element.querySelectorAll("[role=menuitemradio]")].map(
-              (item) => ({
-                name: item.getAttribute("aria-label"),
-                tabIndex: item.tabIndex,
-              }),
-            ),
-          }),
-        ),
-      })),
-    });
+  if (scan.violations.length)
     await page.screenshot({
       path: resolve(output, "accessibility-failure.png"),
       animations: "disabled",
     });
-  }
   expect(scan.violations).toEqual([]);
 }
 try {
   await check(
-    "Add person defaults to Viewer; permission descriptions, keyboard selection, Escape and outside dismissal preserve the parent form",
+    "Add person defaults to Viewer and an invite; the role menu and capability preview work by keyboard, Escape and outside clicks",
     async () => {
       await load();
       const modal = await openAdd(),
         trigger = roleButton(modal);
       await expect(trigger).toContainText("Viewer");
       await expect(trigger).toContainText(descriptions.Viewer);
+      await expect(
+        modal.getByRole("radio", { name: /Send an invite link/ }),
+      ).toBeChecked();
+      await expect(modal).toContainText("This role can:");
+      await modal.getByLabel("Name", { exact: true }).fill("Sam Rivera");
+      await expect(modal).toContainText("Sam will be able to:");
       await trigger.focus();
       await page.keyboard.press("Space");
       for (const [label, text] of Object.entries(descriptions)) {
@@ -300,104 +380,236 @@ try {
       await expect(modal).toBeVisible();
       await expect(trigger).toBeFocused();
       await expect(trigger).toContainText("Administrator");
+      await expect(
+        modal.locator(".role-capabilities li.yes", {
+          hasText: "Manage people and recover device identities",
+        }),
+      ).toBeVisible();
+      await choose(modal, "Editor");
+      await expect(modal).toContainText(
+        "Editors change drafts and operators publish them",
+      );
       await trigger.click();
       await page.keyboard.press("Escape");
       await expect(modal).toBeVisible();
       await expect(trigger).toBeFocused();
       await trigger.click();
       await modal
-        .getByRole("heading", { name: "Add a workspace user", exact: true })
+        .getByRole("heading", { name: "Add a person", exact: true })
         .click();
       await expect(menu()).toHaveCount(0);
       await expect(modal).toBeVisible();
-      await modal.getByLabel("Full name", { exact: true }).click();
-      await expect(
-        modal.getByLabel("Full name", { exact: true }),
-      ).toBeFocused();
+      await expect(modal.getByLabel("Name", { exact: true })).toHaveValue(
+        "Sam Rivera",
+      );
       expect(state.mutations).toEqual([]);
       await modal.getByRole("button", { name: "Cancel", exact: true }).click();
       const reopened = await openAdd();
       await expect(roleButton(reopened)).toContainText("Viewer");
+      await expect(reopened.getByLabel("Name", { exact: true })).toHaveValue(
+        "",
+      );
       expect(state.mutations).toEqual([]);
     },
   );
   await check(
-    "role selection remains local until Create user; a pending submission hides the secret and locks a single request",
+    "an invitation is one keyed request without a password; its single-use link opens once and the table shows it",
     async () => {
       await load();
       const modal = await openAdd();
-      await choose(modal, "Editor");
-      expect(state.mutations).toEqual([]);
-      await modal
-        .getByLabel("Full name", { exact: true })
-        .fill("Synthetic new person");
-      await modal
-        .getByLabel("Email", { exact: true })
-        .fill("new@fixture.example.test");
-      await modal
-        .getByLabel("Initial password", { exact: true })
-        .fill(syntheticPassword);
+      await fillPerson(
+        modal,
+        "Synthetic invitee",
+        "invitee@fixture.example.test",
+      );
+      await choose(modal, "Operator");
       state.hold = true;
       await modal
-        .getByRole("button", { name: "Create user", exact: true })
+        .getByRole("button", { name: "Create invite link", exact: true })
         .click();
       await expect.poll(() => state.mutations.length).toBe(1);
-      expect(state.mutations[0].body.role).toBe("editor");
-      expect(state.people).toHaveLength(2);
-      await expect(modal).toHaveCount(0);
-      await expect(dialog("Waiting for account creation")).toBeVisible();
-      await expect(page.getByLabel("Initial password")).toHaveCount(0);
+      await expect(modal.getByLabel("Name", { exact: true })).toBeDisabled();
+      await expect(
+        modal.getByRole("button", { name: "Stop waiting", exact: true }),
+      ).toBeVisible();
+      const sent = state.mutations[0].body;
+      expect(Object.keys(sent).sort()).toEqual([
+        "email",
+        "invite",
+        "name",
+        "request_id",
+        "role",
+      ]);
+      expect(sent.role).toBe("operator");
       release();
-      await expect(dialog("Waiting for account creation")).toHaveCount(0);
-      await expect.poll(() => state.people.length).toBe(3);
-      expect(state.people[2].role).toBe("editor");
+      const link = dialog("Invite link for Synthetic invitee");
+      await expect(link).toBeVisible();
+      const url = await link.locator(".copy-line code").innerText();
+      expect(url).toBe(`${origin}/__role-picker#/invite?code=${inviteCode}`);
+      await expect(link).toContainText("It works once, until");
+      await link.getByRole("button", { name: "Done", exact: true }).click();
+      await expect(link).toHaveCount(0);
+      await expect(row("invitee@fixture.example.test")).toContainText(
+        "Invited",
+      );
+      await expect(row("invitee@fixture.example.test")).toContainText(
+        "Link expires in",
+      );
+      const html = await page.content();
+      expect(html.includes(inviteCode)).toBe(false);
+      expect(state.mutations).toHaveLength(1);
     },
   );
   await check(
-    "Edit access retains the account until Save access, preserves revision fields, and protects the last administrator",
+    "a duplicate email stays next to the field with a way to find that person; nothing is resent",
+    async () => {
+      await load();
+      const modal = await openAdd();
+      await fillPerson(modal, "Someone else", colleague.email);
+      await modal.getByText("Set a password now").click();
+      await modal
+        .getByRole("button", { name: "Generate", exact: true })
+        .click();
+      await modal
+        .getByRole("button", { name: "Add person", exact: true })
+        .click();
+      const email = modal.getByLabel("Email", { exact: true });
+      await expect(modal).toContainText(
+        `Someone already uses ${colleague.email}.`,
+      );
+      await expect(email).toHaveAttribute("aria-invalid", "true");
+      await expect(modal.getByLabel("Name", { exact: true })).toHaveValue(
+        "Someone else",
+      );
+      await expect(modal.getByLabel("Password for Someone")).toHaveValue("");
+      expect(state.mutations).toHaveLength(1);
+      expect(Object.keys(state.mutations[0].body).sort()).toEqual([
+        "email",
+        "name",
+        "password",
+        "request_id",
+        "role",
+      ]);
+      await modal
+        .getByRole("button", { name: "Show in Workspace access", exact: true })
+        .click();
+      await expect(modal).toHaveCount(0);
+      await expect(row(colleague.email)).toHaveClass(/person-highlight/);
+      expect(state.mutations).toHaveLength(1);
+    },
+  );
+  await check(
+    "a lost creation response is read back automatically; an unknown one is cancelled before a new attempt keeps the entries",
+    async () => {
+      await load();
+      state.createFault = "lose";
+      let modal = await openAdd();
+      await fillPerson(modal, "Lost response", "lost@fixture.example.test");
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      const ready = dialog("Lost response's account is ready");
+      await expect(ready).toBeVisible();
+      await expect(ready).toContainText("We couldn't show the invite link.");
+      await expect(
+        ready.getByRole("button", { name: "Create invite link", exact: true }),
+      ).toBeVisible();
+      expect(state.mutations).toHaveLength(1);
+      await ready.getByRole("button", { name: "Done", exact: true }).click();
+      await expect(row("lost@fixture.example.test")).toContainText("Invited");
+      state.createFault = "drop";
+      modal = await openAdd();
+      await fillPerson(
+        modal,
+        "Dropped request",
+        "dropped@fixture.example.test",
+      );
+      await choose(modal, "Editor");
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      await expect(modal).toContainText(
+        "We couldn't confirm Dropped request's account was created",
+      );
+      const first = state.mutations.at(-1).body.request_id;
+      await modal.getByText("Technical details").click();
+      await expect(modal).toContainText(first);
+      state.createFault = null;
+      await modal
+        .getByRole("button", { name: "Cancel it and try again", exact: true })
+        .click();
+      await expect(modal.getByLabel("Name", { exact: true })).toHaveValue(
+        "Dropped request",
+      );
+      await expect(modal.getByLabel("Email", { exact: true })).toHaveValue(
+        "dropped@fixture.example.test",
+      );
+      await expect(roleButton(modal)).toContainText("Editor");
+      expect(state.mutations.at(-1).path).toBe(
+        `/users/requests/${first}/cancel`,
+      );
+      await modal
+        .getByRole("button", { name: "Create invite link", exact: true })
+        .click();
+      await expect(dialog("Invite link for Dropped request")).toBeVisible();
+      const second = state.mutations.at(-1).body.request_id;
+      expect(second).not.toBe(first);
+      expect(state.creations.get(first).status).toBe("cancelled");
+    },
+  );
+  await check(
+    "editing access shows what saving does, sends one keyed request, and protects the last administrator",
     async () => {
       await load();
       const modal = await openEdit();
       await expect(roleButton(modal)).toContainText("Viewer");
       await choose(modal, "Operator");
-      expect(state.people[1]).toEqual(colleague);
+      await expect(modal).toContainText(
+        "Change the role from Viewer to Operator",
+      );
+      await expect(modal).toContainText(
+        "Sign Synthetic out of every browser and cancel their unused links",
+      );
       expect(state.mutations).toEqual([]);
       await modal
-        .getByLabel("Your current password", { exact: true })
+        .getByLabel("Your password", { exact: true })
+        .fill("wrong-synthetic-password");
+      await modal
+        .getByRole("button", { name: "Save changes", exact: true })
+        .click();
+      await expect(modal).toContainText("Your password didn't match.");
+      await expect(roleButton(modal)).toContainText("Operator");
+      await modal
+        .getByLabel("Your password", { exact: true })
         .fill(syntheticPassword);
       state.hold = true;
       await modal
-        .getByRole("button", { name: "Save access", exact: true })
+        .getByRole("button", { name: "Save changes", exact: true })
         .click();
-      await expect.poll(() => state.mutations.length).toBe(1);
-      const body = state.mutations[0].body;
-      expect({
-        name: body.name,
-        role: body.role,
-        revision: body.revision,
-        enabled: body.enabled,
-      }).toEqual({
-        name: colleague.name,
+      await expect.poll(() => state.mutations.length).toBe(2);
+      const body = state.mutations[1].body;
+      expect(Object.keys(body).sort()).toEqual([
+        "current_password",
+        "enabled",
+        "name",
+        "request_id",
+        "revision",
+        "role",
+      ]);
+      expect({ role: body.role, revision: body.revision }).toEqual({
         role: "operator",
         revision: 4,
-        enabled: true,
       });
+      expect(body.request_id).not.toBe(state.mutations[0].body.request_id);
       await expect(roleButton(modal)).toBeDisabled();
-      await page.keyboard.press("Escape");
-      await expect(modal).toBeVisible();
       release();
       await expect(modal).toHaveCount(0);
-      await expect.poll(() => state.people[1].role).toBe("operator");
-      await page
-        .getByRole("button", {
-          name: "Edit access for Synthetic administrator",
-          exact: true,
-        })
-        .click();
+      await expect(row(colleague.email)).toContainText("Operator");
+      await openEdit("Synthetic administrator");
       const own = dialog("Edit workspace access");
       await expect(roleButton(own)).toBeDisabled();
-      await expect(own).toContainText("last active administrator");
-      expect(state.mutations).toHaveLength(1);
+      await expect(own).toContainText("You're the only active administrator.");
+      expect(state.mutations).toHaveLength(2);
     },
   );
   await check(
@@ -409,7 +621,23 @@ try {
         [375, "dark", true],
       ]) {
         await load({ width, theme });
-        const modal = edit ? await openEdit() : await openAdd();
+        if (width < 760)
+          await expect(
+            page.getByRole("list", { name: "Workspace access", exact: true }),
+          ).toBeVisible();
+        await axe(`people page ${width}-${theme}`);
+        const modal = edit
+          ? await (async () => {
+              await page
+                .getByRole("list", { name: "Workspace access", exact: true })
+                .getByRole("button", {
+                  name: "Edit access for Synthetic colleague",
+                  exact: true,
+                })
+                .click();
+              return dialog("Edit workspace access");
+            })()
+          : await openAdd();
         const label = `${width}-${theme}`;
         await axe(`closed role field ${label}`);
         await page.screenshot({
@@ -459,6 +687,9 @@ try {
     "src/role-picker.css",
     "src/UsersSecurity.tsx",
     "src/AccountAccess.tsx",
+    "src/AddPersonActions.tsx",
+    "src/AdminPasswordResetActions.tsx",
+    "src/keyedRequest.ts",
     "src/ui.tsx",
     "package-lock.json",
   ])
@@ -472,7 +703,7 @@ try {
         recorded_at: new Date().toISOString(),
         passed: !failure,
         scope:
-          "Actual App, UsersSecurity and WorkspaceAccess with isolated synthetic accounts and in-memory form submissions. No real preview/account mutations, authentication enforcement or native server claim. Reports omit credentials and request bodies; screenshots use blank forms and synthetic names.",
+          "Actual App, UsersSecurity, AddPersonActions and WorkspaceAccess with isolated synthetic accounts and in-memory keyed requests, including dropped and lost responses. No real preview/account mutations, authentication enforcement or native server claim. Reports omit credentials, invite codes and request bodies; screenshots use blank forms and synthetic names.",
         results,
         accessibility,
         measurements,

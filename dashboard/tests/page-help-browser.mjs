@@ -150,6 +150,7 @@ await context.route("**/*", async (route) => {
   if (path === "/settings")
     return reply({ instance_name: "Synthetic help workspace" });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/users") return reply([user]);
   if (path === "/overview")
     return reply({

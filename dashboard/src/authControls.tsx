@@ -260,6 +260,17 @@ export function OtpInput({
             onChange(next);
             if (next.length === 6 && digits.length < 6) onComplete?.(next);
           }}
+          onPaste={(event) => {
+            // A pasted code replaces what's there: "123 456" and "123-456" work.
+            const pasted = event.clipboardData
+              .getData("text")
+              .replace(/\D/g, "")
+              .slice(0, 6);
+            if (!pasted) return;
+            event.preventDefault();
+            onChange(pasted);
+            if (pasted.length === 6) onComplete?.(pasted);
+          }}
         />
         <div className="otp-cells" aria-hidden="true">
           {Array.from({ length: 6 }, (_, index) => (

@@ -49,6 +49,16 @@
 .auth-field-link:hover {
   text-decoration: underline;
 }
+/* Tab order is email, password, Sign in, then this link beside the label. */
+.signin-password {
+  position: relative;
+}
+.signin-forgot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  line-height: 1.45;
+}
 .auth-field-hint,
 .auth-field-error,
 .auth-caps {

@@ -116,13 +116,11 @@ export default function AuthenticatorSetup({
                   <Smartphone size={16} aria-hidden="true" />
                   Open authenticator app
                 </a>
-                <p className="authenticator-key-label" id="authenticator-key">
+                <p className="authenticator-key-label">
                   Or enter this setup key:
                 </p>
                 <div className="authenticator-key-row">
-                  <code aria-labelledby="authenticator-key" translate="no">
-                    {groupSetupKey(setup.secret)}
-                  </code>
+                  <code translate="no">{groupSetupKey(setup.secret)}</code>
                   <CopyButton
                     text={setup.secret}
                     label="Copy key"

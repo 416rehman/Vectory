@@ -191,6 +191,8 @@ async function fixture({ mfa = true } = {}) {
     }
     if (path === "/settings" && state.authenticated)
       return reply({ instance_name: "Synthetic verification" });
+    if (path === "/account/sessions" && state.authenticated)
+      return reply({ sessions: [] });
     if (path === "/mfa" && state.authenticated)
       return reply({ enabled: state.mfa });
     unexpected.push({ path, method });
@@ -232,7 +234,10 @@ async function check(name, run) {
 }
 async function pending(f) {
   await expect(
-    f.page.getByRole("heading", { name: "Two-factor authentication", exact: true }),
+    f.page.getByRole("heading", {
+      name: "Two-factor authentication",
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(f.page.getByLabel("Password", { exact: true })).toHaveCount(0);
   expect(f.state.authenticated).toBe(false);
@@ -333,9 +338,7 @@ try {
         await expect(
           f.page.getByLabel("Authenticator code", { exact: true }),
         ).toHaveValue("");
-        await f.page
-          .getByRole("button", { name: "Back", exact: true })
-          .click();
+        await f.page.getByRole("button", { name: "Back", exact: true }).click();
         await expect(
           f.page.getByLabel("Email address", { exact: true }),
         ).toHaveValue(credentials.email);
