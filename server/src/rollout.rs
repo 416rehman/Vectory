@@ -425,9 +425,9 @@ fn compatibility_problems(
     needs_full_mode: bool,
 ) -> [Option<(&'static str, &'static str)>; 2] {
     [
-        (text(device, "vector_version") != crate::validation::VECTOR_VERSION).then_some((
+        (!crate::validation::vector_compatible(text(device, "vector_version"))).then_some((
             "VECTOR_VERSION_INCOMPATIBLE",
-            "The selected device does not report the required Vector 0.58.0 version. Review its local Vector installation before deploying.",
+            "The selected device does not report a Vector 0.58.x version. Review its local Vector installation before deploying.",
         )),
         (needs_full_mode && device["configuration_mode"] != "full").then_some((
             "FULL_VECTOR_MODE_REQUIRED",
@@ -1523,11 +1523,6 @@ pub async fn reconcile_membership(db: &mut SqliteConnection) -> Result<()> {
 }
 // Preview and resolution must agree even when the winning assignment's target has
 // not been released yet. Admission gates application, not priority selection.
-async fn assignment_winners(
-    db: &mut SqliteConnection,
-) -> Result<BTreeMap<(String, String), Value>> {
-    assignment_winners_for(db, None).await
-}
 pub(crate) async fn assignment_winners_for(
     db: &mut SqliteConnection,
     scope: Option<&BTreeSet<String>>,
@@ -1536,12 +1531,15 @@ pub(crate) async fn assignment_winners_for(
     Ok(winners_among(&set, scope))
 }
 pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
-    if !conflicts(db, None).await?.is_empty() {
+    // One candidate pass serves both the conflict check and the winners: the
+    // scheduler runs this under the writer lock every tick.
+    let set = candidates(db, &Proposal::default()).await?;
+    if !conflicts_among(db, &set).await?.is_empty() {
         return Err(ApiError::conflict(
             "Inconsistent assignment state; preserving last valid desired state",
         ));
     }
-    let winners = assignment_winners(db).await?;
+    let winners = winners_among(&set, None);
     let rows = sqlx::query("SELECT * FROM devices WHERE revoked=0")
         .fetch_all(&mut *db)
         .await?;
@@ -1893,8 +1891,7 @@ async fn deployment_ids(db: &mut SqliteConnection) -> Result<Vec<String>> {
     .await?)
 }
 pub async fn tick(s: &State) -> Result<()> {
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     for id in deployment_ids(&mut tx).await? {
         let mut d = db::record(&mut tx, "deployment", &id).await?;
         if d["status"] == "scheduled" {
@@ -2019,6 +2016,14 @@ pub async fn tick(s: &State) -> Result<()> {
         advance(&mut tx, &mut d).await?;
     }
     resolve(&mut tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+/// Retention: drop telemetry older than the retention window and expired
+/// sessions. Runs about once a minute, apart from the rollout tick, so
+/// heartbeats never queue behind it every two seconds.
+pub async fn prune(s: &State) -> Result<()> {
+    let (_guard, mut tx) = crate::db::write_tx(s).await?;
     let cutoff =
         (Utc::now() - chrono::Duration::days(db::telemetry_retention_days())).timestamp() / 60;
     sqlx::query("DELETE FROM telemetry WHERE bucket<?")

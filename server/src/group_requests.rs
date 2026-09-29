@@ -97,8 +97,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let id: Option<String> =
         sqlx::query_scalar("SELECT group_id FROM group_requests WHERE actor_id=? AND request_id=?")
@@ -121,8 +120,7 @@ pub async fn history(
     let input = crate::deployment_history::query(raw.as_deref(), parsed)?;
     let (_, page, size, offset) =
         crate::deployment_history::bounds(None, input.page, input.page_size)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let actor = actor["id"].as_str().unwrap();
     let total: i64 = sqlx::query_scalar("SELECT count(*) FROM group_requests WHERE actor_id=?")
@@ -173,8 +171,7 @@ pub async fn membership_preview(
     if request.device_ids.len() > 10_000 {
         return Err(ApiError::invalid("Too many group members"));
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     sqlx::query("SAVEPOINT group_membership_preview")
         .execute(&mut *tx)
@@ -193,24 +190,20 @@ async fn delivery(
     db: &mut SqliteConnection,
     ids: &std::collections::BTreeSet<String>,
 ) -> Result<std::collections::BTreeMap<String, (Value, Value, Option<String>)>> {
-    let mut out = std::collections::BTreeMap::new();
-    for id in ids {
-        let row: Option<(String, String, Option<String>)> = sqlx::query_as(&format!(
-            "SELECT {},{},substr(d.name,1,240) FROM devices d WHERE d.id=?",
-            crate::assignment_removal::CONFIG,
-            crate::assignment_removal::POLICY
-        ))
-        .bind(id)
-        .fetch_optional(&mut *db)
-        .await?;
-        if let Some((configuration, policy, name)) = row {
-            out.insert(
-                id.clone(),
-                (db::parse(&configuration)?, db::parse(&policy)?, name),
-            );
-        }
-    }
-    Ok(out)
+    // One read for every changed device; the preview holds the writer lock.
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT d.id,{},{},substr(d.name,1,240) FROM devices d WHERE d.id IN (SELECT value FROM json_each(?))",
+        crate::assignment_removal::CONFIG,
+        crate::assignment_removal::POLICY
+    ))
+    .bind(json!(ids).to_string())
+    .fetch_all(&mut *db)
+    .await?;
+    rows.into_iter()
+        .map(|(id, configuration, policy, name)| {
+            Ok((id, (db::parse(&configuration)?, db::parse(&policy)?, name)))
+        })
+        .collect()
 }
 async fn simulate_membership(
     db: &mut SqliteConnection,

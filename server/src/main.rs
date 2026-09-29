@@ -170,13 +170,21 @@ async fn main() -> anyhow::Result<()> {
     let scheduler = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        loop {
+        for tick in 0u64.. {
             interval.tick().await;
             if let Err(e) = rollout::tick(&scheduler).await {
                 tracing::error!(
                     code = e.code,
                     "scheduler transaction failed; last valid desired state retained"
                 )
+            }
+            if tick % 30 == 0 {
+                if let Err(e) = rollout::prune(&scheduler).await {
+                    tracing::error!(
+                        code = e.code,
+                        "retention pruning failed; retrying next minute"
+                    )
+                }
             }
         }
     });

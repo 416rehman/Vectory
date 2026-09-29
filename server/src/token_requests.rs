@@ -177,8 +177,7 @@ pub async fn post(
     auth::authorize(&s, &h, &["operator"], true).await?;
     no_query(raw.as_deref())?;
     let v = parse(&body)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let out = create(&mut tx, &v, api::text(&actor, "id")).await?;
     tx.commit().await?;
@@ -298,8 +297,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let out = match entry(&mut tx, api::text(&actor, "id"), &key).await? {
         None => json!({"request_id":key,"request_correlation":true,"found":false}),
@@ -322,8 +320,7 @@ pub async fn cancel(
         ));
     }
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let actor = api::text(&actor, "id");
     let prior = entry(&mut tx, actor, &key).await?;

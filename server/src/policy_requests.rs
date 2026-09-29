@@ -179,8 +179,7 @@ pub async fn edit(
         .ok_or_else(|| ApiError::invalid("revision must be a nonnegative safe integer"))?;
     let name = db::string(&request, "name", 120)?.to_owned();
     db::validate_policy(&request["policy"])?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let mut record = db::record(&mut tx, "policy", &id).await?;
     let current = record["revision"].as_u64().unwrap_or(0);
@@ -222,8 +221,7 @@ pub async fn post(
     }
     let request: UniqueValue = serde_json::from_slice(&body)
         .map_err(|_| ApiError::invalid("Provide a JSON object without duplicate keys"))?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let value = create(&mut tx, &request.0, api::text(&actor, "id")).await?;
     tx.commit().await?;
@@ -304,8 +302,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let id: Option<String> = sqlx::query_scalar(
         "SELECT policy_id FROM policy_requests WHERE actor_id=? AND request_id=?",
@@ -331,8 +328,7 @@ pub async fn history(
     let input = crate::deployment_history::query(raw.as_deref(), parsed)?;
     let (_, page, size, offset) =
         crate::deployment_history::bounds(None, input.page, input.page_size)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let actor = actor["id"].as_str().unwrap();
     let total: i64 = sqlx::query_scalar("SELECT count(*) FROM policy_requests WHERE actor_id=?")

@@ -297,8 +297,16 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
         .rev()
         .filter(|e| e["outcome"] == "failure")
         .collect();
-    assert_eq!(failures.len(), attempts.len());
-    for (event, (body, reason, token)) in failures.iter().zip(&attempts) {
+    // A second tokenless refusal from the same client within a minute is
+    // refused the same way but not audited again.
+    let recorded: Vec<_> = attempts
+        .iter()
+        .enumerate()
+        .filter(|(n, _)| *n != 1)
+        .map(|(_, attempt)| attempt)
+        .collect();
+    assert_eq!(failures.len(), recorded.len());
+    for (event, (body, reason, token)) in failures.iter().zip(recorded) {
         assert_eq!(event["reason_code"], *reason, "{event}");
         assert_eq!(event["token_id"], json!(token), "{event}");
         assert_eq!(
@@ -317,7 +325,7 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
     assert!(success["device_id"].is_string());
 
     // The audit trail shows the same allowlisted details, and never a token.
-    let id = failures[2]["id"].as_str().unwrap();
+    let id = failures[1]["id"].as_str().unwrap();
     let (status, _, bytes) = f
         .get(
             &f.api,
@@ -331,6 +339,61 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
         detail["details"],
         json!({"reason_code":"TOKEN_EXPIRED","name":"edge-12","token_id":expired_id,"agent_os":"linux","agent_arch":"amd64","agent_version":"0.1.0","configuration_mode":"restricted","client_address":"10.0.4.17"})
     );
+
+    // Viewers read the same events without where anyone connected from, and
+    // the enrollment activity feed is for the people who add devices.
+    let viewer = db::id();
+    let viewer_session = auth::random_secret();
+    sqlx::query(
+        "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&viewer)
+    .bind("vic@example.invalid")
+    .bind("Vic Viewer")
+    .bind("viewer")
+    .bind("unused-test-hash")
+    .bind(db::now())
+    .execute(&f.s.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
+        .bind(db::hash(&viewer_session))
+        .bind(&viewer)
+        .bind(auth::random_secret())
+        .bind("2099-01-01T00:00:00Z")
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let as_viewer = |path: String| {
+        Request::builder()
+            .uri(path)
+            .header("cookie", format!("vectory_session={viewer_session}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, _) = send(&f.api, as_viewer("/api/v1/agent-install/activity".into())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, bytes) = send(&f.api, as_viewer(format!("/api/v1/audit/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut redacted = detail.clone();
+    redacted["details"]
+        .as_object_mut()
+        .unwrap()
+        .remove("client_address");
+    assert_eq!(json_of(&bytes), redacted);
+    let (status, _, bytes) = send(&f.api, as_viewer("/api/v1/audit".into())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!String::from_utf8(bytes).unwrap().contains("10.0.4.17"));
+    // An encoded offset is an ordinary RFC3339 timestamp.
+    let (status, _, _) = f
+        .get(
+            &f.api,
+            "/api/v1/agent-install/activity?since=2026-01-01T00%3A00%3A00%2B00%3A00",
+            "vectory.example.test",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
     for secret in [&single, &reusable, &web_only, &expired, &unknown] {
         let leaked: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE instr(data,?)>0")
             .bind(secret)
@@ -867,4 +930,40 @@ async fn doctor_can_prove_a_credential_and_the_token_list_shows_its_devices() {
     assert_eq!(listed["devices"][0]["name"], "rack-7-a");
     assert_eq!(listed["devices"][0]["revoked"], false);
     assert!(listed["last_used_at"].is_string());
+}
+
+#[tokio::test]
+async fn one_noisy_client_cannot_block_enrollment_for_the_fleet() {
+    let f = fixture(|_, _| {}).await;
+    let junk = json!({"protocol_version":1,"token":"0".repeat(64)});
+    let post = |router: Router| {
+        let junk = junk.clone();
+        async move {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/agent/v1/enroll")
+                .header("content-type", "application/json")
+                .body(Body::from(junk.to_string()))
+                .unwrap();
+            send(&router, request).await.0
+        }
+    };
+    let noisy = agent(&f.s);
+    for _ in 0..60 {
+        assert_eq!(post(noisy.clone()).await, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(post(noisy.clone()).await, StatusCode::TOO_MANY_REQUESTS);
+    let neighbour = device::router(f.s.clone()).layer(Extension(ConnectInfo(SocketAddr::from((
+        [10, 0, 4, 18],
+        50124,
+    )))));
+    assert_eq!(post(neighbour).await, StatusCode::UNAUTHORIZED);
+    // 61 junk attempts left one audit row, not 61.
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='device.enroll'",
+    )
+    .fetch_one(&f.s.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 2, "one per client and reason each minute");
 }

@@ -83,8 +83,7 @@ pub async fn history(
             "operation must be all, create, or rollback",
         ));
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let actor = actor["id"].as_str().unwrap();
     let total: i64 = history_count(actor, operation)
@@ -303,8 +302,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let id = parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let mapping: Option<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT deployment_id,operation_kind,source_deployment_id FROM deployment_requests WHERE actor_id=? AND request_id=?",

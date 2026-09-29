@@ -4,8 +4,7 @@ use crate::{State, db};
 use serde_json::{Value, json};
 
 pub async fn invalidate(s: &State, apply: bool) -> anyhow::Result<Value> {
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let malformed: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM enrollment_tokens WHERE json_type(data) != 'object'",
     )

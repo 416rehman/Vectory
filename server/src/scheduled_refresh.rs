@@ -72,8 +72,7 @@ pub async fn post_preview(
         serde_json::from_slice::<Empty>(&body)
             .map_err(|_| ApiError::invalid("Scheduled device preview accepts an empty object"))?;
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let (out, _, _) = plan(&mut tx, &identity(&id)?, actor["id"].as_str().unwrap()).await?;
     tx.rollback().await?;
@@ -108,8 +107,7 @@ pub async fn post_commit(
         return Err(ApiError::invalid("Expected device IDs must be distinct"));
     }
     let id = identity(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let actor = actor["id"].as_str().unwrap();
     let (preview, mut source, revision) = plan(&mut tx, &id, actor).await?;

@@ -489,6 +489,172 @@ async fn admin_again(app: &Router) -> Session {
     sign_in(app, "admin@example.test", PASSWORD, "Desk").await
 }
 
+async fn last_seen(state: &State) -> String {
+    sqlx::query_scalar("SELECT last_seen_at FROM session_details")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn last_active_updates_never_break_or_wait_on_a_writer() {
+    let (_temp, state, app, admin) = fixture().await;
+    let stale = "2000-01-01T00:00:00Z";
+    sqlx::query("UPDATE session_details SET last_seen_at=?")
+        .bind(stale)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // Why writers begin immediately: a deferred transaction that has read
+    // cannot write after another connection commits (SQLITE_BUSY_SNAPSHOT).
+    let mut deferred = state.pool.begin().await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *deferred)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE session_details SET last_seen_at='2000-01-01T00:00:01Z'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let stale_snapshot = sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *deferred)
+        .await
+        .unwrap_err();
+    assert!(
+        stale_snapshot.to_string().contains("locked"),
+        "{stale_snapshot}"
+    );
+    drop(deferred);
+    sqlx::query("UPDATE session_details SET last_seen_at=?")
+        .bind(stale)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // An authenticated request during a writer transaction skips its
+    // best-effort last-active write instead of queueing behind or breaking it.
+    let (guard, mut tx) = vectory_server::db::write_tx(&state).await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let (current, members) = tokio::join!(
+        get(&app, "/api/v1/session", Some(&admin)),
+        get(&app, "/api/v1/users", Some(&admin)),
+    );
+    assert_eq!(current.status, StatusCode::OK, "{}", current.body);
+    assert_eq!(members.status, StatusCode::OK, "{}", members.body);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(guard);
+    assert_eq!(last_seen(&state).await, stale);
+
+    // A write made outside the writer lock waits for an immediate writer to
+    // commit rather than invalidating the writer's snapshot.
+    let (guard, mut tx) = vectory_server::db::write_tx(&state).await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let pool = state.pool.clone();
+    let outside = tokio::spawn(async move {
+        sqlx::query("UPDATE session_details SET user_agent='Outside writer'")
+            .execute(&pool)
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(guard);
+    outside.await.unwrap().unwrap();
+
+    // With the writer free, the next request records activity.
+    assert_eq!(
+        get(&app, "/api/v1/session", Some(&admin)).await.status,
+        StatusCode::OK
+    );
+    assert_ne!(last_seen(&state).await, stale);
+}
+
+async fn sign_in_from(app: &Router, address: &str, password: &str) -> StatusCode {
+    let peer: std::net::IpAddr = address.parse().unwrap();
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/login")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"email":"admin@example.test","password":password}).to_string(),
+        ))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(
+            peer, 443,
+        )));
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn parallel_wrong_passwords_get_exactly_the_failure_budget() {
+    let (_temp, state, app, _admin) = fixture().await;
+    let mut burst = tokio::task::JoinSet::new();
+    for _ in 0..40 {
+        let app = app.clone();
+        burst.spawn(async move { sign_in_from(&app, "192.0.2.7", "not-the-password").await });
+    }
+    let mut denied = 0;
+    let mut throttled = 0;
+    while let Some(status) = burst.join_next().await {
+        match status.unwrap() {
+            StatusCode::UNAUTHORIZED => denied += 1,
+            StatusCode::TOO_MANY_REQUESTS => throttled += 1,
+            other => panic!("unexpected {other}"),
+        }
+    }
+    assert_eq!((denied, throttled), (10, 30));
+    // The same budget covers the client's whole IPv6 /64, but only that /64.
+    for _ in 0..10 {
+        let status = sign_in_from(&app, "2001:db8:5:6::1", "not-the-password").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        sign_in_from(&app, "2001:db8:5:6:ffff::2", PASSWORD).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        sign_in_from(&app, "2001:db8:5:7::1", PASSWORD).await,
+        StatusCode::OK
+    );
+    // A successful sign-in refunds its reservation: signing in correctly
+    // never spends the account budget. 20 failures so far.
+    for _ in 0..3 {
+        assert_eq!(
+            sign_in_from(&app, "198.51.100.4", PASSWORD).await,
+            StatusCode::OK
+        );
+    }
+    let mut ledger = state.sign_in_failures();
+    assert!(
+        ledger
+            .blocked("login-fail:admin@example.test", 20)
+            .is_some()
+    );
+    assert!(
+        ledger
+            .blocked("login-fail:admin@example.test", 21)
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn failed_and_throttled_sign_ins_are_audited_with_account_and_client() {
     let (_temp, state, app, admin) = fixture().await;

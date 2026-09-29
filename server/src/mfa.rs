@@ -213,8 +213,7 @@ async fn commit_prepared(
     expected_epoch: i64,
     password_hash: Option<String>,
 ) -> Result<Json<Value>> {
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = if let Some(hash) = password_hash {
         crate::accounts::recheck(&mut tx, h, &[], &hash).await?
     } else {
@@ -389,8 +388,7 @@ pub async fn admin_reset(
         db::string(&v, "current_password", 256)?,
     )
     .await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = crate::accounts::recheck(&mut tx, &h, &["admin"], &hash).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if actor_id == id {
@@ -419,8 +417,7 @@ pub async fn admin_reset(
 /// Offline break-glass from `vectory-admin disable-mfa` on a stopped server.
 pub async fn local_disable(s: &State, email: &str) -> anyhow::Result<String> {
     let email = email.trim().to_ascii_lowercase();
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let row = sqlx::query("SELECT id,name FROM users WHERE email=?")
         .bind(&email)
         .fetch_optional(&mut *tx)

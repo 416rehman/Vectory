@@ -142,7 +142,7 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     let failed = device(
         &s,
         "edge-01",
-        json!({"last_seen":now,"apply_state":"failed","reported_generation":1,"configuration_attempt":{"generation":1,"version_id":version,"sha256":sha,"state":"failed","error":{"code":"VALIDATION_FAILED","stage":"validation","message":"data_dir \"/var/lib/vector/\" does not exist"}}}),
+        json!({"last_seen":now,"apply_state":"failed","reported_generation":1,"configuration_attempt":{"generation":1,"version_id":version,"sha256":sha,"state":"failed","error":{"code":"VALIDATION_FAILED","stage":"validation","message":"","diagnostics":[{"severity":"warning","message":"Events that match no route are dropped."},{"severity":"error","message":"data_dir \"/var/lib/vector/\" does not exist"}]}}}),
         Some(&version),
         false,
     )

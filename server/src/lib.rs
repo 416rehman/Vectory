@@ -33,6 +33,7 @@ pub mod restored_access;
 pub mod rollback_review;
 pub mod rollout;
 pub mod scheduled_refresh;
+pub mod sign_in_failures;
 pub mod telemetry;
 pub mod token_requests;
 pub mod user_requests;
@@ -93,6 +94,8 @@ pub struct App {
     pub instance_lock: std::fs::File,
     pub limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
     pub device_limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
+    /// Sign-in failure counts and recently successful clients, per account.
+    pub sign_in_failures: std::sync::Mutex<sign_in_failures::Ledger>,
     /// Release file SHA-256 keyed by name and the (length, modified) pair it was computed for.
     pub release_hashes: std::sync::Mutex<HashMap<String, (u64, std::time::SystemTime, String)>>,
 }
@@ -163,6 +166,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         audit_exports,
         limits: Default::default(),
         device_limits: Default::default(),
+        sign_in_failures: Default::default(),
         release_hashes: Default::default(),
         agent_request_slots: tokio::sync::Semaphore::new(128),
         validation_slots: tokio::sync::Semaphore::new(2),
@@ -232,34 +236,12 @@ impl App {
         }
         Ok(())
     }
-    /// Seconds until `key` may try again when it already has `maximum` recorded
-    /// failures in its current window. Checking never counts as a failure.
-    pub fn failures_block(&self, key: &str, maximum: u32) -> Option<u64> {
-        let (limits, _) = self.limit_partition(key).ok()?;
-        let (start, count, window) = limits.get(key)?;
-        (start.elapsed() < *window && *count >= maximum)
-            .then(|| window.saturating_sub(start.elapsed()).as_secs() + 1)
-    }
-    /// Record one failure for `key`. Legitimate successes never consume budget.
-    pub fn record_failure(&self, key: String, window: Duration) {
-        if let Ok((mut limits, maximum_entries)) = self.limit_partition(&key) {
-            if limits.len() >= maximum_entries {
-                limits.retain(|_, (start, _, lifetime)| start.elapsed() < *lifetime);
-            }
-            if limits.len() >= maximum_entries && !limits.contains_key(&key) {
-                return;
-            }
-            let entry = limits.entry(key).or_insert((Instant::now(), 0, window));
-            if entry.0.elapsed() >= window {
-                *entry = (Instant::now(), 0, window)
-            }
-            entry.1 = entry.1.saturating_add(1);
-        }
-    }
-    pub fn clear_limit(&self, key: &str) {
-        if let Ok((mut limits, _)) = self.limit_partition(key) {
-            limits.remove(key);
-        }
+    /// The sign-in failure ledger. A poisoned lock still yields the ledger:
+    /// failure accounting must never fail open.
+    pub fn sign_in_failures(&self) -> std::sync::MutexGuard<'_, sign_in_failures::Ledger> {
+        self.sign_in_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 /// The TCP peer address, when the listener was served with connect info.
@@ -279,13 +261,22 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientAddress {
     }
 }
 impl App {
-    /// Best-effort client identity for throttling. Behind a trusted proxy the
-    /// last X-Forwarded-For hop is the address the proxy saw; otherwise the peer.
+    /// Best-effort client address, as audits and sessions record it. Behind a
+    /// trusted proxy the last X-Forwarded-For hop is the address the proxy
+    /// saw; otherwise the peer. Throttles count it through `throttle_group`.
     pub fn client_key(
         &self,
         headers: &axum::http::HeaderMap,
         peer: Option<std::net::IpAddr>,
     ) -> String {
+        if !self.settings.trust_proxy_headers && headers.contains_key("x-forwarded-for") {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "Requests carry X-Forwarded-For but VECTORY_TRUST_PROXY_HEADERS is off, so every client behind that proxy shares one sign-in and rate-limit budget. Set VECTORY_TRUST_PROXY_HEADERS=true only when the HTTP listener is reachable solely through the proxy."
+                )
+            });
+        }
         let forwarded = self
             .settings
             .trust_proxy_headers
@@ -298,13 +289,20 @@ impl App {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".into())
     }
-    /// Whether `key` was recorded within its window.
-    pub fn seen(&self, key: &str) -> bool {
-        self.limit_partition(key).is_ok_and(|(limits, _)| {
-            limits
-                .get(key)
-                .is_some_and(|(start, count, window)| *count > 0 && start.elapsed() < *window)
-        })
+}
+/// The identity a client address is throttled under. One IPv6 host usually
+/// holds a whole /64, so IPv6 counts per /64 prefix; IPv4 and IPv4-mapped
+/// addresses count individually. Anything else passes through unchanged.
+pub fn throttle_group(client: &str) -> String {
+    match client.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let [a, b, c, d, ..] = v6.segments();
+                format!("{}/64", std::net::Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
+            }
+        },
+        _ => client.to_owned(),
     }
 }
 /// "45 seconds", "1 minute", "12 minutes".

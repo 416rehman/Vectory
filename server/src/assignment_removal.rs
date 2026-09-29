@@ -48,8 +48,7 @@ pub async fn post_preview(
         serde_json::from_slice::<PreviewRequest>(&body)
             .map_err(|_| ApiError::invalid("Assignment removal preview accepts an empty object"))?;
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = crate::auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let result = preview(&mut tx, &id, actor["id"].as_str().unwrap()).await?;
     tx.rollback().await?;
@@ -71,8 +70,7 @@ pub async fn post_commit(
     let request: CommitRequest = serde_json::from_slice(&body).map_err(|_| {
         ApiError::invalid("Provide only one required assignment-removal review_token")
     })?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = crate::auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let result = commit(
         &mut tx,

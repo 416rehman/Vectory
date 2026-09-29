@@ -70,6 +70,126 @@ async fn pinned_vector_confirms_known_option_failures() {
         assert_eq!(result.status.success(), accepted, "{name}");
     }
 }
+
+/// The server's event-type table must agree with Vector wherever Vector can
+/// see the types, and it must go on to catch the same mismatch behind a remap,
+/// where Vector types every transform output as any event.
+#[tokio::test]
+async fn event_type_table_matches_the_pinned_vector() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; event type table unverified");
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let json_codec = json!({"codec":"json"});
+    let logs = json!({"type":"demo_logs","format":"json"});
+    let metrics = json!({"type":"internal_metrics"});
+    let sinks = [
+        json!({"type":"datadog_metrics","default_api_key":"x"}),
+        json!({"type":"prometheus_exporter"}),
+        json!({"type":"prometheus_remote_write","endpoint":"http://127.0.0.1:9/x"}),
+        json!({"type":"statsd","mode":"udp","address":"127.0.0.1:8125"}),
+        json!({"type":"influxdb_metrics","endpoint":"http://127.0.0.1:8086","database":"d"}),
+        json!({"type":"aws_cloudwatch_metrics","default_namespace":"n","region":"us-east-1"}),
+        json!({"type":"gcp_stackdriver_metrics","project_id":"p","resource":{"type":"global"}}),
+        json!({"type":"loki","endpoint":"http://127.0.0.1:3100","encoding":json_codec,"labels":{"a":"b"}}),
+        json!({"type":"datadog_logs","default_api_key":"x"}),
+        json!({"type":"splunk_hec_logs","endpoint":"http://127.0.0.1:8088","default_token":"x","encoding":json_codec}),
+        json!({"type":"aws_cloudwatch_logs","group_name":"g","stream_name":"s","region":"us-east-1","encoding":json_codec}),
+        json!({"type":"gcp_stackdriver_logs","log_id":"l","project_id":"p","resource":{"type":"global"}}),
+        json!({"type":"influxdb_logs","endpoint":"http://127.0.0.1:8086","measurement":"m","database":"d"}),
+        json!({"type":"papertrail","endpoint":"tcp://127.0.0.1:514","encoding":json_codec}),
+    ];
+    let sources = [
+        logs.clone(),
+        json!({"type":"file","include":["/tmp/x.log"]}),
+        json!({"type":"journald"}),
+        json!({"type":"kubernetes_logs"}),
+        json!({"type":"syslog","mode":"udp","address":"127.0.0.1:5514"}),
+        json!({"type":"docker_logs"}),
+        json!({"type":"internal_logs"}),
+        metrics.clone(),
+        json!({"type":"host_metrics"}),
+        json!({"type":"prometheus_scrape","endpoints":["http://127.0.0.1:9/m"]}),
+        json!({"type":"statsd","mode":"udp","address":"127.0.0.1:8126"}),
+        json!({"type":"static_metrics","metrics":[]}),
+        json!({"type":"apache_metrics","endpoints":["http://127.0.0.1/server-status"]}),
+        json!({"type":"nginx_metrics","endpoints":["http://127.0.0.1/status"]}),
+    ];
+    let loki = sinks[7].clone();
+    let prometheus = sinks[1].clone();
+    let mut cases = Vec::new();
+    for sink in &sinks {
+        for source in [&logs, &metrics] {
+            let mut case = json!({"sources":{"s":source},"sinks":{"k":sink}});
+            case["sinks"]["k"]["inputs"] = json!(["s"]);
+            cases.push(case);
+        }
+    }
+    for source in &sources {
+        for sink in [&loki, &prometheus] {
+            let mut case = json!({"sources":{"s":source},"sinks":{"k":sink}});
+            case["sinks"]["k"]["inputs"] = json!(["s"]);
+            cases.push(case);
+        }
+    }
+    for (transform, extra) in [
+        ("log_to_metric", json!({"metrics":[]})),
+        ("metric_to_log", json!({})),
+        ("aggregate", json!({})),
+    ] {
+        for source in [&logs, &metrics] {
+            let mut case = json!({"sources":{"s":source},"transforms":{"t":extra},"sinks":{"k":{"type":"blackhole","inputs":["t"]}}});
+            case["transforms"]["t"]["type"] = json!(transform);
+            case["transforms"]["t"]["inputs"] = json!(["s"]);
+            cases.push(case);
+        }
+    }
+    let mismatch = |config: &serde_json::Value| {
+        vectory_server::validation::validate(config)["errors"]
+            .to_string()
+            .contains(" emits ")
+    };
+    let mut disagreements = Vec::new();
+    for (n, mut config) in cases.into_iter().enumerate() {
+        config["data_dir"] = json!(temp.path());
+        let path = temp.path().join(format!("types-{n}.json"));
+        tokio::fs::write(&path, config.to_string()).await.unwrap();
+        let output = tokio::process::Command::new(&vector)
+            .args(["validate", "--no-environment"])
+            .arg(&path)
+            .env_clear()
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr);
+        let native = text.contains("Data type mismatch");
+        assert!(
+            native || output.status.success(),
+            "fixture must load: {config}\n{text}"
+        );
+        if native != mismatch(&config) {
+            disagreements.push(config);
+        }
+    }
+    assert!(disagreements.is_empty(), "{disagreements:#?}");
+
+    // Behind a remap Vector sees no mismatch; the server still does.
+    let hidden = json!({"data_dir":temp.path(),"sources":{"s":logs},"transforms":{"p":{"type":"remap","inputs":["s"],"source":".x = 1"}},"sinks":{"k":{"type":"datadog_metrics","inputs":["p"],"default_api_key":"x"}}});
+    let path = temp.path().join("hidden.json");
+    tokio::fs::write(&path, hidden.to_string()).await.unwrap();
+    let output = tokio::process::Command::new(&vector)
+        .args(["validate", "--no-environment"])
+        .arg(&path)
+        .env_clear()
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    assert!(mismatch(&hidden));
+}
 #[tokio::test]
 async fn outdated_worker_replies_are_refused() {
     use axum::{Json, Router, routing::post};
@@ -246,7 +366,7 @@ async fn real_vector_worker_reports_precise_diagnostics() {
         conditions
             .iter()
             .any(|d| d["route_output"] == "server_errors"
-                && d["fix"]["replacement"] == "(.status >= 500) ?? false")
+                && d["fix"]["replacement"] == "((.status >= 500) ?? false)")
     );
     assert!(conditions.iter().all(|d| d["code"] == "E100"));
     let mut fixed = nginx.clone();
@@ -331,6 +451,107 @@ async fn real_vector_worker_reports_precise_diagnostics() {
     assert!(!deferred.to_string().contains("SHOULD_NEVER"));
     let tests = post(&client, &url, "tests", json!({"config":local})).await;
     assert_eq!(tests["tests_run"], false);
+    child.kill().await.unwrap();
+}
+
+/// Apply every "Treat errors as no match" fix the way the editor does (one
+/// span at a time, checking again after each), then run the result natively.
+#[tokio::test]
+async fn condition_quick_fixes_keep_the_original_meaning() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; condition fix semantics unverified");
+        return;
+    };
+    let (mut child, url, _client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let mut config = json!({
+        "sources":{"in":{"type":"demo_logs","format":"json"}},
+        "transforms":{"by_status":{"type":"route","inputs":["in"],"route":{
+            "server_errors":".status >= 500",
+            "client_errors":".status >= 400 && .status < 500"
+        }}},
+        "sinks":{
+            "server":{"type":"blackhole","inputs":["by_status.server_errors"]},
+            "client":{"type":"blackhole","inputs":["by_status.client_errors"]},
+            "rest":{"type":"blackhole","inputs":["by_status._unmatched"]}
+        }
+    });
+    let mut applied = 0;
+    loop {
+        let result = vectory_server::validation::validate_isolated(&state, &config)
+            .await
+            .unwrap();
+        let Some(fix) = result["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["fix"]["label"] == "Treat errors as no match")
+            .cloned()
+        else {
+            assert_eq!(result["valid"], true, "{result}");
+            break;
+        };
+        assert_eq!(fix["fix"]["scope"], "span");
+        let output = fix["route_output"].as_str().unwrap();
+        let condition = config["transforms"]["by_status"]["route"][output]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let start = fix["column"].as_u64().unwrap() as usize - 1;
+        let end = start + fix["length"].as_u64().unwrap() as usize;
+        let rewritten = format!(
+            "{}{}{}",
+            &condition[..start],
+            fix["fix"]["replacement"].as_str().unwrap(),
+            &condition[end..]
+        );
+        config["transforms"]["by_status"]["route"][output] = json!(rewritten);
+        applied += 1;
+        assert!(applied <= 3, "fixes did not converge: {config}");
+    }
+    assert_eq!(applied, 3, "{config}");
+    let route = &config["transforms"]["by_status"]["route"];
+    assert_eq!(
+        route["client_errors"],
+        "((.status >= 400) ?? false) && ((.status < 500) ?? false)"
+    );
+    let client = reqwest::Client::new();
+    let routed = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({
+            "transform":{"type":"route","route":route},
+            "samples":[{"status":200},{"status":404},{"status":503},{"status":"not a number"},{}]
+        }),
+    )
+    .await;
+    let ports: Vec<Vec<&str>> = routed["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{routed}"))
+        .iter()
+        .map(|result| {
+            let mut ports: Vec<&str> = result["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|output| output["port"].as_str().unwrap())
+                .collect();
+            ports.sort();
+            ports
+        })
+        .collect();
+    assert_eq!(
+        ports,
+        vec![
+            vec!["_unmatched"],
+            vec!["client_errors"],
+            vec!["server_errors"],
+            vec!["_unmatched"],
+            vec!["_unmatched"],
+        ],
+        "{routed}"
+    );
     child.kill().await.unwrap();
 }
 
