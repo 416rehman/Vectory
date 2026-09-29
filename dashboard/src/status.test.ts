@@ -137,6 +137,23 @@ describe("status language", () => {
     );
   });
 
+  it("reads list rows, which carry only the first delivery issue", () => {
+    const first = { code: "DATA_PLANE_SINK_ERRORS", title: "Can't deliver" };
+    const listed = {
+      status: "verified",
+      desired_version_id: "v2",
+      data_plane: { version_id: "v2", issues: [first], issue_count: 3 },
+    };
+    expect(deviceDisplayStatus(listed)).toBe("degraded");
+    expect(dataPlaneIssues(listed)).toEqual([first]);
+    // The contract's list row keeps exactly what list pages read.
+    const row = definitions.DeviceListItem.properties;
+    for (const heavy of ["host_runtime", "vector_log_summary"])
+      expect(Object.hasOwn(row, heavy), heavy).toBe(false);
+    expect(row.data_plane.properties.issues.maxItems).toBe(1);
+    expect(row.data_plane.properties.issue_count.type).toBe("integer");
+  });
+
   it("gives every entry a label, tone, icon and one-line description", () => {
     for (const [domain, entries] of Object.entries(statusDomains))
       for (const [value, entry] of Object.entries(entries)) {

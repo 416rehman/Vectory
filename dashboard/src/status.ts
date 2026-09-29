@@ -499,12 +499,17 @@ export type DataPlaneIssue = {
   hint?: string | null;
   since?: string | null;
 };
-/** The server's data-plane summary for the version the device runs. */
+/**
+ * The server's data-plane summary for the version the device runs. List rows
+ * (`/devices`, the Overview) carry only the first issue; `issue_count` counts
+ * them all. The device page (`/devices/{id}`) has every issue.
+ */
 export type DataPlaneSummary = {
   version_id: string | null;
   evaluations?: number | null;
   evaluated_at?: string | null;
   issues: DataPlaneIssue[];
+  issue_count?: number | null;
 };
 
 /** Minimal device fields the display state depends on. */

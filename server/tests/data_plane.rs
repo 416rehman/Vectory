@@ -168,8 +168,15 @@ async fn beat_at(
         .unwrap();
     let mut sample = telemetry;
     sample["sampled_at"] = json!(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let v = json!({"protocol_version":1,"request_id":db::id(),"boot_id":"synthetic","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","agent_version":"synthetic","vector_version":"0.58.0","reported_generation":1,"policy_generation":0,"actual_sha256":db::hash("{}\n"),"apply_state":"verified_applied","local_paused":false,"remote_pause_acknowledged":false,"telemetry":sample,
-        "vector_log_summary":[{"fingerprint":"0123456789abcdef","level":"error","component_id":"archive","component_kind":"sink","component_type":"http","reason":"connection_refused","message":"Connection refused (os error 111) to 127.0.0.1:1","count":13,"first_seen":db::now(),"last_seen":db::now()}]});
+    let logs = json!([{"fingerprint":"0123456789abcdef","level":"error","component_id":"archive","component_kind":"sink","component_type":"http","reason":"connection_refused","message":"Connection refused (os error 111) to 127.0.0.1:1","count":13,"first_seen":db::now(),"last_seen":db::now()}]);
+    heartbeat(agent, sample, json!({"vector_log_summary":logs})).await;
+}
+/// A verified heartbeat carrying `sample` plus any `extra` heartbeat fields.
+async fn heartbeat(agent: &Router, sample: Value, extra: Value) {
+    let mut v = json!({"protocol_version":1,"request_id":db::id(),"boot_id":"synthetic","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","agent_version":"synthetic","vector_version":"0.58.0","reported_generation":1,"policy_generation":0,"actual_sha256":db::hash("{}\n"),"apply_state":"verified_applied","local_paused":false,"remote_pause_acknowledged":false,"telemetry":sample});
+    for (key, value) in extra.as_object().unwrap() {
+        v[key] = value.clone();
+    }
     let response = agent
         .clone()
         .oneshot(
@@ -803,4 +810,121 @@ async fn a_sample_a_few_minutes_ahead_counts_but_is_remembered_at_server_time() 
     .await;
     assert_eq!(evaluation_state(&f, &device).await["evaluations"], 2);
     assert_eq!(open_delivery_issues(&f, "DATA_PLANE_SINK_ERRORS").await, 1);
+}
+
+/// What an agent reports for a ten-component pipeline (two sources, three
+/// transforms, five sinks), with every metric it can send and the last
+/// three sinks failing.
+fn ten_components(at: chrono::DateTime<chrono::Utc>) -> Value {
+    let mut components = Vec::new();
+    for n in 0..10 {
+        let (kind, component_type) = match n {
+            0 | 1 => ("source", "http_server"),
+            2..=4 => ("transform", "remap"),
+            _ => ("sink", "http"),
+        };
+        let failing = n >= 7;
+        let mut component = json!({
+            "id": format!("component_{n:02}"), "kind": kind, "type": component_type,
+            "events_per_second": if failing { 0.0 } else { 124.83 },
+            "received_events_per_second": 124.83, "received_bytes_per_second": 48122.5,
+            "sent_bytes_per_second": if failing { 0.0 } else { 47905.25 },
+            "errors": 3.0, "errors_per_minute": if failing { 12.0 } else { 0.0 },
+            "discarded_events": 0.0, "discarded_intentional": 0.0, "discarded_error": 0.0,
+            "filtered_per_minute": 0.0, "dropped_per_minute": 0.0,
+            "utilization": 0.0213, "latency_mean_seconds": 0.000183,
+        });
+        if kind == "sink" {
+            for (key, value) in [
+                ("buffer_bytes", 1048576.0),
+                ("buffer_events", 2048.0),
+                ("buffer_max_events", 50000.0),
+                ("buffer_max_bytes", 268435456.0),
+                ("buffer_utilization", if failing { 0.62 } else { 0.04 }),
+            ] {
+                component[key] = json!(value);
+            }
+        } else {
+            component["sent_by_output"] = json!({"_default": 124.83});
+        }
+        components.push(component);
+    }
+    json!({"sampled_at": at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "events_per_second": 249.66, "events_out_per_second": 249.66,
+        "bytes_in_per_second": 96245.0, "bytes_out_per_second": 95810.5,
+        "errors": 30.0, "errors_per_minute": 36.0, "uptime_seconds": 86412.0,
+        "memory_bytes": 187432960.0, "cpu_seconds": 5123.25, "discarded_events": 0.0,
+        "discarded_intentional": 0.0, "discarded_error": 0.0, "filtered_per_minute": 0.0,
+        "dropped_per_minute": 0.0, "buffer_bytes": 5242880.0, "buffer_events": 10240.0,
+        "buffer_utilization": 0.62, "components": components})
+}
+
+#[tokio::test]
+async fn lists_leave_out_what_only_the_device_page_shows() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    let logs: Vec<Value> = (0..10)
+        .map(|n| json!({"fingerprint":format!("{n:016x}"),"level":"error","component_id":format!("component_{:02}",7+n%3),"component_kind":"sink","component_type":"http","error_type":"request_failed","stage":"sending","reason":"connection_refused","message":format!("Service call failed. No retries or retries exhausted. error=Some(CallRequest {{ source: hyper::Error(Connect, ConnectError(\"tcp connect error\", Os {{ code: 111, kind: ConnectionRefused }})) }}) attempt={n}"),"count":120+n,"first_seen":db::now(),"last_seen":db::now()}))
+        .collect();
+    let extra = json!({"vector_log_summary":logs,"host_runtime":{"data_dir":"/var/lib/vector","data_dir_source":"pipeline","graceful_shutdown_seconds":60,"metrics_source":"explicit","metrics_address":"127.0.0.1:9598","activation":"reload"}});
+    for n in 1..=3 {
+        sqlx::query("UPDATE data_plane_state SET data=json_set(data,'$.evaluated_at','2000-01-01T00:00:00Z') WHERE device_id=?")
+            .bind(&device)
+            .execute(&f.s.pool)
+            .await
+            .unwrap();
+        let at = chrono::Utc::now() - chrono::Duration::seconds(100 - n);
+        heartbeat(&peer, ten_components(at), extra.clone()).await;
+    }
+    // The device page keeps everything.
+    let full = get(&f, &format!("/api/v1/devices/{device}")).await;
+    assert_eq!(
+        full["telemetry"]["components"].as_array().unwrap().len(),
+        10
+    );
+    assert_eq!(
+        full["vector_log_summary"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        10
+    );
+    assert_eq!(full["host_runtime"]["activation"], "reload");
+    let open = full["data_plane"]["issues"].as_array().unwrap().len();
+    assert!(open > 1, "{}", full["data_plane"]);
+    assert_eq!(full["data_plane"]["issue_count"], open);
+    // Lists keep the first delivery issue and the count, and nothing heavy.
+    let find = |rows: Value| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == device.as_str())
+            .unwrap()
+            .clone()
+    };
+    let listed = find(get(&f, "/api/v1/devices").await);
+    let overview = find(get(&f, "/api/v1/overview").await["devices"].clone());
+    for row in [&listed, &overview] {
+        assert!(row.get("vector_log_summary").is_none(), "{row}");
+        assert!(row.get("host_runtime").is_none(), "{row}");
+        assert!(row["telemetry"].get("components").is_none(), "{row}");
+        assert_eq!(row["telemetry"]["events_per_second"], 249.66);
+        assert_eq!(
+            row["data_plane"]["issues"],
+            json!([full["data_plane"]["issues"][0]])
+        );
+        assert_eq!(row["data_plane"]["issue_count"], open);
+    }
+    // Otherwise a list row is the device page's row, field for field.
+    assert_eq!(listed, vectory_server::rollout::list_row(full.clone()));
+    let (full_bytes, list_bytes) = (full.to_string().len(), listed.to_string().len());
+    eprintln!(
+        "device with 10 components: full row {full_bytes} bytes, list row {list_bytes} bytes"
+    );
+    assert!(
+        list_bytes * 3 < full_bytes,
+        "full {full_bytes}, list {list_bytes}"
+    );
 }
