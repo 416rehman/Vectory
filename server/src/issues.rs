@@ -233,6 +233,8 @@ pub(crate) struct DataPlaneReport<'a> {
     pub diagnostics: &'a Value,
     pub evidence: &'a Value,
     pub deployment_id: Option<String>,
+    /// Evaluations that found the condition since the issue was last written.
+    pub extra_reports: u64,
 }
 /// Open or refresh a data-plane issue keyed by device, version, code and
 /// component. `count` counts openings (a recurrence after resolution is a new
@@ -268,7 +270,9 @@ pub(crate) async fn record_data_plane(
             o.remove("resolved_at");
         }
     }
-    issue["reports"] = increment(counter(&issue, "reports"))?;
+    for _ in 0..=r.extra_reports.min(1000) {
+        issue["reports"] = increment(counter(&issue, "reports"))?;
+    }
     issue["last_seen"] = json!(now);
     issue["component"] = json!(r.component);
     // Never fail a heartbeat over presentation: an invalid finding renders
@@ -455,11 +459,16 @@ pub(crate) async fn open_count(db: &mut SqliteConnection) -> Result<i64> {
         .fetch_one(db)
         .await?)
 }
+/// The unpaged list answers with the newest issues only; clients that need
+/// more page through `GET /issues/history`. Delivery problems can open many
+/// issues at once, so the table is not bounded by the fleet's size.
+const LEGACY_ISSUES: i64 = 1000;
 pub(crate) async fn legacy(db: &mut SqliteConnection) -> Result<Vec<Value>> {
     let mut q = QueryBuilder::new("");
     projection(&mut q);
     filter(&mut q, "all", None, "");
     q.push(" ORDER BY ").push(order());
+    q.push(" LIMIT ").push_bind(LEGACY_ISSUES);
     let rows: Vec<String> = q.build_query_scalar().fetch_all(db).await?;
     rendered(&rows)
 }

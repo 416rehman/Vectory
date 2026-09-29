@@ -45,6 +45,13 @@ pub const MAX_OPEN_PER_DEVICE: usize = 10;
 const MAX_TRACKED: usize = 200;
 /// A sample older than this no longer describes the running pipeline.
 const SAMPLE_MAX_AGE_SECONDS: i64 = 600;
+/// An open issue is rewritten at most this often while its condition holds.
+/// Every write lands in the heartbeat's transaction, under the writer lock,
+/// and moves the issue indexes; a steady outage should not pay it each time.
+const ISSUE_REFRESH_SECONDS: i64 = 300;
+/// Issue writes (open, refresh or resolve) per evaluation. Deferred
+/// transitions keep counting in their streak and go out on the next one.
+const MAX_ISSUE_WRITES_PER_EVALUATION: usize = 3;
 
 pub const SINK_ERRORS: &str = "DATA_PLANE_SINK_ERRORS";
 pub const STALLED: &str = "DATA_PLANE_STALLED";
@@ -475,7 +482,7 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
         // Unassigned: the heartbeat already resolved every issue. Metrics
         // turned off: delivery can't be judged any more, so the flag can't
         // stay (or claim recovery); its issues close as unmonitored.
-        if !o.monitoring {
+        if !o.monitoring && (stored.is_some() || !o.device["data_plane"].is_null()) {
             issues::resolve_data_plane(db, o.device_id, None, "unmonitored").await?;
         }
         if stored.is_some() {
@@ -525,11 +532,17 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
             .bind(state.to_string())
             .execute(&mut *db)
             .await?;
-        sqlx::query("UPDATE devices SET data=json_set(data,'$.data_plane',json(?)) WHERE id=?")
-            .bind(summary(&state).to_string())
-            .bind(o.device_id)
-            .execute(&mut *db)
-            .await?;
+        // The summary is stable while nothing changes (no timestamps, counts
+        // capped, messages refreshed with their issue), so a steady state
+        // doesn't rewrite the whole device row a second time.
+        let public = summary(&state);
+        if public != o.device["data_plane"] {
+            sqlx::query("UPDATE devices SET data=json_set(data,'$.data_plane',json(?)) WHERE id=?")
+                .bind(public.to_string())
+                .bind(o.device_id)
+                .execute(&mut *db)
+                .await?;
+        }
     }
     Ok(())
 }
@@ -550,6 +563,7 @@ async fn evaluate(
     let mut open = keys.values().filter(|e| e["open"] == true).count();
     let mut seen = std::collections::BTreeSet::new();
     let now = db::now();
+    let mut writes = 0usize;
     for f in findings {
         let key = f.key();
         seen.insert(key.clone());
@@ -568,6 +582,24 @@ async fn evaluate(
         } else {
             transition
         };
+        // A steady outage refreshes its issue every few minutes, not on each
+        // evaluation, and no evaluation writes more than a few issues. What
+        // waits keeps counting in its streak and goes out next time.
+        let transition = match transition {
+            Transition::Refresh
+                if !parse_time(&entry["written_at"]).is_none_or(|at| {
+                    Utc::now().signed_duration_since(at).num_seconds() >= ISSUE_REFRESH_SECONDS
+                }) =>
+            {
+                let waiting = entry["unflushed"].as_u64().unwrap_or(0);
+                entry["unflushed"] = json!(waiting.saturating_add(1).min(1_000_000));
+                Transition::None
+            }
+            Transition::None => Transition::None,
+            _ if writes >= MAX_ISSUE_WRITES_PER_EVALUATION => Transition::None,
+            other => other,
+        };
+        let extra_reports = entry["unflushed"].as_u64().unwrap_or(0);
         let report = issues::DataPlaneReport {
             device_id: o.device_id,
             version_id: running,
@@ -576,9 +608,11 @@ async fn evaluate(
             diagnostics: &f.diagnostics,
             evidence: &f.evidence,
             deployment_id: o.assignment_id.clone(),
+            extra_reports,
         };
         match transition {
             Transition::Open | Transition::Refresh => {
+                writes += 1;
                 let id = issues::record_data_plane(db, report).await?;
                 if transition == Transition::Open {
                     open += 1;
@@ -590,8 +624,11 @@ async fn evaluate(
                 entry["component_id"] = json!(f.component);
                 entry["component_kind"] = json!(f.component_kind);
                 entry["diagnostic"] = f.diagnostics[0].clone();
+                entry["written_at"] = json!(now);
+                entry["unflushed"] = json!(0);
             }
             Transition::Resolve => {
+                writes += 1;
                 if let Some(id) = entry["issue_id"].as_str() {
                     issues::resolve_data_plane_issue(db, id, "healthy").await?;
                 }
@@ -603,7 +640,11 @@ async fn evaluate(
     }
     // A condition that no longer appears keeps an open issue (the component
     // may just not have reported); a closed streak without data is dropped.
-    keys.retain(|key, entry| entry["open"] == true || seen.contains(key));
+    // Healthy conditions keep no entry: only an open issue or a streak still
+    // building toward one is worth its bytes in the state.
+    keys.retain(|key, entry| {
+        entry["open"] == true || (seen.contains(key) && entry["bad"].as_u64().unwrap_or(0) > 0)
+    });
     let buffers: Map<String, Value> = o.sample["components"]
         .as_array()
         .unwrap_or(&empty)
@@ -663,8 +704,8 @@ fn summary(state: &Value) -> Value {
     open.truncate(MAX_OPEN_PER_DEVICE);
     json!({
         "version_id": state["version_id"],
-        "evaluations": state["evaluations"],
-        "evaluated_at": state["evaluated_at"],
+        // Only "measured enough" matters to readers, so the count stops there.
+        "evaluations": state["evaluations"].as_u64().unwrap_or(0).min(GATE_MIN_EVALUATIONS),
         "issues": open,
     })
 }
