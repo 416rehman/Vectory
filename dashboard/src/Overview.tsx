@@ -58,6 +58,8 @@ import {
 } from "./activityModel";
 import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
+import { StoppedRolloutItems, useStoppedRollouts } from "./StoppedRollouts";
+import type { StoppedRollout } from "./stoppedRollouts";
 import "./overview.css";
 
 type Navigate = (path: string) => void;
@@ -243,6 +245,8 @@ export function Overview({
     null,
   );
   const summary = useTelemetrySummary(!!data && live.length > 0, interval);
+  // Stopped and rolled-back rollouts leave "in progress" but still need you.
+  const stopped = useStoppedRollouts(!!data);
   const operate = roleAllows(user, "operate");
   const now = Date.now();
   const steps = data
@@ -309,11 +313,17 @@ export function Overview({
               releasesLoading={noDevices && releases.loading}
             />
           )}
-          <KpiTiles data={data} live={live} />
+          <KpiTiles data={data} live={live} stopped={stopped.length} />
           <div className="overview-grid">
             <div className="overview-column">
               <FleetHealth live={live} />
-              <NeedsYou data={data} live={live} user={user} now={now} />
+              <NeedsYou
+                data={data}
+                live={live}
+                user={user}
+                now={now}
+                stopped={stopped}
+              />
               <FleetThroughput live={live} summary={summary} now={now} />
             </div>
             <div className="overview-column">
@@ -585,7 +595,16 @@ function Checklist({
 
 /* ---------- KPI tiles ---------- */
 
-function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
+function KpiTiles({
+  data,
+  live,
+  stopped,
+}: {
+  data: OverviewData;
+  live: Device[];
+  /** Rollouts that stopped or were rolled back in the last day. */
+  stopped: number;
+}) {
   const total = live.length;
   const online = live.filter(
     (device) => connectionState(device) === "online",
@@ -675,6 +694,7 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
         <span className="overview-kpi-value">{active.toLocaleString()}</span>
         <span className="overview-kpi-note">
           {[
+            stopped && `${stopped} stopped`,
             paused && `${paused} paused`,
             scheduled && `${scheduled} scheduled in the next 24h`,
           ]
@@ -880,11 +900,13 @@ function NeedsYou({
   live,
   user,
   now,
+  stopped,
 }: {
   data: OverviewData;
   live: Device[];
   user: User;
   now: number;
+  stopped: StoppedRollout[];
 }) {
   const groups = data.attention || [];
   const affected = groups
@@ -907,8 +929,9 @@ function NeedsYou({
         ) : undefined
       }
     >
-      {groups.length ? (
+      {groups.length || stopped.length ? (
         <ul className="overview-attention-list">
+          <StoppedRolloutItems items={stopped} />
           {groups.map((group) => {
             const Icon = severityIcons[group.cause];
             const { title, detail } = attentionCopy(group, now)!;
