@@ -114,6 +114,26 @@ try {
   results.push(
     "Keyboard option selection, outside dismissal, and persistent headers during loading",
   );
+  // The field reset must not remove the keyboard focus ring from checkboxes
+  // and radios (they draw an outline, not a field ring).
+  await page
+    .getByRole("button", { name: "Toggle loading", exact: true })
+    .focus();
+  for (const [role, name] of [
+    ["checkbox", "Synthetic checkbox"],
+    ["radio", "Synthetic radio"],
+  ]) {
+    await page.keyboard.press("Tab");
+    const control = page.getByRole(role, { name, exact: true });
+    await expect(control).toBeFocused();
+    const ring = await control.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { style: style.outlineStyle, width: style.outlineWidth };
+    });
+    expect(ring.style, `${name} focus outline`).not.toBe("none");
+    expect(ring.width, `${name} focus outline width`).not.toBe("0px");
+  }
+  results.push("Checkboxes and radios show a keyboard focus ring");
   for (const theme of ["light", "dark"])
     for (const width of [899, 375]) {
       await page.setViewportSize({ width, height: 884 });

@@ -165,17 +165,11 @@ async function start(
     reducedMotion: "reduce",
   });
   await context.addInitScript(
-    ({ theme, deadline }) => {
+    ({ theme }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
-      if (deadline) {
-        const original = window.setTimeout;
-        window.setTimeout = function (fn, ms, ...args) {
-          return original(fn, ms === 30000 ? 180 : ms, ...args);
-        };
-      }
     },
-    { theme, deadline },
+    { theme },
   );
   await context.route("**/*", async (route) => {
     const req = route.request(),
@@ -295,6 +289,18 @@ async function start(
   await expect(
     page.getByRole("heading", { name: "Deployments", exact: true }),
   ).toBeVisible();
+  // Shorten the 30 s request deadline only once the page (loaded on demand
+  // behind a 30 s guard of its own) is on screen.
+  await expect(
+    page.getByRole("link", { name: "Synthetic paused canary", exact: true }),
+  ).toBeVisible();
+  if (deadline)
+    await page.evaluate(() => {
+      const original = window.setTimeout;
+      window.setTimeout = function (fn, ms, ...args) {
+        return original(fn, ms === 30000 ? 180 : ms, ...args);
+      };
+    });
   return {
     page,
     context,
@@ -516,6 +522,11 @@ try {
         f.summaryMode = "failed";
         await action(page)
           .getByRole("button", { name: "Check current status", exact: true })
+          .click();
+        // Earlier data is on screen: the server's reason is behind Details.
+        await page
+          .getByRole("alert")
+          .getByText("Details", { exact: true })
           .click();
         await expect(
           page.getByText("Synthetic status unavailable", { exact: true }),

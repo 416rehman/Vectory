@@ -333,9 +333,9 @@ try {
           "No longer included in this assignment. Kept in deployment history.",
         );
         await expect(table(page)).not.toContainText("No reported error");
-        await expect(table(page)).not.toContainText("Waiting for check-in");
+        await expect(table(page)).not.toContainText("Waiting for agent");
         await expect(
-          table(page).locator(".rollout-chip", { hasText: "Verified" }),
+          table(page).locator(".status-badge", { hasText: "Applied" }),
         ).toHaveCount(0);
         await noWrites(f);
       } finally {
@@ -439,7 +439,7 @@ try {
         await expect(removed).toContainText("Last reported error:");
         await expect(removed).toContainText("VALIDATION_FAILED (validation)");
         await expect(
-          removed.locator(".rollout-chip", { hasText: "Verified" }),
+          removed.locator(".status-badge", { hasText: "Applied" }),
         ).toHaveCount(0);
         await expect(
           table(page)
@@ -450,7 +450,7 @@ try {
                 exact: true,
               }),
             }),
-        ).toContainText("Verified");
+        ).toContainText("Applied");
         await dialog(page)
           .getByRole("button", { name: "Roll back", exact: true })
           .click();
@@ -491,7 +491,7 @@ try {
       try {
         const { page } = app;
         await open(page);
-        await expect(table(page)).toContainText("Waiting for check-in");
+        await expect(table(page)).toContainText("Waiting for agent");
         await expect(
           dialog(page).locator(".deployment-removed-count"),
         ).toHaveCount(0);
@@ -575,10 +575,11 @@ try {
         await expect(dialog(page).getByRole("alert")).toContainText(
           "Synthetic target history unavailable",
         );
-        await expect(table(page)).not.toContainText("Synthetic retired 00");
+        // A failed read shows one message, not the previous rows.
+        await expect(dialog(page)).not.toContainText("Synthetic retired 00");
         f.failTargets = false;
         await dialog(page)
-          .getByRole("button", { name: "Try again", exact: true })
+          .getByRole("button", { name: "Retry", exact: true })
           .click();
         await expect(table(page).locator("tbody tr")).toHaveCount(12);
         expect(
@@ -607,7 +608,15 @@ try {
           try {
             const { page } = app;
             await open(page);
-            await expect(table(page)).toContainText("No longer targeted");
+            // Phones list device results as cards, not a table.
+            await expect(
+              width < 640
+                ? dialog(page).getByRole("list", {
+                    name: "Device results",
+                    exact: true,
+                  })
+                : table(page),
+            ).toContainText("No longer targeted");
             await expect(
               dialog(page).getByRole("button", {
                 name: "Roll back",
