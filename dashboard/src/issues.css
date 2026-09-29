@@ -242,6 +242,13 @@
 .issue-device-table {
   min-width: 720px;
 }
+/* Keep device names legible when the table scrolls on narrow screens. */
+.issue-device-table td:first-child {
+  min-width: 11rem;
+}
+.issue-device-table .issue-actions {
+  flex-wrap: nowrap;
+}
 .issue-loading {
   display: flex;
   align-items: center;
