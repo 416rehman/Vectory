@@ -105,7 +105,8 @@ export default function AuthenticatorSetup({
                   aria-label="Authenticator setup QR code"
                 />
                 <p className="authenticator-account">
-                  Vectory <span aria-hidden="true">·</span> {email}
+                  Vectory <span aria-hidden="true">·</span>{" "}
+                  <span className="auth-email">{email}</span>
                 </p>
               </div>
               <div className="authenticator-manual">

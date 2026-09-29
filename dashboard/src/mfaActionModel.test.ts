@@ -5,6 +5,7 @@ import {
   MfaRecoveryCodesSchema,
   MfaSetupSchema,
   MfaStatusSchema,
+  groupRecoveryCode,
   groupSetupKey,
   mfaCanUseContext,
   mfaOutcome,
@@ -163,9 +164,23 @@ describe("MFA response and context model", () => {
     expect(text.split("\n")[0]).toBe(
       "Vectory recovery codes for jane@example.test on Acme Production (vectory.example.test), generated 2026-09-29.",
     );
-    expect(text).toContain(` 1. ${codes[0]}`);
-    expect(text).toContain(` 2. ${codes[1]}`);
+    // Grouped in fours for typing from paper; sign-in ignores the spaces.
+    expect(text).toContain(" 1. 0000 0000 0000 0001 0000 0002 0000 0003");
+    expect(text).toContain(" 2. 0000 0001 0000 0001 0000 0002 0000 0003");
     expect(text).toContain("Each code works once.");
+    expect(text).toContain("Type a code with or without its spaces.");
+  });
+
+  it("groups a recovery code in fours and leaves anything unexpected as it came", () => {
+    expect(groupRecoveryCode("0f3a91c2-5b7d8e10-aa00bb11-cc22dd33")).toBe(
+      "0f3a 91c2 5b7d 8e10 aa00 bb11 cc22 dd33",
+    );
+    expect(groupRecoveryCode("0F3A91C25B7D8E10AA00BB11CC22DD33")).toBe(
+      "0F3A 91C2 5B7D 8E10 AA00 BB11 CC22 DD33",
+    );
+    expect(groupRecoveryCode("not-a-recovery-code")).toBe(
+      "not-a-recovery-code",
+    );
   });
 
   it("requires the original usable actor, role and session binding", () => {

@@ -315,9 +315,19 @@
 .signin {
   min-height: 100dvh;
   display: grid;
+  /* One column no wider than the screen: a long command in the card
+     scrolls inside its box instead of widening the page. */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 56px 20px;
   background: var(--rail);
+}
+/* An email moves to the next line whole, and breaks inside only when it
+   is wider than the line (never at its hyphen when it fits). */
+.auth-email {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .signin-card {
   width: min(432px, 100%);
@@ -689,10 +699,31 @@
   .checklist > li > .button {
     margin-left: 39px;
   }
+  /* The setup command takes the card's width; Copy goes under it. */
+  .setup-hint .copy-line {
+    flex-direction: column;
+  }
+  .setup-hint .copy-line > code {
+    width: 100%;
+  }
   .session-paused {
     top: auto;
     bottom: 12px;
     width: calc(100vw - 24px);
     justify-content: space-between;
+  }
+}
+@media (max-width: 359px) {
+  /* Six code cells still fit the card on the narrowest phones. */
+  .otp-cells {
+    gap: 5px;
+  }
+  .otp-cell {
+    width: 35px;
+    height: 46px;
+    font-size: 19px;
+  }
+  .otp-cell:nth-child(4) {
+    margin-left: 4px;
   }
 }
