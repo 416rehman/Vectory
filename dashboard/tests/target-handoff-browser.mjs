@@ -904,6 +904,9 @@ try {
       await page
         .getByRole("checkbox", { name: /^Synthetic alpha keeps .*\(priority 200\)/ })
         .check();
+      await expect(page.locator(".target-left-behind")).toContainText(
+        "Only the other device changes.",
+      );
       await page
         .getByRole("button", { name: "Deploy to 1 of 2 devices", exact: true })
         .click();

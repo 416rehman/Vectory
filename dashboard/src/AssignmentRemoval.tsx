@@ -437,17 +437,24 @@ export default function AssignmentRemoval({
                       <strong>
                         {removalEffectLabel(device, preview.resource)}
                       </strong>
-                      {/* The label names a pipeline version; settings, a
-                          named assignment or an unnamed version say more. */}
-                      {(preview.resource === "policy" ||
-                        device.effect === "fallback" ||
-                        (device.after?.version_id &&
-                          (device.after.configuration_name === null ||
-                            device.after.version_number === null))) && (
+                      {/* The label names a pipeline version; settings and
+                          an unnamed version say more, and a switch names the
+                          assignment it switches to. */}
+                      {preview.resource === "policy" ||
+                      (device.after?.version_id &&
+                        (device.after.configuration_name === null ||
+                          device.after.version_number === null)) ? (
                         <StateDetail
                           state={device.after}
                           resource={preview.resource}
                         />
+                      ) : (
+                        device.effect === "fallback" &&
+                        device.after?.assignment_name && (
+                          <div className="assignment-removal-state">
+                            <span>{device.after.assignment_name}</span>
+                          </div>
+                        )
                       )}
                       {device.effect === "not_targeted" && (
                         <p>No longer targeted by this assignment.</p>
