@@ -328,7 +328,29 @@ export function displayLabel(type: string, kind?: Kind, fallback?: string) {
 const schemaDefaults: Record<string, Config> = {
   "sinks:aws_s3": { encoding: { codec: "json" }, compression: "gzip" },
 };
-export const catalog: Component[] = [
+/**
+ * Vector's reference has no description for a few components (or repeats the
+ * name). Say what the step does instead of showing the gap.
+ */
+function describe(item: Component): Component {
+  const text = item.description?.trim() ?? "";
+  const bare = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (
+    text &&
+    !/missing a description/i.test(text) &&
+    bare(text) !== bare(item.label)
+  )
+    return item;
+  const name = displayLabel(item.type, item.kind, item.label);
+  const description =
+    item.kind === "sources"
+      ? `Collect events from ${name}.`
+      : item.kind === "sinks"
+        ? `Send events to ${name}.`
+        : `Change events with ${name}.`;
+  return { ...item, description };
+}
+const assembledCatalog: Component[] = [
   ...curatedCatalog.map(
     (item) =>
       ({
@@ -367,6 +389,7 @@ export const catalog: Component[] = [
         }) as Component,
     ),
 ];
+export const catalog: Component[] = assembledCatalog.map(describe);
 export function componentSchema(component: Component): Schema | undefined {
   return component.schema_ref ? { $ref: component.schema_ref } : undefined;
 }

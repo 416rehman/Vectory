@@ -62,7 +62,19 @@ export function readSamples(
   try {
     const raw = localStorage.getItem(key(userId, pipelineId));
     const parsed = raw ? JSON.parse(raw) : null;
-    return valid(parsed) ? parsed : emptyStore(fallback);
+    if (!valid(parsed)) return emptyStore(fallback);
+    // An untouched copy of the old built-in example gives way to events that
+    // fit this pipeline's source.
+    if (fallback !== DEFAULT_SAMPLE)
+      return {
+        ...parsed,
+        sets: parsed.sets.map((set) =>
+          set.id === "default" && set.text === DEFAULT_SAMPLE
+            ? { ...set, text: fallback }
+            : set,
+        ),
+      };
+    return parsed;
   } catch {
     return emptyStore(fallback);
   }

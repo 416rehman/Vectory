@@ -668,3 +668,16 @@ describe("one name per component", () => {
     ).toEqual([]);
   });
 });
+
+describe("component descriptions", () => {
+  it("never show a gap or repeat the name", () => {
+    for (const item of catalog) {
+      expect(item.description).not.toMatch(/missing a description/i);
+      expect(item.description.trim().length).toBeGreaterThan(item.label.length);
+    }
+    expect(
+      catalog.find((item) => item.kind === "sinks" && item.type === "mqtt")
+        ?.description,
+    ).toBe("Send events to Mqtt.");
+  });
+});

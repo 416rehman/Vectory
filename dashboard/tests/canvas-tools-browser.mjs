@@ -360,14 +360,15 @@ try {
           sets: [{ id: "default", name: "Sample events", text: line }],
           active: {},
         },
-        vrl: '{"valid":true,"compiled":true,"output":null,"errors":[],"results":[{"sample":0,"outcome":"emitted","outputs":[{"port":"","event":{"message":"x","ns":1790669601180123456,"a":1},"timestamps":[]}]}]}',
+        vrl: '{"valid":true,"compiled":true,"output":null,"errors":[],"results":[{"sample":0,"outcome":"emitted","outputs":[{"port":"","event":{"message":"x","ns":1790669601180123457,"a":1},"timestamps":[]}]}]}',
       });
       await node("parse").click();
       await expect(inspector().locator(".sample-result")).toHaveCount(1);
       await expect(inspector().locator(".sample-error")).toHaveCount(0);
-      await expect(inspector().locator(".sample-diff")).toContainText(
-        "1790669601180123456",
-      );
+      // The sample's value and the step's result differ only in the last digit.
+      const diff = inspector().locator(".sample-diff");
+      await expect(diff).toContainText("1790669601180123456");
+      await expect(diff).toContainText("1790669601180123457");
       const width = await inspector()
         .locator(".editor-inspector-body")
         .evaluate((element) => [element.scrollWidth, element.clientWidth]);

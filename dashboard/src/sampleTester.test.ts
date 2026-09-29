@@ -3,6 +3,7 @@ import { parseLosslessJSON } from "./configurationNumbers";
 import { diffEvents, displayValue, flattenEvent } from "./eventDiff";
 import { eventPaths } from "./vrlLanguage";
 import {
+  DEFAULT_SAMPLE,
   activeSet,
   emptyStore,
   parseSamples,
@@ -211,5 +212,28 @@ describe("epoch nanoseconds and other big integers", () => {
     expect(JSON.stringify(parsed.samples[0])).toBe(
       '{"id":18446744073709551615}',
     );
+  });
+});
+
+describe("sample sets follow the source", () => {
+  beforeEach(() => {
+    const values = new Map<string, string>();
+    (globalThis as any).localStorage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+    };
+  });
+  it("open on the events a source emits, and replace an untouched old default", () => {
+    const events =
+      '{"message":"<134>2 2026-09-29T08:45:37.562Z h app 1 ID1 - hi"}';
+    expect(readSamples("u", "p", events).sets[0].text).toBe(events);
+    // The old built-in example, saved untouched, is refreshed...
+    writeSamples("u", "p", emptyStore(DEFAULT_SAMPLE));
+    expect(readSamples("u", "p", events).sets[0].text).toBe(events);
+    // ...but anything the person wrote is kept.
+    writeSamples("u", "p", emptyStore('{"mine":true}'));
+    expect(readSamples("u", "p", events).sets[0].text).toBe('{"mine":true}');
+    // No fitting events: the store opens empty rather than red.
+    expect(readSamples("u", "q", "").sets[0].text).toBe("");
   });
 });
