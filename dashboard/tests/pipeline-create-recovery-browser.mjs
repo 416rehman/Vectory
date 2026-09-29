@@ -150,6 +150,7 @@ async function start(f = state(), options = {}) {
     ({ theme, seed, failStorage, prefix }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
+      localStorage.setItem("vectory.editor.auto-check", "off");
       for (const [k, v] of Object.entries(seed || {}))
         localStorage.setItem(k, v);
       window.fixture = {
@@ -1438,6 +1439,9 @@ try {
       try {
         await s.page.locator('.react-flow__node[data-id="sample"]').click();
         await s.page.getByLabel("One in every", { exact: true }).fill("21");
+        // Drafts save explicitly (there is no autosave); the duplicate below
+        // must wait for this held save to finish.
+        await s.page.keyboard.press("ControlOrMeta+s");
         await expect.poll(() => s.f.puts.length).toBe(1);
         await s.page.locator(".editor-tools-menu > summary").click();
         await s.page

@@ -60,6 +60,7 @@ import {
   RotateCcw,
   RefreshCw,
   ChevronDown,
+  MessageSquareText,
 } from "lucide-react";
 import {
   api,
@@ -71,6 +72,7 @@ import {
   download,
   post,
   put,
+  when,
   type Config,
   type Configuration,
   type Graph,
@@ -168,6 +170,13 @@ import {
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
 import { coalesces, editedField } from "./editHistory";
+import { draftSummary } from "./draftSummary";
+import {
+  clearRecoveryDraft,
+  readRecoveryDraft,
+  storeRecoveryDraft,
+  type RecoveryDraft,
+} from "./draftRecovery";
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
@@ -328,6 +337,25 @@ function pipelineSummary(config: Config) {
     .filter(Boolean)
     .join(" → ");
 }
+/** Whether two graphs place the same nodes at the same positions. */
+function samePositions(left: any[], right: any[]) {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      left.every(
+        (node, index) =>
+          node.id === right[index].id &&
+          (node.position === right[index].position ||
+            (node.position?.x === right[index].position?.x &&
+              node.position?.y === right[index].position?.y)),
+      ))
+  );
+}
+const saveShortcut =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+    ? "⌘S"
+    : "Ctrl+S";
 const AUTO_CHECK_KEY = "vectory.editor.auto-check";
 function readAutoCheck() {
   try {
@@ -428,6 +456,10 @@ export default function Editor({
       nonce: number;
     } | null>(null),
     [savingDraft, setSavingDraft] = useState(false),
+    // The note for "Save with note…"; null while that dialog is closed.
+    [saveNote, setSaveNote] = useState<string | null>(null),
+    // Unsaved edits found in this browser, until restored or discarded.
+    [recovery, setRecovery] = useState<RecoveryDraft | null>(null),
     [historyOpen, setHistoryOpen] = useState(false),
     [historyVersion, setHistoryVersion] = useState<Version | null>(null),
     [publishNotice, setPublishNotice] = useState<
@@ -996,6 +1028,23 @@ export default function Editor({
         setCheck(null);
         setCheckError("");
         setError("");
+        // Offer edits left unsaved in this browser (a crash, closed tab or
+        // lost session) unless they match what the server already has.
+        const stored =
+          can(user, "edit") && !result.archived
+            ? readRecoveryDraft(user.id, id)
+            : null;
+        if (
+          stored &&
+          (!sameConfiguration(stored.config, result.config) ||
+            JSON.stringify(stored.variables) !==
+              JSON.stringify(result.variables || []))
+        )
+          setRecovery(stored);
+        else {
+          if (stored) clearRecoveryDraft(user.id, id);
+          setRecovery(null);
+        }
         setPublishedVersion(null);
         setPublishedVersionStatus("loading");
         setPublishedVersionError("");
@@ -1113,6 +1162,7 @@ export default function Editor({
       explicit = false,
       metadata?: { name: string; description: string },
       parentSignal?: AbortSignal,
+      note?: string,
     ): Promise<Configuration | null> {
       // Opening the discard dialog suspends queued saves immediately.
       if (discardGate.current) return null;
@@ -1123,12 +1173,13 @@ export default function Editor({
         if (discardGate.current) return null;
         if (!saved) return null;
         return latest.current.dirty || metadata
-          ? saveDraft(explicit, metadata, parentSignal)
+          ? saveDraft(explicit, metadata, parentSignal, note)
           : latest.current.doc;
       }
       const current = latest.current;
       if (!current.doc || !editable) return current.doc;
-      const revision = current.doc.revision;
+      const revision = current.doc.revision,
+        savedDoc = current.doc;
       setSaveStatus("Saving…");
       const operation = (async () => {
         try {
@@ -1142,11 +1193,19 @@ export default function Editor({
                   graph: { nodes: current.nodes, edges: current.edges },
                   config: current.config,
                   variables: current.variables,
+                  // An explicit save records the author's note, or a
+                  // summary of what changed since the saved revision.
                   message: metadata
                     ? "Updated pipeline details"
-                    : explicit
-                      ? "Saved from pipeline editor"
-                      : "Saved before publishing",
+                    : note?.trim() ||
+                      (explicit
+                        ? draftSummary(
+                            savedDoc.config,
+                            current.config,
+                            savedDoc.variables || [],
+                            current.variables,
+                          )
+                        : "Saved before publishing"),
                 },
                 signal,
               ),
@@ -1158,11 +1217,12 @@ export default function Editor({
           saveNeedsReload.current = false;
           setDoc(updated);
           latest.current.doc = updated;
+          // Measurements and selection change node and edge objects without
+          // changing the draft; only the config, variables and positions do.
           const stillSame =
             latest.current.config === current.config &&
             latest.current.variables === current.variables &&
-            latest.current.nodes === current.nodes &&
-            latest.current.edges === current.edges;
+            samePositions(latest.current.nodes, current.nodes);
           if (stillSame) {
             setDirty(false);
             latest.current.dirty = false;
@@ -2109,7 +2169,7 @@ export default function Editor({
       if (publishMounted.current) setBusy(false);
     }
   }
-  async function saveDraftNow(confirmServerDraft = false) {
+  async function saveDraftNow(confirmServerDraft = false, note?: string) {
     if (!editable || busy || explicitSaveInFlight.current) return;
     if (saveNeedsReload.current) {
       setError("The server draft changed. Reload it before saving again.");
@@ -2127,11 +2187,113 @@ export default function Editor({
     setSavingDraft(true);
     setError("");
     try {
-      await persist(true);
+      return await persist(true, undefined, undefined, note);
     } finally {
       explicitSaveInFlight.current = false;
       setSavingDraft(false);
     }
+  }
+  function openSaveNote() {
+    if (!editable || !latest.current.doc) return;
+    const saved = latest.current.doc;
+    setSaveNote(
+      draftSummary(
+        saved.config,
+        latest.current.config,
+        saved.variables || [],
+        latest.current.variables,
+      ),
+    );
+  }
+  async function saveWithNote() {
+    const note = saveNote;
+    if (note === null) return;
+    const saved = await saveDraftNow(false, note);
+    if (saved) setSaveNote(null);
+  }
+  // Ctrl/Cmd+S saves the draft anywhere in the editor. The browser's own
+  // "save page" never applies here, even when there is nothing to save.
+  const saveShortcutState = useRef({ blocked: false, save: () => {} });
+  saveShortcutState.current = {
+    blocked:
+      !editable ||
+      historyOpen ||
+      publishOpen ||
+      globalsOpen ||
+      detailsOpen ||
+      discardOpen ||
+      !!deployVersion ||
+      !!pipelineAction ||
+      !!importCandidate ||
+      saveNote !== null,
+    save: () => {
+      if (hasUnappliedImportFields()) {
+        setError(
+          "Apply or discard unfinished code and field edits before saving the draft.",
+        );
+        return;
+      }
+      void saveDraftNow();
+    },
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "s" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      event.preventDefault();
+      const shortcut = saveShortcutState.current;
+      if (!shortcut.blocked) shortcut.save();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // Unsaved edits live in this browser until saved or discarded. While an
+  // earlier copy awaits Restore or Discard it is not overwritten.
+  useEffect(() => {
+    if (!doc || !editable || recovery) return;
+    if (!dirty) {
+      clearRecoveryDraft(user.id, id);
+      return;
+    }
+    const timer = window.setTimeout(
+      () =>
+        storeRecoveryDraft(user.id, id, {
+          revision: doc.revision,
+          config,
+          variables,
+          positions: Object.fromEntries(
+            nodes.map((node) => [node.id, node.position]),
+          ),
+        }),
+      800,
+    );
+    return () => window.clearTimeout(timer);
+  }, [dirty, config, variables, nodes, doc?.revision, editable, recovery]);
+  function restoreRecovery() {
+    if (!recovery || !editable || !closeSettings()) return;
+    replace(
+      recovery.config,
+      {
+        nodes: Object.entries(recovery.positions).map(([nodeId, position]) => ({
+          id: nodeId,
+          position,
+        })) as Graph["nodes"],
+        edges: [],
+      },
+      true,
+      recovery.variables,
+    );
+    setRecovery(null);
+    notify("Unsaved changes restored. Save to keep them.");
+  }
+  function discardRecovery() {
+    clearRecoveryDraft(user.id, id);
+    setRecovery(null);
   }
   function openHistory() {
     if (toolsRef.current) toolsRef.current.open = false;
@@ -3397,11 +3559,103 @@ export default function Editor({
               {saveIndicator}
               {!historyOpen && (can(user, "operate") || editable) && (
                 <div
-                  className={`editor-primary-action ${editable && can(user, "operate") ? "editor-primary-split" : ""}`}
+                  className="editor-primary-action"
                   role="group"
                   aria-label="Pipeline save and publish actions"
                 >
-                  {can(user, "operate") ? (
+                  {editable && (
+                    <div className="editor-save-split">
+                      <Button
+                        variant="secondary"
+                        className="editor-save-button"
+                        icon={Save}
+                        busy={savingDraft}
+                        disabled={busy || hasPendingFields || !dirty}
+                        aria-keyshortcuts="Control+S Meta+S"
+                        title={
+                          hasPendingFields
+                            ? "Apply unfinished code and field edits before saving"
+                            : dirty
+                              ? `Save draft (${saveShortcut})`
+                              : "No unsaved changes"
+                        }
+                        onClick={() => void saveDraftNow()}
+                      >
+                        Save
+                      </Button>
+                      <DropdownMenu.Root
+                        modal={false}
+                        onOpenChange={(open) => {
+                          if (open && toolsRef.current)
+                            toolsRef.current.open = false;
+                        }}
+                      >
+                        <DropdownMenu.Trigger asChild>
+                          <button
+                            type="button"
+                            className="button secondary editor-save-trigger"
+                            aria-label="Save options"
+                            title="Save options"
+                            disabled={busy || savingDraft}
+                          >
+                            <ChevronDown size={15} aria-hidden="true" />
+                          </button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content
+                            className="editor-save-menu"
+                            align="end"
+                            sideOffset={6}
+                            collisionPadding={12}
+                            aria-label="Save options"
+                            loop
+                            onEscapeKeyDown={(event) => event.stopPropagation()}
+                          >
+                            <DropdownMenu.Item
+                              className="editor-save-menu-item"
+                              disabled={
+                                hasPendingFields ||
+                                !dirty ||
+                                busy ||
+                                savingDraft
+                              }
+                              onSelect={() => void saveDraftNow()}
+                              aria-keyshortcuts="Control+S Meta+S"
+                            >
+                              <Save size={16} aria-hidden="true" />
+                              Save draft
+                              <kbd
+                                className="editor-save-menu-shortcut"
+                                aria-hidden="true"
+                              >
+                                {saveShortcut}
+                              </kbd>
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item
+                              className="editor-save-menu-item"
+                              disabled={
+                                hasPendingFields ||
+                                !dirty ||
+                                busy ||
+                                savingDraft
+                              }
+                              onSelect={openSaveNote}
+                            >
+                              <MessageSquareText size={16} aria-hidden="true" />
+                              Save with note…
+                            </DropdownMenu.Item>
+                            {hasPendingFields && (
+                              <p className="editor-save-menu-hint">
+                                Apply unfinished code and field edits before
+                                saving.
+                              </p>
+                            )}
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu.Root>
+                    </div>
+                  )}
+                  {can(user, "operate") && (
                     <Button
                       className="editor-primary-button"
                       icon={
@@ -3457,77 +3711,32 @@ export default function Editor({
                               ? "Choose devices"
                               : "Review & publish"}
                     </Button>
-                  ) : (
-                    <Button
-                      icon={Save}
-                      busy={savingDraft}
-                      disabled={busy || hasPendingFields || !dirty}
-                      title={
-                        hasPendingFields
-                          ? "Apply unfinished code and field edits before saving"
-                          : dirty
-                            ? "Save draft"
-                            : "No unsaved changes"
-                      }
-                      onClick={() => void saveDraftNow()}
-                    >
-                      Save draft
-                    </Button>
-                  )}
-                  {editable && can(user, "operate") && (
-                    <DropdownMenu.Root
-                      modal={false}
-                      onOpenChange={(open) => {
-                        if (open && toolsRef.current)
-                          toolsRef.current.open = false;
-                      }}
-                    >
-                      <DropdownMenu.Trigger asChild>
-                        <button
-                          type="button"
-                          className="button editor-save-trigger"
-                          aria-label="Save options"
-                          title="Save options"
-                          disabled={busy || savingDraft}
-                        >
-                          <ChevronDown size={15} aria-hidden="true" />
-                        </button>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                          className="editor-save-menu"
-                          align="end"
-                          sideOffset={6}
-                          collisionPadding={12}
-                          aria-label="Save options"
-                          loop
-                          onEscapeKeyDown={(event) => event.stopPropagation()}
-                        >
-                          <DropdownMenu.Item
-                            className="editor-save-menu-item"
-                            disabled={
-                              hasPendingFields || !dirty || busy || savingDraft
-                            }
-                            onSelect={() => void saveDraftNow()}
-                          >
-                            <Save size={16} aria-hidden="true" />
-                            Save draft
-                          </DropdownMenu.Item>
-                          {hasPendingFields && (
-                            <p className="editor-save-menu-hint">
-                              Apply unfinished code and field edits before
-                              saving.
-                            </p>
-                          )}
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
                   )}
                 </div>
               )}
             </div>
           </div>
         </div>
+        {recovery && editable && (
+          <div className="editor-recovery" role="status">
+            <History size={16} aria-hidden="true" />
+            <p>
+              <strong>
+                Unsaved changes from {when(recovery.saved_at)} are still in this
+                browser.
+              </strong>{" "}
+              {recovery.revision === doc.revision
+                ? "Restore them to keep editing, or discard them."
+                : `The saved draft changed since then (revision ${recovery.revision} → ${doc.revision}). Restoring replaces it in the editor; review before saving.`}
+            </p>
+            <Button variant="secondary compact" onClick={restoreRecovery}>
+              Restore changes
+            </Button>
+            <Button variant="ghost compact" onClick={discardRecovery}>
+              Discard
+            </Button>
+          </div>
+        )}
         {publishedVersionStatus === "failed" && (
           <div className="editor-published-status-error" role="status">
             <span>Published version check failed: {publishedVersionError}</span>
@@ -4196,6 +4405,47 @@ export default function Editor({
           onConfirm={() => applyImportedPipeline(importCandidate)}
         />
       )}
+      <Modal
+        open={saveNote !== null}
+        onClose={() => !savingDraft && setSaveNote(null)}
+        title="Save draft"
+        description="The note appears in version history with this draft revision."
+      >
+        <div className="modal-body">
+          <Field label="Note">
+            <textarea
+              rows={3}
+              maxLength={500}
+              value={saveNote ?? ""}
+              disabled={savingDraft}
+              onChange={(event) => setSaveNote(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void saveWithNote();
+                }
+              }}
+            />
+          </Field>
+        </div>
+        <div className="modal-footer">
+          <Button
+            variant="secondary"
+            disabled={savingDraft}
+            onClick={() => setSaveNote(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            icon={Save}
+            busy={savingDraft}
+            disabled={hasPendingFields || !dirty}
+            onClick={() => void saveWithNote()}
+          >
+            Save draft
+          </Button>
+        </div>
+      </Modal>
       <Modal
         open={discardOpen}
         onClose={cancelDiscard}
