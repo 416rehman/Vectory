@@ -28,6 +28,10 @@ const reasons: Record<string, { title: string; fix: string }> = {
     title: "the token only allows other device names",
     fix: "Use a name the token allows, or create a new command without a name restriction.",
   },
+  DEVICE_NAME_MISMATCH: {
+    title: "the command was made for another device name",
+    fix: "Run it with the --name it was made for, or create a new command for this name.",
+  },
   RECOVERY_NAME_MISMATCH: {
     title: "this recovery token is for another device name",
     fix: "Use the recovered device's exact name.",

@@ -631,6 +631,10 @@ export type Device = {
   service_manager?: "systemd" | "launchd" | "windows" | "none";
   /** Whether Vector runs, from the latest check-in; absent when unknown. */
   vector_running?: boolean;
+  /** SHA-256 of the running agent build, from the latest check-in. */
+  agent_sha256?: string;
+  /** The agent's state directory on the host, from the latest check-in. */
+  state_dir?: string;
 };
 export type VersionLabel = {
   id: string;
@@ -1402,6 +1406,8 @@ export type Token = {
   uses: number;
   max_uses?: number | null;
   name_prefix?: string | null;
+  /** Set when the token enrolls only this device name (newer servers). */
+  device_name?: string;
   revoked: boolean;
   created_at: string;
   recovery_device_id?: string;

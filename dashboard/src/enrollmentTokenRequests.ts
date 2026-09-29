@@ -25,7 +25,12 @@ const prefixSchema = z
   .regex(/^[a-z0-9-]*$/)
   .nullable();
 const usesSchema = z.number().int().min(1).max(100000).nullable();
-const inputSchema = z
+/** A device name as enrollment normalizes it (lowercase). */
+const deviceNameSchema = z
+  .string()
+  .max(100)
+  .regex(/^[a-z0-9][a-z0-9_.-]*$/);
+const inputObject = z
   .object({
     name: name.refine(
       (value) => !!value.trim(),
@@ -37,8 +42,17 @@ const inputSchema = z
       (value) => value !== "",
       "Use null when no name prefix is requested.",
     ),
+    // Add device binds a command's token to the name typed for it.
+    device_name: deviceNameSchema.nullable().optional(),
   })
   .strict();
+const inputSchema = inputObject.refine(
+  (value) =>
+    !value.device_name ||
+    !value.name_prefix ||
+    value.device_name.startsWith(value.name_prefix),
+  "The device name must start with the name prefix.",
+);
 
 export const TokenRecordSchema = z
   .object({
@@ -48,6 +62,8 @@ export const TokenRecordSchema = z
     uses: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     max_uses: usesSchema,
     name_prefix: prefixSchema,
+    // Present only when the server binds the token to one device name.
+    device_name: deviceNameSchema.optional(),
     revoked: z.boolean(),
     created_at: z.string().datetime({ offset: true }),
     recovery_device_id: uuid.optional(),
@@ -127,7 +143,7 @@ const operationSchema = z
     actor_id: actorSchema,
     id: uuid,
     recorded_at: z.string().datetime(),
-    request: inputSchema.extend({ request_id: uuid }).strict(),
+    request: inputObject.extend({ request_id: uuid }).strict(),
     // Set when the first secret arrived: the creation is confirmed, so the
     // reminder only tracks the token (by ID, never its secret).
     token_id: uuid.optional(),
@@ -157,6 +173,10 @@ function checkRecord(operation: TokenRequestOperation, record: TokenRecord) {
     record.name !== operation.request.name ||
     record.max_uses !== operation.request.max_uses ||
     record.name_prefix !== operation.request.name_prefix ||
+    // A server before name binding omits it (the token takes any name); one
+    // that binds must bind the name this request asked for.
+    (record.device_name !== undefined &&
+      record.device_name !== operation.request.device_name) ||
     record.recovery_device_id !== undefined ||
     record.recovery_name !== undefined
   )
