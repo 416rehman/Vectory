@@ -17758,7 +17758,7 @@
               "issues"
             ],
             "additionalProperties": false,
-            "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+            "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
           },
           "check_in_seconds": {
             "type": "integer",

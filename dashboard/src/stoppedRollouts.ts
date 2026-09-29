@@ -60,7 +60,7 @@ export function stoppedRollouts(
         [
           counts.failed ? `${counts.failed} failed` : "",
           counts.queued ? `${counts.queued} not released` : "",
-          d.verified_count ? `${d.verified_count} verified` : "",
+          d.verified_count ? `${d.verified_count} applied` : "",
         ]
           .filter(Boolean)
           .join(" · ") || plural(current, "device"),

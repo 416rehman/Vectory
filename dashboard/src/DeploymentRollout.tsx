@@ -186,7 +186,7 @@ export function StageLanes({
               <span>
                 {verified} of {lane.size}
               </span>{" "}
-              verified
+              applied
             </p>
             <ul
               className="rollout-dots"
@@ -233,7 +233,7 @@ export function StageLanes({
                 />
               ) : lane.verified_at ? (
                 <span>
-                  <CircleCheck size={13} aria-hidden="true" /> Verified{" "}
+                  <CircleCheck size={13} aria-hidden="true" /> Applied{" "}
                   {exactTime(lane.verified_at)}
                 </span>
               ) : lane.released_at ? (

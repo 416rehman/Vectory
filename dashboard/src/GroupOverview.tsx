@@ -4,7 +4,7 @@ import { ErrorBox, Spinner, StatusBadge, useResource } from "./ui";
 import { deviceDisplayStatus, statusLabel } from "./status";
 import { relativeTime } from "./time";
 import { deploymentRoute } from "./deploymentRouting";
-import { describeDeployment, interval, verifiedText } from "./deploymentStatus";
+import { appliedText, describeDeployment, interval } from "./deploymentStatus";
 import { runningName } from "./deploymentReviewModel";
 
 function assignmentTitle(d: DeploymentSummary) {
@@ -169,7 +169,7 @@ export default function GroupOverview({
                     <ArrowRight size={13} aria-hidden="true" />
                   </a>
                   <span className="control-muted">
-                    {verifiedText(d)} · {relativeTime(d.created_at)}
+                    {appliedText(d)} · {relativeTime(d.created_at)}
                   </span>
                   <StatusBadge
                     domain="deployment"

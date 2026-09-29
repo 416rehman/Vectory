@@ -136,10 +136,11 @@ function display(state: string) {
 }
 
 /**
- * "2 of 3 verified": how many of the devices a rollout currently follows
- * verified it. One wording for the list, the group view and cards.
+ * "2 of 3 applied": how many of the devices a rollout currently follows
+ * applied it (the agent verified Vector runs it). One wording for the list,
+ * the group view, cards and the rollout page.
  */
-export function verifiedText(
+export function appliedText(
   d: Pick<
     DeploymentSummary,
     "target_count" | "verified_count" | "state_counts" | "rolled_back_by"
@@ -148,7 +149,7 @@ export function verifiedText(
   const current = d.target_count - (d.state_counts.removed || 0);
   if (!current && d.target_count) return "No devices follow this now";
   if (!current) return "No devices";
-  return `${d.verified_count} of ${current} verified${d.rolled_back_by ? ", then rolled back" : ""}`;
+  return `${d.verified_count} of ${current} applied${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 
 /** Whether a rollout can still release devices (and is worth polling fast). */
