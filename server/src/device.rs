@@ -267,124 +267,6 @@ pub async fn renew(
     tx.commit().await?;
     Ok(Json(issued.response))
 }
-fn telemetry(v: &Value) -> Result<Value> {
-    if v.is_null() {
-        return Ok(Value::Null);
-    }
-    const FIELDS: &[&str] = &[
-        "sampled_at",
-        "events_per_second",
-        "errors",
-        "uptime_seconds",
-        "memory_bytes",
-        "cpu_seconds",
-        "discarded_events",
-        "buffer_bytes",
-        "components",
-    ];
-    if !v.is_object()
-        || v.as_object()
-            .unwrap()
-            .keys()
-            .any(|k| !FIELDS.contains(&k.as_str()))
-    {
-        return Err(ApiError::invalid("Telemetry contains an unsupported field"));
-    }
-    let time = chrono::DateTime::parse_from_rfc3339(db::string(v, "sampled_at", 64)?)
-        .map_err(|_| ApiError::invalid("Invalid telemetry timestamp"))?;
-    if (Utc::now().signed_duration_since(time).num_seconds()).abs() > 86400 {
-        return Err(ApiError::invalid(
-            "Telemetry sample is outside the retention window",
-        ));
-    }
-    let mut out = json!({"sampled_at":time.to_rfc3339_opts(chrono::SecondsFormat::Secs,true)});
-    for key in [
-        "events_per_second",
-        "errors",
-        "uptime_seconds",
-        "memory_bytes",
-        "cpu_seconds",
-        "discarded_events",
-        "buffer_bytes",
-    ] {
-        if !v[key].is_null() {
-            let n = v[key]
-                .as_f64()
-                .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 1e15)
-                .ok_or_else(|| {
-                    ApiError::invalid("Telemetry values must be bounded nonnegative numbers")
-                })?;
-            out[key] = json!(n)
-        }
-    }
-    if !v["components"].is_null() {
-        let components = v["components"]
-            .as_array()
-            .filter(|c| c.len() <= 50)
-            .ok_or_else(|| ApiError::invalid("Telemetry supports at most 50 component samples"))?;
-        let mut result = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for component in components {
-            if component.as_object().is_none_or(|o| {
-                o.keys().any(|k| {
-                    ![
-                        "id",
-                        "type",
-                        "events_per_second",
-                        "errors",
-                        "discarded_events",
-                        "buffer_bytes",
-                    ]
-                    .contains(&k.as_str())
-                })
-            }) {
-                return Err(ApiError::invalid("Invalid component telemetry fields"));
-            }
-            let id = db::string(component, "id", 100)?;
-            if !id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-                || !seen.insert(id)
-            {
-                return Err(ApiError::invalid(
-                    "Component telemetry IDs must be unique bounded identifiers",
-                ));
-            }
-            let mut sample = json!({"id":id});
-            if !component["type"].is_null() {
-                let kind = db::string(component, "type", 64)?;
-                if !kind
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-                {
-                    return Err(ApiError::invalid("Invalid component type"));
-                }
-                sample["type"] = json!(kind);
-            }
-            for key in [
-                "events_per_second",
-                "errors",
-                "discarded_events",
-                "buffer_bytes",
-            ] {
-                if !component[key].is_null() {
-                    let n = component[key]
-                        .as_f64()
-                        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 1e15)
-                        .ok_or_else(|| {
-                            ApiError::invalid(
-                                "Component metrics must be bounded nonnegative numbers",
-                            )
-                        })?;
-                    sample[key] = json!(n);
-                }
-            }
-            result.push(sample);
-        }
-        out["components"] = json!(result);
-    }
-    Ok(out)
-}
 pub async fn heartbeat(
     AppState(s): AppState<State>,
     Extension(peer): Extension<PeerCertificate>,
@@ -463,7 +345,7 @@ pub async fn heartbeat(
     if !v["local_paused"].is_boolean() || !v["remote_pause_acknowledged"].is_boolean() {
         return Err(ApiError::invalid("Pause flags must be booleans"));
     }
-    let sample = telemetry(&v["telemetry"])?;
+    let sample = crate::telemetry::validate(&v["telemetry"])?;
     let attempt = crate::configuration_attempt::parse(&v)?;
     let mut tx = s.pool.begin().await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
@@ -692,7 +574,7 @@ pub async fn heartbeat(
         .execute(&mut *tx)
         .await?;
     if policy["telemetry_enabled"] == true && !sample.is_null() {
-        sqlx::query("INSERT INTO telemetry(device_id,bucket,data) VALUES(?,?,?) ON CONFLICT(device_id,bucket) DO UPDATE SET data=excluded.data").bind(&id).bind(Utc::now().timestamp()/60).bind(sample.to_string()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO telemetry(device_id,bucket,data) VALUES(?,?,?) ON CONFLICT(device_id,bucket) DO UPDATE SET data=excluded.data").bind(&id).bind(Utc::now().timestamp()/60).bind(crate::telemetry::history_sample(&sample).to_string()).execute(&mut *tx).await?;
     }
     let prior_verified_current =
         crate::configuration_attempt::identity_matches(&verified_attempt, generation, &desired);
@@ -940,35 +822,5 @@ pub async fn serve_tls(
                 .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
                 .await;
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn telemetry_preserves_unavailability_and_bounds_component_cardinality() {
-        let minimal = json!({"sampled_at":db::now()});
-        let result = telemetry(&minimal).unwrap();
-        assert!(result.get("errors").is_none());
-        assert!(result.get("memory_bytes").is_none());
-        assert!(result.get("components").is_none());
-        let measured = json!({"sampled_at":db::now(),"uptime_seconds":12,"cpu_seconds":0,"components":[{"id":"web_ingest","type":"http_server","events_per_second":2.5,"errors":0}]});
-        assert_eq!(
-            telemetry(&measured).unwrap()["components"][0]["errors"],
-            0.0
-        );
-        let mut invalid = measured.clone();
-        invalid["components"][0]["tenant"] = json!("unbounded-label");
-        assert!(telemetry(&invalid).is_err());
-        let mut invalid = measured.clone();
-        invalid["memory_bytes"] = json!(-1);
-        assert!(telemetry(&invalid).is_err());
-        let mut invalid = measured.clone();
-        invalid["components"] = json!(vec![measured["components"][0].clone(); 51]);
-        assert!(telemetry(&invalid).is_err());
-        let mut invalid = measured.clone();
-        invalid["components"] = json!(vec![measured["components"][0].clone(); 2]);
-        assert!(telemetry(&invalid).is_err());
     }
 }
