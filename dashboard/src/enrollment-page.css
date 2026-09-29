@@ -1,5 +1,6 @@
 .enroll-page {
   max-width: 960px;
+  min-width: 0;
 }
 .enroll-layout {
   display: grid;
@@ -116,6 +117,9 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  /* The block scrolls inside itself; it never widens the page. */
+  min-width: 0;
+  max-width: 100%;
   margin-top: 4px;
   padding: 12px 12px 12px 16px;
   border: 1px solid var(--line);
@@ -173,6 +177,62 @@
 }
 .enroll-secret-hint {
   margin: 6px 0 0;
+}
+.enroll-advanced,
+.enroll-manual,
+.enroll-attempts .control-card {
+  min-width: 0;
+}
+.enroll-no-build p {
+  margin: 0;
+  line-height: 1.55;
+}
+.enroll-unused {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.enroll-text-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.enroll-text-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.enroll-attempts > summary {
+  width: fit-content;
+  padding: 6px 0;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.enroll-attempts > .control-card {
+  margin-top: 12px;
+}
+.enroll-attempts .control-card > p {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+@media (max-width: 639px) {
+  /* A narrow command block stacks Copy under the command. */
+  .enroll-command {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+  }
+  .enroll-command pre {
+    font-size: 12px;
+  }
+  .enroll-command .button {
+    align-self: flex-start;
+  }
 }
 .enroll-manual > p {
   margin: 10px 0;

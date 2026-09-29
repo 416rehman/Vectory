@@ -242,7 +242,7 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
       .getByRole("button", { name: "Create install command", exact: true })
       .click();
     await expect(page.locator(".enroll-command pre").first()).toContainText(
-      "sudo sh vectory-install.sh --mode restricted",
+      "sudo sh vectory-install.sh \\\n    --mode restricted",
     );
     await expect(page.locator("body")).not.toContainText(
       "synthetic-unused-enrollment-token",
@@ -293,7 +293,7 @@ try {
         try {
           await expect(
             f.page.getByRole("heading", {
-              name: "Adding devices needs the Operator role",
+              name: "Needs the Operator or Administrator role",
               exact: true,
             }),
           ).toBeVisible();
