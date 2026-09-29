@@ -16,6 +16,7 @@ import {
   programDiff,
   reviewChanges,
   sectionCount,
+  shortValue,
   type ComponentChange,
 } from "./publishReview";
 import "./publish-review.css";
@@ -70,12 +71,21 @@ function describe(component: ComponentChange) {
   if (component.change !== "changed")
     return displayLabel(component.type, component.section as Kind);
   const parts = component.programs.map((program) => `${program.label} changed`);
-  if (component.options.length)
-    parts.push(
-      component.options.length > 3
-        ? `${component.options.length} options changed`
-        : `${component.options.join(", ")} changed`,
-    );
+  if (component.options.length) {
+    // "rate 10 → 7" where the values are short, "endpoint changed" where not.
+    if (component.options.length <= 3)
+      parts.push(
+        component.options
+          .map((key) => {
+            const value = component.values[key];
+            return value
+              ? `${key} ${shortValue(value.before)} → ${shortValue(value.after)}`
+              : `${key} changed`;
+          })
+          .join(", "),
+      );
+    else parts.push(`${component.options.length} options changed`);
+  }
   if (component.rewired) parts.push("inputs changed");
   return parts.join(" · ");
 }

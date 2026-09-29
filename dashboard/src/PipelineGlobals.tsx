@@ -264,7 +264,14 @@ export default function PipelineGlobals({
                 </Button>
               </div>
               {error && <ErrorBox message={error} />}
-              {result && <PipelineTestResults run={result} />}
+              {result && (
+                <PipelineTestResults
+                  run={result}
+                  expected={
+                    Array.isArray(config.tests) ? config.tests.length : 0
+                  }
+                />
+              )}
             </div>
           )}
           {section === "variables" ? (

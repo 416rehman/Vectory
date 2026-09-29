@@ -23,9 +23,17 @@ export type PipelineTestRun = {
 const ran = (run: PipelineTestRun) =>
   run.tests_run === true || (run.tests_run !== false && !!run.tests?.length);
 
+/**
+ * A run that reported no test although the pipeline has some: Vector did not
+ * run them (it could not build them), whatever else the response says.
+ */
+const unreported = (run: PipelineTestRun, expected: number) =>
+  ran(run) && !(run.tests ?? []).length && expected > 0;
+
 /** One line that says how the run went, from Vector's own result. */
-export function testHeadline(run: PipelineTestRun) {
+export function testHeadline(run: PipelineTestRun, expected = 0) {
   const tests = run.tests ?? [];
+  if (unreported(run, expected)) return "Vector didn't run these tests";
   if (!ran(run) && run.deferred)
     return "These tests need the device environment";
   if (run.tests_run === false)
@@ -55,7 +63,14 @@ export function deferralNote(run: PipelineTestRun) {
 }
 
 /** Each test with Vector's verdict; failures show why and what came out. */
-export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
+export default function PipelineTestResults({
+  run,
+  expected = 0,
+}: {
+  run: PipelineTestRun;
+  /** How many tests the pipeline has. */
+  expected?: number;
+}) {
   const tests = run.tests ?? [];
   const failures = tests.filter((test) => !test.passed).length;
   // The headline already counts failures; keep only other messages.
@@ -63,19 +78,24 @@ export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
     (message) =>
       !tests.length || !/^\d+ of \d+ pipeline tests? failed\.?$/.test(message),
   );
-  const note = deferralNote(run);
-  const state = ran(run)
-    ? run.valid
-      ? "passed"
-      : "failed"
-    : run.deferred
-      ? "deferred"
-      : run.valid
+  const missing = unreported(run, expected);
+  const note = missing
+    ? "Vector couldn't build them. Check the pipeline for problems, then run them again."
+    : deferralNote(run);
+  const state = missing
+    ? "failed"
+    : ran(run)
+      ? run.valid
         ? "passed"
-        : "failed";
+        : "failed"
+      : run.deferred
+        ? "deferred"
+        : run.valid
+          ? "passed"
+          : "failed";
   return (
     <div className="pipeline-test-results" role="status" data-state={state}>
-      <strong>{testHeadline(run)}</strong>
+      <strong>{testHeadline(run, expected)}</strong>
       {note && <p className="pipeline-test-note">{note}</p>}
       {tests.length > 0 && (
         <ul className="pipeline-test-list" aria-label="Test results">
@@ -110,7 +130,7 @@ export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
         </ul>
       )}
       {errors.length > 0 && <ErrorBox message={errors.join("\n")} />}
-      {!tests.length && run.output && (
+      {!tests.length && !missing && run.output && (
         <pre className="code-preview">{run.output}</pre>
       )}
     </div>

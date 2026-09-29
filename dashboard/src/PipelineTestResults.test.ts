@@ -56,4 +56,17 @@ describe("pipeline test headline", () => {
       deferralNote({ valid: true, errors: [], tests: [test(true)] }),
     ).toBeNull();
   });
+
+  it("does not say tests passed when Vector reported none for a pipeline that has some", () => {
+    const empty = {
+      valid: true,
+      errors: [],
+      tests_run: true,
+      tests: [],
+      output: "0 of 0 tests passed.",
+    };
+    expect(testHeadline(empty, 2)).toBe("Vector didn't run these tests");
+    // A pipeline without tests keeps the plain wording.
+    expect(testHeadline(empty, 0)).toBe("Pipeline tests passed");
+  });
 });

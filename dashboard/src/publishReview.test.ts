@@ -108,6 +108,9 @@ describe("publish review", () => {
       after: "((.status >= 500) ?? false)",
     });
     expect(byId.loki).toMatchObject({ options: ["endpoint"], rewired: true });
+    expect(byId.loki.values).toEqual({
+      endpoint: { before: "http://a", after: "http://b" },
+    });
     expect(byId.archive).toMatchObject({ change: "added", type: "aws_s3" });
     expect(byId.nginx.change).toBe("removed");
     expect(byId.journal.change).toBe("added");

@@ -105,6 +105,17 @@ export function programLabel(path: string) {
   return exclusive ? `Route ${Number(exclusive[1]) + 1}` : path;
 }
 
+/** A value short enough to show inline: text up to 24 characters, a number, a flag. */
+const short = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  typeof value === "number" ||
+  typeof value === "boolean" ||
+  (typeof value === "string" && value.length <= 24 && !value.includes("\n"));
+export function shortValue(value: unknown) {
+  return value === undefined ? "unset" : JSON.stringify(value);
+}
+
 export type ProgramChange = {
   path: string;
   label: string;
@@ -118,6 +129,8 @@ export type ComponentChange = {
   change: "added" | "removed" | "changed";
   /** Changed options other than programs and inputs. */
   options: string[];
+  /** Before and after for options whose values are short scalars. */
+  values: Record<string, { before: unknown; after: unknown }>;
   programs: ProgramChange[];
   rewired: boolean;
 };
@@ -149,6 +162,7 @@ export function reviewChanges(
           type,
           change: "added",
           options: [],
+          values: {},
           programs: [...componentPrograms(component)].map(([path, text]) => ({
             path,
             label: programLabel(path),
@@ -184,13 +198,21 @@ export function reviewChanges(
             after: now,
           });
       }
+      const options = keys.filter(
+        (key) => !PROGRAM_KEYS.has(key) && key !== "inputs",
+      );
       components.push({
         id,
         section,
         type,
         change: "changed",
-        options: keys.filter(
-          (key) => !PROGRAM_KEYS.has(key) && key !== "inputs",
+        options,
+        values: Object.fromEntries(
+          options.flatMap((key) =>
+            short(previous?.[key]) && short(component?.[key])
+              ? [[key, { before: previous?.[key], after: component?.[key] }]]
+              : [],
+          ),
         ),
         programs,
         rewired: keys.includes("inputs"),
@@ -207,6 +229,7 @@ export function reviewChanges(
               : "",
           change: "removed",
           options: [],
+          values: {},
           programs: [],
           rewired: false,
         });
