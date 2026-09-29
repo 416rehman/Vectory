@@ -25,7 +25,7 @@ You should see a toast such as "Test delivered to On-call Slack: answered 200 in
 
 ## Add a webhook channel
 
-Any HTTPS endpoint that accepts a JSON `POST` works: Microsoft Teams workflows, PagerDuty, Opsgenie or your own service. Add it like a Slack channel, then set the optional fields:
+Any HTTPS endpoint that accepts a JSON `POST` works, such as your own service or an automation that reads the `event` object. A service that expects its own format, such as PagerDuty's Events API, needs a small relay in between. Add the channel like a Slack channel, then set the optional fields:
 
 - **Signing secret (optional):** at least 16 characters. Each message gets an `X-Vectory-Signature` header your receiver can check.
 - **Header (optional)** and **Header value:** a header sent with every message, such as `Authorization` with `Bearer <token>`. Vectory sets `Host`, `Content-Type`, `User-Agent` and the `X-Vectory-` headers itself.
@@ -188,7 +188,7 @@ Messages are sent in the background. A slow or unreachable receiver never slows 
 | Situation | What happens |
 | --- | --- |
 | The receiver answers `2xx` | **Delivered**. |
-| No answer, a timeout, `408`, `425`, `429` or `5xx` | **Retrying**: again after 1 minute, 5 minutes and 30 minutes. If the fourth attempt fails, **Gave up**. |
+| No connection, no answer in time, a TLS failure, `408`, `425`, `429` or `5xx` | **Retrying**: again after 1 minute, 5 minutes and 30 minutes. If the fourth attempt fails, **Gave up**. |
 | Any other `4xx`, a redirect or a refused address | **Failed** at once. A retry wouldn't change it. |
 | More than 30 messages in a minute | The rest wait and go out as one summary, such as "12 more notifications, summarised to avoid flooding this channel". |
 | 500 messages already waiting | New ones join one summary, "… more notifications while this channel was behind". |
@@ -225,7 +225,7 @@ A channel reads **Failing** when its last attempt failed; the reason is under it
 | "… which Vectory never contacts." | The address is link-local, cloud metadata or reserved. Use the receiver's real, routable address. |
 | "The receiver answered 404 Not Found" or "403 Forbidden" | The URL or credential is wrong or was revoked. For Slack, create a new incoming webhook and **Replace** the URL. |
 | "… a redirect. Vectory doesn't follow redirects; use the final URL." | Replace the URL with the one the redirect points to, usually `https://` instead of `http://`. |
-| "… didn't answer within 10 s" or "Couldn't connect" | Check the receiver is up and that this server can reach it through your firewall. Retries continue on their own. |
+| "Couldn't resolve …", "Connection refused by …", "Timed out connecting to …" or "… didn't answer within 10 s" | Check the receiver is up, its name resolves from this server, and your firewall lets this server reach it. Retries continue on their own. |
 | "TLS handshake with … failed" | The receiver needs a certificate from a public certificate authority, valid for its host name. Vectory doesn't trust private certificate authorities for notifications. |
 | **Needs secrets** | The channel's saved secrets can't be read with this server's keys, for example after restoring onto a different key. Edit the channel and enter them again. |
 

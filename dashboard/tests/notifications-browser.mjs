@@ -211,8 +211,7 @@ function channels() {
         state: "failing",
         last_attempt_at: ago(1),
         last_delivered_at: ago(180),
-        last_error:
-          "Couldn't connect to alerts.example.test: connection refused.",
+        last_error: "Couldn't resolve alerts.example.test.",
         last_status_code: null,
         pending: 3,
       },
@@ -304,7 +303,7 @@ function attempts() {
           ? null
           : outcome === "failed"
             ? "The receiver answered 404 Not Found: «redacted»"
-            : "Couldn't connect to alerts.example.test: connection refused.",
+            : "Couldn't resolve alerts.example.test.",
       next_attempt_at: outcome === "retrying" ? later(5) : null,
     };
   });
@@ -509,8 +508,7 @@ async function load({
                 delivered: false,
                 status_code: null,
                 latency_ms: 5003,
-                error:
-                  "Couldn't connect to alerts.example.test: connection refused.",
+                error: "Couldn't resolve alerts.example.test.",
               }
             : {
                 delivered: true,
@@ -987,7 +985,7 @@ try {
       );
       await expect(channelRow("Incident receiver")).toContainText("Failing");
       await expect(channelRow("Incident receiver")).toContainText(
-        "connection refused. · 3 waiting",
+        "Couldn't resolve alerts.example.test. · 3 waiting",
       );
       await expect(channelRow("Incident receiver")).toContainText(
         "Errors only · 2 pipelines · Quiet 22:00–07:00 (Europe/Berlin)",
@@ -1009,7 +1007,7 @@ try {
       await expect.poll(notices).toEqual([
         {
           message:
-            "Test to Incident receiver failed. Couldn't connect to alerts.example.test: connection refused.",
+            "Test to Incident receiver failed. Couldn't resolve alerts.example.test.",
           tone: "error",
         },
       ]);
@@ -1359,9 +1357,7 @@ try {
       await expect(channelTable()).toHaveCount(0);
       await expect(list.locator(".data-list-item")).toHaveCount(4);
       // Cards keep what the table's status column says.
-      await expect(list).toContainText(
-        "Couldn't connect to alerts.example.test: connection refused.",
-      );
+      await expect(list).toContainText("Couldn't resolve alerts.example.test.");
       await expect(list).toContainText("Last delivered 2m ago");
       for (const name of ["light", "dark"]) {
         await theme(name);

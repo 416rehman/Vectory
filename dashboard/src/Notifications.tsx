@@ -665,7 +665,7 @@ function ChannelDialog({
                         "webhook",
                         Webhook,
                         "Webhook",
-                        "Slack, Teams, PagerDuty or your own receiver",
+                        "Slack, or any HTTPS receiver that takes JSON",
                       ],
                       [
                         "email",
