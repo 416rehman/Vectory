@@ -4,6 +4,7 @@ import {
   installerCommand,
   platformDefaults,
   quote,
+  runCommand,
   setupArguments,
   setupCommand,
   fingerprintRows,
@@ -11,7 +12,13 @@ import {
   windowsCommand,
   type SetupChoices,
 } from "./enrollmentCommands";
-import { eventsFor, progress, refusal } from "./enrollmentActivity";
+import {
+  eventsFor,
+  progress,
+  refusal,
+  supervision,
+  unsupervisedLine,
+} from "./enrollmentActivity";
 
 const pin = "1f3c" + "0".repeat(56) + "9ab0";
 const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
@@ -195,6 +202,26 @@ describe("install commands", () => {
   it("shows fingerprints the way the agent prints them", () => {
     expect(shortFingerprint(pin)).toBe("1F:3C:...:9A:B0");
   });
+
+  it("starts an agent without a service where this page's command put it", () => {
+    expect(runCommand(install, choices(), true)).toBe(
+      "sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent",
+    );
+    expect(
+      runCommand(
+        { default_install_dir: "/opt/vectory/bin/" },
+        choices({ stateDir: "/srv/agent state" }),
+        true,
+      ),
+    ).toBe("sudo /opt/vectory/bin/vectory run --state-dir '/srv/agent state'");
+    // An agent copied to the host is run from PATH, like its setup command.
+    expect(runCommand(install, choices({ os: "darwin" }), false)).toBe(
+      "sudo vectory run --state-dir '/Library/Application Support/Vectory/agent'",
+    );
+    expect(runCommand(install, choices({ os: "windows" }), true)).toBe(
+      ".\\vectory.exe run --state-dir 'C:\\ProgramData\\Vectory\\agent'",
+    );
+  });
 });
 
 describe("enrollment activity", () => {
@@ -283,5 +310,46 @@ describe("enrollment activity", () => {
     const state = progress([], [old, revoked], "t1", baseline, "edge-01");
     expect(state.revoked).toBe(true);
     expect(state.checkedIn).toBe(false);
+  });
+
+  it("says when nothing keeps a connected agent running, until it checks in again", () => {
+    const first = "2026-09-29T10:00:05Z";
+    expect(
+      supervision({ service_manager: "systemd", last_seen: first }, first),
+    ).toBe("supervised");
+    // An older agent doesn't say: nothing is claimed about it.
+    expect(supervision({ last_seen: first }, first)).toBe("supervised");
+    expect(
+      supervision({ service_manager: "none", last_seen: first }, first),
+    ).toBe("unsupervised");
+    // Setup's own follow-up check-in lands within seconds.
+    expect(
+      supervision(
+        { service_manager: "none", last_seen: "2026-09-29T10:00:07Z" },
+        first,
+      ),
+    ).toBe("unsupervised");
+    expect(
+      supervision(
+        { service_manager: "none", last_seen: "2026-09-29T10:01:05Z" },
+        first,
+      ),
+    ).toBe("running");
+    const line = unsupervisedLine(
+      "r16-auto",
+      "sudo /opt/x/vectory run --state-dir /var/lib/vectory-agent",
+      "linux",
+      false,
+    );
+    expect(`${line.title} ${line.before}${line.command}${line.after}`).toBe(
+      "r16-auto checked in once, but nothing keeps its agent running. Start it with sudo /opt/x/vectory run --state-dir /var/lib/vectory-agent, or use a host with systemd.",
+    );
+    const chosen = unsupervisedLine("lab-1", "sudo vectory run", "linux", true);
+    expect(chosen.after).toBe(
+      " and keep it running under your own supervisor.",
+    );
+    expect(unsupervisedLine("mac-1", "x", "darwin", false).after).toBe(
+      ", or use a host with launchd.",
+    );
   });
 });
