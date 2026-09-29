@@ -398,6 +398,8 @@ a.control-row-title {
 }
 .deployment-targets td:last-child {
   width: 34%;
+  /* Failure reasons wrap inside the column; table cells default to one line. */
+  white-space: normal;
 }
 .deployment-targets a {
   color: var(--accent-ink);

@@ -12,7 +12,6 @@ import {
   type Version,
 } from "./api";
 import { Button, ErrorBox, Field, Modal, useResource } from "./ui";
-import agentCatalog from "./generated/vector-catalog.json";
 import DocLink from "./DocLink";
 import { DataTable } from "./DataTable";
 import { deploymentRoute } from "./deploymentRouting";
@@ -35,6 +34,12 @@ import {
 import { releasePlan, type StatusTone } from "./deploymentStatus";
 import { shortDigest } from "./enrollmentCommands";
 import {
+  allowancesFile,
+  fullModeRequirements,
+  hasHostApprovals,
+  hostApprovals,
+} from "./hostRequirements";
+import {
   AssignmentLink,
   ConflictTable,
   CopyDetails,
@@ -42,11 +47,8 @@ import {
   ReleaseStrategyFields,
 } from "./DeploymentReview";
 import {
-  allowancesFile,
   assignmentMeta,
   conflictRows,
-  hasHostApprovals,
-  hostApprovals,
   defaultRelease,
   devicesText,
   inferPipelineName,
@@ -93,101 +95,6 @@ function blockerRowLabel(code: string): string {
     default:
       return "Deployment blocked";
   }
-}
-function isLoopbackSocketAddress(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(
-    value,
-  );
-  if (ipv4)
-    return (
-      Number(ipv4[1]) === 127 &&
-      ipv4.slice(2, 5).every((part) => Number(part) <= 255) &&
-      Number(ipv4[5]) <= 65535
-    );
-  if (!/^\[[0-9a-fA-F:]+\]:\d{1,5}$/.test(value)) return false;
-  try {
-    const address = new URL(`http://${value}`);
-    return (
-      address.hostname === "[::1]" &&
-      Number(value.slice(value.lastIndexOf(":") + 1)) <= 65535
-    );
-  } catch {
-    return false;
-  }
-}
-function fullModeRequirements(config: Record<string, any>): string[] {
-  const required = new Set<string>();
-  const restrictedRoots = new Set([
-    "sources",
-    "transforms",
-    "sinks",
-    "data_dir",
-    "api",
-    "acknowledgements",
-    "healthchecks",
-    "timezone",
-  ]);
-  for (const key of Object.keys(config))
-    if (!restrictedRoots.has(key)) required.add(`Global setting: ${key}`);
-  if (
-    config.api?.enabled === true &&
-    !isLoopbackSocketAddress(config.api.address)
-  )
-    required.add("API listener outside loopback");
-  for (const kind of ["sources", "transforms", "sinks"]) {
-    for (const component of Object.values(config[kind] || {}) as any[]) {
-      if (
-        !agentCatalog.components.some(
-          (known) =>
-            known.kind === kind &&
-            known.type === component?.type &&
-            known.device_capability === "allowed",
-        )
-      )
-        required.add(`${kind.slice(0, -1)}: ${component?.type || "unknown"}`);
-      if (component?.type === "console" && component.target !== "stderr")
-        required.add("Console output to stdout");
-    }
-  }
-  function inspect(value: any) {
-    if (typeof value === "string") {
-      if (/\$[A-Za-z_{]|SECRET\[|\{\{|%\{/.test(value))
-        required.add("Native secrets, environment values or dynamic templates");
-      if (
-        /get_env_var|get_secret|set_secret|remove_secret|dns_lookup|get_enrichment_table|find_enrichment_table/i.test(
-          value,
-        )
-      )
-        required.add("VRL access to device resources");
-    } else if (Array.isArray(value)) value.forEach(inspect);
-    else if (value && typeof value === "object")
-      for (const [key, child] of Object.entries(value)) {
-        if (
-          [
-            "command",
-            "exec",
-            "provider",
-            "secret",
-            "secrets",
-            "source_files",
-            "files",
-            "enrichment_tables",
-          ].includes(key.toLowerCase())
-        )
-          required.add(`Native capability: ${key}`);
-        if (
-          ["verify_certificate", "verify_hostname"].includes(
-            key.toLowerCase(),
-          ) &&
-          child === false
-        )
-          required.add("Disabled TLS verification");
-        inspect(child);
-      }
-  }
-  inspect(config);
-  return [...required];
 }
 /**
  * A restricted host refuses destinations, listeners and paths it hasn't

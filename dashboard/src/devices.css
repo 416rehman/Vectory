@@ -693,7 +693,6 @@ a.device-version-name:hover {
   color: var(--text);
   font-weight: var(--weight-semibold);
   text-decoration: none;
-  text-transform: capitalize;
 }
 .device-issues a:hover {
   color: var(--accent-text);
