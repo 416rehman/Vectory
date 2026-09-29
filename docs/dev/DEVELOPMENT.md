@@ -46,7 +46,7 @@ node scripts/demo.mjs --stop        # stops the agents and the preview
 
 The demo builds the agent, downloads Vector 0.58.0 and checks it against the official SHA-256 list, starts the preview and creates an administrator, `operator@vectory.local`, with a random password in `.local/preview/credentials.json`. It then enrolls the agents, puts them in two groups, sets 15-second check-ins, and publishes and deploys two pipelines that generate synthetic `demo_logs` events. Nothing leaves the machine.
 
-Each agent keeps its state in `.local/demo/agents/<name>/`. Running the demo again reuses agents that are still running. Set `VECTORY_DEMO_DIR` to keep a second demo apart.
+Each agent keeps its state in `.local/demo/agents/<name>/`. Running the demo again reuses agents that are still running. Set `VECTORY_DEMO_DIR` and `VECTORY_DEMO_METRICS_PORT` (default `19600`) to keep a second demo apart.
 
 ### Test
 
