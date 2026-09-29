@@ -695,17 +695,19 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     assert_eq!(details["certificate"]["publicly_trusted"], false);
     // The CA certificate itself, for the command that fetches the installer:
     // exactly the certificate the fingerprint names.
-    let ca_pem = details["certificate"]["ca_pem"].as_str().unwrap().to_owned();
+    let ca_pem = details["certificate"]["ca_pem"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     {
         use rustls::pki_types::{CertificateDer, pem::PemObject};
         let der = CertificateDer::from_pem_slice(ca_pem.as_bytes()).unwrap();
         assert_eq!(db::hash(der.as_ref()), d.ca_sha256);
     }
     assert!(
-        ca_pem
-            .lines()
-            .all(|line| line.bytes().all(|b| b.is_ascii_alphanumeric()
-                || b"+/=- ".contains(&b))),
+        ca_pem.lines().all(|line| line
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"+/=- ".contains(&b))),
         "the PEM must be safe to single-quote in a shell: {ca_pem}"
     );
     assert_eq!(
@@ -737,13 +739,20 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     }
     assert!(!script.contains("windows/amd64)"));
     assert!(!script.contains(&token), "the installer holds a token");
-    assert!(script.contains(ca_pem.trim_end()), "the installer lacks the CA");
+    assert!(
+        script.contains(ca_pem.trim_end()),
+        "the installer lacks the CA"
+    );
     // Nothing in the installer turns certificate verification off.
     for word in script.split_whitespace() {
         let word = word.trim_matches(|c| c == '\'' || c == '"');
         assert!(
-            !["--insecure", "--no-check-certificate", "-SkipCertificateCheck"]
-                .contains(&word),
+            ![
+                "--insecure",
+                "--no-check-certificate",
+                "-SkipCertificateCheck"
+            ]
+            .contains(&word),
             "the installer skips certificate checks: {word}"
         );
         // A cluster of short options such as -fsSg, never one with k.
@@ -1142,4 +1151,63 @@ async fn installer_and_download_floods_from_many_addresses_share_one_budget() {
     }
     // None of it landed where sign-in keys live.
     assert_eq!(f.s.limits.lock().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn a_token_made_for_a_typed_name_enrolls_only_that_device() {
+    let f = fixture(|_, _| {}).await;
+    let (status, created) = f
+        .post(
+            "/api/v1/tokens",
+            json!({"name":"Edge-7 install command","expires_hours":1,"max_uses":2,"device_name":" Edge-7 "}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    // Normalized as enrollment normalizes names, and echoed so the page can
+    // tell a binding server from one that ignores the field.
+    assert_eq!(created["record"]["device_name"], "edge-7");
+    let token = created["token"].as_str().unwrap().to_owned();
+    let (status, _) = f
+        .enroll(&enrollment(&token, "request-other", "edge-8", &csr()))
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refusal = f
+        .activity()
+        .await
+        .into_iter()
+        .find(|event| event["device_name"] == "edge-8")
+        .unwrap();
+    assert_eq!(refusal["reason_code"], "DEVICE_NAME_MISMATCH");
+    let (status, enrolled) = f
+        .enroll(&enrollment(&token, "request-named", "EDGE-7", &csr()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    // The token list shows the binding.
+    let (_, _, bytes) = f
+        .get(&f.api, "/api/v1/tokens", "vectory.example.test")
+        .await;
+    let listed = json_of(&bytes)
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == created["record"]["id"])
+        .cloned()
+        .unwrap();
+    assert_eq!(listed["device_name"], "edge-7");
+    // A name the token could never enroll is refused at creation.
+    for bad in [
+        json!({"name":"Bad","expires_hours":1,"device_name":"-edge"}),
+        json!({"name":"Bad","expires_hours":1,"device_name":"edge 7"}),
+        json!({"name":"Bad","expires_hours":1,"device_name":7}),
+        json!({"name":"Bad","expires_hours":1,"device_name":"db-1","name_prefix":"web-"}),
+    ] {
+        let (status, _) = f.post("/api/v1/tokens", bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // Without a name, a token enrolls any unique name as before.
+    let (status, open) = f
+        .post("/api/v1/tokens", json!({"name":"Open","expires_hours":1}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(open["record"].get("device_name").is_none());
 }

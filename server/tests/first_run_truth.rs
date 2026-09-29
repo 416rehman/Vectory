@@ -448,3 +448,65 @@ async fn a_device_with_metrics_is_never_judged_from_its_log() {
     );
     assert_eq!(open_delivery(&s, &cookie).await["total"], 0);
 }
+
+#[tokio::test]
+async fn devices_report_the_running_agent_build_and_their_state_directory() {
+    let (_temp, s) = state().await;
+    let (cookie, csrf) = admin(&s).await;
+    let id = enroll(&s, &cookie, &csrf, "edge-build", json!({})).await;
+    let peer = agent(&s, &id).await;
+    let sha = "97".repeat(32);
+    let (status, envelope) = beat(
+        &peer,
+        heartbeat(
+            0,
+            "",
+            "unmanaged",
+            json!({"agent_sha256":sha,"state_dir":"/srv/vectory agent/state"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{envelope}");
+    let features = manifest(&envelope)["features"].clone();
+    for feature in ["agent_sha256", "state_dir"] {
+        assert!(
+            features.as_array().unwrap().contains(&json!(feature)),
+            "{features}"
+        );
+    }
+    // List rows carry both: the deploy dialog writes host commands from them.
+    let (row, full) = shown(&s, &id).await;
+    assert_eq!(row["agent_sha256"], sha);
+    assert_eq!(row["state_dir"], "/srv/vectory agent/state");
+    assert_eq!(full["agent_sha256"], sha);
+    // Windows drive paths are absolute too.
+    let windows = json!({"state_dir":"C:\\ProgramData\\Vectory\\agent"});
+    assert_eq!(
+        beat(&peer, heartbeat(0, "", "unmanaged", windows)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        shown(&s, &id).await.0["state_dir"],
+        "C:\\ProgramData\\Vectory\\agent"
+    );
+    // An older agent doesn't say: both are unknown, never stale.
+    assert_eq!(
+        beat(&peer, heartbeat(0, "", "unmanaged", json!({})))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (row, _) = shown(&s, &id).await;
+    assert!(row.get("agent_sha256").is_none() && row.get("state_dir").is_none());
+    for bad in [
+        json!({"agent_sha256":"ABCD"}),
+        json!({"agent_sha256":"G".repeat(64)}),
+        json!({"state_dir":"relative/state"}),
+        json!({"state_dir":"/tmp/line\nbreak"}),
+        json!({"state_dir":format!("/{}", "a".repeat(4096))}),
+        json!({"state_dir":7}),
+    ] {
+        let (status, _) = beat(&peer, heartbeat(0, "", "unmanaged", bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
