@@ -643,7 +643,7 @@ export default function PipelineSettings({
               <ul>
                 {inputPatterns.map((input) => (
                   <li key={input.pattern}>
-                    <code>{input.pattern}</code>
+                    <code>{input.pattern}</code>{" "}
                     <span>
                       {patternSummary(input).slice(input.pattern.length + 1)}
                     </span>

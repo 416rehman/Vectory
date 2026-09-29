@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { differencePath, type Difference } from "./configurationDiff";
-import { historyDifferenceLines, historyDifferenceTotals } from "./historyDiff";
+import {
+  historyDifferenceLines,
+  historyDifferenceTotals,
+  isProgramDifference,
+} from "./historyDiff";
 import { Button, ErrorBox } from "./ui";
 import { DataTable } from "./DataTable";
 
@@ -129,7 +133,7 @@ export default function HistoryChange({
           },
           {
             id: "value",
-            header: "JSON value",
+            header: isProgramDifference(difference) ? "Program" : "JSON value",
             className: "history-diff-code",
             cell: (line) => <code>{line.text || " "}</code>,
           },
