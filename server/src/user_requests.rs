@@ -104,8 +104,7 @@ pub(crate) async fn create(s: &State, h: &HeaderMap, v: &Value, key: &str) -> Re
         auth::check_new_password(password, &[&email, &name])?;
         auth::password_hash(password.to_owned()).await?
     };
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, h, &["admin"], true).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if entry(&mut tx, actor_id, key).await?.is_some() {
@@ -181,8 +180,7 @@ pub async fn cancel(
         ));
     }
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], true).await?;
     let actor_id = actor["id"].as_str().unwrap();
     let prior = entry(&mut tx, actor_id, &key).await?;

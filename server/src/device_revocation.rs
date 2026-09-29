@@ -35,8 +35,7 @@ pub async fn status(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let source = id(&source)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     Ok(Json(receipt(&source, revoked(&mut tx, &source).await?)))
 }
@@ -60,8 +59,7 @@ pub async fn post(
         ));
     }
     let source = id(&source)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     if !revoked(&mut tx, &source).await? {
         sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")

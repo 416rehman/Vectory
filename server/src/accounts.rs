@@ -148,8 +148,7 @@ pub async fn edit(
         .ok_or_else(|| ApiError::invalid("enabled must be a boolean"))?;
     let (_, hash) =
         reauthenticate(&s, &h, &["admin"], db::string(&v, "current_password", 256)?).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = recheck(&mut tx, &h, &["admin"], &hash).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if let Some(key) = key.as_deref() {
@@ -239,8 +238,7 @@ pub async fn change_password(
     )?;
     let next_hash = auth::password_hash(password.to_owned()).await?;
     let client = s.client_key(&h, peer);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = recheck(&mut tx, &h, &[], &current_hash).await?;
     let id = actor["id"].as_str().unwrap();
     replace_password(&mut tx, id, &next_hash).await?;
@@ -289,8 +287,7 @@ pub async fn revoke_sessions(
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
     let (_, hash) = reauthenticate(&s, &h, &[], db::string(&v, "current_password", 256)?).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = recheck(&mut tx, &h, &[], &hash).await?;
     let id = actor["id"].as_str().unwrap();
     crate::login_challenges::clear(&mut tx, id).await?;
@@ -378,8 +375,7 @@ pub async fn issue_reset(
     }
     let (_, hash) =
         reauthenticate(&s, &h, &["admin"], db::string(&v, "current_password", 256)?).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = recheck(&mut tx, &h, &["admin"], &hash).await?;
     let actor_id = actor["id"].as_str().unwrap();
     if let Some(key) = key.as_deref() {
@@ -499,8 +495,7 @@ pub async fn redeem_reset(
     drop(conn);
     auth::check_new_password(password, &[&target.email, &target.name])?;
     let hash = auth::password_hash(password.to_owned()).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let target = reset_target(&mut tx, &verifier)
         .await?
         .ok_or_else(|| code_invalid(false))?;
@@ -595,8 +590,7 @@ pub async fn accept_invite(
     auth::check_new_password(password, &[&target.email, &target.name])?;
     let hash = auth::password_hash(password.to_owned()).await?;
     let client = s.client_key(&h, peer);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let target = invite_target(&mut tx, &verifier).await?;
     replace_password(&mut tx, &target.id, &hash).await?;
     sqlx::query("UPDATE users SET last_login_at=? WHERE id=?")
@@ -622,8 +616,7 @@ pub async fn accept_invite(
 /// with no administrator issuer. Changes nothing until the code is redeemed.
 pub async fn local_reset(s: &State, email: &str) -> anyhow::Result<(String, String, String)> {
     let email = email.trim().to_ascii_lowercase();
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let row = sqlx::query("SELECT id,name,enabled FROM users WHERE email=?")
         .bind(&email)
         .fetch_optional(&mut *tx)

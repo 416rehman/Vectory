@@ -1893,8 +1893,7 @@ async fn deployment_ids(db: &mut SqliteConnection) -> Result<Vec<String>> {
     .await?)
 }
 pub async fn tick(s: &State) -> Result<()> {
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     for id in deployment_ids(&mut tx).await? {
         let mut d = db::record(&mut tx, "deployment", &id).await?;
         if d["status"] == "scheduled" {
