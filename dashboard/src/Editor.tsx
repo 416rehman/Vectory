@@ -149,6 +149,22 @@ import ConfigurationImportDialog, {
 import "./editor.css";
 import PipelineNode, { ComponentIcon } from "./PipelineNode";
 import PipelineCheckButton from "./PipelineCheckButton";
+import ProblemsPanel from "./ProblemsPanel";
+import {
+  applyFix,
+  checkLabel,
+  checkProblems,
+  checkStatus,
+  checkVerdict,
+  componentProblems,
+  countProblems,
+  localProblems,
+  mergeProblems,
+  settleStaleProblems,
+  type PipelineCheck,
+  type Problem,
+} from "./pipelineProblems";
+import { vrlValue, withVrlValue } from "./PipelineSettings";
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
@@ -295,6 +311,21 @@ function pipelineSummary(config: Config) {
     .filter(Boolean)
     .join(" → ");
 }
+const AUTO_CHECK_KEY = "vectory.editor.auto-check";
+function readAutoCheck() {
+  try {
+    return window.localStorage.getItem(AUTO_CHECK_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+function writeAutoCheck(value: boolean) {
+  try {
+    window.localStorage.setItem(AUTO_CHECK_KEY, value ? "on" : "off");
+  } catch {
+    // A preference only: the choice still applies until the page reloads.
+  }
+}
 type EditorSnapshot = {
   config: Config;
   graph: Graph;
@@ -354,16 +385,27 @@ export default function Editor({
     [loadAttempt, setLoadAttempt] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [validation, setValidation] = useState<{
-      valid: boolean;
-      vector_validated: boolean;
-      errors: string[];
-      warnings: string[];
+    // The last Vector check and the exact draft it checked. Findings stay
+    // visible (marked stale) until the next check of the edited draft.
+    [check, setCheck] = useState<{
+      result: PipelineCheck;
+      config: Config;
+      variables: VariableDeclaration[];
+      /** The Code text checked before it was applied to the draft. */
+      code?: string;
     } | null>(null),
-    [checkState, setCheckState] = useState<
-      "neutral" | "passed" | "partial" | "failed" | "stale"
-    >("neutral"),
     [checking, setChecking] = useState(false),
+    // Why the last requested check could not run. Earlier findings stay.
+    [checkError, setCheckError] = useState(""),
+    [problemsOpen, setProblemsOpen] = useState(false),
+    [autoCheck, setAutoCheck] = useState(readAutoCheck),
+    [focusRequest, setFocusRequest] = useState<{
+      component: string;
+      field?: string;
+      line?: number;
+      column?: number;
+      nonce: number;
+    } | null>(null),
     [savingDraft, setSavingDraft] = useState(false),
     [historyOpen, setHistoryOpen] = useState(false),
     [historyVersion, setHistoryVersion] = useState<Version | null>(null),
@@ -519,20 +561,14 @@ export default function Editor({
     if (hovered && highlightEnabled) setHoveredConnection(id);
     else setHoveredConnection((current) => (current === id ? null : current));
   }
-  const invalidateCheck = useCallback(() => {
-    checkGeneration.current++;
-    setCheckState("stale");
-    setValidation(null);
-  }, []);
   const schemaPendingChange = useCallback(
     (fieldId: string, hasChanges: boolean) => {
       if (hasChanges) {
         pendingSchemaFields.current.add(fieldId);
-        invalidateCheck();
       } else pendingSchemaFields.current.delete(fieldId);
       setPendingFieldCount(pendingSchemaFields.current.size);
     },
-    [invalidateCheck],
+    [],
   );
   latest.current = { doc, config, variables, nodes, edges, dirty };
   const editable = can(user, "edit") && !!doc && !doc.archived;
@@ -594,13 +630,27 @@ export default function Editor({
       (tableNode) =>
         tableNode.data.enrichmentTable === tableId && tableNode.id === issue.id,
     );
-  const nodeIssue = (node: any) =>
-    issues.find(
-      (issue) =>
-        issue.id === node.id ||
-        (node.data.enrichmentTable &&
-          issueAffectsMemoryTable(issue, node.data.enrichmentTable)),
-    );
+  // Node badges: errors, else Vector warnings, for a step or the memory table
+  // it edits. Connectivity has its own badge.
+  const nodeProblemData = (node: any) => {
+    const table: string | undefined = node.data.enrichmentTable;
+    const entry =
+      nodeProblems.get(node.id) ||
+      (table ? nodeProblems.get(table) : undefined);
+    const tableIssue = table
+      ? issues.find((issue) => issueAffectsMemoryTable(issue, table))
+      : undefined;
+    const errors = entry?.errors || (tableIssue ? 1 : 0);
+    const first = entry
+      ? [entry.first.field, entry.first.message].filter(Boolean).join(": ")
+      : undefined;
+    return {
+      hasIssue: errors > 0,
+      issueCount: errors,
+      issueMessage: entry?.errors ? first : tableIssue?.message,
+      warningMessage: !errors && entry?.warnings ? first : undefined,
+    };
+  };
   const connectivity = useMemo(() => pipelineConnectivity(config), [config]);
   const customJSONAnalysis = useMemo(
     () => diagnoseJSONValue(customComponentJSON),
@@ -610,10 +660,96 @@ export default function Editor({
   const checkFeedbackId = useId();
   const customJSONFeedbackId = useId();
   const customJSONErrorId = useId();
-  const errors = [
-    ...issues.map((issue) => issue.message),
-    ...variableErrors(config, variables),
-  ];
+  const variableMessages = useMemo(
+    () => variableErrors(config, variables),
+    [config, variables],
+  );
+  const errors = [...issues.map((issue) => issue.message), ...variableMessages];
+  // Problems: instant local checks plus the last Vector check. Vector's
+  // findings stay visible, marked stale, until a check of the edited draft.
+  const codeChecked = view === "code" && importedCodeDirty.current;
+  const checkStale = useMemo(() => {
+    if (!check) return false;
+    if (codeChecked) return check.code !== code;
+    return (
+      (check.config !== config && !sameConfiguration(check.config, config)) ||
+      (check.variables !== variables &&
+        JSON.stringify(check.variables) !== JSON.stringify(variables))
+    );
+  }, [check, config, variables, code, codeChecked]);
+  const draftProblems = useMemo(
+    () =>
+      localProblems(
+        graphDiagnosis.diagnostics,
+        connectivity,
+        variableMessages,
+        config,
+      ),
+    [graphDiagnosis, connectivity, variableMessages, config],
+  );
+  const problems = useMemo(() => {
+    const vector = checkProblems(check?.result || null, config, checkStale);
+    const program = (
+      draft: "checked" | "current",
+      component: string,
+      field: string,
+    ) => {
+      const value = (draft === "checked" ? check?.config : config)
+        ?.transforms?.[component];
+      return value ? vrlValue(value, field) : null;
+    };
+    return mergeProblems(
+      draftProblems,
+      checkStale ? settleStaleProblems(vector, program) : vector,
+    );
+  }, [draftProblems, check, config, checkStale]);
+  const problemCounts = countProblems(problems);
+  const nodeProblems = useMemo(() => componentProblems(problems), [problems]);
+  const status = checkStatus({
+    checking,
+    check: check?.result || null,
+    stale: checkStale,
+    errors: problemCounts.errors,
+    failed: !!checkError,
+  });
+  const statusLabel = checkLabel(status, problemCounts.errors);
+  const verdict = checkError
+    ? `Couldn't check with Vector: ${checkError}`
+    : checkStale
+      ? autoCheck
+        ? "Changed since the last check. Checking again when you pause."
+        : "Changed since the last check."
+      : checkVerdict(check?.result || null, problemCounts.errors);
+  const autoCheckAttempt = useRef<{
+    config: Config;
+    variables: VariableDeclaration[];
+  } | null>(null);
+  const autoCheckReady =
+    autoCheck &&
+    checkable &&
+    view === "canvas" &&
+    !checking &&
+    !busy &&
+    !historyOpen &&
+    pendingFieldCount === 0 &&
+    (!check || checkStale) &&
+    Object.keys(config.sources || {}).length > 0 &&
+    Object.keys(config.sinks || {}).length > 0;
+  useEffect(() => {
+    if (!autoCheckReady) return;
+    const attempt = autoCheckAttempt.current;
+    // One automatic attempt per draft: a failed attempt waits for the next edit.
+    if (attempt?.config === config && attempt.variables === variables) return;
+    const timer = window.setTimeout(() => {
+      autoCheckAttempt.current = { config, variables };
+      void validate({ auto: true });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [autoCheckReady, config, variables]);
+  function changeAutoCheck(value: boolean) {
+    setAutoCheck(value);
+    writeAutoCheck(value);
+  }
   const toolsRef = useRef<HTMLDetailsElement>(null);
   useDismissibleDetails(toolsRef);
   const handledDestination = useRef("");
@@ -694,8 +830,10 @@ export default function Editor({
         setEdges(graph.edges);
         setDirty(false);
         checkGeneration.current++;
-        setCheckState("neutral");
-        setValidation(null);
+        checkInFlight.current = false;
+        setChecking(false);
+        setCheck(null);
+        setCheckError("");
         setError("");
         setPublishedVersion(null);
         setPublishedVersionStatus("loading");
@@ -958,7 +1096,6 @@ export default function Editor({
     setEdges(nextGraph.edges);
     setDirty(true);
     setSaveStatus("Unsaved changes");
-    invalidateCheck();
   }
   function undo(redo = false) {
     if (pendingSchemaFields.current.size && !closeSettings()) return;
@@ -1457,7 +1594,6 @@ export default function Editor({
     if (changes.some((c) => c.type === "position" && c.dragging === false)) {
       setDirty(true);
       setSaveStatus("Unsaved changes");
-      invalidateCheck();
     }
   }
   function removeEdges(removed: Edge[]) {
@@ -1629,115 +1765,59 @@ export default function Editor({
   function hasUnappliedImportFields() {
     return importedCodeDirty.current || !!pendingSchemaFields.current.size;
   }
-  async function validate() {
-    if (busy || checkInFlight.current) return;
-    const generation = ++checkGeneration.current;
-    setValidation(null);
+  // Check the draft (or unapplied Code edits) with the isolated Vector worker.
+  // A check never locks the editor; a newer check or a reload supersedes it.
+  async function validate({ auto = false } = {}) {
+    if (checkInFlight.current) return;
     if (pendingSchemaFields.current.size) {
-      const message =
-        "Resolve or apply pending field changes before checking this pipeline.";
-      setValidation({
-        valid: false,
-        vector_validated: false,
-        errors: [message],
-        warnings: [],
-      });
-      setCheckState("failed");
-      setError(message);
+      if (!auto)
+        setError(
+          "Resolve or apply pending field changes before checking this pipeline.",
+        );
       return;
     }
-    checkInFlight.current = true;
-    setChecking(true);
-    setBusy(true);
-    setError("");
-    const candidateWarnings =
-      view === "code" && importedCodeDirty.current
-        ? [
-            "This check reviewed unapplied Code edits. Apply code changes to update the draft.",
-          ]
-        : [];
-    let connectivityWarnings: string[] = [];
-    try {
-      const diagnosis =
-        view === "code"
-          ? diagnoseConfigurationSource(code, format)
-          : diagnoseConfiguration(config);
-      const current = diagnosis.config;
-      // Check the Code candidate without applying it to the draft. A later
-      // edit invalidates this result, and only Apply changes the draft.
-      // Run the same schema diagnostics shown by Code and on graph nodes. The
-      // server's structural-only fallback cannot clear a local field error.
-      const localErrors = diagnosis.diagnostics
-        .filter((item) => item.severity === "error")
-        .map((item) => item.message);
-      if (current)
-        localErrors.push(...variableErrors(current, latest.current.variables));
-      const localWarnings = diagnosis.diagnostics
-        .filter((item) => item.severity === "warning")
-        .map((item) => item.message);
-      if (current)
-        connectivityWarnings = [...pipelineConnectivity(current)].map(
-          ([componentId, warning]) => `${componentId}: ${warning}`,
-        );
-      if (!current || localErrors.length) {
-        setValidation({
-          valid: false,
-          vector_validated: false,
-          errors: localErrors.length
-            ? localErrors
-            : ["The pipeline could not be checked locally."],
-          warnings: [
-            ...localWarnings,
-            ...connectivityWarnings,
-            ...candidateWarnings,
-          ],
-        });
-        setCheckState("failed");
+    let candidate = latest.current.config;
+    if (view === "code" && importedCodeDirty.current) {
+      const diagnosis = diagnoseConfigurationSource(code, format);
+      if (!diagnosis.config) {
+        if (!auto) setError("Fix the code syntax before checking it.");
         return;
       }
-      setCheckState("neutral");
-      const result = await post<NonNullable<typeof validation>>(
+      candidate = diagnosis.config;
+    }
+    const candidateVariables = latest.current.variables;
+    const candidateCode =
+      candidate === latest.current.config ? undefined : code;
+    const generation = ++checkGeneration.current;
+    checkInFlight.current = true;
+    setChecking(true);
+    if (!auto) {
+      setCheckError("");
+      setProblemsOpen(true);
+    }
+    try {
+      const result = await post<PipelineCheck>(
         `/configurations/${id}/validate`,
-        {
-          config: current,
-        },
+        { config: candidate },
       );
       if (generation !== checkGeneration.current) return;
-      const passed = result.valid && !result.errors.length;
-      const warnings = [
-        ...result.warnings,
-        ...localWarnings,
-        ...connectivityWarnings,
-        ...candidateWarnings,
-      ];
-      setValidation({
-        ...result,
-        valid: passed,
-        warnings,
+      setCheck({
+        result,
+        config: candidate,
+        variables: candidateVariables,
+        code: candidateCode,
       });
-      setCheckState(
-        passed
-          ? result.vector_validated && !warnings.length
-            ? "passed"
-            : "partial"
-          : "failed",
-      );
+      setCheckError("");
     } catch (e) {
-      if (generation === checkGeneration.current) {
-        const message = (e as Error).message;
-        setValidation({
-          valid: false,
-          vector_validated: false,
-          errors: [message],
-          warnings: [...connectivityWarnings, ...candidateWarnings],
-        });
-        setCheckState("failed");
-        setError(message);
-      }
+      if (generation !== checkGeneration.current) return;
+      // An automatic check that could not run (busy checker, lost session)
+      // keeps the earlier findings and tries again after the next edit.
+      if (!auto) setCheckError((e as Error).message);
     } finally {
-      checkInFlight.current = false;
-      setChecking(false);
-      setBusy(false);
+      if (generation === checkGeneration.current) {
+        checkInFlight.current = false;
+        setChecking(false);
+      }
     }
   }
   async function publish() {
@@ -1766,8 +1846,12 @@ export default function Editor({
         throw Error("Apply your code and field changes before publishing.");
       if (!diagnoseConfiguration(latest.current.config).locallyValid)
         throw Error("Resolve the pipeline errors before publishing.");
-      if (variableErrors(latest.current.config, latest.current.variables).length)
-        throw Error("Resolve the device-specific variable fields before publishing.");
+      if (
+        variableErrors(latest.current.config, latest.current.variables).length
+      )
+        throw Error(
+          "Resolve the device-specific variable fields before publishing.",
+        );
       let saved = latest.current.doc;
       while (latest.current.dirty || pendingSave.current) {
         saved = await withRequestDeadline(
@@ -1919,7 +2003,6 @@ export default function Editor({
     syncCode(result.config);
     setSelected(null);
     setDirty(false);
-    invalidateCheck();
     importedCodeDirty.current = false;
     stack.current = [];
     future.current = [];
@@ -2046,7 +2129,6 @@ export default function Editor({
       syncCode(restored.config);
       setSelected(null);
       setDirty(false);
-      invalidateCheck();
       importedCodeDirty.current = false;
       setSaveStatus("All changes saved");
       notify(
@@ -2063,6 +2145,13 @@ export default function Editor({
       ? config.enrichment_tables?.[selectedNode.data.enrichmentTable]
       : config[selectedNode.data.kind]?.[selectedNode.id]
     : null;
+  const selectedProblems = useMemo(
+    () =>
+      selected
+        ? problems.filter((problem) => problem.component === selected)
+        : [],
+    [problems, selected],
+  );
   const hasPendingFields = !!(pendingFieldCount || importedCodeDirty.current);
   const displaySaveStatus = saveNeedsReload.current
     ? "Save conflict — reload server draft"
@@ -2071,18 +2160,6 @@ export default function Editor({
       : hasPendingFields
         ? "Unapplied field changes"
         : saveStatus;
-  const checkButtonState =
-    checking && checkState !== "stale" ? "checking" : checkState;
-  const checkDescription = {
-    neutral: "Check pipeline",
-    checking: "Checking pipeline…",
-    passed: "Vector checks passed for this pipeline.",
-    partial: validation?.vector_validated
-      ? "Checks passed with warnings. Review the results."
-      : "Available checks found no errors. Full Vector validation is pending on each device.",
-    failed: "Pipeline check failed. Resolve the errors and check again.",
-    stale: "Changes need checking. Check the pipeline again.",
-  }[checkButtonState];
   const definition = component
     ? catalog.find(
         (c) => c.type === component.type && c.kind === selectedNode.data.kind,
@@ -2253,6 +2330,95 @@ export default function Editor({
     setSelected(stepId);
     setError("");
   }
+  // Open the step a problem belongs to and reveal the field and position.
+  // Pipeline-wide problems open the matching pipeline settings section.
+  function openProblem(problem: Problem) {
+    if (view === "code") {
+      if (importedCodeDirty.current) {
+        setError("Apply or discard your Code changes to open this problem.");
+        return;
+      }
+      changeView("canvas");
+    }
+    const node = problem.component
+      ? nodes.find(
+          (item) =>
+            item.id === problem.component ||
+            item.data.enrichmentTable === problem.component,
+        )
+      : undefined;
+    if (!node) {
+      tool(() => {
+        setGlobalsSection(
+          problem.section === "tests"
+            ? "tests"
+            : problem.section === "enrichment_tables"
+              ? "enrichment_tables"
+              : problem.code === "variables"
+                ? "variables"
+                : "general",
+        );
+        setGlobalsOpen(true);
+      });
+      return;
+    }
+    if (selected !== node.id) {
+      if (!closeSettings()) return;
+      setSelected(node.id);
+    }
+    setFocusRequest({
+      component: node.id,
+      field: problem.field,
+      line: problem.line,
+      column: problem.column,
+      nonce: Date.now(),
+    });
+  }
+  function canFixProblem(problem: Problem) {
+    return (
+      editable &&
+      !!problem.fix &&
+      !!problem.component &&
+      !!problem.field &&
+      !!config.transforms?.[problem.component]
+    );
+  }
+  function fixProblem(problem: Problem) {
+    if (!canFixProblem(problem)) return;
+    if (pendingSchemaFields.current.size) {
+      setError("Apply or discard pending field changes before applying a fix.");
+      return;
+    }
+    const current = config.transforms[problem.component!];
+    const text = vrlValue(current, problem.field!);
+    const fixed = applyFix(text, problem);
+    if (fixed === null || fixed === text) {
+      notify(
+        "The program changed since this check. Check again to refresh fixes.",
+      );
+      return;
+    }
+    replace({
+      ...config,
+      transforms: {
+        ...config.transforms,
+        [problem.component!]: withVrlValue(current, problem.field!, fixed),
+      },
+    });
+    notify(`Applied: ${problem.fix!.label}.`);
+  }
+  function saveSampleTests(tests: Config[]) {
+    if (!editable || !tests.length) return;
+    replace({
+      ...config,
+      tests: [...(Array.isArray(config.tests) ? config.tests : []), ...tests],
+    });
+    notify(
+      tests.length === 1
+        ? `Added pipeline test “${tests[0].name}”. Save to keep it.`
+        : `Added ${tests.length} pipeline tests. Save to keep them.`,
+    );
+  }
   function renameRoute(before: string, after: string) {
     if (!selectedNode) return;
     if (!guardInspectorDrafts()) return;
@@ -2380,13 +2546,44 @@ export default function Editor({
           issues={issues
             .filter((issue) => issue.id === selectedNode.id)
             .map((issue) => issue.message)}
+          problems={selectedProblems}
           onChange={changeComponent}
           onPendingChange={schemaPendingChange}
           onRouteRename={renameRoute}
           onRouteRemove={removeRoute}
+          pipelineId={id}
+          userId={user.id}
+          timezone={
+            typeof config.timezone === "string" ? config.timezone : undefined
+          }
+          canRunSamples={checkable}
+          existingTests={Array.isArray(config.tests) ? config.tests : []}
+          onSaveTests={editable ? saveSampleTests : undefined}
+          focus={
+            focusRequest?.component === selectedNode.id ? focusRequest : null
+          }
         />
       )
     ) : null;
+  const problemsPanel = (
+    <ProblemsPanel
+      problems={problems}
+      config={config}
+      open={problemsOpen}
+      onOpenChange={setProblemsOpen}
+      verdict={
+        problemCounts.errors && !checkError && !checkStale
+          ? "Fix the errors to publish."
+          : verdict
+      }
+      autoCheck={checkable ? autoCheck : undefined}
+      onAutoCheckChange={checkable ? changeAutoCheck : undefined}
+      onSelect={openProblem}
+      onFix={fixProblem}
+      checking={checking}
+      canFix={canFixProblem}
+    />
+  );
   function fitGraph() {
     flow.current?.fitView({
       padding: 0.1,
@@ -2756,14 +2953,18 @@ export default function Editor({
               {checkable && (
                 <PipelineCheckButton
                   key={id}
-                  state={checkButtonState}
-                  description={checkDescription}
+                  status={status}
+                  label={statusLabel}
+                  description={
+                    checking ? "Checking the pipeline with Vector…" : verdict
+                  }
                   feedbackId={checkFeedbackId}
-                  result={validation}
-                  checking={checking}
                   disabled={busy}
                   hidden={historyOpen}
-                  onCheck={() => void validate()}
+                  onCheck={() => {
+                    setProblemsOpen(true);
+                    void validate();
+                  }}
                 />
               )}
               <IconButton
@@ -3119,8 +3320,7 @@ export default function Editor({
                     selected: node.id === selected || node.selected,
                     data: {
                       ...node.data,
-                      hasIssue: !!nodeIssue(node),
-                      issueMessage: nodeIssue(node)?.message,
+                      ...nodeProblemData(node),
                       connectivityWarning: connectivity.get(node.id),
                       editable: editable && !busy,
                       openMenu: (
@@ -3520,6 +3720,7 @@ export default function Editor({
                   </div>
                 )}
               </div>
+              {problemsPanel}
             </div>
             {inlineSettings && (
               <aside
@@ -3642,7 +3843,6 @@ export default function Editor({
               diagnostics={currentAnalysis?.diagnostics || []}
               onFormat={formatCode}
               onChange={(value) => {
-                if (value !== code) invalidateCheck();
                 setCode(value);
                 importedCodeDirty.current = value !== stringify(config);
               }}
@@ -3683,11 +3883,12 @@ export default function Editor({
               ) : (
                 <span>
                   {currentAnalysis
-                    ? "No local issues. Use Check pipeline for runtime validation."
-                    : "Checking code…"}
+                    ? "No syntax or schema issues."
+                    : "Reading code…"}
                 </span>
               )}
             </div>
+            {problemsPanel}
             {editable && (
               <div className="editor-code-footer">
                 <span>
@@ -3699,7 +3900,6 @@ export default function Editor({
                   <Button
                     variant="ghost compact"
                     onClick={() => {
-                      invalidateCheck();
                       importedCodeDirty.current = false;
                       syncCode(config);
                       setError("");
@@ -3945,8 +4145,9 @@ export default function Editor({
           <p>{pipelineSummary(config)}</p>
           {variables.length > 0 && (
             <p>
-              {variables.length} device-specific {variables.length === 1 ? "field" : "fields"}.
-              Values are set when you deploy this version.
+              {variables.length} device-specific{" "}
+              {variables.length === 1 ? "field" : "fields"}. Values are set when
+              you deploy this version.
             </p>
           )}
           {errors.length > 0 ? (

@@ -208,11 +208,23 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.pipeline-node-v2 .pipeline-node-attention {
-  display: flex;
-  color: var(--danger, #b33d42);
+.pipeline-node-v2 .pipeline-node-attention,
+.pipeline-node-v2 .pipeline-node-caution {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: none;
   margin-left: auto;
+  color: var(--ed-danger, var(--danger, #b33d42));
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.pipeline-node-v2 .pipeline-node-caution {
+  color: var(--ed-warning, #7a4f06);
+}
+.pipeline-node-v2 .pipeline-node-connectivity + .pipeline-node-caution {
+  margin-left: 0;
 }
 .pipeline-node.pipeline-node-v2.pipeline-node-unconnected {
   --pipeline-node-shadow: none;

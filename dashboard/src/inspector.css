@@ -1,3 +1,4 @@
+@import "./editor-tokens.css";
 /* The property toolbar stays in place while the fields beneath it scroll. */
 .editor-inspector:has(> .editor-inspector-properties-toolbar) {
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -287,4 +288,78 @@
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   border-radius: 2px;
+}
+
+.pipeline-vector-problems {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ed-danger-line);
+  border-radius: var(--ed-radius-sm);
+  color: var(--ink);
+  background: var(--ed-danger-bg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pipeline-vector-problems strong {
+  font-weight: 600;
+}
+.pipeline-vector-problems ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pipeline-vector-problems li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--ed-danger);
+}
+.pipeline-vector-problems li[data-severity="warning"] {
+  border-left-color: var(--ed-warning);
+}
+.pipeline-vector-problems code {
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
+}
+.pipeline-vector-problems small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Wide VRL studio: the program and the sample tester side by side. */
+.modal.vrl-studio {
+  width: min(1320px, calc(100vw - 32px));
+  height: min(860px, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+}
+.vrl-studio-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px 20px;
+  overflow: auto;
+}
+.vrl-studio-program .vrl-editor .cm-scroller {
+  min-height: 420px;
+  max-height: calc(100dvh - 260px);
+}
+.vrl-studio-samples .sample-tester {
+  margin-top: 0;
+}
+.vrl-studio-samples .sample-tester-wide .sample-tester-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 900px) {
+  .vrl-studio-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

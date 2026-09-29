@@ -294,7 +294,10 @@ describe("local source diagnostics and import gate", () => {
     expect(result.locallyValid).toBe(true);
     expect(
       result.diagnostics.some(
-        (d) => d.severity === "warning" && /resolved/.test(d.message),
+        (d) =>
+          d.severity === "warning" &&
+          d.code === "deferred" &&
+          /resolves/.test(d.message),
       ),
     ).toBe(true);
     expect(assertValidPipelineSource(JSON.stringify(config), "json")).toEqual(

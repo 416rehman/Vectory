@@ -55,6 +55,7 @@ import {
   usePendingField,
   usePendingScope,
 } from "./SchemaValueEditor";
+import ProblemText from "./ProblemText";
 import "./schema-controls.css";
 
 export type SchemaPropertySection = {
@@ -66,6 +67,30 @@ export type SchemaPropertySection = {
 };
 
 const FieldPathContext = createContext("");
+/** Prefix the option path of controls rendered outside the component root. */
+export function FieldPathScope({
+  path,
+  children,
+}: {
+  path: string;
+  children: ReactNode;
+}) {
+  return (
+    <FieldPathContext.Provider value={path}>
+      {children}
+    </FieldPathContext.Provider>
+  );
+}
+export type FieldProblem = {
+  key: string;
+  severity: "error" | "warning";
+  message: string;
+  hint?: string;
+};
+/** Findings for an option path (`endpoint`, `encoding.codec`), shown under it. */
+export const FieldProblemsContext = createContext<
+  (path: string) => readonly FieldProblem[]
+>(() => []);
 const FieldTrailContext = createContext<string[]>([]);
 const ConditionFormatContext = createContext(false);
 const clone = (value: any) =>
@@ -660,6 +685,7 @@ function SchemaField({
   const parentPath = useContext(FieldPathContext),
     path = parentPath ? `${parentPath}.${name}` : name;
   const trail = useContext(FieldTrailContext);
+  const fieldProblems = useContext(FieldProblemsContext)(path);
   const inConditionFormat = useContext(ConditionFormatContext);
   const scope = usePendingScope(),
     [choiceError, setChoiceError] = useState("");
@@ -1336,6 +1362,14 @@ function SchemaField({
             <div
               className={`schema-field-control ${ownsHeader ? "schema-field-owned" : ""} ${structured ? "schema-field-section" : ""}`}
               data-field-name={name}
+              data-field-path={path}
+              data-field-problem={
+                fieldProblems.some((problem) => problem.severity === "error")
+                  ? "error"
+                  : fieldProblems.length
+                    ? "warning"
+                    : undefined
+              }
             >
               {ownsHeader && (
                 <SchemaFieldHeader
@@ -1501,6 +1535,23 @@ function SchemaField({
               <div className="schema-structured-value" hidden={rawOpen}>
                 {control}
               </div>
+              {fieldProblems.length > 0 && (
+                <ul
+                  className="schema-field-problems"
+                  aria-label={`Problems in ${title}`}
+                >
+                  {fieldProblems.map((problem) => (
+                    <li key={problem.key} data-severity={problem.severity}>
+                      <ProblemText text={problem.message} />
+                      {problem.hint && (
+                        <small>
+                          <ProblemText text={problem.hint.split("\n")[0]} />
+                        </small>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {rawAvailable && (
                 <div className="schema-raw-value" id={rawId} hidden={!rawOpen}>
                   {rawVisited && (

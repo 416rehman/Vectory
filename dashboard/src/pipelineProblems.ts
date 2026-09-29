@@ -1,0 +1,577 @@
+import type { Config } from "./api";
+
+/** One structured finding from the isolated Vector worker (see CONTRACT.md). */
+export type VectorDiagnostic = {
+  severity: "error" | "warning";
+  message: string;
+  section?: string;
+  component?: string;
+  route_output?: string;
+  field?: string;
+  code?: string;
+  line?: number;
+  column?: number;
+  length?: number;
+  hint?: string;
+  detail?: string;
+  docs_url?: string;
+  fix?: { label: string; replacement: string; scope: "span" | "line" };
+};
+
+export type PipelineCheck = {
+  valid: boolean;
+  vector_validated: boolean;
+  static_checked?: boolean;
+  deferred?: boolean;
+  deferred_reasons?: string[];
+  placeholders?: string[];
+  diagnostics?: VectorDiagnostic[];
+  errors: string[];
+  warnings: string[];
+};
+
+export type ProblemSection =
+  "sources" | "transforms" | "sinks" | "enrichment_tables" | "tests" | "global";
+
+export type Problem = {
+  key: string;
+  severity: "error" | "warning";
+  /** `draft`: instant local checks. `vector`: the last pinned-Vector check. */
+  origin: "draft" | "vector";
+  section?: ProblemSection;
+  component?: string;
+  field?: string;
+  routeOutput?: string;
+  message: string;
+  hint?: string;
+  code?: string;
+  line?: number;
+  column?: number;
+  length?: number;
+  detail?: string;
+  docsUrl?: string;
+  fix?: VectorDiagnostic["fix"];
+  /** The pipeline changed after this Vector finding was produced. */
+  stale?: boolean;
+};
+
+export type LocalDiagnostic = {
+  severity: "error" | "warning";
+  message: string;
+  code?: string;
+  componentId?: string;
+  enrichmentTableId?: string;
+};
+
+const sectionOf = (config: Config, id: string): ProblemSection | undefined =>
+  (["sources", "transforms", "sinks", "enrichment_tables"] as const).find(
+    (section) =>
+      !!config?.[section] &&
+      typeof config[section] === "object" &&
+      Object.hasOwn(config[section], id),
+  );
+
+const escapeRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Split a local message into the option it names and the finding: both
+ * `parse: Enter source.` and `sinks.out.buffer.max_size: must be …` carry a
+ * component prefix, and the second also the option path.
+ */
+function localMessage(message: string, component?: string) {
+  const prefixed =
+    component &&
+    new RegExp(
+      `^(?:(?:sources|transforms|sinks|enrichment_tables)\\.)?${escapeRegExp(component)}(?:\\.([^:\\s]+))?: ([\\s\\S]*)$`,
+    ).exec(message);
+  const text = sentence(prefixed ? prefixed[2] : message);
+  const required = /^Enter ([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\.$/.exec(text);
+  return {
+    message: text,
+    field: prefixed?.[1] || required?.[1],
+    code: required ? "missing_field" : undefined,
+  };
+}
+
+const sentence = (text: string) => {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const first = trimmed[0].toUpperCase() + trimmed.slice(1);
+  return /[.!?:)`]$/.test(first) ? first : `${first}.`;
+};
+
+/** Instant checks: schema, structure, connectivity and variable fields. */
+export function localProblems(
+  diagnostics: readonly LocalDiagnostic[],
+  connectivity: ReadonlyMap<string, string>,
+  variableMessages: readonly string[],
+  config: Config,
+): Problem[] {
+  const problems: Problem[] = [];
+  const seen = new Set<string>();
+  const push = (problem: Omit<Problem, "key">) => {
+    const key = `draft:${problem.severity}:${problem.component || ""}:${problem.message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    problems.push({ ...problem, key });
+  };
+  for (const item of diagnostics) {
+    // Native references are checked with placeholders; the check's verdict
+    // names what each device still resolves.
+    if (item.code === "deferred") continue;
+    const component = item.componentId || item.enrichmentTableId;
+    const { message, field, code } = localMessage(item.message, component);
+    push({
+      severity: item.severity,
+      origin: "draft",
+      component:
+        component && sectionOf(config, component) ? component : undefined,
+      section: component ? sectionOf(config, component) : "global",
+      message,
+      ...(field ? { field } : {}),
+      ...(code ? { code } : {}),
+    });
+  }
+  for (const [component, message] of connectivity)
+    push({
+      severity: "warning",
+      origin: "draft",
+      component,
+      section: sectionOf(config, component),
+      code: "no_destination",
+      message,
+    });
+  for (const message of variableMessages)
+    push({
+      severity: "error",
+      origin: "draft",
+      section: "global",
+      code: "variables",
+      message: sentence(message),
+    });
+  return problems;
+}
+
+/** Diagnostics that say the check itself could not run or finish. */
+const CHECK_FAILURES = new Set([
+  "validator_unavailable",
+  "validator_incomplete",
+]);
+
+/** Findings from the last Vector check, falling back to older text-only servers. */
+export function checkProblems(
+  check: PipelineCheck | null,
+  config: Config,
+  stale = false,
+): Problem[] {
+  if (!check) return [];
+  if (Array.isArray(check.diagnostics))
+    return check.diagnostics.flatMap((item, index): Problem[] => {
+      // A check that could not run is the check's state, not a pipeline problem.
+      if (item.code && CHECK_FAILURES.has(item.code)) return [];
+      const component =
+        item.component && sectionOf(config, item.component)
+          ? item.component
+          : undefined;
+      return [
+        {
+          key: `vector:${index}:${item.component || ""}:${item.code || ""}:${item.line || 0}:${item.column || 0}:${item.message}`,
+          severity: item.severity,
+          origin: "vector",
+          section:
+            (item.section as ProblemSection) ||
+            (component ? sectionOf(config, component) : "global"),
+          component,
+          field: item.field,
+          routeOutput: item.route_output,
+          message: sentence(item.message),
+          hint: item.hint,
+          code: item.code,
+          line: item.line,
+          column: item.column,
+          length: item.length,
+          detail: item.detail,
+          docsUrl: item.docs_url,
+          fix: item.fix,
+          stale,
+        },
+      ];
+    });
+  return check.errors.map((message, index) => {
+    const prefix = /^(?:(?:sources|transforms|sinks)\.)?([^:\s]+): /.exec(
+      message,
+    );
+    const component =
+      prefix && sectionOf(config, prefix[1]) ? prefix[1] : undefined;
+    return {
+      key: `vector:legacy:${index}:${message}`,
+      severity: "error" as const,
+      origin: "vector" as const,
+      section: component ? sectionOf(config, component) : ("global" as const),
+      component,
+      message: sentence(component ? message.slice(prefix![0].length) : message),
+      stale,
+    };
+  });
+}
+
+/** Vector settings errors a local finding for the same step already covers. */
+const SETTINGS_CODES = new Set([
+  "missing_field",
+  "invalid_type",
+  "invalid_value",
+]);
+
+/**
+ * Local and Vector findings without repeats. A local finding Vector reports in
+ * the same words is shown once. Where the local check already flags a step's
+ * settings, Vector's settings errors for that step give way: Vector stops at
+ * the first one it meets, and a check after the fix reports anything left.
+ * Unknown options and VRL, input and type findings always stay.
+ */
+export function mergeProblems(local: Problem[], vector: Problem[]) {
+  const identity = (problem: Problem) =>
+    `${problem.component || ""}:${problem.message.toLowerCase()}`;
+  const vectorKeys = new Set(vector.map(identity));
+  const localErrors = local.filter((problem) => problem.severity === "error");
+  const flagged = new Set(localErrors.map((problem) => problem.component));
+  const repeated = (problem: Problem) =>
+    problem.severity === "error" &&
+    ((problem.code === "empty_pipeline" &&
+      localErrors.some(
+        (item) => !item.component && item.section === "global",
+      )) ||
+      (!!problem.component &&
+        flagged.has(problem.component) &&
+        (!problem.code || SETTINGS_CODES.has(problem.code))));
+  return [
+    ...local.filter((problem) => !vectorKeys.has(identity(problem))),
+    ...vector.filter((problem) => !repeated(problem)),
+  ];
+}
+
+/**
+ * After an edit, a Vector finding keeps its position and quick fix only while
+ * the program it points into is unchanged since the check.
+ */
+export function settleStaleProblems(
+  problems: Problem[],
+  program: (
+    draft: "checked" | "current",
+    component: string,
+    field: string,
+  ) => string | null,
+): Problem[] {
+  return problems.map((problem) => {
+    if (
+      !problem.stale ||
+      !problem.component ||
+      !problem.field ||
+      (!problem.line && !problem.fix)
+    )
+      return problem;
+    const before = program("checked", problem.component, problem.field);
+    if (
+      before !== null &&
+      before === program("current", problem.component, problem.field)
+    )
+      return problem;
+    const moved = { ...problem };
+    delete moved.line;
+    delete moved.column;
+    delete moved.length;
+    delete moved.fix;
+    return moved;
+  });
+}
+
+export type ProblemGroup = {
+  key: string;
+  component?: string;
+  section?: ProblemSection;
+  problems: Problem[];
+  errors: number;
+  warnings: number;
+};
+
+const severityRank = (problem: Problem) =>
+  problem.severity === "error" ? 0 : 1;
+
+/** Components in the order events flow: each step after the steps it reads. */
+export function pipelineOrder(config: Config) {
+  const sections = ["sources", "transforms", "sinks", "enrichment_tables"];
+  const rank = new Map<string, number>(),
+    parents = new Map<string, string[]>();
+  sections.forEach((section, index) => {
+    const entries = config?.[section];
+    if (!entries || typeof entries !== "object") return;
+    for (const [id, component] of Object.entries(entries as Config)) {
+      rank.set(id, index);
+      const inputs = Array.isArray(component?.inputs) ? component.inputs : [];
+      parents.set(
+        id,
+        inputs
+          .filter(
+            (input: unknown): input is string => typeof input === "string",
+          )
+          .map((input: string) => input.split(".")[0]),
+      );
+    }
+  });
+  const depth = new Map<string, number>();
+  const measure = (id: string, trail: Set<string>): number => {
+    const known = depth.get(id);
+    if (known !== undefined) return known;
+    if (trail.has(id)) return 0;
+    trail.add(id);
+    const upstream = (parents.get(id) || []).filter((parent) =>
+      rank.has(parent),
+    );
+    const value = upstream.length
+      ? 1 + Math.max(...upstream.map((parent) => measure(parent, trail)))
+      : 0;
+    trail.delete(id);
+    depth.set(id, value);
+    return value;
+  };
+  const table = (id: string) => (rank.get(id) === 3 ? 1 : 0);
+  const ids = [...rank.keys()];
+  for (const id of ids) measure(id, new Set());
+  ids.sort(
+    (a, b) =>
+      table(a) - table(b) ||
+      depth.get(a)! - depth.get(b)! ||
+      rank.get(a)! - rank.get(b)! ||
+      a.localeCompare(b),
+  );
+  return new Map(ids.map((id, index) => [id, index]));
+}
+
+/** Group by component in the order events flow, pipeline-wide last. */
+export function groupProblems(
+  problems: Problem[],
+  config: Config,
+): ProblemGroup[] {
+  const order = pipelineOrder(config);
+  const groups = new Map<string, ProblemGroup>();
+  for (const problem of problems) {
+    const key = problem.component
+      ? `component:${problem.component}`
+      : `section:${problem.section || "global"}`;
+    const group =
+      groups.get(key) ||
+      groups
+        .set(key, {
+          key,
+          component: problem.component,
+          section: problem.section,
+          problems: [],
+          errors: 0,
+          warnings: 0,
+        })
+        .get(key)!;
+    group.problems.push(problem);
+    if (problem.severity === "error") group.errors++;
+    else group.warnings++;
+  }
+  for (const group of groups.values())
+    group.problems.sort(
+      (a, b) =>
+        severityRank(a) - severityRank(b) ||
+        (a.line || 0) - (b.line || 0) ||
+        (a.column || 0) - (b.column || 0),
+    );
+  return [...groups.values()].sort((a, b) => {
+    const rank = (group: ProblemGroup) =>
+      group.component ? (order.get(group.component) ?? 1e6) : 2e6;
+    return (b.errors > 0 ? 1 : 0) - (a.errors > 0 ? 1 : 0) || rank(a) - rank(b);
+  });
+}
+
+export function countProblems(problems: readonly Problem[]) {
+  let errors = 0,
+    warnings = 0;
+  for (const problem of problems)
+    if (problem.severity === "error") errors++;
+    else warnings++;
+  return { errors, warnings };
+}
+
+/** Per-component counts for node badges. Connectivity has its own badge. */
+export function componentProblems(problems: readonly Problem[]) {
+  const map = new Map<
+    string,
+    { errors: number; warnings: number; first: Problem }
+  >();
+  for (const problem of problems) {
+    if (!problem.component || problem.code === "no_destination") continue;
+    const entry = map.get(problem.component);
+    if (!entry)
+      map.set(problem.component, {
+        errors: problem.severity === "error" ? 1 : 0,
+        warnings: problem.severity === "warning" ? 1 : 0,
+        first: problem,
+      });
+    else {
+      if (problem.severity === "error") {
+        entry.errors++;
+        if (entry.first.severity !== "error") entry.first = problem;
+      } else entry.warnings++;
+    }
+  }
+  return map;
+}
+
+export type CheckStatus =
+  | "unchecked"
+  | "checking"
+  | "passed"
+  | "device"
+  | "partial"
+  | "problems"
+  | "stale"
+  | "unavailable";
+
+/** Why the last check could not run or finish, or null when it ran. */
+export function checkFailure(check: PipelineCheck | null) {
+  return (
+    check?.diagnostics?.find(
+      (item) => item.code && CHECK_FAILURES.has(item.code),
+    )?.message || null
+  );
+}
+
+/**
+ * The Check button's state. `device`: Vector accepted the draft and each
+ * device still checks its own environment. `partial`: only the structure was
+ * checked because no Vector checker is configured.
+ */
+export function checkStatus({
+  checking,
+  check,
+  stale,
+  errors,
+  failed = false,
+}: {
+  checking: boolean;
+  check: PipelineCheck | null;
+  stale: boolean;
+  errors: number;
+  /** The last check request failed before a result arrived. */
+  failed?: boolean;
+}): CheckStatus {
+  if (checking) return "checking";
+  if (failed) return "unavailable";
+  if (!check) return errors ? "problems" : "unchecked";
+  if (stale) return errors ? "problems" : "stale";
+  if (errors) return "problems";
+  if (checkFailure(check)) return "unavailable";
+  if (!check.valid) return "problems";
+  if (!check.static_checked) return "partial";
+  return check.vector_validated ? "passed" : "device";
+}
+
+export function checkLabel(status: CheckStatus, errors: number) {
+  switch (status) {
+    case "checking":
+      return "Checking…";
+    case "passed":
+    case "device":
+      return "Checked";
+    case "partial":
+      return "Partly checked";
+    case "problems":
+      return errors === 1 ? "1 problem" : `${errors} problems`;
+    case "unavailable":
+      return "Couldn't check";
+    default:
+      return "Not checked";
+  }
+}
+
+const deferralPhrases: Record<string, string> = {
+  "environment variables": "environment variables",
+  "native secret references": "secrets",
+  "native secret providers": "secrets",
+  "VRL access to device resources": "VRL that reads device resources",
+  "native configuration provider": "the configuration provider",
+  "device enrichment data": "enrichment data files",
+  "device-local paths or external code files": "local files and paths",
+};
+
+/** One-line verdict for a completed check. */
+export function checkVerdict(check: PipelineCheck | null, errors: number) {
+  if (errors)
+    return errors === 1
+      ? "1 problem to fix before publishing."
+      : `${errors} problems to fix before publishing.`;
+  if (!check) return "Run a check to validate this pipeline with Vector.";
+  const failure = checkFailure(check);
+  if (failure)
+    return check.diagnostics?.some(
+      (item) => item.code === "validator_unavailable",
+    )
+      ? "The Vector checker is unavailable. Publishing is blocked until it responds."
+      : sentence(failure);
+  if (!check.static_checked)
+    return "Only the pipeline structure was checked. Each device validates before applying.";
+  if (check.vector_validated) return "Vector 0.58 accepted this pipeline.";
+  const reasons = [
+    ...new Set(
+      (check.deferred_reasons || []).map(
+        (reason) =>
+          deferralPhrases[reason] ||
+          reason.replace(
+            /^platform-specific source (.+)$/,
+            "the $1 source's platform",
+          ),
+      ),
+    ),
+  ];
+  const what =
+    reasons.length > 1
+      ? `${reasons.slice(0, -1).join(", ")} and ${reasons.at(-1)}`
+      : reasons[0] || "their environment";
+  return `Vector 0.58 accepted this pipeline. Each device checks ${what} before applying it.`;
+}
+
+/**
+ * Apply a Vector quick fix to a program. `span` replaces `length` characters at
+ * 1-based `line:column`; `line` replaces the whole line, keeping indentation.
+ * Returns null when the program no longer matches the finding.
+ */
+export function applyFix(
+  text: string,
+  problem: Pick<Problem, "line" | "column" | "length" | "fix">,
+): string | null {
+  const { fix, line, column } = problem;
+  if (!fix || !line || line < 1) return null;
+  const lines = text.split("\n");
+  if (line > lines.length) return null;
+  const current = lines[line - 1];
+  if (fix.scope === "line") {
+    const indent = /^\s*/.exec(current)?.[0] || "";
+    lines[line - 1] = indent + fix.replacement.trim();
+    return lines.join("\n");
+  }
+  if (!column || column < 1) return null;
+  const characters = [...current];
+  const start = column - 1,
+    length = Math.max(0, problem.length ?? 0);
+  if (start > characters.length) return null;
+  characters.splice(start, length, fix.replacement);
+  lines[line - 1] = characters.join("");
+  return lines.join("\n");
+}
+
+/** Findings for one field of one component (VRL program, condition, route). */
+export function fieldProblems(
+  problems: readonly Problem[],
+  component: string,
+  field: string,
+) {
+  return problems.filter(
+    (problem) => problem.component === component && problem.field === field,
+  );
+}

@@ -23,6 +23,7 @@ import ConfigurationCodeEditor, {
   type ConfigurationDiagnostic,
 } from "./ConfigurationCodeEditor";
 import "./schema-value-editor.css";
+import VrlField from "./VrlField";
 import { SchemaFieldHeader } from "./SchemaFieldChrome";
 import { parseExactJSON } from "./configurationNumbers";
 import {
@@ -222,17 +223,25 @@ export function ScalarValueEditor({
           {title +
             (model.sensitive && !/reference$/i.test(title) ? " reference" : "")}
         </span>
-        {multiline ? (
+        {model.intent.kind === "vrl" ? (
+          <VrlField
+            path={path || name}
+            title={title}
+            text={text}
+            readOnly={disabled}
+            describedBy={error ? errorId : undefined}
+            onInput={input}
+          />
+        ) : multiline ? (
           <div className="schema-code-control">
             <div className="schema-code-toolbar">
               <span>
-                {model.intent.kind === "vrl"
-                  ? "VRL"
-                  : model.intent.kind === "regex"
-                    ? "Regular expression"
-                    : "Code"}
+                {model.intent.kind === "regex" ? "Regular expression" : "Code"}
               </span>
-              <span>{text.split("\n").length} lines</span>
+              <span>
+                {text.split("\n").length}{" "}
+                {text.split("\n").length === 1 ? "line" : "lines"}
+              </span>
             </div>
             <textarea
               id={controlId}

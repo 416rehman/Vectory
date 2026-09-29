@@ -1,0 +1,54 @@
+/* Editor-scoped status and code tokens (light, then dark). Contrast-checked
+   pairs from the shell review; kept self-contained so the editor does not
+   depend on the shell token rollout. */
+:root {
+  --ed-danger: #a3262b;
+  --ed-danger-bg: #fdecec;
+  --ed-danger-line: #f3c7c7;
+  --ed-warning: #7a4f06;
+  --ed-warning-bg: #fdf3dc;
+  --ed-warning-line: #f0d9a6;
+  --ed-success: #1f6b43;
+  --ed-success-bg: #e9f5ee;
+  --ed-success-line: #c5e3d1;
+  --ed-info: #3446ba;
+  --ed-info-bg: #eceefd;
+  --ed-info-line: #cdd3f7;
+  --ed-neutral-bg: #eeece8;
+  --ed-neutral-line: #dcd8d1;
+  --ed-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --ed-code-path: #235ca8;
+  --ed-code-function: #7440a3;
+  --ed-code-string: #216441;
+  --ed-code-literal: #9a4b12;
+  --ed-code-number: #845818;
+  --ed-code-comment: #6f6b64;
+  --ed-radius: 8px;
+  --ed-radius-sm: 6px;
+  --ed-elevation: 0 1px 2px #2925220d, 0 8px 24px #2925220f;
+}
+[data-theme="dark"] {
+  --ed-danger: #f5a5a5;
+  --ed-danger-bg: #3d2224;
+  --ed-danger-line: #5e3336;
+  --ed-warning: #f0cf8a;
+  --ed-warning-bg: #3a2f1a;
+  --ed-warning-line: #5a4a26;
+  --ed-success: #8fd1a8;
+  --ed-success-bg: #1d3326;
+  --ed-success-line: #2c4d39;
+  --ed-info: #b6beff;
+  --ed-info-bg: #2b2d4a;
+  --ed-info-line: #3d4170;
+  --ed-neutral-bg: #353238;
+  --ed-neutral-line: #4a464d;
+  --ed-code-path: #a6c6ff;
+  --ed-code-function: #d6b2ed;
+  --ed-code-string: #acd5b8;
+  --ed-code-literal: #f0b78a;
+  --ed-code-number: #e2c287;
+  --ed-code-comment: #a39e99;
+  --ed-elevation: 0 1px 2px #0006, 0 10px 30px #0005;
+}

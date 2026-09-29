@@ -1,3 +1,4 @@
+@import "./editor-tokens.css";
 /* Canvas-first editor: one toolbar, with graph controls kept on the graph. */
 .editor-redesigned .editor-header {
   padding: 16px 22px;
@@ -138,64 +139,74 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.editor-check-button[data-check-state="passed"] {
-  color: #256440;
+.editor-check-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
-.editor-check-button[data-check-state="partial"] {
-  color: #95620b;
+.editor-check-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.editor-check-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.editor-check-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.editor-check-button > svg {
+  flex: none;
+  color: var(--muted);
 }
 .editor-check-button:is(
-  [data-check-state="failed"],
-  [data-check-state="stale"]
+    [data-check-state="passed"],
+    [data-check-state="device"]
+  )
+  > svg {
+  color: var(--ed-success);
+}
+.editor-check-button[data-check-state="problems"] {
+  border-color: var(--ed-danger-line);
+  color: var(--ed-danger);
+  background: var(--ed-danger-bg);
+}
+.editor-check-button[data-check-state="problems"] > svg {
+  color: var(--ed-danger);
+}
+.editor-check-button:is(
+    [data-check-state="unavailable"],
+    [data-check-state="partial"]
+  )
+  > svg {
+  color: var(--ed-warning);
+}
+.editor-check-button:is(
+  [data-check-state="stale"],
+  [data-check-state="unchecked"]
 ) {
-  color: #a32d28;
-}
-[data-theme="dark"] .editor-check-button[data-check-state="passed"] {
-  color: #a2d5b2;
-}
-[data-theme="dark"] .editor-check-button[data-check-state="partial"] {
-  color: #ffd27a;
-}
-[data-theme="dark"]
-  .editor-check-button:is(
-    [data-check-state="failed"],
-    [data-check-state="stale"]
-  ) {
-  color: #ffc2be;
+  color: var(--muted);
 }
 @media (prefers-reduced-motion: no-preference) {
   .editor-check-button[data-check-state="checking"] > svg {
     animation: spin 1s linear infinite;
   }
-}
-.editor-checks-popover {
-  z-index: 100;
-  box-sizing: border-box;
-  width: min(330px, calc(100vw - 24px));
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 8px 24px #0002;
-  font-size: 12px;
-  max-height: min(360px, var(--radix-popover-content-available-height));
-  overflow: auto;
-}
-.editor-checks-popover > strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-.editor-checks-popover p:last-child,
-.editor-checks-popover ul:last-child {
-  margin-bottom: 0;
-}
-.editor-checks-popover ul {
-  padding-left: 18px;
-}
-.editor-checks-popover p,
-.editor-checks-popover li {
-  color: var(--muted);
-  line-height: 1.5;
 }
 .editor-toolbar .editor-header-actions {
   gap: 8px;
