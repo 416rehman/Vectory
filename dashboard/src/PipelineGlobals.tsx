@@ -49,7 +49,8 @@ const sections = [
     id: "variables",
     title: "Variables",
     icon: Braces,
-    description: "Choose fields that can have a different value on each device.",
+    description:
+      "Choose fields that can have a different value on each device.",
     link: "",
   },
   {
@@ -226,58 +227,75 @@ export default function PipelineGlobals({
           <h3>{details.title}</h3>
           <p>
             {details.description}{" "}
-            {section !== "variables" && <DocLink
-              topic={section === "general" ? "pipelines" : "resources"}
-              section={
-                {
-                  general: "global-settings",
-                  enrichment_tables: "enrich-events-with-local-data",
-                  secret: "use-native-vector-secret-providers",
-                  tests: "test-transformations",
-                  provider: "configuration-providers",
-                }[section]
-              }
-            >
-              How this works
-            </DocLink>}
+            {section !== "variables" && (
+              <DocLink
+                topic={section === "general" ? "pipelines" : "resources"}
+                section={
+                  {
+                    general: "global-settings",
+                    enrichment_tables: "enrich-events-with-local-data",
+                    secret: "use-native-vector-secret-providers",
+                    tests: "test-transformations",
+                    provider: "configuration-providers",
+                  }[section]
+                }
+              >
+                How this works
+              </DocLink>
+            )}
           </p>
-          {section === "variables" ? <PipelineVariables
-            config={config}
-            variables={variables}
-            editable={editable}
-            onChange={onVariablesChange}
-          /> : <PipelineSchemaFields
-            key={section}
-            schema={schema}
-            root={vectorSchema}
-            component={config}
-            exclude={Object.keys(config).filter((key) => !names.includes(key))}
-            onChange={update}
-            editable={editable}
-            onPendingChange={pendingChange}
-          />}
           {section === "tests" && (
             <div className="pipeline-test-run">
-              <Button
-                variant="secondary"
-                busy={busy}
-                disabled={
-                  !Array.isArray(config.tests) || config.tests.length === 0
-                }
-                onClick={runTests}
-              >
-                Run pipeline tests
-              </Button>
+              <div className="pipeline-test-run-bar">
+                <strong>
+                  {Array.isArray(config.tests) && config.tests.length
+                    ? `${config.tests.length} ${config.tests.length === 1 ? "test" : "tests"}`
+                    : "No tests yet"}
+                </strong>
+                <Button
+                  variant="secondary compact"
+                  busy={busy}
+                  disabled={
+                    !Array.isArray(config.tests) || config.tests.length === 0
+                  }
+                  onClick={runTests}
+                >
+                  Run pipeline tests
+                </Button>
+              </div>
               {error && <ErrorBox message={error} />}
               {result && <PipelineTestResults run={result} />}
             </div>
           )}
-          {section !== "variables" && <ExternalDocLink
-            className="pipeline-global-docs"
-            href={`https://vector.dev/docs/reference/configuration/${details.link}/`}
-          >
-            Vector reference for {details.title.toLowerCase()}
-          </ExternalDocLink>}
+          {section === "variables" ? (
+            <PipelineVariables
+              config={config}
+              variables={variables}
+              editable={editable}
+              onChange={onVariablesChange}
+            />
+          ) : (
+            <PipelineSchemaFields
+              key={section}
+              schema={schema}
+              root={vectorSchema}
+              component={config}
+              exclude={Object.keys(config).filter(
+                (key) => !names.includes(key),
+              )}
+              onChange={update}
+              editable={editable}
+              onPendingChange={pendingChange}
+            />
+          )}
+          {section !== "variables" && (
+            <ExternalDocLink
+              className="pipeline-global-docs"
+              href={`https://vector.dev/docs/reference/configuration/${details.link}/`}
+            >
+              Vector reference for {details.title.toLowerCase()}
+            </ExternalDocLink>
+          )}
         </div>
       </div>
       <div className="modal-footer">

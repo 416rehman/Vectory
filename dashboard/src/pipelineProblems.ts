@@ -579,6 +579,45 @@ export function checkVerdict(check: PipelineCheck | null, errors: number) {
   return `Vector 0.58 accepted this pipeline. Each device checks ${what} before applying it.`;
 }
 
+/** Fewest single-character edits between two strings (small inputs only). */
+export function editDistance(a: string, b: string) {
+  const left = [...a],
+    right = [...b];
+  let row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= right.length; j++)
+      next[j] = Math.min(
+        row[j] + 1,
+        next[j - 1] + 1,
+        row[j - 1] + (left[i - 1] === right[j - 1] ? 0 : 1),
+      );
+    row = next;
+  }
+  return row[right.length];
+}
+
+/**
+ * Whether to offer a fix. Vector's "did you mean" suggestions (labelled
+ * "Change to …") are only trustworthy for a near miss: while a name is still
+ * being typed the closest known one can be far off, and offering it is noise.
+ * Other fixes (add `!`, treat errors as no match) are exact and always shown.
+ */
+export function fixLooksIntended(
+  text: string,
+  problem: Pick<Problem, "line" | "column" | "length" | "fix">,
+) {
+  const { fix, line, column } = problem;
+  if (!fix || !/^Change to\b/i.test(fix.label) || fix.scope !== "span")
+    return true;
+  const current = text.split("\n")[(line ?? 0) - 1];
+  if (current === undefined || !column) return true;
+  const span = [...current]
+    .slice(column - 1, column - 1 + Math.max(0, problem.length ?? 0))
+    .join("");
+  return editDistance(span, fix.replacement) <= 2;
+}
+
 /**
  * Apply a Vector quick fix to a program. `span` replaces `length` characters at
  * 1-based `line:column`; `line` replaces the whole line, keeping indentation.

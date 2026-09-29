@@ -170,6 +170,7 @@ import PipelineCheckButton from "./PipelineCheckButton";
 import ProblemsPanel from "./ProblemsPanel";
 import {
   applyFix,
+  fixLooksIntended,
   checkFailureMessage,
   checkLabel,
   checkProblems,
@@ -1023,10 +1024,17 @@ export default function Editor({
     const attempt = autoCheckAttempt.current;
     // One automatic attempt per draft: a failed attempt waits for the next edit.
     if (attempt?.config === config && attempt.variables === variables) return;
-    const timer = window.setTimeout(() => {
+    let timer = 0;
+    const run = () => {
+      // An open completion popup means the person is still typing.
+      if (document.querySelector(".cm-tooltip-autocomplete")) {
+        timer = window.setTimeout(run, 800);
+        return;
+      }
       autoCheckAttempt.current = { config, variables };
       void validate({ auto: true });
-    }, 1200);
+    };
+    timer = window.setTimeout(run, 1200);
     return () => window.clearTimeout(timer);
   }, [autoCheckReady, config, variables]);
   function changeAutoCheck(value: boolean) {
@@ -3274,12 +3282,17 @@ export default function Editor({
     });
   }
   function canFixProblem(problem: Problem) {
-    return (
-      editable &&
-      !!problem.fix &&
-      !!problem.component &&
-      !!problem.field &&
-      !!config.transforms?.[problem.component]
+    if (
+      !editable ||
+      !problem.fix ||
+      !problem.component ||
+      !problem.field ||
+      !config.transforms?.[problem.component]
+    )
+      return false;
+    return fixLooksIntended(
+      vrlValue(config.transforms[problem.component], problem.field),
+      problem,
     );
   }
   function fixProblem(problem: Problem) {

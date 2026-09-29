@@ -6,7 +6,37 @@ import {
   isSecretReference,
   type Schema,
 } from "./pipelineSchema";
-export const vectorSchema: Schema = generatedSchema;
+/**
+ * Vector's schema does not say that a condition's `source` is VRL, so a test's
+ * `conditions` would get a plain text box. Mark it, and the same editor as
+ * everywhere else appears.
+ */
+function withVrlConditions(schema: Schema): Schema {
+  const key = "vector::conditions::vrl::VrlConfig";
+  const definition = schema.definitions?.[key];
+  const source = definition?.properties?.source;
+  if (!definition || !source) return schema;
+  return {
+    ...schema,
+    definitions: {
+      ...schema.definitions,
+      [key]: {
+        ...definition,
+        properties: {
+          ...definition.properties,
+          source: {
+            ...source,
+            _metadata: {
+              ...source._metadata,
+              "docs::syntax_override": "vrl_program",
+            },
+          },
+        },
+      },
+    },
+  };
+}
+export const vectorSchema: Schema = withVrlConditions(generatedSchema);
 export const vectorCatalogVersion = generatedCatalog.vector_version;
 export type Kind = "sources" | "transforms" | "sinks";
 export type Component = {
