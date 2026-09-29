@@ -229,7 +229,7 @@ async fn failing_sink_fails_the_canary_explains_why_and_resolves_when_fixed() {
     assert_eq!(open["title"], "archive can't deliver events");
     assert_eq!(
         open["message"],
-        "The http sink archive failed 12 requests in the last minute (connection refused)."
+        "The http sink archive is failing about 12 requests a minute (connection refused)."
     );
     assert!(open["hint"].as_str().unwrap().contains("reachable"));
 

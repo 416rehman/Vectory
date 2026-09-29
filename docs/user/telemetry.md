@@ -85,6 +85,17 @@ Clearing the URL doesn't remove the exporter from the pipeline, and old samples 
 
 A rate needs two samples, so the first sample shows no rate. A Vector restart resets counters; Vectory never shows negative throughput. A dash means the value wasn't reported: it isn't zero. Some exporters, such as Vector's on Windows, don't report CPU or memory.
 
+## Delivery health
+
+Applied means Vector runs the version. Delivery is a separate question, so Vectory also checks each device's metrics at every check-in against the version it runs:
+
+- **Sink errors:** a sink fails at least one request a minute.
+- **Stalled:** events arrive, but less than 1% is delivered and a sink is struggling.
+- **Buffer filling:** a buffer is over 80% full and rising, or over 95% full.
+- **Error drops:** a component drops at least one event a minute because of errors.
+
+A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. Meanwhile the device reads **Degraded**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
+
 ## Read history and gaps
 
 Hover over the throughput chart, or focus it and use the arrow keys, to read a sample. Expand the sample history for exact values.
@@ -108,7 +119,8 @@ This pattern points to a slow or failing destination, but confirm it with the de
 <!-- verify-after-merge: issue grouping, acknowledgement on live devices and recovery actions (W2) -->
 [**Activity → Issues**](/#/issues) lists problems devices reported, such as a version that failed to apply. Each issue names the device, the version and the reason, and links to the device and the deployment.
 
-- An issue resolves by itself when the device next applies a version and confirms it.
+- An apply issue resolves by itself when the device next applies a version and confirms it.
+- A delivery issue (**Degraded**) resolves by itself after three clean checks, or when the device stops running that version.
 - **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back. Both are recorded in the audit log.
 - A new failure after an acknowledgement reopens the issue.
 

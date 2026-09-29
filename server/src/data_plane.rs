@@ -120,6 +120,12 @@ fn number(value: f64) -> String {
         format!("{value:.2}")
     }
 }
+/// "12 requests", "1 request": a rate averaged over the sampling window,
+/// rounded to what an operator counts.
+fn per_minute(value: f64, noun: &str) -> String {
+    let count = value.round().max(1.0);
+    format!("{count:.0} {noun}{}", if count == 1.0 { "" } else { "s" })
+}
 fn percent(value: f64) -> String {
     format!("{:.0}%", (value * 100.0).clamp(0.0, 100.0))
 }
@@ -219,8 +225,8 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
                     verdict,
                     "error",
                     format!(
-                        "{described} failed {} requests in the last minute{}.",
-                        number(errors),
+                        "{described} is failing about {} a minute{}.",
+                        per_minute(errors, "request"),
                         cause(log)
                     ),
                     "Check that the destination is up and reachable from this device, and that its address and credentials are right.".into(),
@@ -271,8 +277,8 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
                 verdict,
                 "error",
                 format!(
-                    "{id} dropped {} events in the last minute because of errors{}.",
-                    number(drops),
+                    "{id} is dropping about {} a minute because of errors{}.",
+                    per_minute(drops, "event"),
                     cause(log)
                 ),
                 format!(
@@ -644,7 +650,7 @@ mod tests {
         let errors = found.iter().find(|f| f.code == SINK_ERRORS).unwrap();
         assert_eq!(
             errors.diagnostics[0]["message"],
-            "The http sink out failed 12 requests in the last minute (connection refused)."
+            "The http sink out is failing about 12 requests a minute (connection refused)."
         );
         assert_eq!(
             errors.diagnostics[1]["message"],
