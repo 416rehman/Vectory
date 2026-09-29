@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,10 +23,12 @@ import (
 type MetricsCollector struct {
 	url       string
 	namespace string
-	client    *http.Client
-	counters  counterSet
-	sampled   time.Time
-	uptime    *float64
+	// internal lists sinks carrying only Vector's own telemetry.
+	internal map[string]bool
+	client   *http.Client
+	counters counterSet
+	sampled  time.Time
+	uptime   *float64
 }
 
 // Metrics endpoint sources reported in host_runtime.metrics_source.
@@ -84,6 +87,17 @@ func (c *MetricsCollector) setEndpoint(endpoint, namespace string) error {
 	c.url, c.namespace = u.String(), namespace
 	c.counters, c.uptime, c.sampled = nil, nil, time.Time{}
 	return nil
+}
+
+// setInternalSinks updates the sinks left out of "events out". A changed set
+// changes what the device totals count, so their next rate starts over.
+func (c *MetricsCollector) setInternalSinks(internal map[string]bool) {
+	if maps.Equal(internal, c.internal) {
+		return
+	}
+	c.internal = internal
+	delete(c.counters, "d:out")
+	delete(c.counters, "d:out_bytes")
 }
 
 var metricLine = regexp.MustCompile(`^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)(?:\s+[0-9]+)?$`)
@@ -150,7 +164,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, now time.Time) *Telemetr
 	if e != nil || len(data) > MaxArtifact {
 		return nil
 	}
-	observed, e := parseMetricObservationWithNamespace(data, c.namespace)
+	observed, e := parseMetricObservationWithNamespace(data, c.namespace, c.internal)
 	if e != nil || (observed.Events == nil && observed.Errors == nil && observed.UptimeSeconds == nil && observed.BufferBytes == nil && observed.DiscardedEvents == nil && len(observed.Components) == 0) {
 		return nil
 	}
@@ -328,11 +342,54 @@ func (e *Engine) collectTelemetry(ctx context.Context, running []byte) (*Telemet
 	if e.Metrics.setEndpoint(endpoint, namespace) != nil {
 		return nil, source, address
 	}
+	e.Metrics.setInternalSinks(telemetrySinks(running))
 	sample := e.Metrics.Collect(ctx, e.now())
 	if sample != nil {
 		sample.Components = runningComponents(sample.Components, running)
 	}
 	return sample, source, address
+}
+
+// telemetrySinks lists the sinks of a configuration that carry only Vector's
+// own telemetry: every source upstream of them, through transforms, is
+// internal_metrics or internal_logs. Their events are not the pipeline's
+// output, just as those sources are not its input. An input that cannot be
+// resolved (a wildcard, a missing component) counts as pipeline data.
+func telemetrySinks(config []byte) map[string]bool {
+	var root struct {
+		Sources    map[string]map[string]any `json:"sources"`
+		Transforms map[string]map[string]any `json:"transforms"`
+		Sinks      map[string]map[string]any `json:"sinks"`
+	}
+	if json.Unmarshal(config, &root) != nil {
+		return nil
+	}
+	var internal func(inputs any, depth int) bool
+	internal = func(inputs any, depth int) bool {
+		list, _ := inputs.([]any)
+		if len(list) == 0 || depth > 16 {
+			return false
+		}
+		for _, input := range list {
+			name, _ := input.(string)
+			id, _, _ := strings.Cut(name, ".")
+			if source, ok := root.Sources[id]; ok {
+				if source["type"] != "internal_metrics" && source["type"] != "internal_logs" {
+					return false
+				}
+			} else if transform, ok := root.Transforms[id]; !ok || !internal(transform["inputs"], depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	sinks := map[string]bool{}
+	for id, sink := range root.Sinks {
+		if internal(sink["inputs"], 0) {
+			sinks[id] = true
+		}
+	}
+	return sinks
 }
 
 // runningComponents keeps components of the running configuration. Vector
