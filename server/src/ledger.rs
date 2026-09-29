@@ -1,16 +1,16 @@
-//! Sign-in failure accounting, kept apart from the request limiter so neither
-//! can exhaust the other. The ledger is bounded, and when full it evicts the
-//! entry that expires soonest (expired entries first). It never declines to
-//! record a failure and never turns a sign-in away because it is full.
+//! Bounded counters with fixed windows, one per key. The request limiter's
+//! partitions and sign-in failure accounting each keep their own ledger, so
+//! none can exhaust another. When full, a ledger evicts the entry that
+//! expires soonest (expired entries first): it never declines to count a new
+//! key. Each new key also drops a few expired entries, so a ledger never
+//! scans all of its entries.
 use std::{
     collections::{BTreeMap, HashMap},
     time::{Duration, Instant},
 };
 
-/// Live entries. A single instance allows 600 sign-in attempts a minute, each
-/// adding at most two failure keys with 15- and 60-minute windows: about
-/// 45,000 live keys at the cap, so nothing live is evicted in practice.
-pub const CAPACITY: usize = 65536;
+/// Expired entries dropped per new key, oldest first.
+const PRUNE_PER_INSERT: usize = 8;
 
 struct Entry {
     count: u32,
@@ -22,12 +22,6 @@ pub struct Ledger {
     entries: HashMap<String, Entry>,
     by_expiry: BTreeMap<(Instant, u64), String>,
     sequence: u64,
-}
-
-impl Default for Ledger {
-    fn default() -> Self {
-        Self::with_capacity(CAPACITY)
-    }
 }
 
 impl Ledger {
@@ -55,19 +49,12 @@ impl Ledger {
         }
         self.entries.get_mut(key)
     }
-    /// Seconds until `key` may try again once it holds `maximum` failures.
+    /// Seconds until `key` may try again once it holds `maximum` counts.
     pub fn blocked(&mut self, key: &str, maximum: u32) -> Option<u64> {
         let entry = self.live(key)?;
-        (entry.count >= maximum).then(|| {
-            entry
-                .expiry
-                .0
-                .saturating_duration_since(Instant::now())
-                .as_secs()
-                + 1
-        })
+        (entry.count >= maximum).then(|| remaining(entry))
     }
-    /// Whether `key` holds at least one entry in its current window.
+    /// Whether `key` holds at least one count in its current window.
     pub fn seen(&mut self, key: &str) -> bool {
         self.live(key).is_some_and(|entry| entry.count > 0)
     }
@@ -77,6 +64,7 @@ impl Ledger {
             entry.count = entry.count.saturating_add(1);
             return;
         }
+        self.prune(PRUNE_PER_INSERT);
         while self.entries.len() >= self.capacity {
             let Some((_, oldest)) = self.by_expiry.pop_first() else {
                 break;
@@ -88,6 +76,16 @@ impl Ledger {
         self.by_expiry.insert(expiry, key.to_owned());
         self.entries
             .insert(key.to_owned(), Entry { count: 1, expiry });
+    }
+    /// Count one against `key` like `add`, and return its count in the
+    /// current window and the seconds until that window ends.
+    pub fn hit(&mut self, key: &str, window: Duration) -> (u32, u64) {
+        self.add(key, window);
+        self.entries
+            .get(key)
+            .map_or((1, window.as_secs() + 1), |entry| {
+                (entry.count, remaining(entry))
+            })
     }
     /// Give back one count reserved against `key`.
     pub fn refund(&mut self, key: &str) {
@@ -103,6 +101,30 @@ impl Ledger {
             self.by_expiry.remove(&entry.expiry);
         }
     }
+    /// Drop at most `most` expired entries, soonest expiry first.
+    fn prune(&mut self, most: usize) {
+        let now = Instant::now();
+        for _ in 0..most {
+            match self.by_expiry.first_key_value() {
+                Some(((expiry, _), _)) if *expiry <= now => {
+                    if let Some((_, key)) = self.by_expiry.pop_first() {
+                        self.entries.remove(&key);
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+}
+
+/// Whole seconds until `entry`'s window ends, rounded up to at least one.
+fn remaining(entry: &Entry) -> u64 {
+    entry
+        .expiry
+        .0
+        .saturating_duration_since(Instant::now())
+        .as_secs()
+        + 1
 }
 
 #[cfg(test)]
@@ -144,5 +166,32 @@ mod tests {
         assert!(!ledger.seen("gone"));
         assert!(ledger.is_empty());
         assert!(ledger.by_expiry.is_empty());
+    }
+
+    #[test]
+    fn hits_count_within_a_window_and_start_over_after_it() {
+        let mut ledger = Ledger::with_capacity(8);
+        for expected in 1..=3 {
+            let (count, wait) = ledger.hit("key", Duration::from_secs(60));
+            assert_eq!(count, expected);
+            assert!((59..=60).contains(&wait), "{wait}");
+        }
+        assert_eq!(ledger.hit("brief", Duration::ZERO).0, 1);
+        assert_eq!(ledger.hit("brief", Duration::ZERO).0, 1, "a new window");
+    }
+
+    #[test]
+    fn new_keys_drop_expired_entries_a_few_at_a_time() {
+        let mut ledger = Ledger::with_capacity(1000);
+        for n in 0..20 {
+            ledger.add(&format!("brief-{n}"), Duration::from_millis(200));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        ledger.add("live", Duration::from_secs(60));
+        assert_eq!(ledger.len(), 20 - PRUNE_PER_INSERT + 1);
+        ledger.add("live-2", Duration::from_secs(60));
+        ledger.add("live-3", Duration::from_secs(60));
+        assert_eq!(ledger.len(), 3, "only the live keys are left");
+        assert_eq!(ledger.by_expiry.len(), 3);
     }
 }

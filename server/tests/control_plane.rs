@@ -2628,18 +2628,86 @@ async fn authenticated_fleet_limiter_is_independent_of_anonymous_key_pressure() 
         )
         .unwrap();
     }
-    assert!(
-        s.limit(
-            "login:overflow".into(),
-            8,
-            std::time::Duration::from_secs(300)
-        )
-        .is_err()
-    );
     s.limit(
         "heartbeat:another-registered-device".into(),
         30,
         std::time::Duration::from_secs(60),
     )
     .unwrap();
+    assert_eq!(s.device_limits.lock().unwrap().len(), 10001);
+}
+
+#[tokio::test]
+async fn a_full_limiter_admits_new_sign_in_clients_and_keeps_spent_budgets() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    let five_minutes = std::time::Duration::from_secs(300);
+    // Someone spent a reset code's budget, in a five-minute window.
+    for _ in 0..8 {
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .unwrap();
+    }
+    assert!(
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .is_err()
+    );
+    // Sign-in clients with one-minute windows fill the partition.
+    for i in 0..vectory_server::ANONYMOUS_LIMIT_KEYS {
+        s.limit(format!("login-client:198.51.{i}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // A new client can still sign in: the key whose window ends soonest
+    // makes room. The server is never "busy" because the map is full.
+    for n in 0..100 {
+        s.limit(format!("login-client:203.0.113.{n}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // The spent budget has the most time left, so it still holds.
+    let refused = s
+        .limit("password-reset:guessed".into(), 8, five_minutes)
+        .unwrap_err();
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(refused.retry_after.unwrap() > 60, "{refused:?}");
+}
+
+#[tokio::test]
+async fn unauthenticated_agent_listener_traffic_never_displaces_sign_in_keys() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    for _ in 0..60 {
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .unwrap();
+    }
+    let signing_in = s.limits.lock().unwrap().len();
+    // A flood from many addresses fills its own partition: installer,
+    // download, enrollment and invitation keys. Nothing is ever refused
+    // because a map is full.
+    for i in 0..vectory_server::PUBLIC_LIMIT_KEYS + 1000 {
+        let key = match i % 4 {
+            0 => format!("agent-installer:2001:db8:{i:x}::/64"),
+            1 => format!("agent-download:2001:db8:{i:x}::/64"),
+            2 => format!("enrollment:2001:db8:{i:x}::/64"),
+            _ => format!("invite-preview:2001:db8:{i:x}::/64"),
+        };
+        s.limit(key, 300, std::time::Duration::from_secs(600))
+            .unwrap();
+    }
+    assert_eq!(
+        s.public_limits.lock().unwrap().len(),
+        vectory_server::PUBLIC_LIMIT_KEYS
+    );
+    assert_eq!(s.limits.lock().unwrap().len(), signing_in);
+    // The sign-in client's spent minute still holds.
+    assert!(
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .is_err()
+    );
 }

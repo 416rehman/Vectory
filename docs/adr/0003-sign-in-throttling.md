@@ -2,6 +2,8 @@
 
 Accepted 2026-09-29. Revised 2026-09-29 after review: failures are reserved before the password check,
 the failure ledger has its own bounded memory that never fails open, and IPv6 clients count per /64.
+Revised again after a second review: the request limiter evicts instead of refusing when full, and
+unauthenticated agent-listener keys have their own capped partition.
 
 ## Context
 
@@ -36,7 +38,13 @@ emails could switch the lockout off.
   /64; IPv4 and IPv4-mapped addresses count individually. Audit records keep the full address.
 - Throttled responses use `SIGNIN_THROTTLED` with the real remaining wait in `Retry-After` and a humane
   message that points to an administrator reset.
-- The anonymous request limiter tracks up to 32,768 keys (it previously refused everyone after 4,096).
+- The request limiter keeps three partitions of the same bounded ledger: sign-in, browser and account
+  keys (32,768); unauthenticated keys outside sign-in, meaning the agent listener's installer, agent
+  downloads and enrollment, and invitation previews (32,768); and authenticated devices (40,000). A full
+  partition evicts the key whose window ends soonest, so a new key is always counted and never turned
+  away. Each unauthenticated namespace has a global per-minute cap ahead of its per-address key, so a
+  flood from many addresses cannot fill its partition and never evicts a sign-in key. (The limiter first
+  refused everyone after 4,096 keys, later after 32,768.)
 
 ## Consequences
 
