@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { APIError } from "./api";
+import { cleanSummary } from "./ProblemsPanel";
 import {
   applyFix,
+  editDistance,
+  fixLooksIntended,
+  checkFailureMessage,
   checkLabel,
   checkProblems,
   checkStatus,
@@ -71,7 +76,7 @@ const check: PipelineCheck = {
       message: "unhandled error",
       fix: {
         label: "Treat errors as no match",
-        replacement: "(.status >= 500) ?? false",
+        replacement: "((.status >= 500) ?? false)",
         scope: "span",
       },
     },
@@ -447,7 +452,7 @@ describe("pipeline problems", () => {
     });
     expect(status).toBe("unavailable");
     expect(checkLabel(status, 0)).toBe("Couldn't check");
-    expect(checkVerdict(unavailable, 0)).toMatch(/checker is unavailable/);
+    expect(checkVerdict(unavailable, 0)).toMatch(/checker isn.t reachable/);
     expect(
       checkStatus({
         checking: false,
@@ -500,5 +505,146 @@ describe("pipeline problems", () => {
       "archive",
       "geo",
     ]);
+  });
+
+  it("never reads as clean when the check could not run", () => {
+    expect(cleanSummary("unavailable")).toBe("Not checked");
+    expect(cleanSummary("unchecked")).toBe("Not checked");
+    expect(cleanSummary("stale")).toBe("Not checked");
+    expect(cleanSummary("checking")).toBe("Checking…");
+    expect(cleanSummary("passed")).toBe("No problems");
+    expect(cleanSummary("device")).toBe("No problems");
+    expect(
+      checkFailureMessage(
+        new APIError(
+          "CAPABILITY_DENIED",
+          "Isolated Vector validator is unavailable",
+          503,
+          true,
+        ),
+      ),
+    ).toBe(
+      "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.",
+    );
+    expect(checkFailureMessage(new TypeError("Failed to fetch"))).toMatch(
+      /^Couldn't reach Vectory/,
+    );
+    expect(
+      checkFailureMessage(
+        new APIError("INVALID_INPUT", "Bad draft", 400, true),
+      ),
+    ).toBe("Couldn't check with Vector: Bad draft");
+  });
+
+  it("keeps a compound condition's logic when a span fix is applied", () => {
+    expect(
+      applyFix(".status >= 400 && .status < 500", {
+        line: 1,
+        column: 1,
+        length: 14,
+        fix: {
+          label: "Treat errors as no match",
+          replacement: "((.status >= 400) ?? false)",
+          scope: "span",
+        },
+      }),
+    ).toBe("((.status >= 400) ?? false) && .status < 500");
+  });
+
+  it("shows an event type mismatch as a problem on the consumer's inputs", () => {
+    const problems = checkProblems(
+      {
+        valid: false,
+        vector_validated: false,
+        static_checked: false,
+        errors: ["`r.a` emits logs but `dd` accepts metrics."],
+        warnings: [],
+        diagnostics: [
+          {
+            severity: "error",
+            section: "sinks",
+            component: "dd",
+            field: "inputs",
+            code: "type_mismatch",
+            message: "`r.a` emits logs but `dd` accepts metrics.",
+            hint: "Connect a step that produces the event type this component accepts.",
+          },
+        ],
+      },
+      { sinks: { dd: { type: "datadog_metrics", inputs: ["r.a"] } } },
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      severity: "error",
+      component: "dd",
+      field: "inputs",
+      code: "type_mismatch",
+    });
+  });
+
+  it("treats an incomplete check as not checked", () => {
+    const incomplete: PipelineCheck = {
+      valid: false,
+      vector_validated: false,
+      static_checked: false,
+      errors: [],
+      warnings: [],
+      diagnostics: [
+        {
+          severity: "error",
+          code: "validator_incomplete",
+          message: "Vector did not finish checking this pipeline.",
+        },
+      ],
+    };
+    expect(checkProblems(incomplete, {})).toEqual([]);
+    expect(
+      checkStatus({
+        checking: false,
+        check: incomplete,
+        stale: false,
+        errors: 0,
+      }),
+    ).toBe("unavailable");
+  });
+
+  it("offers a did-you-mean fix only for a near miss", () => {
+    const fix = (replacement: string) => ({
+      label: `Change to \`${replacement}\``,
+      replacement,
+      scope: "span" as const,
+    });
+    expect(editDistance("parse_timestmp", "parse_timestamp")).toBe(1);
+    // A near miss reads as a typo.
+    expect(
+      fixLooksIntended(".ts = parse_timestmp!(.t)", {
+        line: 1,
+        column: 7,
+        length: 14,
+        fix: fix("parse_timestamp"),
+      }),
+    ).toBe(true);
+    // Half-typed, the closest suggestion is far off and would only be noise.
+    expect(
+      fixLooksIntended(".ts = parse_tim", {
+        line: 1,
+        column: 7,
+        length: 9,
+        fix: fix("false"),
+      }),
+    ).toBe(false);
+    // Exact fixes are always offered.
+    expect(
+      fixLooksIntended(".a = to_int(.b)", {
+        line: 1,
+        column: 6,
+        length: 9,
+        fix: {
+          label: "Add `!`",
+          replacement: "to_int!(.b)",
+          scope: "span",
+        },
+      }),
+    ).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import {
   diagnoseConfigurationSource,
   assertValidPipelineSource,
   detectConfigurationFormat,
+  sourceErrorMessage,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
   ConfigurationSourceError,
@@ -361,5 +362,39 @@ describe("local source diagnostics and import gate", () => {
       pipeline,
     ])
       expect(isEmptyPipeline(config)).toBe(false);
+  });
+});
+
+describe("sourceErrorMessage", () => {
+  const failureOf = (text: string, format: string) => {
+    try {
+      parseSource(text, format);
+    } catch (error) {
+      return error;
+    }
+    throw new Error("The text was expected to fail.");
+  };
+
+  it("names the line and column of the first problem", () => {
+    const yaml = "sources:\n  demo:\n    type: demo_logs\n   format: json\n";
+    expect(sourceErrorMessage(yaml, failureOf(yaml, "yaml"))).toMatch(
+      /^Line 4:\d+: \S/,
+    );
+    const json = '{\n  "sources": {\n    "demo": }\n}';
+    expect(sourceErrorMessage(json, failureOf(json, "json"))).toMatch(
+      /^Line 3:\d+: \S/,
+    );
+  });
+
+  it("never returns an empty message", () => {
+    expect(sourceErrorMessage("a: 1", new Error("Choose a file."))).toBe(
+      "Choose a file.",
+    );
+    expect(sourceErrorMessage("", new Error(""))).toBe(
+      "This configuration could not be read.",
+    );
+    expect(sourceErrorMessage("", "unknown")).toBe(
+      "This configuration could not be read.",
+    );
   });
 });

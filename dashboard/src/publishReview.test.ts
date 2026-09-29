@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   deviceReach,
+  groupChanges,
+  sectionCount,
   programDiff,
   reachLabel,
   reviewChanges,
@@ -26,11 +28,65 @@ const published = {
 };
 
 describe("publish review", () => {
+  it("ignores key order, the way the server returns a version", () => {
+    const draft = {
+      sources: { nginx: { type: "file", include: ["/var/log/a.log"] } },
+      transforms: {
+        parse: { type: "remap", inputs: ["nginx"], source: ".a = 1" },
+      },
+      sinks: {
+        loki: {
+          type: "loki",
+          inputs: ["parse", "nginx"],
+          labels: { app: "web", env: "prod" },
+        },
+      },
+    };
+    const server = {
+      sinks: {
+        loki: {
+          labels: { env: "prod", app: "web" },
+          inputs: ["nginx", "parse"],
+          type: "loki",
+        },
+      },
+      sources: { nginx: { include: ["/var/log/a.log"], type: "file" } },
+      transforms: {
+        parse: { source: ".a = 1", inputs: ["nginx"], type: "remap" },
+      },
+    };
+    expect(reviewChanges(server, draft).components).toEqual([]);
+    // Order inside other lists still matters.
+    const reordered = structuredClone(draft) as any;
+    reordered.sources.nginx.include = ["/var/log/b.log", "/var/log/a.log"];
+    server.sources.nginx.include = ["/var/log/a.log", "/var/log/b.log"];
+    expect(reviewChanges(server, reordered).components).toMatchObject([
+      { id: "nginx", options: ["include"] },
+    ]);
+  });
+
+  it("lists steps from source to sink", () => {
+    const draft = {
+      transforms: {
+        by_status: { type: "route", inputs: ["parse"], route: { a: "true" } },
+        parse: { type: "remap", inputs: ["nginx"], source: "." },
+      },
+      sinks: { archive: { type: "aws_s3", inputs: ["by_status.a"] } },
+      sources: { nginx: { type: "file" } },
+    };
+    expect(reviewChanges(null, draft).components.map((c) => c.id)).toEqual([
+      "nginx",
+      "parse",
+      "by_status",
+      "archive",
+    ]);
+  });
+
   it("lists added, removed and changed steps with program and option changes", () => {
     const draft = structuredClone(published) as any;
     draft.transforms.parse.source =
       '. = parse_nginx_log!(.message, "combined")\n.env = "staging"';
-    draft.transforms.by_status.route.errors = "(.status >= 500) ?? false";
+    draft.transforms.by_status.route.errors = "((.status >= 500) ?? false)";
     draft.sinks.loki.endpoint = "http://b";
     draft.sinks.loki.inputs = ["parse"];
     draft.sinks.archive = { type: "aws_s3", inputs: ["parse"], bucket: "x" };
@@ -49,9 +105,12 @@ describe("publish review", () => {
       path: "route.errors",
       label: "Route errors",
       before: ".status >= 500",
-      after: "(.status >= 500) ?? false",
+      after: "((.status >= 500) ?? false)",
     });
     expect(byId.loki).toMatchObject({ options: ["endpoint"], rewired: true });
+    expect(byId.loki.values).toEqual({
+      endpoint: { before: "http://a", after: "http://b" },
+    });
     expect(byId.archive).toMatchObject({ change: "added", type: "aws_s3" });
     expect(byId.nginx.change).toBe("removed");
     expect(byId.journal.change).toBe("added");
@@ -131,5 +190,33 @@ describe("publish review", () => {
         ),
       ),
     ).toBe("Assigned to 1 device (v1) · all verified running.");
+  });
+});
+
+describe("publish review for large pipelines", () => {
+  const many = Object.fromEntries(
+    Array.from({ length: 36 }, (_, index) => [`s${index}`, { type: "file" }]),
+  );
+  it("folds a long run of added steps into one counted row", () => {
+    const draft = {
+      sources: many,
+      transforms: { parse: { type: "remap", inputs: ["s0"], source: "." } },
+      sinks: { out: { type: "console", inputs: ["parse"] } },
+    };
+    const rows = groupChanges(reviewChanges(null, draft).components);
+    expect(rows.map((row) => row.kind)).toEqual(["group", "step", "step"]);
+    const group = rows[0];
+    expect(group.kind === "group" && group.components).toHaveLength(36);
+    expect(sectionCount("sources", 36)).toBe("36 sources");
+    expect(sectionCount("sinks", 1)).toBe("1 destination");
+  });
+
+  it("keeps changed steps and short runs as their own rows", () => {
+    const before = { sources: { a: { type: "file" } } };
+    const after = {
+      sources: { a: { type: "file", include: ["/x"] }, b: { type: "file" } },
+    };
+    const rows = groupChanges(reviewChanges(before, after).components);
+    expect(rows.map((row) => row.kind)).toEqual(["step", "step"]);
   });
 });

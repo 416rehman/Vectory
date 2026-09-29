@@ -9,8 +9,10 @@ import {
 } from "./catalog";
 
 import {
+  nodeOutputPorts,
   pipelineNodeHeight,
   PIPELINE_NODE_COLUMN_GAP,
+  PIPELINE_NODE_WIDTH,
 } from "./pipelineNodeModel";
 
 const kinds: Kind[] = ["sources", "transforms", "sinks"];
@@ -371,4 +373,172 @@ export function arrangeGraph(graph: Graph): Graph {
       },
     })),
   };
+}
+
+type PlacedNode = {
+  id: string;
+  position: { x: number; y: number };
+  data: { kind?: Kind; component?: Config };
+};
+const ROW_GAP = 40;
+
+/** Cards overlapping (or within half a row gap of) the card at `x`,`y`. */
+function overlapping(
+  nodes: readonly PlacedNode[],
+  x: number,
+  y: number,
+  height: number,
+) {
+  return nodes.filter(
+    (node) =>
+      x < node.position.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+      node.position.x < x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+      y < node.position.y + pipelineNodeHeight(node.data) + ROW_GAP / 2 &&
+      node.position.y < y + height + ROW_GAP / 2,
+  );
+}
+const bottom = (node: PlacedNode) =>
+  node.position.y + pipelineNodeHeight(node.data);
+
+/**
+ * The first free spot at or below `preferred` where a new card overlaps no
+ * existing card, so new steps never stack on top of each other.
+ */
+export function freePosition(
+  nodes: readonly PlacedNode[],
+  preferred: { x: number; y: number },
+  height = pipelineNodeHeight({}),
+) {
+  let y = preferred.y;
+  for (let tries = 0; tries < 200; tries++) {
+    const blockers = overlapping(nodes, preferred.x, y, height);
+    if (!blockers.length) break;
+    y = Math.max(...blockers.map(bottom)) + ROW_GAP;
+  }
+  return { x: preferred.x, y };
+}
+
+export type BlockStep = {
+  id: string;
+  kind: Kind;
+  component: Config;
+  /** Where the step sat in the pipeline it came from, when known. */
+  position?: { x: number; y: number };
+};
+
+/**
+ * A layout for steps that have no positions: columns by distance from the
+ * block's sources (following inputs between them), stacked in each column.
+ * Positions are relative to the block's top-left corner.
+ */
+export function layoutBlock(steps: readonly BlockStep[]) {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const depth = new Map<string, number>();
+  const visit = (step: BlockStep, seen: Set<string>): number => {
+    const known = depth.get(step.id);
+    if (known !== undefined) return known;
+    if (seen.has(step.id)) return 0;
+    seen.add(step.id);
+    let deepest = -1;
+    for (const input of Array.isArray(step.component.inputs)
+      ? step.component.inputs
+      : []) {
+      const upstream = byId.get(String(input).split(".")[0]);
+      if (upstream && upstream !== step)
+        deepest = Math.max(deepest, visit(upstream, seen));
+    }
+    seen.delete(step.id);
+    depth.set(step.id, deepest + 1);
+    return deepest + 1;
+  };
+  const rows = new Map<number, number>();
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const step of steps) {
+    const column = visit(step, new Set());
+    const y = rows.get(column) ?? 0;
+    positions.set(step.id, { x: column * PIPELINE_NODE_COLUMN_GAP, y });
+    rows.set(
+      column,
+      y +
+        pipelineNodeHeight({ kind: step.kind, component: step.component }) +
+        ROW_GAP,
+    );
+  }
+  return positions;
+}
+
+/**
+ * Where a block of steps goes. The block keeps its own arrangement (steps
+ * with known positions keep their spacing; the rest are laid out by flow)
+ * and lands at `anchor`, moved down until it overlaps no existing card.
+ */
+export function placeBlock(
+  existing: readonly PlacedNode[],
+  steps: readonly BlockStep[],
+  anchor: { x: number; y: number },
+) {
+  const relative = new Map<string, { x: number; y: number }>();
+  if (steps.length && steps.every((step) => step.position)) {
+    const left = Math.min(...steps.map((step) => step.position!.x)),
+      top = Math.min(...steps.map((step) => step.position!.y));
+    for (const step of steps)
+      relative.set(step.id, {
+        x: step.position!.x - left,
+        y: step.position!.y - top,
+      });
+  } else for (const [id, at] of layoutBlock(steps)) relative.set(id, at);
+  const cards = steps.map((step) => ({
+    id: step.id,
+    data: { kind: step.kind, component: step.component },
+    position: relative.get(step.id)!,
+  }));
+  let dy = 0;
+  for (let tries = 0; tries < 200; tries++) {
+    let push = 0;
+    for (const card of cards) {
+      const blockers = overlapping(
+        existing,
+        anchor.x + card.position.x,
+        anchor.y + dy + card.position.y,
+        pipelineNodeHeight(card.data),
+      );
+      if (blockers.length)
+        push = Math.max(
+          push,
+          Math.max(...blockers.map(bottom)) +
+            ROW_GAP -
+            (anchor.y + dy + card.position.y),
+        );
+    }
+    if (!push) break;
+    dy += push;
+  }
+  return new Map(
+    cards.map((card) => [
+      card.id,
+      { x: anchor.x + card.position.x, y: anchor.y + dy + card.position.y },
+    ]),
+  );
+}
+
+/**
+ * The reference a new step reads when it is added next to `node`: its
+ * default output, or its first named output (a route's first route).
+ * Empty for destinations, which have no outputs.
+ */
+export function primaryOutput(node: PlacedNode) {
+  const kind = node.data.kind || "transforms";
+  const ports = nodeOutputPorts(node.data.component || {}, kind);
+  if (!ports.length) return "";
+  if (ports.includes("output")) return node.id;
+  const named = ports.find((port) => port !== "_unmatched") || ports[0];
+  return `${node.id}.${named}`;
+}
+
+/** Where a step added next to `node` goes: the next column, first free row. */
+export function besidePosition(nodes: readonly PlacedNode[], node: PlacedNode) {
+  return freePosition(nodes, {
+    x: node.position.x + PIPELINE_NODE_COLUMN_GAP,
+    y: node.position.y,
+  });
 }

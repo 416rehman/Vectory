@@ -6,7 +6,37 @@ import {
   isSecretReference,
   type Schema,
 } from "./pipelineSchema";
-export const vectorSchema: Schema = generatedSchema;
+/**
+ * Vector's schema does not say that a condition's `source` is VRL, so a test's
+ * `conditions` would get a plain text box. Mark it, and the same editor as
+ * everywhere else appears.
+ */
+function withVrlConditions(schema: Schema): Schema {
+  const key = "vector::conditions::vrl::VrlConfig";
+  const definition = schema.definitions?.[key];
+  const source = definition?.properties?.source;
+  if (!definition || !source) return schema;
+  return {
+    ...schema,
+    definitions: {
+      ...schema.definitions,
+      [key]: {
+        ...definition,
+        properties: {
+          ...definition.properties,
+          source: {
+            ...source,
+            _metadata: {
+              ...source._metadata,
+              "docs::syntax_override": "vrl_program",
+            },
+          },
+        },
+      },
+    },
+  };
+}
+export const vectorSchema: Schema = withVrlConditions(generatedSchema);
 export const vectorCatalogVersion = generatedCatalog.vector_version;
 export type Kind = "sources" | "transforms" | "sinks";
 export type Component = {
@@ -31,13 +61,13 @@ export type Component = {
   }[];
 };
 /**
- * A new remap step: a short guide in comments and one line that runs.
+ * A new remap step: a short guide in comments only, so a new step passes
+ * events through unchanged until you write the first line.
  */
-export const REMAP_STARTER = `# Runs once for every event; "." is the event.
+export const REMAP_STARTER = `# Runs once for every event; "." is the event. Uncomment a line to try it.
 # Set a field:      .environment = "production"
 # Remove a field:   del(.password)
 # Parse JSON text:  . = merge(., object!(parse_json!(.message)))
-.environment = "development"
 `;
 const curatedCatalog: Component[] = [
   {
@@ -201,11 +231,126 @@ const curatedCatalog: Component[] = [
     fields: [{ key: "endpoint", label: "Endpoint", required: true }],
   },
 ];
+/**
+ * The one name for each component type, used by the node card, picker,
+ * inspector, Problems panel and publish review. The Vector type is shown
+ * beside it in mono.
+ */
+const DISPLAY_LABELS: Record<string, string> = {
+  aws_s3: "Amazon S3",
+  aws_cloudwatch_logs: "CloudWatch Logs",
+  aws_cloudwatch_metrics: "CloudWatch Metrics",
+  aws_kinesis_firehose: "Amazon Data Firehose",
+  aws_kinesis_streams: "Amazon Kinesis",
+  datadog_agent: "Datadog Agent",
+  datadog_logs: "Datadog Logs",
+  datadog_metrics: "Datadog Metrics",
+  datadog_traces: "Datadog Traces",
+  datadog_events: "Datadog Events",
+  gcp_cloud_storage: "Google Cloud Storage",
+  gcp_pubsub: "Google Cloud Pub/Sub",
+  kafka: "Apache Kafka",
+  opentelemetry: "OpenTelemetry",
+  kubernetes_logs: "Kubernetes Logs",
+  docker_logs: "Docker Logs",
+  remap: "Remap",
+  route: "Route",
+  exclusive_route: "Exclusive route",
+  sample: "Sample",
+  filter: "Filter",
+  http_server: "HTTP Server",
+  http_client: "HTTP Client",
+  splunk_hec_logs: "Splunk HEC Logs",
+  splunk_hec_metrics: "Splunk HEC Metrics",
+  "sources:file": "Log files",
+  "sinks:file": "File output",
+  demo_logs: "Demo logs",
+  console: "Console",
+  blackhole: "Discard events",
+};
+
+/**
+ * Words people search for that a component's name or description leaves out:
+ * the products it reads (nginx, apache), the job it does (archive, discard)
+ * and the names other tools use for it.
+ */
+const SEARCH_KEYWORDS: Record<string, string> = {
+  "sources:file":
+    "nginx apache httpd haproxy log logs files tail read path glob access error application app text disk",
+  "sources:syslog": "rsyslog syslog-ng linux messages network udp tcp",
+  "sources:journald": "systemd journal linux service units",
+  "sources:kubernetes_logs": "k8s kubernetes pods containers cluster",
+  "sources:docker_logs": "container containers docker compose",
+  "sources:demo_logs": "synthetic sample test fake generate example demo",
+  "sources:http_server": "webhook http endpoint receive listen post rest api",
+  "sources:opentelemetry": "otel otlp collector traces metrics logs grpc",
+  "sources:host_metrics": "cpu memory disk network system node machine",
+  "sources:internal_metrics": "vector monitoring self telemetry health",
+  "sources:kafka": "redpanda topic consumer stream queue",
+  "sources:prometheus_scrape": "scrape exporter metrics endpoint",
+  "sources:stdin": "pipe standard input terminal",
+  "transforms:remap":
+    "vrl edit fields parse modify rename script code json regex",
+  "transforms:route": "split branch condition if else fan out",
+  "transforms:exclusive_route": "split branch condition if else first match",
+  "transforms:filter": "drop keep discard where condition remove",
+  "transforms:sample": "sampling reduce volume rate percent thin",
+  "transforms:dedupe": "duplicates duplicate unique repeated",
+  "transforms:reduce": "aggregate combine multiline merge group stack trace",
+  "transforms:throttle": "rate limit cap quota burst",
+  "transforms:log_to_metric": "counter gauge histogram convert",
+  "sinks:aws_s3": "s3 amazon aws bucket archive object storage backup",
+  "sinks:loki": "grafana logs labels",
+  "sinks:elasticsearch": "opensearch elk search index kibana",
+  "sinks:console": "stdout stderr print debug terminal",
+  "sinks:blackhole": "discard drop null devnull throw away",
+  "sinks:prometheus_exporter": "scrape metrics grafana endpoint",
+  "sinks:http": "webhook post rest api endpoint",
+  "sinks:file": "write disk local save",
+  "sinks:kafka": "redpanda topic producer stream queue",
+  "sinks:datadog_logs": "dd datadog",
+  "sinks:splunk_hec_logs": "splunk hec",
+};
+export function searchKeywords(kind: Kind, type: string) {
+  return SEARCH_KEYWORDS[`${kind}:${type}`] || "";
+}
+
+export function displayLabel(type: string, kind?: Kind, fallback?: string) {
+  return (
+    (kind && DISPLAY_LABELS[`${kind}:${type}`]) ||
+    (Object.hasOwn(DISPLAY_LABELS, type) ? DISPLAY_LABELS[type] : "") ||
+    fallback ||
+    type ||
+    "Component"
+  );
+}
 // Starting values for schema-only components where Vector needs a choice.
 const schemaDefaults: Record<string, Config> = {
   "sinks:aws_s3": { encoding: { codec: "json" }, compression: "gzip" },
 };
-export const catalog: Component[] = [
+/**
+ * Vector's reference has no description for a few components (or repeats the
+ * name). Say what the step does instead of showing the gap.
+ */
+function describe(item: Component): Component {
+  const text = item.description?.trim() ?? "";
+  const bare = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (
+    text &&
+    !/missing a description/i.test(text) &&
+    bare(text) !== bare(item.label)
+  )
+    return item;
+  const name = displayLabel(item.type, item.kind, item.label);
+  const description =
+    item.kind === "sources"
+      ? `Collect events from ${name}.`
+      : item.kind === "sinks"
+        ? `Send events to ${name}.`
+        : `Change events with ${name}.`;
+  return { ...item, description };
+}
+const assembledCatalog: Component[] = [
   ...curatedCatalog.map(
     (item) =>
       ({
@@ -214,6 +359,7 @@ export const catalog: Component[] = [
             component.kind === item.kind && component.type === item.type,
         ),
         ...item,
+        label: displayLabel(item.type, item.kind, item.label),
         curated: true,
       }) as Component,
   ),
@@ -229,6 +375,11 @@ export const catalog: Component[] = [
       (component) =>
         ({
           ...component,
+          label: displayLabel(
+            component.type,
+            component.kind as Kind,
+            component.label,
+          ),
           kind: component.kind as Kind,
           defaults: structuredClone(
             schemaDefaults[`${component.kind}:${component.type}`] ?? {},
@@ -238,6 +389,7 @@ export const catalog: Component[] = [
         }) as Component,
     ),
 ];
+export const catalog: Component[] = assembledCatalog.map(describe);
 export function componentSchema(component: Component): Schema | undefined {
   return component.schema_ref ? { $ref: component.schema_ref } : undefined;
 }
@@ -325,12 +477,87 @@ export const exactOutputTypes = new Set([
   "log_to_metric",
 ]);
 const allEvents: EventType[] = ["logs", "metrics", "traces"];
+// Event types from Vector 0.58's component reference, for the components
+// whose input or output is a single kind. Anything not listed is treated as
+// accepting (or emitting) every type, so this never blocks a valid pipeline.
+const LOGS_ONLY_INPUT = new Set([
+  "loki",
+  "elasticsearch",
+  "reduce",
+  "log_to_metric",
+  "dedupe",
+  "aws_s3",
+  "aws_cloudwatch_logs",
+  "splunk_hec_logs",
+  "datadog_logs",
+  "gcp_cloud_storage",
+]);
+const METRICS_ONLY_INPUT = new Set([
+  "prometheus_exporter",
+  "prometheus_remote_write",
+  "statsd",
+  "datadog_metrics",
+  "influxdb_metrics",
+  "aws_cloudwatch_metrics",
+  "gcp_stackdriver_metrics",
+  "splunk_hec_metrics",
+  "aggregate",
+  "incremental_to_absolute",
+  "metric_to_log",
+  "tag_cardinality_limit",
+]);
+const LOG_SOURCES = new Set([
+  "demo_logs",
+  "file",
+  "syslog",
+  "http_server",
+  "journald",
+  "docker_logs",
+  "kubernetes_logs",
+  "internal_logs",
+  "stdin",
+]);
+const METRIC_SOURCES = new Set([
+  "internal_metrics",
+  "host_metrics",
+  "prometheus_scrape",
+  "prometheus_remote_write",
+  "statsd",
+  "apache_metrics",
+  "nginx_metrics",
+  "mongodb_metrics",
+  "postgresql_metrics",
+  "aws_ecs_metrics",
+  "eventstoredb_metrics",
+  "static_metrics",
+  "log_to_metric",
+]);
 function acceptedEvents(type: string): EventType[] {
   if (["sample"].includes(type)) return ["logs", "traces"];
-  if (["loki", "elasticsearch", "reduce", "log_to_metric"].includes(type))
-    return ["logs"];
-  if (type === "prometheus_exporter") return ["metrics"];
+  if (type === "datadog_traces") return ["traces"];
+  if (LOGS_ONLY_INPUT.has(type)) return ["logs"];
+  if (METRICS_ONLY_INPUT.has(type)) return ["metrics"];
   return allEvents;
+}
+const eventWords = (types: readonly EventType[]) =>
+  types.length > 1
+    ? `${types.slice(0, -1).join(", ")} and ${types.at(-1)}`
+    : types[0];
+
+/**
+ * Why a component can't read `input`, such as "Accepts metrics; parse
+ * sends logs." Null when it can, or when the types aren't known.
+ */
+export function inputMismatch(
+  config: Config,
+  input: string,
+  item: Pick<Component, "kind" | "type">,
+): string | null {
+  if (!input || item.kind === "sources") return null;
+  const sends = inferEvents(config, input);
+  const accepts = acceptedEvents(item.type);
+  if (sends.some((type) => accepts.includes(type))) return null;
+  return `Accepts ${eventWords(accepts)}; ${input} sends ${eventWords(sends)}.`;
 }
 function inferEvents(
   config: Config,
@@ -353,10 +580,8 @@ function inferEvents(
     allEvents.includes(port as EventType)
   )
     return [port as EventType];
-  if (["demo_logs", "file", "syslog", "http_server"].includes(c.type))
-    return ["logs"];
-  if (["internal_metrics", "log_to_metric"].includes(c.type))
-    return ["metrics"];
+  if (LOG_SOURCES.has(c.type) && !config.transforms?.[id]) return ["logs"];
+  if (METRIC_SOURCES.has(c.type)) return ["metrics"];
   if (
     [
       "remap",
@@ -678,6 +903,42 @@ export function suggestedInput(config: Config): string {
   return terminal.length === 1 ? terminal[0].reference : "";
 }
 
+/**
+ * What a new step is called: its role in the flow rather than the bare type,
+ * so reviews don't read "remap remap". Never reuses a taken ID.
+ */
+const ROLE_IDS: Record<string, string> = {
+  "sources:file": "app_logs",
+  "sources:demo_logs": "demo",
+  "sources:syslog": "syslog_in",
+  "sources:http_server": "http_in",
+  "sources:opentelemetry": "otel_in",
+  "sources:internal_metrics": "vector_metrics",
+  "transforms:remap": "parse",
+  "transforms:filter": "keep",
+  "transforms:route": "by_condition",
+  "transforms:exclusive_route": "by_condition",
+  "sinks:aws_s3": "archive",
+  "sinks:console": "console_out",
+  "sinks:blackhole": "discard",
+  "sinks:loki": "loki_out",
+  "sinks:elasticsearch": "search_out",
+  "sinks:http": "http_out",
+  "sinks:file": "file_out",
+  "sinks:prometheus_exporter": "metrics_exporter",
+};
+export function defaultComponentId(
+  kind: Kind,
+  type: string,
+  used: ReadonlySet<string>,
+) {
+  const base = ROLE_IDS[`${kind}:${type}`] || type;
+  let id = base,
+    suffix = 2;
+  while (used.has(id)) id = `${base}_${suffix++}`;
+  return id;
+}
+
 /** Adds a step and safely inserts a transform into a chosen existing connection. */
 export function addConnectedComponent(
   config: Config,
@@ -688,9 +949,7 @@ export function addConnectedComponent(
 ) {
   let next = structuredClone(config);
   const used = new Set(pipelineComponents(next).map((entry) => entry.id));
-  let id = item.type,
-    suffix = 2;
-  while (used.has(id)) id = `${item.type}_${suffix++}`;
+  const id = defaultComponentId(item.kind, item.type, used);
   next[item.kind] ??= {};
   next[item.kind][id] = {
     type: item.type,

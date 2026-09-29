@@ -124,6 +124,20 @@
   font-size: 13px;
   cursor: pointer;
 }
+.editor-tools-menu > div > .editor-tools-divider {
+  height: 1px;
+  margin: 5px 4px;
+  border: 0;
+  background: var(--line, #dfe3e8);
+}
+.editor-tools-menu > div > .editor-tools-heading {
+  margin: 4px 10px 2px;
+  color: var(--muted, #596370);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
 .editor-tools-menu > div > button > svg {
   flex-shrink: 0;
   color: var(--muted);
@@ -741,7 +755,7 @@
   font-weight: 550;
 }
 .pipeline-settings textarea,
-.pipeline-settings input,
+.pipeline-settings input:not([type="checkbox"]):not([type="radio"]),
 .pipeline-settings select {
   width: 100%;
 }
@@ -1635,6 +1649,13 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
+  overflow: hidden;
+}
+/* React Flow draws a 200x150 map; fit it to the docked frame. */
+.editor-graph .react-flow__minimap svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 @media (max-width: 600px) {
   .editor-graph .react-flow__minimap {

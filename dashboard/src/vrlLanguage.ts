@@ -1,3 +1,4 @@
+import { isExactInteger } from "./configurationNumbers";
 import { StreamLanguage, type StreamParser } from "@codemirror/language";
 import type {
   Completion,
@@ -255,7 +256,13 @@ export function eventPaths(events: readonly unknown[], limit = 200): string[] {
   const paths = new Set<string>();
   const walk = (value: unknown, prefix: string, depth: number) => {
     if (paths.size >= limit || depth > 6) return;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    if (
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      isExactInteger(value)
+    )
+      return;
     for (const [key, child] of Object.entries(value)) {
       const segment = /^[A-Za-z_@][\w@]*$/.test(key)
         ? key

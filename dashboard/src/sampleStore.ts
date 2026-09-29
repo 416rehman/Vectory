@@ -1,3 +1,5 @@
+import { parseLosslessJSON } from "./configurationNumbers";
+
 /**
  * Named synthetic sample sets, kept in this browser per account and pipeline.
  * Samples are user-written test data; they never come from devices.
@@ -8,6 +10,8 @@ export type SampleStore = {
   sets: SampleSet[];
   /** Selected set per component ID. */
   active: Record<string, string>;
+  /** Per component: false runs samples straight into it, skipping upstream steps. */
+  through?: Record<string, boolean>;
 };
 
 export const MAX_SAMPLE_SETS = 12;
@@ -19,10 +23,11 @@ export const DEFAULT_SAMPLE =
 const key = (userId: string, pipelineId: string) =>
   `vectory.samples.v1:${userId}:${pipelineId}`;
 
-export function emptyStore(): SampleStore {
+/** A fresh store; `text` is the first set's events (may be empty). */
+export function emptyStore(text = DEFAULT_SAMPLE): SampleStore {
   return {
     version: 1,
-    sets: [{ id: "default", name: "Sample events", text: DEFAULT_SAMPLE }],
+    sets: [{ id: "default", name: "Sample events", text }],
     active: {},
   };
 }
@@ -48,13 +53,30 @@ function valid(value: unknown): value is SampleStore {
   );
 }
 
-export function readSamples(userId: string, pipelineId: string): SampleStore {
+/** Saved sets, or a fresh store opening on `fallback` events. */
+export function readSamples(
+  userId: string,
+  pipelineId: string,
+  fallback = DEFAULT_SAMPLE,
+): SampleStore {
   try {
     const raw = localStorage.getItem(key(userId, pipelineId));
     const parsed = raw ? JSON.parse(raw) : null;
-    return valid(parsed) ? parsed : emptyStore();
+    if (!valid(parsed)) return emptyStore(fallback);
+    // An untouched copy of the old built-in example gives way to events that
+    // fit this pipeline's source.
+    if (fallback !== DEFAULT_SAMPLE)
+      return {
+        ...parsed,
+        sets: parsed.sets.map((set) =>
+          set.id === "default" && set.text === DEFAULT_SAMPLE
+            ? { ...set, text: fallback }
+            : set,
+        ),
+      };
+    return parsed;
   } catch {
-    return emptyStore();
+    return emptyStore(fallback);
   }
 }
 
@@ -103,7 +125,7 @@ export function parseSamples(text: string, limit = 20): ParsedSamples {
   if (!trimmed) return { samples: [], lines: [], errors: [] };
   if (/^[[{]/.test(trimmed) && trimmed.includes("\n")) {
     try {
-      const whole = JSON.parse(trimmed);
+      const whole = parseLosslessJSON(trimmed);
       const list = Array.isArray(whole) ? whole : [whole];
       if (
         list.every(
@@ -136,7 +158,7 @@ export function parseSamples(text: string, limit = 20): ParsedSamples {
   text.split("\n").forEach((line, index) => {
     if (!line.trim()) return;
     try {
-      const value = JSON.parse(line);
+      const value = parseLosslessJSON(line);
       if (!value || typeof value !== "object" || Array.isArray(value))
         errors.push({
           line: index + 1,

@@ -55,8 +55,21 @@
 }
 .pipeline-test-run {
   display: grid;
-  gap: 14px;
-  margin-top: 22px;
+  gap: 12px;
+  margin: 4px 0 18px;
+}
+.pipeline-test-run-bar {
+  position: sticky;
+  top: -1px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
 }
 @media (max-width: 650px) {
   .pipeline-global-layout {

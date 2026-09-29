@@ -9,10 +9,14 @@ import {
 import { ago, type Config, type Version } from "./api";
 import { Button } from "./ui";
 import ProblemText from "./ProblemText";
+import { displayLabel, type Kind } from "./catalog";
 import type { CheckStatus, Problem } from "./pipelineProblems";
 import {
+  groupChanges,
   programDiff,
   reviewChanges,
+  sectionCount,
+  shortValue,
   type ComponentChange,
 } from "./publishReview";
 import "./publish-review.css";
@@ -33,15 +37,55 @@ const changeWords: Record<ComponentChange["change"], string> = {
   changed: "Changed",
 };
 
+/** Refusals that mean the checker could not run, not that the draft is wrong. */
+const checkerDown = (code: string) =>
+  code === "CAPABILITY_DENIED" || code === "WORKER_BUSY";
+
+function ChangeRow({ component }: { component: ComponentChange }) {
+  return (
+    <li>
+      <div className="publish-change-row">
+        <span className="publish-change-kind" data-change={component.change}>
+          {changeWords[component.change]}
+        </span>
+        <code>{component.id}</code>
+        <span className="publish-change-detail">
+          {describe(component)}
+          {component.change !== "changed" && component.type && (
+            <code className="publish-change-type">{component.type}</code>
+          )}
+        </span>
+      </div>
+      {component.change === "changed" &&
+        component.programs.map((program) => (
+          <details key={program.path} className="publish-program">
+            <summary>{program.label}</summary>
+            <ProgramDiff before={program.before} after={program.after} />
+          </details>
+        ))}
+    </li>
+  );
+}
+
 function describe(component: ComponentChange) {
-  if (component.change !== "changed") return component.type;
+  if (component.change !== "changed")
+    return displayLabel(component.type, component.section as Kind);
   const parts = component.programs.map((program) => `${program.label} changed`);
-  if (component.options.length)
-    parts.push(
-      component.options.length > 3
-        ? `${component.options.length} options changed`
-        : `${component.options.join(", ")} changed`,
-    );
+  if (component.options.length) {
+    // "rate 10 → 7" where the values are short, "endpoint changed" where not.
+    if (component.options.length <= 3)
+      parts.push(
+        component.options
+          .map((key) => {
+            const value = component.values[key];
+            return value
+              ? `${key} ${shortValue(value.before)} → ${shortValue(value.after)}`
+              : `${key} changed`;
+          })
+          .join(", "),
+      );
+    else parts.push(`${component.options.length} options changed`);
+  }
   if (component.rewired) parts.push("inputs changed");
   return parts.join(" · ");
 }
@@ -114,6 +158,11 @@ export default function PublishReview({
   );
   const Icon = statusIcons[status];
   const errors = problems.filter((problem) => problem.severity === "error");
+  const warnings = problems.filter((problem) => problem.severity === "warning");
+  const rows = useMemo(
+    () => groupChanges(review.components),
+    [review.components],
+  );
   const empty =
     !review.components.length && !review.settings.length && !review.tests;
   return (
@@ -125,10 +174,16 @@ export default function PublishReview({
               ? "Vector rejected this version. Nothing was published."
               : rejection.code === "STALE_REVISION"
                 ? "The draft changed while you reviewed it. Nothing was published."
-                : "The server refused to publish. Nothing was published."}
+                : checkerDown(rejection.code)
+                  ? "Not published. Vector's checker is unavailable, so Vectory couldn't verify this draft."
+                  : "The server refused to publish. Nothing was published."}
           </strong>
           <p>
-            <ProblemText text={rejection.message} />
+            {checkerDown(rejection.code) ? (
+              "Try again in a minute."
+            ) : (
+              <ProblemText text={rejection.message} />
+            )}
           </p>
         </div>
       )}
@@ -142,11 +197,14 @@ export default function PublishReview({
         <Icon size={16} aria-hidden="true" />
         <strong>{statusLabel}</strong>
         <span>{verdict}</span>
-        {onCheck && (status === "unchecked" || status === "stale") && (
-          <Button variant="secondary compact" onClick={onCheck}>
-            Check now
-          </Button>
-        )}
+        {onCheck &&
+          (status === "unchecked" ||
+            status === "stale" ||
+            status === "unavailable") && (
+            <Button variant="secondary compact" onClick={onCheck}>
+              {status === "unavailable" ? "Check again" : "Check now"}
+            </Button>
+          )}
       </div>
       {errors.length > 0 && (
         <ul className="publish-review-problems" aria-label="Problems to fix">
@@ -172,6 +230,32 @@ export default function PublishReview({
           )}
         </ul>
       )}
+      {warnings.length > 0 && (
+        <ul
+          className="publish-review-problems publish-review-warnings"
+          aria-label="Warnings"
+        >
+          {warnings.slice(0, 4).map((problem) => (
+            <li key={problem.key}>
+              <span>
+                {problem.component && <code>{problem.component}</code>}
+                <ProblemText text={problem.message} />
+              </span>
+              <Button
+                variant="ghost compact"
+                onClick={() => onGoToProblem(problem)}
+              >
+                Go to warning
+              </Button>
+            </li>
+          ))}
+          {warnings.length > 4 && (
+            <li className="publish-review-more">
+              {warnings.length - 4} more in the Problems panel.
+            </li>
+          )}
+        </ul>
+      )}
       <section className="publish-review-changes" aria-label="Changes">
         <h4>{published ? `Changes since v${published.number}` : "Steps"}</h4>
         {empty ? (
@@ -180,32 +264,38 @@ export default function PublishReview({
           </p>
         ) : (
           <ul>
-            {review.components.map((component) => (
-              <li key={`${component.section}:${component.id}`}>
-                <div className="publish-change-row">
-                  <span
-                    className="publish-change-kind"
-                    data-change={component.change}
-                  >
-                    {changeWords[component.change]}
-                  </span>
-                  <code>{component.id}</code>
-                  <span className="publish-change-detail">
-                    {describe(component)}
-                  </span>
-                </div>
-                {component.change === "changed" &&
-                  component.programs.map((program) => (
-                    <details key={program.path} className="publish-program">
-                      <summary>{program.label}</summary>
-                      <ProgramDiff
-                        before={program.before}
-                        after={program.after}
-                      />
-                    </details>
-                  ))}
-              </li>
-            ))}
+            {rows.map((row) =>
+              row.kind === "step" ? (
+                <ChangeRow
+                  key={`${row.component.section}:${row.component.id}`}
+                  component={row.component}
+                />
+              ) : (
+                <li key={`${row.change}:${row.section}`}>
+                  <details className="publish-group">
+                    <summary className="publish-change-row">
+                      <span
+                        className="publish-change-kind"
+                        data-change={row.change}
+                      >
+                        {changeWords[row.change]}
+                      </span>
+                      <span className="publish-change-detail">
+                        {sectionCount(row.section, row.components.length)}
+                      </span>
+                    </summary>
+                    <ul>
+                      {row.components.map((component) => (
+                        <ChangeRow
+                          key={`${component.section}:${component.id}`}
+                          component={component}
+                        />
+                      ))}
+                    </ul>
+                  </details>
+                </li>
+              ),
+            )}
             {review.settings.length > 0 && (
               <li>
                 <div className="publish-change-row">

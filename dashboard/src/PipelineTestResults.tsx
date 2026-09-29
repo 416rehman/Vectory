@@ -16,12 +16,26 @@ export type PipelineTestRun = {
   errors: string[];
   output?: string;
   deferred?: boolean;
+  warnings?: string[];
 };
 
+/** Tests that ran, whatever else Vector could not check here. */
+const ran = (run: PipelineTestRun) =>
+  run.tests_run === true || (run.tests_run !== false && !!run.tests?.length);
+
+/**
+ * A run that reported no test although the pipeline has some: Vector did not
+ * run them (it could not build them), whatever else the response says.
+ */
+const unreported = (run: PipelineTestRun, expected: number) =>
+  ran(run) && !(run.tests ?? []).length && expected > 0;
+
 /** One line that says how the run went, from Vector's own result. */
-export function testHeadline(run: PipelineTestRun) {
-  if (run.deferred) return "These tests need the device environment";
+export function testHeadline(run: PipelineTestRun, expected = 0) {
   const tests = run.tests ?? [];
+  if (unreported(run, expected)) return "Vector didn't run these tests";
+  if (!ran(run) && run.deferred)
+    return "These tests need the device environment";
   if (run.tests_run === false)
     return "Vector couldn't load this pipeline to run its tests";
   if (!tests.length)
@@ -34,8 +48,29 @@ export function testHeadline(run: PipelineTestRun) {
   return `${passed} of ${tests.length} tests passed`;
 }
 
+/**
+ * What still waits for the device after the tests ran here: Vector used
+ * stand-ins for device paths, variables or secrets.
+ */
+export function deferralNote(run: PipelineTestRun) {
+  if (!run.deferred || !ran(run)) return null;
+  const device = (run.warnings ?? []).find((warning) =>
+    warning.startsWith("Each device checks"),
+  );
+  return `Vector ran them with stand-ins for device values. ${
+    device ?? "Each device checks its own values before applying."
+  }`;
+}
+
 /** Each test with Vector's verdict; failures show why and what came out. */
-export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
+export default function PipelineTestResults({
+  run,
+  expected = 0,
+}: {
+  run: PipelineTestRun;
+  /** How many tests the pipeline has. */
+  expected?: number;
+}) {
   const tests = run.tests ?? [];
   const failures = tests.filter((test) => !test.passed).length;
   // The headline already counts failures; keep only other messages.
@@ -43,13 +78,25 @@ export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
     (message) =>
       !tests.length || !/^\d+ of \d+ pipeline tests? failed\.?$/.test(message),
   );
+  const missing = unreported(run, expected);
+  const note = missing
+    ? "Vector couldn't build them. Check the pipeline for problems, then run them again."
+    : deferralNote(run);
+  const state = missing
+    ? "failed"
+    : ran(run)
+      ? run.valid
+        ? "passed"
+        : "failed"
+      : run.deferred
+        ? "deferred"
+        : run.valid
+          ? "passed"
+          : "failed";
   return (
-    <div
-      className="pipeline-test-results"
-      role="status"
-      data-state={run.deferred ? "deferred" : run.valid ? "passed" : "failed"}
-    >
-      <strong>{testHeadline(run)}</strong>
+    <div className="pipeline-test-results" role="status" data-state={state}>
+      <strong>{testHeadline(run, expected)}</strong>
+      {note && <p className="pipeline-test-note">{note}</p>}
       {tests.length > 0 && (
         <ul className="pipeline-test-list" aria-label="Test results">
           {tests.map((test, index) => (
@@ -83,7 +130,7 @@ export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
         </ul>
       )}
       {errors.length > 0 && <ErrorBox message={errors.join("\n")} />}
-      {!tests.length && run.output && (
+      {!tests.length && !missing && run.output && (
         <pre className="code-preview">{run.output}</pre>
       )}
     </div>

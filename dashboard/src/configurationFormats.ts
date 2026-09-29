@@ -65,12 +65,18 @@ export function stringifyConfiguration(
   format: string,
 ): string {
   assertExactNumbers(value);
-  // Order only the document's sections; retain nested values and unknown settings.
+  // Global options such as data_dir first, then the pipeline's sections in
+  // flow order; nested values and unknown settings keep their order.
+  const global = (key: string) =>
+    !sectionOrder.includes(key) && !isRecord(value[key]);
   const ordered = Object.fromEntries([
+    ...Object.entries(value).filter(([key]) => global(key)),
     ...sectionOrder
       .filter((key) => Object.hasOwn(value, key))
       .map((key) => [key, orderSection(key, value[key])]),
-    ...Object.entries(value).filter(([key]) => !sectionOrder.includes(key)),
+    ...Object.entries(value).filter(
+      ([key]) => !sectionOrder.includes(key) && !global(key),
+    ),
   ]);
   if (format === "json") return JSON.stringify(ordered, null, 2);
   if (format !== "toml") return YAML.stringify(ordered);
@@ -83,14 +89,73 @@ export function stringifyConfiguration(
     throw Error(
       `TOML cannot preserve ${differencePath(changes[0].path)}. Use JSON or YAML to keep every value.`,
     );
-  // Multi-line programs read better as literal blocks; keep them only when
-  // TOML parses them back to the same document.
-  const literal = literalBlocks(text);
-  if (literal === text) return text;
-  try {
-    if (!configurationDiff(value, parseToml(literal)).length) return literal;
-  } catch {
-    // Fall back to the serializer's quoted strings.
+  // Multi-line programs read better as literal blocks, and one blank line
+  // between tables is enough; keep each only when TOML parses it back to the
+  // same document.
+  let result = text;
+  for (const tidy of [
+    literalBlocks,
+    (current: string) => current.replace(/\n{3,}/g, "\n\n"),
+  ]) {
+    const next = tidy(result);
+    if (next === result) continue;
+    try {
+      if (!configurationDiff(value, parseToml(next)).length) result = next;
+    } catch {
+      // Keep the previous, verified text.
+    }
   }
-  return text;
+  return result;
+}
+
+/**
+ * Whether configuration text has comments of its own. The editor stores the
+ * pipeline as data, so they are not kept when code is applied. Text inside
+ * strings (such as `#` lines in a VRL program) is content, not a comment.
+ */
+export function hasSourceComments(text: string, format: string): boolean {
+  if (format === "json" || !text.includes("#")) return false;
+  if (format === "toml") {
+    let multiline: string | null = null;
+    for (const line of text.split("\n")) {
+      let quote: string | null = null;
+      for (let index = 0; index < line.length; index++) {
+        const rest = line.slice(index);
+        if (multiline) {
+          if (rest.startsWith(multiline)) {
+            index += 2;
+            multiline = null;
+          } else if (multiline === '"""' && line[index] === "\\") index++;
+          continue;
+        }
+        if (quote) {
+          if (quote === '"' && line[index] === "\\") index++;
+          else if (line[index] === quote) quote = null;
+          continue;
+        }
+        if (rest.startsWith("'''") || rest.startsWith('"""')) {
+          multiline = rest.slice(0, 3);
+          index += 2;
+        } else if (line[index] === '"' || line[index] === "'")
+          quote = line[index];
+        else if (line[index] === "#") return true;
+      }
+    }
+    return false;
+  }
+  try {
+    const document = YAML.parseDocument(text);
+    if (document.commentBefore || document.comment) return true;
+    let found = false;
+    YAML.visit(document, (_key, node) => {
+      const commented = node as { commentBefore?: string; comment?: string };
+      if (commented?.commentBefore || commented?.comment) {
+        found = true;
+        return YAML.visit.BREAK;
+      }
+    });
+    return found;
+  } catch {
+    return false;
+  }
 }

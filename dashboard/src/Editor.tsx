@@ -62,6 +62,8 @@ import {
   ChevronDown,
   MessageSquareText,
   Activity,
+  Radio,
+  ClipboardCopy,
 } from "lucide-react";
 import {
   api,
@@ -134,12 +136,20 @@ import {
   disconnect,
   canConnect,
   connectConnection,
+  besidePosition,
+  freePosition,
+  placeBlock,
+  primaryOutput,
+  type BlockStep,
 } from "./pipelineEditing";
 import PipelineSchemaFields from "./PipelineSchemaFields";
 import { resolveSchema } from "./pipelineSchema";
 import DocLink, { HelpLink } from "./DocLink";
 import { assertExactNumbers } from "./configurationNumbers";
-import { stringifyConfiguration } from "./configurationFormats";
+import {
+  hasSourceComments,
+  stringifyConfiguration,
+} from "./configurationFormats";
 import {
   parseSource,
   diagnoseConfiguration,
@@ -148,6 +158,7 @@ import {
   detectConfigurationFormat,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
+  sourceErrorMessage,
   sourceOffset,
 } from "./configurationSource";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
@@ -155,11 +166,13 @@ import ConfigurationImportDialog, {
   type ConfigurationImport,
 } from "./ConfigurationImportDialog";
 import "./editor.css";
-import PipelineNode, { ComponentIcon } from "./PipelineNode";
+import PipelineNode, { ComponentIcon, componentTitle } from "./PipelineNode";
 import PipelineCheckButton from "./PipelineCheckButton";
 import ProblemsPanel from "./ProblemsPanel";
 import {
   applyFix,
+  fixLooksIntended,
+  checkFailureMessage,
   checkLabel,
   checkProblems,
   checkStatus,
@@ -173,6 +186,28 @@ import {
   type Problem,
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
+import { upstreamOf } from "./sampleUpstream";
+import { copySteps, pasteSteps, stepsText } from "./canvasClipboard";
+import { patternEdges, patternInputs, patternSummary } from "./inputPatterns";
+import CanvasFind from "./CanvasFind";
+import {
+  edgeRate,
+  formatRate,
+  liveSummary,
+  nodeLive,
+  type PipelineTelemetry,
+} from "./liveGraph";
+
+const LIVE_KEY = "vectory.editor.live";
+const readLiveSetting = () => {
+  try {
+    return localStorage.getItem(LIVE_KEY) === "on";
+  } catch {
+    return false;
+  }
+};
+/** How often live numbers refresh: about one agent check-in. */
+const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
 import {
@@ -190,6 +225,7 @@ import {
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
+  PIPELINE_NODE_COLUMN_GAP,
 } from "./pipelineNodeModel";
 import "./pipeline-node.css";
 import CanvasComponentMenu, {
@@ -428,6 +464,16 @@ export default function Editor({
     [customComponentJSON, setCustomComponentJSON] =
       useState('{\n  "type": ""\n}'),
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
+    [live, setLive] = useState(readLiveSetting),
+    [findOpen, setFindOpen] = useState(false),
+    [trace, setTrace] = useState<{
+      id: string;
+      counts: Record<string, number>;
+    } | null>(null),
+    [telemetry, setTelemetry] = useState<{
+      data: PipelineTelemetry | null;
+      error: string;
+    } | null>(null),
     [publishedVersionStatus, setPublishedVersionStatus] = useState<
       "loading" | "ready" | "failed"
     >("loading"),
@@ -549,13 +595,20 @@ export default function Editor({
     nodeMenu: MenuHandler;
     edgeMenu: MenuHandler;
     edgeHover: (id: string, hovered: boolean) => void;
-  }>({ nodeMenu: () => {}, edgeMenu: () => {}, edgeHover: () => {} });
+    edgeInsert: (id: string, position: { x: number; y: number }) => void;
+  }>({
+    nodeMenu: () => {},
+    edgeMenu: () => {},
+    edgeHover: () => {},
+    edgeInsert: () => {},
+  });
   const handlerCache = useRef(
     new Map<
       string,
       {
         menu: (position: { x: number; y: number }, opener: HTMLElement) => void;
         hover: (hovered: boolean) => void;
+        insert: (position: { x: number; y: number }) => void;
       }
     >(),
   );
@@ -570,6 +623,7 @@ export default function Editor({
             ? graphHandlers.current.nodeMenu
             : graphHandlers.current.edgeMenu)(id, position, opener),
         hover: (hovered) => graphHandlers.current.edgeHover(id, hovered),
+        insert: (position) => graphHandlers.current.edgeInsert(id, position),
       };
       handlerCache.current.set(key, entry);
     }
@@ -890,12 +944,17 @@ export default function Editor({
       checkedConfig,
     ],
   );
+  // Auto-check needs a source and a destination; until then stale Vector
+  // findings (such as "No sources defined") would contradict the canvas.
+  const missingForCheck = [
+    Object.keys(checkedConfig.sources || {}).length ? "" : "source",
+    Object.keys(checkedConfig.sinks || {}).length ? "" : "destination",
+  ].filter(Boolean);
+  const dropStaleVector = checkStale && missingForCheck.length > 0;
   const problems = useMemo(() => {
-    const vector = checkProblems(
-      check?.result || null,
-      checkedConfig,
-      checkStale,
-    );
+    const vector = dropStaleVector
+      ? []
+      : checkProblems(check?.result || null, checkedConfig, checkStale);
     const program = (
       draft: "checked" | "current",
       component: string,
@@ -909,7 +968,7 @@ export default function Editor({
       draftProblems,
       checkStale ? settleStaleProblems(vector, program) : vector,
     );
-  }, [draftProblems, check, checkedConfig, checkStale]);
+  }, [draftProblems, check, checkedConfig, checkStale, dropStaleVector]);
   const problemCounts = countProblems(problems);
   // Vector errors from a check of this exact draft block publishing: the
   // server would refuse the same draft.
@@ -931,13 +990,15 @@ export default function Editor({
   });
   const statusLabel = checkLabel(status, problemCounts.errors);
   const verdict = checkError
-    ? `Couldn't check with Vector: ${checkError}`
+    ? checkError
     : checkStale
       ? pendingFieldCount
         ? "Apply or discard the field you're editing, then check again."
-        : autoCheck
-          ? "Changed since the last check. Checking again when you pause."
-          : "Changed since the last check."
+        : autoCheck && missingForCheck.length
+          ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
+          : autoCheck
+            ? "Changed since the last check. Checking again when you pause."
+            : "Changed since the last check."
       : checkVerdict(check?.result || null, problemCounts.errors);
   const autoCheckAttempt = useRef<{
     config: Config;
@@ -968,16 +1029,74 @@ export default function Editor({
     const attempt = autoCheckAttempt.current;
     // One automatic attempt per draft: a failed attempt waits for the next edit.
     if (attempt?.config === config && attempt.variables === variables) return;
-    const timer = window.setTimeout(() => {
+    let timer = 0;
+    const run = () => {
+      // An open completion popup means the person is still typing.
+      if (document.querySelector(".cm-tooltip-autocomplete")) {
+        timer = window.setTimeout(run, 800);
+        return;
+      }
       autoCheckAttempt.current = { config, variables };
       void validate({ auto: true });
-    }, 1200);
+    };
+    timer = window.setTimeout(run, 1200);
     return () => window.clearTimeout(timer);
   }, [autoCheckReady, config, variables]);
   function changeAutoCheck(value: boolean) {
     setAutoCheck(value);
     writeAutoCheck(value);
   }
+  // Live numbers for the versions devices run, refreshed about once per
+  // check-in while the canvas is visible.
+  const liveAvailable = !!publishedVersion;
+  const liveOn = live && liveAvailable && view === "canvas";
+  useEffect(() => {
+    if (!liveOn) return;
+    let alive = true,
+      timer = 0;
+    const controller = new AbortController();
+    const load = async () => {
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(load, LIVE_REFRESH_MS);
+        return;
+      }
+      try {
+        const data = await api<PipelineTelemetry>(
+          `/configurations/${id}/telemetry`,
+          { signal: controller.signal },
+        );
+        if (alive) setTelemetry({ data, error: "" });
+      } catch (failure) {
+        if (alive)
+          setTelemetry((previous) => ({
+            data: previous?.data ?? null,
+            error: (failure as Error).message,
+          }));
+      }
+      if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS);
+    };
+    void load();
+    return () => {
+      alive = false;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [liveOn, id]);
+  function toggleLive() {
+    const next = !live;
+    setLive(next);
+    if (!next) setTelemetry(null);
+    try {
+      localStorage.setItem(LIVE_KEY, next ? "on" : "off");
+    } catch {
+      /* the choice lasts for this visit */
+    }
+  }
+  const liveData = liveOn ? (telemetry?.data ?? null) : null;
+  const liveStatus =
+    liveOn && telemetry?.data
+      ? liveSummary(telemetry.data, publishedVersion?.number ?? null)
+      : null;
   const toolsRef = useRef<HTMLDetailsElement>(null);
   useDismissibleDetails(toolsRef);
   const handledDestination = useRef("");
@@ -1172,18 +1291,31 @@ export default function Editor({
     };
     window.addEventListener("beforeunload", unload);
     const navigate = (event: Event) => {
+      if (publishActive.current) {
+        event.preventDefault();
+        return;
+      }
+      const unresolved = saveUncertain.current || saveNeedsReload.current,
+        unapplied =
+          importedCodeDirty.current || pendingSchemaFields.current.size > 0;
+      if (!dirty && !unresolved && !unapplied) return;
+      // Edits that are in the draft are kept in this browser and offered back
+      // the next time the pipeline opens, so leaving needs no question. Only
+      // what cannot be kept is asked about.
+      if (dirty && !unresolved && !unapplied && keepEditsForLater()) {
+        notify(
+          "Unsaved changes are kept in this browser. Open this pipeline again to restore them.",
+        );
+        return;
+      }
       if (
-        publishActive.current ||
-        ((dirty ||
-          importedCodeDirty.current ||
-          pendingSchemaFields.current.size ||
-          saveUncertain.current ||
-          saveNeedsReload.current) &&
-          !confirm(
-            saveUncertain.current || saveNeedsReload.current
-              ? "Leave this editor? A draft save is unresolved. It may still change the server draft."
+        !confirm(
+          unresolved
+            ? "Leave this editor? A draft save is unresolved. It may still change the server draft."
+            : unapplied
+              ? "Leave this editor? Code or field edits you haven't applied will be lost."
               : "Leave this editor? Unsaved changes may be lost.",
-          ))
+        )
       )
         event.preventDefault();
     };
@@ -1382,31 +1514,73 @@ export default function Editor({
     screen: { x: number; y: number },
     input = "",
     kind?: Kind,
+    position?: { x: number; y: number },
+    insertBefore?: string[],
+    shiftFrom?: number,
   ) {
     if (!editable || busy || !flow.current || !closeSettings()) return;
     setGraphMenu(null);
     const location = {
       screen,
-      position: flow.current.screenToFlowPosition(screen),
+      position: position ?? flow.current.screenToFlowPosition(screen),
       input,
       kind,
+      insertBefore,
+      shiftFrom,
     };
     pickerPlacement.current = location;
     pickerOpener.current = document.activeElement as HTMLElement;
     setCanvasPicker(location);
     setError("");
   }
+  // A new step goes into free space: beside the selected step and fed by its
+  // main output, or near the middle of the view when nothing is selected.
+  /** Insert a step on a connection, taking over its downstream end. */
+  function insertOnEdge(edgeId: string, screen?: { x: number; y: number }) {
+    const edge = edges.find((item) => item.id === edgeId);
+    const source = nodes.find((node) => node.id === edge?.source),
+      target = nodes.find((node) => node.id === edge?.target);
+    if (!edge || !source || !target || !flow.current) return;
+    const input =
+      !edge.sourceHandle || edge.sourceHandle === "output"
+        ? edge.source
+        : `${edge.source}.${edge.sourceHandle}`;
+    // Use the gap between the steps when there is one; otherwise the new
+    // step takes the target's column and everything from there moves right.
+    const roomy =
+      target.position.x - source.position.x >= 2 * PIPELINE_NODE_COLUMN_GAP;
+    const position = roomy
+      ? freePosition(nodes, {
+          x: source.position.x + PIPELINE_NODE_COLUMN_GAP,
+          y: (source.position.y + target.position.y) / 2,
+        })
+      : { x: target.position.x, y: target.position.y };
+    openCanvasPicker(
+      screen ?? flow.current.flowToScreenPosition(position),
+      input,
+      "transforms",
+      position,
+      [edge.target],
+      roomy ? undefined : target.position.x,
+    );
+  }
   function openPicker(kind?: Kind) {
     const bounds = graphRef.current?.getBoundingClientRect();
-    if (bounds)
-      openCanvasPicker(
-        {
-          x: bounds.left + bounds.width / 2,
-          y: bounds.top + Math.min(bounds.height / 3, 180),
-        },
-        "",
-        kind,
-      );
+    if (!bounds || !flow.current) return;
+    const screen = {
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + Math.min(bounds.height / 3, 180),
+    };
+    const anchor = selected
+      ? nodes.find((node) => node.id === selected && !node.data.enrichmentTable)
+      : undefined;
+    const input = anchor && kind !== "sources" ? primaryOutput(anchor) : "";
+    const position = anchor
+      ? input
+        ? besidePosition(nodes, anchor)
+        : freePosition(nodes, anchor.position)
+      : freePosition(nodes, flow.current.screenToFlowPosition(screen));
+    openCanvasPicker(screen, input, kind, position);
   }
   const onConnectStart: OnConnectStart = (_event, params) => {
     connectionCancelled.current = false;
@@ -1451,23 +1625,67 @@ export default function Editor({
         : state.fromNode.id + "." + port,
     );
   };
-  function add(item: Component) {
+  /**
+   * Put the cursor where the new step needs input: its first required empty
+   * field, else its first field. Never the header's Rename button.
+   */
+  function focusFirstControl() {
+    const controls =
+      'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled), [contenteditable="true"]';
+    let frames = 0;
+    const attempt = () => {
+      const body = document.querySelector<HTMLElement>(
+        ".editor-inspector-body",
+      );
+      if (!body) {
+        if (++frames < 10) requestAnimationFrame(attempt);
+        return;
+      }
+      const required = Array.from(
+        body.querySelectorAll<HTMLElement>('[aria-required="true"]'),
+      ).find((element) => !(element as HTMLInputElement).value);
+      (
+        required ||
+        body.querySelector<HTMLElement>(controls) ||
+        body.querySelector<HTMLElement>("summary, button")
+      )?.focus();
+    };
+    requestAnimationFrame(attempt);
+  }
+  function add(item: Component, input?: string) {
     if (!editable || busy || !guardInspectorDrafts()) return;
     try {
-      const placement = pickerPlacement.current;
+      const placement = pickerPlacement.current
+        ? {
+            ...pickerPlacement.current,
+            input: input ?? pickerPlacement.current.input,
+          }
+        : null;
+      // Sources never take an input; other steps join the chosen output, and
+      // an insertion on a connection takes over its downstream end.
       const result = addConnectedComponent(
         config,
         item,
-        placement?.input || "",
-        [],
+        item.kind === "sources" ? "" : placement?.input || "",
+        item.kind === "transforms" ? (placement?.insertBefore ?? []) : [],
         { autoConnectSource: false },
       );
       const nextGraph = toGraph(result.config, { nodes, edges });
       if (placement) {
+        const shiftFrom =
+          item.kind === "transforms" ? placement.shiftFrom : undefined;
         nextGraph.nodes = nextGraph.nodes.map((node) =>
           node.id === result.id
             ? { ...node, position: placement.position }
-            : node,
+            : shiftFrom !== undefined && node.position.x >= shiftFrom - 1
+              ? {
+                  ...node,
+                  position: {
+                    x: node.position.x + PIPELINE_NODE_COLUMN_GAP,
+                    y: node.position.y,
+                  },
+                }
+              : node,
         );
         setAutoArrange(false);
       }
@@ -1476,13 +1694,7 @@ export default function Editor({
       setCanvasPicker(null);
       pickerPlacement.current = null;
       setSelected(result.id);
-      requestAnimationFrame(() => {
-        document
-          .querySelector<HTMLElement>(
-            '.editor-inspector-body input, .editor-inspector-body textarea, .editor-inspector-body [contenteditable="true"], .editor-inspector-body select, .editor-inspector-body summary, .editor-inspector button',
-          )
-          ?.focus();
-      });
+      focusFirstControl();
       notify(item.label + " added.");
     } catch (e) {
       setError((e as Error).message);
@@ -1623,6 +1835,16 @@ export default function Editor({
         ...(editable
           ? [
               {
+                id: "insert",
+                label: "Insert a step",
+                icon: Plus,
+                onSelect: () =>
+                  insertOnEdge(edge.id, {
+                    x: graphMenu.position.x,
+                    y: graphMenu.position.y,
+                  }),
+              },
+              {
                 id: "disconnect",
                 label: "Disconnect",
                 icon: Unplug,
@@ -1689,6 +1911,32 @@ export default function Editor({
       return;
     const nodeId = target.closest(".react-flow__node")?.getAttribute("data-id");
     const edgeId = target.closest(".react-flow__edge")?.getAttribute("data-id");
+    if (
+      event.key === "Escape" &&
+      !connectionGesture &&
+      multiSelected.length > 1
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSelection();
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "a"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (selected && !closeSettings()) return;
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.data.enrichmentTable ? node : { ...node, selected: true },
+        ),
+      );
+      return;
+    }
     if (event.key === "Escape" && connectionGesture) {
       event.preventDefault();
       event.stopPropagation();
@@ -1742,7 +1990,9 @@ export default function Editor({
     ) {
       event.preventDefault();
       event.stopPropagation();
-      duplicate(nodeId);
+      if (multiSelected.length > 1 && multiSelected.includes(nodeId))
+        duplicateSelection();
+      else duplicate(nodeId);
       return;
     }
     if (event.key === "Delete" || event.key === "Backspace") {
@@ -1823,6 +2073,114 @@ export default function Editor({
       graphRef.current
         ?.querySelector<HTMLElement>(
           `.react-flow__node[data-id="${CSS.escape(name)}"]`,
+        )
+        ?.focus({ preventScroll: true }),
+    );
+  }
+  // Steps a toolbar action or shortcut applies to: the canvas selection, or
+  // the step whose properties are open.
+  const multiSelected = nodes
+    .filter((node) => node.selected && !node.data.enrichmentTable)
+    .map((node) => node.id);
+  function selectionIds() {
+    return multiSelected.length ? multiSelected : selected ? [selected] : [];
+  }
+  function copySelection(clipboard?: DataTransfer | null) {
+    const ids = selectionIds();
+    if (!ids.length) return false;
+    const text = stepsText(copySteps(config, ids));
+    if (clipboard) clipboard.setData("text/plain", text);
+    else void navigator.clipboard?.writeText(text).catch(() => {});
+    notify(
+      `Copied ${ids.length === 1 ? `${ids[0]}` : `${ids.length} steps`} as Vector YAML.`,
+    );
+    return true;
+  }
+  /** Add steps from Vector configuration text, placed in free space. */
+  function pasteText(text: string) {
+    if (!editable || busy || !guardInspectorDrafts()) return;
+    try {
+      const pasted = pasteSteps(config, text);
+      const graph = toGraph(pasted.config, { nodes, edges });
+      const originals = new Map(nodes.map((node) => [node.id, node]));
+      const steps: BlockStep[] = [...pasted.ids].map(([from, to]) => {
+        const kind = pasted.kinds.get(to) || "transforms";
+        return {
+          id: to,
+          kind,
+          component: pasted.config[kind][to],
+          position: originals.get(from)?.position,
+        };
+      });
+      // Copies of steps from this pipeline land just below the originals,
+      // and steps from elsewhere at the top left of what is on screen.
+      const known = steps.every((step) => step.position);
+      const bounds = graphRef.current?.getBoundingClientRect();
+      const origin = flow.current?.screenToFlowPosition({
+        x: (bounds?.left ?? 0) + 120,
+        y: (bounds?.top ?? 0) + 120,
+      }) ?? { x: 80, y: 80 };
+      const anchor = known
+        ? {
+            x: Math.min(...steps.map((step) => step.position!.x)) + 40,
+            y: Math.min(...steps.map((step) => step.position!.y)) + 40,
+          }
+        : origin;
+      const positions = placeBlock(nodes, steps, anchor);
+      graph.nodes = graph.nodes.map((node) =>
+        positions.has(node.id)
+          ? { ...node, position: positions.get(node.id)!, selected: true }
+          : { ...node, selected: false },
+      );
+      setAutoArrange(false);
+      replace(pasted.config, graph);
+      setSelected(null);
+      notify(
+        pasted.ids.size === 1
+          ? `Pasted ${[...pasted.ids.values()][0]}.`
+          : `Pasted ${pasted.ids.size} steps.`,
+      );
+    } catch (failure) {
+      notify((failure as Error).message);
+    }
+  }
+  function duplicateSelection() {
+    const ids = selectionIds();
+    if (ids.length === 1) duplicate(ids[0]);
+    else if (ids.length) pasteText(stepsText(copySteps(config, ids)));
+  }
+  function clearSelection() {
+    setNodes((previous) =>
+      previous.map((node) =>
+        node.selected ? { ...node, selected: false } : node,
+      ),
+    );
+  }
+  // Selecting several steps (Shift-drag, Ctrl-click, Ctrl+A) puts the
+  // inspector away: it shows one step at a time.
+  const selectingMany = multiSelected.length > 1;
+  useEffect(() => {
+    if (selectingMany && selected) closeSettings();
+  }, [selectingMany]);
+  function findStep(stepId: string) {
+    const node = nodes.find((item) => item.id === stepId);
+    setFindOpen(false);
+    if (!node) return;
+    selectStep(stepId);
+    flow.current?.setCenter(
+      node.position.x + PIPELINE_NODE_WIDTH / 2,
+      node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
+      {
+        zoom: Math.max(flow.current.getZoom(), 0.85),
+        duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? 0
+          : 220,
+      },
+    );
+    requestAnimationFrame(() =>
+      graphRef.current
+        ?.querySelector<HTMLElement>(
+          `.react-flow__node[data-id="${CSS.escape(stepId)}"]`,
         )
         ?.focus({ preventScroll: true }),
     );
@@ -1952,12 +2310,12 @@ export default function Editor({
       );
       return;
     }
+    let text = "";
     try {
       const fileFormat = detectConfigurationFormat(file.name);
       if (file.size > MAX_CONFIGURATION_BYTES)
         throw Error("Configuration files must be 1 MiB or smaller.");
       const bytes = await file.arrayBuffer();
-      let text: string;
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {
@@ -1994,7 +2352,7 @@ export default function Editor({
       else setImportCandidate(candidate);
     } catch (failure) {
       if (generation === importGeneration.current)
-        notify(`Import failed: ${(failure as Error).message}`);
+        notify(`Import failed: ${sourceErrorMessage(text, failure)}`);
     }
   }
   function applyImportedPipeline(candidate: ConfigurationImport) {
@@ -2073,7 +2431,7 @@ export default function Editor({
       if (generation !== checkGeneration.current) return;
       // An automatic check that could not run (busy checker, lost session)
       // keeps the earlier findings and tries again after the next edit.
-      if (!auto) setCheckError((e as Error).message);
+      if (!auto) setCheckError(checkFailureMessage(e));
     } finally {
       if (generation === checkGeneration.current) {
         checkInFlight.current = false;
@@ -2226,13 +2584,13 @@ export default function Editor({
       // A peer can send this shared intent while our preflight or POST waits,
       // so a structured rejection alone cannot rule out a committed result
       // under the same request key. It becomes definitive once the server
-      // confirms that no version was committed under that key.
+      // confirms that no version was committed under that key. That holds
+      // for a structured 5xx too, such as an unavailable Vector checker.
       if (
         operation &&
         failure instanceof APIError &&
         failure.serverRejection &&
         failure.status >= 400 &&
-        failure.status < 500 &&
         failure.code !== "IDEMPOTENCY_CONFLICT" &&
         (await rejectedWithoutCommit(operation, controller.signal))
       ) {
@@ -2335,26 +2693,109 @@ export default function Editor({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
+  // Canvas clipboard and find. They apply while the canvas (or nothing in
+  // particular) has focus; text fields and code editors keep their own.
+  const canvasShortcuts = useRef({
+    active: false,
+    copy: (_clipboard: DataTransfer | null): boolean => false,
+    paste: (_text: string) => {},
+    find: () => {},
+  });
+  canvasShortcuts.current = {
+    active:
+      view === "canvas" &&
+      !historyOpen &&
+      !publishOpen &&
+      !globalsOpen &&
+      !detailsOpen &&
+      !discardOpen &&
+      !deployVersion &&
+      !pipelineAction &&
+      !importCandidate &&
+      saveNote === null,
+    copy: copySelection,
+    paste: pasteText,
+    find: () => setFindOpen(true),
+  };
+  useEffect(() => {
+    const onCanvas = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return false;
+      if (
+        target.closest(
+          '.cm-editor, input, textarea, select, [contenteditable="true"], [role="dialog"]',
+        )
+      )
+        return false;
+      return (
+        target === document.body ||
+        !!graphRef.current?.contains(target) ||
+        target.closest(".editor-workspace, .editor-content") !== null
+      );
+    };
+    const onCopy = (event: ClipboardEvent) => {
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      if (window.getSelection()?.toString()) return;
+      if (shortcut.copy(event.clipboardData)) event.preventDefault();
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text?.trim()) return;
+      event.preventDefault();
+      shortcut.paste(text);
+    };
+    const onFind = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "f" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      event.preventDefault();
+      shortcut.find();
+    };
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    window.addEventListener("keydown", onFind);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      window.removeEventListener("keydown", onFind);
+    };
+  }, []);
   // Unsaved edits live in this browser until saved or discarded. While an
   // earlier copy awaits Restore or Discard it is not overwritten.
+  const recoveryOpen = useRef(false);
+  recoveryOpen.current = !!recovery;
+  /** Write the draft now; false when it could not or must not be kept. */
+  function keepEditsForLater() {
+    const current = latest.current;
+    if (!current.doc || !editable || recoveryOpen.current) return false;
+    return storeRecoveryDraft(user.id, id, {
+      revision: current.doc.revision,
+      config: current.config,
+      variables: current.variables,
+      positions: Object.fromEntries(
+        current.nodes.map((node: { id: string; position: unknown }) => [
+          node.id,
+          node.position,
+        ]),
+      ) as RecoveryDraft["positions"],
+    });
+  }
   useEffect(() => {
     if (!doc || !editable || recovery) return;
     if (!dirty) {
       clearRecoveryDraft(user.id, id);
       return;
     }
-    const timer = window.setTimeout(
-      () =>
-        storeRecoveryDraft(user.id, id, {
-          revision: doc.revision,
-          config,
-          variables,
-          positions: Object.fromEntries(
-            nodes.map((node) => [node.id, node.position]),
-          ),
-        }),
-      800,
-    );
+    const timer = window.setTimeout(keepEditsForLater, 800);
     return () => window.clearTimeout(timer);
   }, [dirty, config, variables, nodes, doc?.revision, editable, recovery]);
   function restoreRecovery() {
@@ -2571,11 +3012,26 @@ export default function Editor({
     }
   }
   const selectedNode = nodes.find((n) => n.id === selected);
+  const patterns = useMemo(() => patternInputs(config), [config]);
+  const patternEdgeList = useMemo(() => patternEdges(patterns), [patterns]);
   const component = selectedNode
     ? selectedNode.data.enrichmentTable
       ? config.enrichment_tables?.[selectedNode.data.enrichmentTable]
       : config[selectedNode.data.kind]?.[selectedNode.id]
     : null;
+  // Stable while the steps feeding the selection are unchanged, so typing in
+  // other steps doesn't re-run the tester.
+  const upstreamText = useMemo(
+    () =>
+      selected && config.transforms?.[selected]
+        ? JSON.stringify(upstreamOf(config, selected))
+        : "",
+    [config, selected],
+  );
+  const selectedUpstream = useMemo(
+    () => (upstreamText ? JSON.parse(upstreamText) : undefined),
+    [upstreamText],
+  );
   const selectedProblems = useMemo(
     () =>
       selected
@@ -2831,12 +3287,17 @@ export default function Editor({
     });
   }
   function canFixProblem(problem: Problem) {
-    return (
-      editable &&
-      !!problem.fix &&
-      !!problem.component &&
-      !!problem.field &&
-      !!config.transforms?.[problem.component]
+    if (
+      !editable ||
+      !problem.fix ||
+      !problem.component ||
+      !problem.field ||
+      !config.transforms?.[problem.component]
+    )
+      return false;
+    return fixLooksIntended(
+      vrlValue(config.transforms[problem.component], problem.field),
+      problem,
     );
   }
   function fixProblem(problem: Problem) {
@@ -3074,6 +3535,17 @@ export default function Editor({
           focus={
             focusRequest?.component === selectedNode.id ? focusRequest : null
           }
+          upstream={selectedUpstream}
+          inputPatterns={patterns.filter(
+            (input) => input.target === selectedNode.id,
+          )}
+          onTrace={(counts) =>
+            setTrace(
+              counts && Object.keys(counts).length
+                ? { id: selectedNode.id, counts }
+                : null,
+            )
+          }
         />
       )
     ) : null;
@@ -3094,6 +3566,8 @@ export default function Editor({
       onFix={fixProblem}
       checking={checking}
       canFix={canFixProblem}
+      status={status}
+      onCheck={checkable ? () => void validate() : undefined}
     />
   );
   function fitGraph() {
@@ -3130,14 +3604,15 @@ export default function Editor({
         ? 0
         : 220;
       const node = selected ? nodes.find((node) => node.id === selected) : null;
-      if (node)
+      const reveal = node ? revealViewport(node) : null;
+      if (node && !reveal) return;
+      if (node && reveal?.mode === "pan")
+        void flow.current?.setViewport(reveal.viewport, { duration });
+      else if (node)
         flow.current?.setCenter(
           node.position.x + PIPELINE_NODE_WIDTH / 2,
           node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
-          {
-            zoom: Math.max(flow.current.getZoom(), 0.85),
-            duration,
-          },
+          { zoom: flow.current.getZoom(), duration },
         );
       else
         flow.current?.fitView({
@@ -3149,11 +3624,60 @@ export default function Editor({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [selected, view, nodes.length]);
+  /**
+   * How to bring a node into view: null when it already is, a small pan when
+   * it is partly hidden (by the edge or the inspector), and a centering only
+   * when it is entirely out of sight. Nothing else moves the canvas.
+   */
+  function revealViewport(node: { position: { x: number; y: number } }) {
+    const instance = flow.current,
+      pane = graphRef.current?.querySelector(".react-flow");
+    if (!instance || !pane) return null;
+    const bounds = pane.getBoundingClientRect();
+    const { x, y, zoom } = instance.getViewport();
+    const margin = 28;
+    const left = node.position.x * zoom + x,
+      top = node.position.y * zoom + y,
+      right = left + PIPELINE_NODE_WIDTH * zoom,
+      bottom = top + PIPELINE_NODE_BODY_HEIGHT * zoom;
+    if (
+      left >= 0 &&
+      top >= 0 &&
+      right <= bounds.width &&
+      bottom <= bounds.height
+    )
+      return null;
+    if (right < 0 || bottom < 0 || left > bounds.width || top > bounds.height)
+      return { mode: "center" as const };
+    const shift = (start: number, end: number, size: number) =>
+      end - start > size - 2 * margin
+        ? margin - start
+        : start < margin
+          ? margin - start
+          : end > size - margin
+            ? size - margin - end
+            : 0;
+    return {
+      mode: "pan" as const,
+      viewport: {
+        x: x + shift(left, right, bounds.width),
+        y: y + shift(top, bottom, bounds.height),
+        zoom,
+      },
+    };
+  }
   useEffect(() => {
     if (!selected || view !== "canvas" || historyOpen) return;
     const onEscape = (event: KeyboardEvent) => {
+      // Escape belongs to the control that has focus first: completion
+      // popups, code editors (Escape then Tab leaves them), fields and menus.
+      const target = event.target instanceof Element ? event.target : null;
       if (
         event.key === "Escape" &&
+        !event.defaultPrevented &&
+        !target?.closest(
+          '.cm-editor, input, textarea, select, [contenteditable="true"], [role="listbox"], [role="menu"]',
+        ) &&
         !document.querySelector('[role="dialog"]')
       ) {
         event.preventDefault();
@@ -3178,6 +3702,7 @@ export default function Editor({
     edgeMenu: (edgeId, position, opener) =>
       openGraphMenu("edge", edgeId, position, opener),
     edgeHover: (edgeId, hovered) => hoverConnection(edgeId, hovered),
+    edgeInsert: (edgeId, position) => insertOnEdge(edgeId, position),
   };
   if (flowCache.current.size > 4 * (nodes.length + edges.length) + 64)
     flowCache.current.clear();
@@ -3195,11 +3720,20 @@ export default function Editor({
       outputs = ports?.outputs || [],
       isSelected = node.id === selected || !!node.selected,
       menuOpen = graphMenu?.kind === "node" && graphMenu.id === node.id,
-      warning = connectivity.get(node.id);
+      warning = connectivity.get(node.id),
+      reading =
+        liveOn && !node.data.enrichmentTable
+          ? nodeLive(liveData, node.id)
+          : undefined;
+    const liveKey = reading === undefined ? "" : JSON.stringify(reading);
+    const traced = trace && trace.id === node.id ? trace.counts : undefined;
+    const traceKey = traced ? JSON.stringify(traced) : "";
     return cachedFlowObject(
       `node:${node.id}`,
       [
         node,
+        liveKey,
+        traceKey,
         highlight,
         isSelected,
         problem.hasIssue,
@@ -3215,6 +3749,14 @@ export default function Editor({
       ],
       () => ({
         ...node,
+        ariaLabel: `${componentTitle(
+          String(node.data.component?.type || ""),
+          node.data.kind,
+          {
+            enrichmentTable: node.data.enrichmentTable,
+            implicitSource: node.data.implicitSource,
+          },
+        )} ${node.id}${problem.hasIssue ? ", has problems" : ""}`,
         domAttributes: {
           ...node.domAttributes,
           "data-connection-highlight": highlight,
@@ -3223,6 +3765,8 @@ export default function Editor({
         data: {
           ...node.data,
           ...problem,
+          live: reading,
+          trace: traced,
           connectivityWarning: warning,
           editable: editable && !busy,
           openMenu: stableHandlers(`node:${node.id}`).menu,
@@ -3241,14 +3785,17 @@ export default function Editor({
         : "dimmed"
       : undefined;
     const category = nodeKinds.get(edge.source) || "transforms";
+    const rate = liveOn
+      ? edgeRate(liveData, edge.source, edge.sourceHandle || "output")
+      : undefined;
     return cachedFlowObject(
       `edge:${edge.id}`,
-      [edge, highlight, category, editable, connectionStyle],
+      [edge, highlight, category, editable, connectionStyle, rate],
       () => ({
         ...edge,
         type: "pipeline",
         className: "pipeline-connection",
-        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
+        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${formatRate(rate)} events`}`,
         domAttributes: {
           ...edge.domAttributes,
           "data-connection-highlight": highlight,
@@ -3257,9 +3804,48 @@ export default function Editor({
         data: {
           editable,
           connectionStyle,
+          liveRate: rate,
           connectionHighlight: highlight,
           onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
           openMenu: stableHandlers(`edge:${edge.id}`).menu,
+          insertStep: editable
+            ? stableHandlers(`edge:${edge.id}`).insert
+            : undefined,
+        },
+      }),
+    );
+  });
+  // Wildcard inputs draw a dashed, read-only line to each output they match.
+  const currentPatternEdges = patternEdgeList.map((edge) => {
+    const category = nodeKinds.get(edge.source) || "transforms";
+    const rate = liveOn
+      ? edgeRate(liveData, edge.source, edge.sourceHandle)
+      : undefined;
+    return cachedFlowObject(
+      `pattern:${edge.id}`,
+      [edge, category, connectionStyle, rate],
+      () => ({
+        id: edge.id,
+        source: edge.source,
+        sourceHandle: edge.sourceHandle,
+        target: edge.target,
+        targetHandle: edge.targetHandle,
+        type: "pipeline",
+        className: "pipeline-connection pipeline-connection-pattern",
+        selectable: false,
+        focusable: false,
+        deletable: false,
+        reconnectable: false,
+        ariaLabel: `Wildcard input ${edge.pattern}: ${edge.source}${edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
+        domAttributes: {
+          "data-pipeline-category": category,
+        } as Edge["domAttributes"],
+        data: {
+          editable: false,
+          connectionStyle,
+          pattern: edge.pattern,
+          patternMore: edge.more,
+          liveRate: rate,
         },
       }),
     );
@@ -3269,7 +3855,10 @@ export default function Editor({
   // inspector first and the node summary follows. Drags and selections stay
   // immediate.
   const flowNodes = stableArray(flowNodeArray, currentFlowNodes),
-    flowEdges = stableArray(flowEdgeArray, currentFlowEdges);
+    flowEdges = stableArray(flowEdgeArray, [
+      ...currentFlowEdges,
+      ...currentPatternEdges,
+    ]);
   const deferredFlowNodes = useDeferredValue(flowNodes),
     deferredFlowEdges = useDeferredValue(flowEdges);
   const canvasNodes = graphFromEdit.current ? deferredFlowNodes : flowNodes,
@@ -3590,16 +4179,21 @@ export default function Editor({
                   }}
                 />
               )}
-              <IconButton
-                icon={Settings2}
-                label="Pipeline settings"
+              <button
+                type="button"
+                className="icon-button editor-settings-button"
+                aria-label="Pipeline settings"
+                title="Pipeline settings"
                 onClick={() =>
                   tool(() => {
                     setGlobalsSection("general");
                     setGlobalsOpen(true);
                   })
                 }
-              />
+              >
+                <Settings2 size={16} aria-hidden="true" />
+                <span aria-hidden="true">Settings</span>
+              </button>
             </div>
             <div className="editor-header-actions" inert={busy}>
               <details
@@ -3634,6 +4228,71 @@ export default function Editor({
                       Add monitoring
                     </button>
                   )}
+                  {can(user, "edit") && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        onClick={() => void openPipelineAction("duplicate")}
+                      >
+                        <Copy size={16} aria-hidden="true" />
+                        Duplicate pipeline
+                      </button>
+                      <button
+                        onClick={() =>
+                          void openPipelineAction(
+                            doc.archived ? "unarchive" : "archive",
+                          )
+                        }
+                      >
+                        {doc.archived ? (
+                          <ArchiveRestore size={16} aria-hidden="true" />
+                        ) : (
+                          <Archive size={16} aria-hidden="true" />
+                        )}
+                        {doc.archived
+                          ? "Unarchive pipeline"
+                          : "Archive pipeline"}
+                      </button>
+                    </>
+                  )}
+                  {editable && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        disabled={!stack.current.length}
+                        onClick={() => tool(() => undo())}
+                      >
+                        <Undo2 size={16} aria-hidden="true" />
+                        Undo last change
+                      </button>
+                      <button
+                        disabled={!future.current.length}
+                        onClick={() => tool(() => undo(true))}
+                      >
+                        <Redo2 size={16} aria-hidden="true" />
+                        Redo last change
+                      </button>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        onClick={() => tool(() => fileRef.current?.click())}
+                      >
+                        <Upload size={16} aria-hidden="true" />
+                        Import configuration file
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => tool(exportConfiguration)}>
+                    <Download size={16} aria-hidden="true" />
+                    Export configuration
+                  </button>
+                  {(can(user, "operate") || can(user, "edit")) && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <p className="editor-tools-heading">
+                        Requests from this browser
+                      </p>
+                    </>
+                  )}
                   {can(user, "operate") && (
                     <button
                       onClick={() => {
@@ -3664,64 +4323,6 @@ export default function Editor({
                       Your pipeline requests
                     </button>
                   )}
-                  {can(user, "edit") && (
-                    <>
-                      <button
-                        onClick={() => void openPipelineAction("duplicate")}
-                      >
-                        <Copy size={16} aria-hidden="true" />
-                        Duplicate pipeline
-                      </button>
-                      <button
-                        onClick={() =>
-                          void openPipelineAction(
-                            doc.archived ? "unarchive" : "archive",
-                          )
-                        }
-                      >
-                        {doc.archived ? (
-                          <ArchiveRestore size={16} aria-hidden="true" />
-                        ) : (
-                          <Archive size={16} aria-hidden="true" />
-                        )}
-                        {doc.archived
-                          ? "Unarchive pipeline"
-                          : "Archive pipeline"}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() =>
-                      tool(() => {
-                        setGlobalsSection("general");
-                        setGlobalsOpen(true);
-                      })
-                    }
-                  >
-                    <Settings2 size={16} aria-hidden="true" />
-                    Pipeline settings
-                  </button>
-                  {editable && (
-                    <button
-                      disabled={!future.current.length}
-                      onClick={() => tool(() => undo(true))}
-                    >
-                      <Redo2 size={16} aria-hidden="true" />
-                      Redo last change
-                    </button>
-                  )}
-                  {editable && (
-                    <button
-                      onClick={() => tool(() => fileRef.current?.click())}
-                    >
-                      <Upload size={16} aria-hidden="true" />
-                      Import configuration file
-                    </button>
-                  )}
-                  <button onClick={() => tool(exportConfiguration)}>
-                    <Download size={16} aria-hidden="true" />
-                    Export configuration
-                  </button>
                 </div>
               </details>
               {saveIndicator}
@@ -4188,11 +4789,18 @@ export default function Editor({
                     "onNodeClick",
                     (event, node) => {
                       if (
-                        !(event.target as Element).closest(
+                        (event.target as Element).closest(
                           ".react-flow__handle,[data-node-action]",
                         )
                       )
-                        selectStep(node.id);
+                        return;
+                      // Ctrl, Cmd or Shift builds a multi-selection, and the
+                      // inspector only ever shows one step.
+                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                        if (selected) closeSettings();
+                        return;
+                      }
+                      selectStep(node.id);
                     },
                   )}
                   onPaneClick={stableCanvasHandler("onPaneClick", () => {
@@ -4258,6 +4866,109 @@ export default function Editor({
                         <Blocks size={18} aria-hidden="true" />
                         <span>Add component</span>
                       </button>
+                    </Panel>
+                  )}
+                  {multiSelected.length > 1 && !connectionGesture && (
+                    <Panel
+                      position="top-center"
+                      className="editor-selection-toolbar"
+                    >
+                      <div role="toolbar" aria-label="Selected steps">
+                        <strong>{multiSelected.length} steps selected</strong>
+                        {editable && (
+                          <button type="button" onClick={duplicateSelection}>
+                            <Copy size={14} aria-hidden="true" />
+                            Duplicate
+                          </button>
+                        )}
+                        <button type="button" onClick={() => copySelection()}>
+                          <ClipboardCopy size={14} aria-hidden="true" />
+                          Copy YAML
+                        </button>
+                        {editable && (
+                          <button
+                            type="button"
+                            data-danger
+                            onClick={() => remove(multiSelected)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label="Clear selection"
+                          title="Clear selection"
+                          onClick={clearSelection}
+                        >
+                          <X size={14} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </Panel>
+                  )}
+                  {findOpen && (
+                    <Panel position="top-center" className="editor-find-panel">
+                      <CanvasFind
+                        nodes={nodes}
+                        onFind={findStep}
+                        onClose={() => {
+                          setFindOpen(false);
+                          graphRef.current?.focus();
+                        }}
+                      />
+                    </Panel>
+                  )}
+                  {liveAvailable && !connectionGesture && (
+                    <Panel position="top-right" className="editor-live-panel">
+                      <button
+                        type="button"
+                        className="editor-live-toggle"
+                        aria-pressed={liveOn}
+                        onClick={toggleLive}
+                        title={
+                          liveOn
+                            ? "Hide live numbers"
+                            : "Show events per second from devices running this pipeline"
+                        }
+                      >
+                        <Radio size={15} aria-hidden="true" />
+                        Live
+                      </button>
+                      {liveOn && (
+                        <div
+                          className="editor-live-status"
+                          role="status"
+                          data-tone={
+                            telemetry?.error && !telemetry.data
+                              ? "error"
+                              : (liveStatus?.tone ?? "loading")
+                          }
+                        >
+                          <span>
+                            {!telemetry
+                              ? "Loading live numbers…"
+                              : telemetry.error && !telemetry.data
+                                ? `Live numbers are unavailable: ${telemetry.error}`
+                                : liveStatus?.message}
+                          </span>
+                          {liveStatus?.suggestMonitoring && editable && (
+                            <button
+                              type="button"
+                              onClick={() => tool(addMonitoring)}
+                            >
+                              <Activity size={13} aria-hidden="true" />
+                              Add monitoring
+                            </button>
+                          )}
+                          {liveStatus &&
+                            liveStatus.tone !== "empty" &&
+                            !publishedDraft && (
+                              <small>
+                                Your draft has changes that aren&apos;t running.
+                              </small>
+                            )}
+                        </div>
+                      )}
                     </Panel>
                   )}
                   <Panel
@@ -4433,6 +5144,11 @@ export default function Editor({
                           : selectedNode.data.kind === "sinks"
                             ? "Destination"
                             : "Transform"}
+                      {!selectedNode.data.enrichmentTable && (
+                        <code className="editor-inspector-type">
+                          {component.type}
+                        </code>
+                      )}
                     </span>
                     <h2>
                       {selectedNode.data.enrichmentTable
@@ -4580,6 +5296,14 @@ export default function Editor({
                   {importedCodeDirty.current
                     ? "Code changes have not been applied to the draft."
                     : "Code matches the current draft."}
+                  {importedCodeDirty.current &&
+                    hasSourceComments(code, format) && (
+                      <strong className="editor-code-comments">
+                        {" "}
+                        Comments are not kept when you apply. Comments inside
+                        VRL programs are.
+                      </strong>
+                    )}
                 </span>
                 {importedCodeDirty.current && (
                   <Button
@@ -4726,8 +5450,21 @@ export default function Editor({
             <dd>Remove selected steps or disconnect selected lines.</dd>
             <dt>Arrow keys</dt>
             <dd>Move a focused step 10 pixels. Hold Shift for 50 pixels.</dd>
+            <dt>Ctrl / ⌘ S</dt>
+            <dd>Save the draft.</dd>
+            <dt>⌘ K</dt>
+            <dd>Open the command menu.</dd>
+            <dt>Ctrl / ⌘ F</dt>
+            <dd>Find a step by ID, name or type.</dd>
+            <dt>Ctrl / ⌘ C, V</dt>
+            <dd>
+              Copy the selected steps as Vector YAML, and paste steps from any
+              Vector configuration.
+            </dd>
+            <dt>Ctrl / ⌘ click, Shift drag</dt>
+            <dd>Select several steps. Ctrl / ⌘ A selects all.</dd>
             <dt>Ctrl / ⌘ D</dt>
-            <dd>Duplicate the focused step.</dd>
+            <dd>Duplicate the focused or selected steps.</dd>
             <dt>Ctrl / ⌘ Z</dt>
             <dd>Undo. Add Shift to redo.</dd>
             <dt>Shift F10 / Menu key</dt>
@@ -4952,7 +5689,9 @@ export default function Editor({
               hasPendingFields ||
               importedCodeDirty.current ||
               unresolvedPublish ||
-              !!publishNotice
+              !!publishNotice ||
+              // The server refuses a draft its checker cannot verify.
+              status === "unavailable"
             }
             onClick={publish}
           >

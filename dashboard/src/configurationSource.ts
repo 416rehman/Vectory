@@ -114,6 +114,32 @@ export function detectConfigurationFormat(
   throw new Error("Choose a .yaml, .yml, .json or .toml configuration file.");
 }
 
+/** The format of pasted text: JSON objects, TOML tables and keys, else YAML. */
+export function guessConfigurationFormat(text: string): ConfigurationFormat {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) return "json";
+  const tomlLike =
+    /^\s*\[{1,2}[A-Za-z0-9_."-]+\]{1,2}\s*$/m.test(text) ||
+    /^\s*[A-Za-z0-9_."-]+\s*=/m.test(text);
+  const yamlLike = /^\s*[A-Za-z0-9_"'-]+:(\s|$)/m.test(text);
+  return tomlLike && !yamlLike ? "toml" : "yaml";
+}
+
+/** "Line 4:3: message" for the first problem, so a parse error is findable. */
+export function sourceErrorMessage(text: string, error: unknown) {
+  const first =
+    error instanceof ConfigurationSourceError ? error.diagnostics[0] : null;
+  const message = first?.message || (error as Error)?.message || "";
+  if (!message) return "This configuration could not be read.";
+  if (!first || (first.from === 0 && !text.trim())) return message;
+  const before = text.slice(0, first.from).split("\n");
+  const line = before.length,
+    column = before.at(-1)!.length + 1;
+  return /^Line \d+/i.test(message)
+    ? message
+    : `Line ${line}:${column}: ${message.replace(/ at line \d+, column \d+:?$/, "")}`;
+}
+
 /** Parse without coercing non-JSON values, dropping unknown keys, or rounding integers. */
 export function parseSource(
   text: string,

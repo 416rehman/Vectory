@@ -26,8 +26,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 8px;
-  max-height: 280px;
-  overflow: auto;
 }
 .pipeline-start-import {
   display: flex;
@@ -36,7 +34,21 @@
   gap: 8px;
   margin: 8px 0 0 26px;
 }
+.pipeline-start-paste {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  width: 100%;
+}
+.pipeline-start-paste textarea {
+  width: 100%;
+  min-height: 132px;
+  font-family: var(--ed-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .pipeline-start-import-result {
+  flex-basis: 100%;
   margin: 0;
   color: var(--muted);
   font-size: 12px;

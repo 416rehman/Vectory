@@ -64,6 +64,8 @@ export type ConfigurationCodeEditorProps = {
   onFormat?: () => void;
   /** Move the cursor to a text offset and focus the editor when `nonce` changes. */
   reveal?: { offset: number; nonce: number } | null;
+  /** Wrap long lines instead of scrolling sideways (sample JSONL). */
+  wrap?: boolean;
 };
 
 const externalChange = Annotation.define<boolean>();
@@ -138,6 +140,7 @@ export default function ConfigurationCodeEditor({
   describedBy,
   onFormat,
   reveal,
+  wrap = false,
 }: ConfigurationCodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<{
@@ -179,6 +182,7 @@ export default function ConfigurationCodeEditor({
           highlightSelectionMatches(),
           search({ top: true }),
           lintGutter(),
+          wrap ? EditorView.lineWrapping : [],
           language.of(languageFor(format)),
           permissions.of([
             EditorState.readOnly.of(readOnly),

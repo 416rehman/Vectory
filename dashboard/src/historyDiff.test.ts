@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isProgramDifference,
   historyDifferenceLines,
   historyDifferenceTotals,
   type HistoryDifferenceLine,
@@ -204,5 +205,20 @@ describe("Git-style configuration value line differences", () => {
     expect(JSON.parse(reconstructed(changed({}, unusual), "after"))).toEqual(
       unusual,
     );
+  });
+});
+
+describe("what a history change is called", () => {
+  it("tells a program from a JSON value", () => {
+    const diff = (before: unknown, after: unknown) => ({
+      path: ["source"],
+      kind: "changed" as const,
+      before,
+      after,
+    });
+    expect(isProgramDifference(diff(".a = 1\n.b = 2", ".a = 1"))).toBe(true);
+    expect(isProgramDifference(diff("one line", "another"))).toBe(false);
+    expect(isProgramDifference(diff(10, 5))).toBe(false);
+    expect(isProgramDifference(diff({ rate: 1 }, { rate: 2 }))).toBe(false);
   });
 });
