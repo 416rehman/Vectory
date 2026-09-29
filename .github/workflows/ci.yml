@@ -58,8 +58,12 @@ jobs:
         run: npm run build
       - run: npx playwright install --with-deps chromium
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-      - run: node ../tests/security/resource-race.mjs
+      - name: Check the shared resource hook against stale, slow and interleaved replies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-race.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_RACE_EVIDENCE: artifacts/resource-race.json
       - name: Check shared column sorting, filtering and keyboard access
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/data-table-browser.mjs
@@ -244,6 +248,30 @@ jobs:
         working-directory: .
         env:
           VECTORY_AUDIT_EVIDENCE: artifacts/audit-review.json
+      - name: Check the resource hook's polling, deadlines and cancellation with controlled timers
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-polling.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_REPORT: artifacts/resource-polling.json
+      - name: Check pinned Vector schema fixtures round-trip losslessly
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-fixtures.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_FIXTURES_EVIDENCE: artifacts/schema-fixtures.json
+      - name: Check schema controls keep values through rename, reorder and null
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-review.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_REVIEW_EVIDENCE: artifacts/schema-review.json
+      - name: Check failed page loads recover inside the production build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/lazy-page-recovery-review.mjs
+        working-directory: .
+        env:
+          VECTORY_LAZY_PAGE_OUTPUT: artifacts/lazy-page-recovery
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -282,6 +310,11 @@ jobs:
             artifacts/audit-order-review.json
             artifacts/issue-review.json
             artifacts/audit-review.json
+            artifacts/resource-race.json
+            artifacts/resource-polling.json
+            artifacts/schema-fixtures.json
+            artifacts/schema-review.json
+            artifacts/lazy-page-recovery
           if-no-files-found: warn
   agent:
     strategy:
