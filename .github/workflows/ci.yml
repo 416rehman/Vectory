@@ -65,6 +65,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: node --test help-center/scripts/*.test.mjs
         working-directory: .
+      - name: Check that repository records link only to committed files
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-doc-links.test.mjs
+          node scripts/check-doc-links.mjs
+        working-directory: .
       - id: build
         if: ${{ !cancelled() }}
         run: npm run build
