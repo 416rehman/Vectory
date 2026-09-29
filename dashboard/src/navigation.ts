@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bell,
   BookOpen,
   CalendarClock,
   CircleAlert,
@@ -45,6 +46,7 @@ export const sectionTabs: Record<string, NavigationItem[]> = {
   settings: [
     { id: "settings", label: "General", icon: Settings },
     { id: "users", label: "People & security", icon: UsersRound },
+    { id: "notifications", label: "Notifications", icon: Bell },
   ],
 };
 const sectionLabels: Record<string, string> = {
@@ -195,6 +197,14 @@ export const pageEntries: PageEntry[] = [
     description: "Access, passwords, two-factor and sessions",
     icon: UsersRound,
     keywords: "users roles account MFA two factor recovery code sessions",
+  },
+  {
+    id: "notifications",
+    name: "Notifications",
+    description: "Slack, webhook and email alerts, and detection thresholds",
+    icon: Bell,
+    keywords:
+      "alerts alerting slack webhook email smtp channel quiet hours delivery log detection thresholds",
   },
   {
     id: "docs/",

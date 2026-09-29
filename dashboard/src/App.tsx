@@ -74,6 +74,7 @@ const UsersSecurity = lazy(() =>
   ),
 );
 const Auth = lazy(() => loadPage(() => import("./AuthScreen")));
+const Notifications = lazy(() => loadPage(() => import("./Notifications")));
 import SessionRenewal from "./SessionRenewal";
 import PermissionNote from "./PermissionNote";
 import Brand from "./Brand";
@@ -770,6 +771,12 @@ export default function App() {
                   />
                 ) : page === "settings" ? (
                   <InstanceSettings />
+                ) : page === "notifications" && !id ? (
+                  <Notifications
+                    user={user}
+                    notify={notify}
+                    query={route.split("?")[1] || ""}
+                  />
                 ) : (
                   <NotFound onSearch={() => openShellModal("search")} />
                 )}

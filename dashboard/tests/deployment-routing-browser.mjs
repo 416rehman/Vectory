@@ -5,6 +5,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { configuredChannels } from "./notification-fixtures.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
 const output = resolve(
@@ -166,6 +167,8 @@ async function fixture({
       );
     if (path === "/settings")
       return reply({ instance_name: "Synthetic navigation check" });
+    // An administrator's Overview asks whether a notification channel exists.
+    if (path === "/notifications/channels") return reply(configuredChannels);
     if (path === "/overview")
       return reply({
         devices_total: 0,
