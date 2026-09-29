@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { besidePosition, freePosition, primaryOutput } from "./pipelineEditing";
 import { catalog, inputMismatch } from "./catalog";
+import { matchesSearch } from "./CanvasComponentMenu";
 import {
   pipelineNodeHeight,
   PIPELINE_NODE_COLUMN_GAP,
@@ -75,5 +76,27 @@ describe("typed picker", () => {
     expect(inputMismatch(config, "parse", item("loki"))).toBeNull();
     expect(inputMismatch(config, "parse", item("http"))).toBeNull();
     expect(inputMismatch(config, "", item("statsd"))).toBeNull();
+  });
+});
+
+describe("picker search", () => {
+  const find = (search: string) =>
+    catalog
+      .filter((item) => matchesSearch(item, search))
+      .map((item) => `${item.kind}:${item.type}`);
+  it("finds components by the products and jobs people name", () => {
+    expect(find("nginx")).toContain("sources:file");
+    expect(find("apache")).toContain("sources:file");
+    expect(find("s3")).toContain("sinks:aws_s3");
+    expect(find("archive")).toContain("sinks:aws_s3");
+    expect(find("discard")).toContain("sinks:blackhole");
+    expect(find("otel")).toContain("sources:opentelemetry");
+    expect(find("parse")).toContain("transforms:remap");
+  });
+  it("needs every word, and matches nothing for nonsense", () => {
+    expect(find("nginx logs")).toContain("sources:file");
+    expect(find("nginx bucket")).not.toContain("sources:file");
+    expect(find("qqqqzzzz")).toEqual([]);
+    expect(find("").length).toBe(catalog.length);
   });
 });

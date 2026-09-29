@@ -472,6 +472,21 @@ function ArrayFields({
     ),
     source = useRef(JSON.stringify(value));
   const [error, setError] = useState("");
+  // After adding, the cursor goes to the new entry so typing lands in it.
+  const container = useRef<HTMLDivElement>(null),
+    focusAdded = useRef(false);
+  useEffect(() => {
+    if (!focusAdded.current) return;
+    focusAdded.current = false;
+    const entries = container.current?.querySelectorAll(
+      ":scope > .schema-array-entry",
+    );
+    entries?.[entries.length - 1]
+      ?.querySelector<HTMLElement>(
+        'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled), [contenteditable="true"]',
+      )
+      ?.focus();
+  }, [rows.length]);
   const label = (
       schema._metadata?.["vectory::entry_label"] || "item"
     ).toLowerCase(),
@@ -533,6 +548,7 @@ function ArrayFields({
       next !== undefined &&
       validateFieldValue(next, childSchema(rows.length), root).length === 0 &&
       (!schema._metadata?.sensitive || isSecretReference(next));
+    focusAdded.current = true;
     update([...rows, makeRow(next, valid)]);
   }
   function move(index: number, direction: number) {
@@ -542,7 +558,7 @@ function ArrayFields({
     update(next);
   }
   return (
-    <div className="pipeline-schema-array schema-array">
+    <div className="pipeline-schema-array schema-array" ref={container}>
       {rows.map((row, index) => (
         <div
           className={`schema-array-entry ${!row.committed ? "schema-array-entry-draft" : ""}`}

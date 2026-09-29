@@ -10,7 +10,13 @@ import {
   ArrowUpFromLine,
   type LucideIcon,
 } from "lucide-react";
-import { catalog, inputMismatch, type Component, type Kind } from "./catalog";
+import {
+  catalog,
+  inputMismatch,
+  searchKeywords,
+  type Component,
+  type Kind,
+} from "./catalog";
 import type { Config } from "./api";
 import { ComponentIcon } from "./PipelineNode";
 import { IconButton } from "./ui";
@@ -33,6 +39,17 @@ const kinds: { id: Kind | "all"; label: string; icon: LucideIcon }[] = [
   { id: "transforms", label: "Transforms", icon: Workflow },
   { id: "sinks", label: "Destinations", icon: ArrowUpFromLine },
 ];
+
+/** Every word of the search appears in the name, type, description or keywords. */
+export function matchesSearch(item: Component, search: string) {
+  const text =
+    `${item.label} ${item.type} ${item.description} ${searchKeywords(item.kind, item.type)}`.toLowerCase();
+  return search
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => text.includes(word));
+}
 
 export default function CanvasComponentMenu({
   location,
@@ -76,10 +93,7 @@ export default function CanvasComponentMenu({
   );
   const matches = available.filter(
     ({ item }) =>
-      (kind === "all" || item.kind === kind) &&
-      `${item.label} ${item.type} ${item.description}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+      (kind === "all" || item.kind === kind) && matchesSearch(item, search),
   );
   const firstMatch = matches.find((match) => !match.reason)?.item;
   useLayoutEffect(() => {
