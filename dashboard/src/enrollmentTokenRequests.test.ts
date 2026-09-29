@@ -491,6 +491,53 @@ describe("correlated enrollment token responses", () => {
     ).toBe(true);
   });
 
+  it("keeps a scoped request's names and labels and matches its receipt exactly", () => {
+    const scoped = {
+      ...input,
+      allowed_names: ["lab-01", "lab-02"],
+      labels: { site: "berlin", rack: "r12" },
+    };
+    const op = beginTokenRequest(actor, scoped);
+    expect(op.request.allowed_names).toEqual(["lab-01", "lab-02"]);
+    // The server returns labels with its own key order.
+    const stored = {
+      ...record(),
+      allowed_names: ["lab-01", "lab-02"],
+      labels: { rack: "r12", site: "berlin" },
+    };
+    expect(
+      checkTokenCreation(op, { ...receipt(op.id), record: stored }).record,
+    ).toEqual(stored);
+    for (const patch of [
+      { allowed_names: ["lab-01"] },
+      { allowed_names: undefined },
+      { labels: { site: "berlin" } },
+      { labels: undefined },
+    ]) {
+      const result = { ...receipt(op.id), record: { ...stored, ...patch } };
+      expect(() => checkTokenCreation(op, result)).toThrow(/does not match/);
+    }
+    for (const invalid of [
+      { ...input, allowed_names: [] },
+      { ...input, allowed_names: ["Not Normalized"] },
+      { ...input, labels: { "bad key": "x" } },
+      {
+        ...input,
+        labels: Object.fromEntries(
+          Array.from({ length: 9 }, (_, n) => [`k${n}`, "v"]),
+        ),
+      },
+    ])
+      expect(() =>
+        beginTokenRequest(actor, invalid as TokenCreateInput),
+      ).toThrow(/names and labels/);
+    // An unscoped request can't adopt a receipt that carries a scope.
+    const plain = fixture();
+    expect(() =>
+      checkTokenCreation(plain, { ...receipt(plain.id), record: stored }),
+    ).toThrow(/does not match/);
+  });
+
   it("checks status-only identity without reconstructing an unreadable payload or enabling creation", () => {
     const result = {
       ...found(actor),

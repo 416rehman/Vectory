@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
+import { sameScope } from "./enrollmentScope";
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 const uuid = z.string().uuid();
@@ -25,6 +26,17 @@ const prefixSchema = z
   .regex(/^[a-z0-9-]*$/)
   .nullable();
 const usesSchema = z.number().int().min(1).max(100000).nullable();
+// The token scope, normalized as the server stores it (enrollmentScope.ts).
+const namesSchema = z
+  .array(z.string().regex(/^[a-z0-9][a-z0-9._-]{0,99}$/))
+  .min(1)
+  .max(500);
+const labelsSchema = z
+  .record(
+    z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/),
+    z.string().min(1).max(512),
+  )
+  .refine((labels) => Object.keys(labels).length <= 8);
 const inputSchema = z
   .object({
     name: name.refine(
@@ -37,6 +49,8 @@ const inputSchema = z
       (value) => value !== "",
       "Use null when no name prefix is requested.",
     ),
+    allowed_names: namesSchema.optional(),
+    labels: labelsSchema.optional(),
   })
   .strict();
 
@@ -50,6 +64,8 @@ export const TokenRecordSchema = z
     name_prefix: prefixSchema,
     revoked: z.boolean(),
     created_at: z.string().datetime({ offset: true }),
+    allowed_names: namesSchema.optional(),
+    labels: labelsSchema.optional(),
     recovery_device_id: uuid.optional(),
     recovery_name: z.string().min(1).max(100).optional(),
     // Usage the token list adds; absent from creation and request receipts.
@@ -157,6 +173,7 @@ function checkRecord(operation: TokenRequestOperation, record: TokenRecord) {
     record.name !== operation.request.name ||
     record.max_uses !== operation.request.max_uses ||
     record.name_prefix !== operation.request.name_prefix ||
+    !sameScope(record, operation.request) ||
     record.recovery_device_id !== undefined ||
     record.recovery_name !== undefined
   )
@@ -198,7 +215,8 @@ export function checkTokenCreation(
 const storagePrefix = "vectory:enrollment-token-request:";
 const eventName = "vectory:enrollment-token-requests";
 const maxRecords = 10;
-const maxBytes = 8192;
+// A request carries up to 500 preapproved names of up to 100 characters.
+const maxBytes = 65536;
 const actorPrefix = (actor: string) =>
   `${storagePrefix}${encodeURIComponent(actor)}:`;
 const keyFor = (operation: Pick<TokenRequestOperation, "actor_id" | "id">) =>
@@ -343,7 +361,7 @@ export function beginTokenRequest(
   const valid = inputSchema.safeParse(input);
   if (!valid.success)
     throw Error(
-      "Review the token name, expiry, maximum uses and prefix before creating it.",
+      "Review the token name, expiry, maximum uses, prefix, names and labels before creating it.",
     );
   if (!actorSchema.safeParse(actor).success)
     throw Error("Sign in again before creating a token.");

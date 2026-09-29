@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -454,6 +455,119 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		if n < 400 {
 			t.Fatal("revoked token accepted")
 		}
+	})
+	t.Run("token-scope-preapproved-names-and-labels-grant-nothing", func(t *testing.T) {
+		tooMany := map[string]string{}
+		for i := 0; i < 9; i++ {
+			tooMany[fmt.Sprintf("k%d", i)] = "v"
+		}
+		for _, bad := range []map[string]any{
+			{"name": "scope-bad", "expires_hours": 1, "name_prefix": "scope-", "allowed_names": []string{"elsewhere-1"}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{"scope-a", "SCOPE-A"}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{"not a name"}},
+			{"name": "scope-bad", "expires_hours": 1, "labels": map[string]string{"bad key": "x"}},
+			{"name": "scope-bad", "expires_hours": 1, "labels": tooMany},
+		} {
+			n, v, _ := h.api("POST", "/tokens", bad)
+			expect(t, n, 400, v)
+		}
+		// A group named like a label: a label must not put a device in it.
+		n, group, _ := h.api("POST", "/groups", map[string]any{"name": "production", "device_ids": []string{}})
+		okay(t, n, group)
+		n, created, _ := h.api("POST", "/tokens", map[string]any{"name": "scoped", "expires_hours": 1, "max_uses": 10, "name_prefix": "scope-", "allowed_names": []string{" Scope-A", "scope-b"}, "labels": map[string]string{"Site": " Berlin ", "group": "production"}})
+		okay(t, n, created)
+		record := created["record"].(map[string]any)
+		if fmt.Sprint(record["allowed_names"]) != "[scope-a scope-b]" || fmt.Sprint(record["labels"]) != "map[group:production site:Berlin]" {
+			t.Fatalf("scope not normalized: %#v", record)
+		}
+		secret := created["token"].(string)
+		listed := func() map[string]bool {
+			r, e := http.NewRequest("GET", h.http+"/api/v1/devices", nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r.Header.Set("Cookie", h.cookie)
+			res, e := h.plain.Do(r)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer res.Body.Close()
+			var devices []map[string]any
+			if e = json.NewDecoder(res.Body).Decode(&devices); e != nil {
+				t.Fatal(e)
+			}
+			names := map[string]bool{}
+			for _, d := range devices {
+				names[d["name"].(string)] = true
+			}
+			return names
+		}
+		before := listed()
+		_, outsideCSR := keyCSR(t)
+		// Matches the prefix but isn't on the list; then matches neither.
+		for _, name := range []string{"scope-c", "elsewhere-2"} {
+			n, v := h.enroll(secret, name, fmt.Sprintf("%x", serial()), outsideCSR)
+			if n < 400 {
+				t.Fatalf("%s enrolled outside the token's scope: %#v", name, v)
+			}
+		}
+		if after := listed(); len(after) != len(before) || after["scope-c"] || after["elsewhere-2"] {
+			t.Fatal("a refused enrollment created a device record")
+		}
+		key, csr := keyCSR(t)
+		n, enrolled := h.enroll(secret, "Scope-A", fmt.Sprintf("%x", serial()), csr)
+		okay(t, n, enrolled)
+		_, againCSR := keyCSR(t)
+		n, v := h.enroll(secret, "scope-a", fmt.Sprintf("%x", serial()), againCSR)
+		if n < 400 {
+			t.Fatalf("a preapproved name enrolled twice: %#v", v)
+		}
+		reasons := map[string]string{}
+		n, activity, _ := h.api("GET", "/agent-install/activity?since="+url.QueryEscape(time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)), nil)
+		okay(t, n, activity)
+		for _, raw := range activity["events"].([]any) {
+			event := raw.(map[string]any)
+			if event["token_id"] == record["id"] && event["outcome"] == "failure" {
+				if _, seen := reasons[fmt.Sprint(event["device_name"])]; !seen {
+					reasons[fmt.Sprint(event["device_name"])] = fmt.Sprint(event["reason_code"])
+				}
+			}
+		}
+		if reasons["scope-c"] != "NAME_NOT_PREAPPROVED" || reasons["elsewhere-2"] != "NAME_PREFIX_MISMATCH" || reasons["scope-a"] != "NAME_ALREADY_ENROLLED" {
+			t.Fatalf("refusal reasons not recorded: %#v", reasons)
+		}
+		// Labels arrive on the device; they grant no group, assignment or policy.
+		id := enrolled["device_id"].(string)
+		n, detail, _ := h.api("GET", "/devices/"+id+"?include=groups", nil)
+		okay(t, n, detail)
+		if fmt.Sprint(detail["labels"]) != "map[group:production site:Berlin]" || detail["name"] != "scope-a" {
+			t.Fatalf("labels not applied: %#v", detail)
+		}
+		if detail["groups"].(map[string]any)["total"] != float64(0) || detail["desired_version_id"] != nil || detail["desired_generation"] != float64(0) || detail["assignment"] != nil || detail["policy_assignment"] != nil {
+			t.Fatalf("enrollment scope granted membership or an assignment: %#v", detail)
+		}
+		n, members, _ := h.api("GET", "/groups/"+group["id"].(string)+"/members", nil)
+		okay(t, n, members)
+		if members["total"] != float64(0) {
+			t.Fatalf("a label added group membership: %#v", members)
+		}
+		scoped := h.client(enrolled, key)
+		defer scoped.CloseIdleConnections()
+		n, envelope, _ := h.req(scoped, h.https, "POST", "/agent/v1/heartbeat", beat, "", "")
+		okay(t, n, envelope)
+		payload, _ := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+		var manifest map[string]any
+		if err := json.Unmarshal(payload, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if manifest["desired"] != nil || manifest["generation"] != float64(0) {
+			t.Fatalf("a scoped enrollment received desired state: %#v", manifest)
+		}
+		// The other listed name, with the prefix, enrolls under the same token.
+		_, secondCSR := keyCSR(t)
+		n, second := h.enroll(secret, "scope-b", fmt.Sprintf("%x", serial()), secondCSR)
+		okay(t, n, second)
 	})
 	t.Run("editor-and-operator-restrictions", func(t *testing.T) {
 		for role, paths := range map[string][]string{"editor": {"/users", "/tokens", "/groups", "/deployments"}, "operator": {"/users", "/configurations"}} {

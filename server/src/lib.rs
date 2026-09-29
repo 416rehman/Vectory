@@ -16,6 +16,7 @@ pub mod detection;
 pub mod device;
 pub mod device_recovery_requests;
 pub mod device_revocation;
+pub mod enrollment_scope;
 pub mod error;
 pub mod fleet;
 pub mod group_requests;

@@ -1520,6 +1520,41 @@
                       }
                     ]
                   },
+                  "allowed_names": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 500,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "description": "Device names this token may enroll, each once. Normalized like enrollment names (trimmed, ASCII-lowercased); each must be a valid device name, distinct after normalization, and start with name_prefix when both are set."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "labels": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "maxProperties": 8,
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "description": "Labels every device this token enrolls receives. Keys are trimmed and lowercased to 1..63 of a-z 0-9 . - _ starting with a letter or digit; values are trimmed, 1..128 characters without control characters."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "request_id": {
                     "type": "string",
                     "format": "uuid"
@@ -19191,7 +19226,17 @@
             "type": "boolean"
           },
           "labels": {
-            "type": "object"
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           },
           "sync_paused": {
             "type": "boolean"
@@ -21546,6 +21591,41 @@
             "type": "string",
             "format": "date-time"
           },
+          "allowed_names": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "description": "Normalized preapproved device names. Only a device whose normalized name is listed can enroll, each name once. Present only on tokens created with a list."
+          },
+          "labels": {
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
+          },
+          "enrolled_names": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "maxItems": 500,
+            "description": "Token list only: preapproved names that already enrolled."
+          },
           "recovery_device_id": {
             "type": "string",
             "format": "uuid"
@@ -21718,6 +21798,32 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "allowed_names": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "description": "Normalized preapproved device names. Only a device whose normalized name is listed can enroll, each name once. Present only on tokens created with a list."
+          },
+          "labels": {
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           }
         },
         "required": [
@@ -22443,6 +22549,8 @@
                   "TOKEN_EXHAUSTED",
                   "NAME_TAKEN",
                   "NAME_PREFIX_MISMATCH",
+                  "NAME_NOT_PREAPPROVED",
+                  "NAME_ALREADY_ENROLLED",
                   "RECOVERY_NAME_MISMATCH",
                   "RECOVERY_TARGET_MISSING",
                   "REQUEST_MISMATCH",
@@ -26662,7 +26770,17 @@
             "type": "boolean"
           },
           "labels": {
-            "type": "object"
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           },
           "sync_paused": {
             "type": "boolean"

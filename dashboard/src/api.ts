@@ -1435,6 +1435,12 @@ export type Token = {
   name_prefix?: string | null;
   revoked: boolean;
   created_at: string;
+  /** Preapproved device names, each of which can enroll once. */
+  allowed_names?: string[];
+  /** Token list only: preapproved names that already enrolled. */
+  enrolled_names?: string[];
+  /** Labels every device the token enrolls receives. */
+  labels?: Record<string, string>;
   recovery_device_id?: string;
   recovery_name?: string;
   /** Usage added by the token list: who created it and what it enrolled. */

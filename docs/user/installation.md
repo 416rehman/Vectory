@@ -9,7 +9,7 @@ Install the Vectory agent on a host that runs Vector 0.58 (any patch release, su
 ## Before you start
 
 - **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
-- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
+- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**, where you can also list the device names it may enroll and labels for the devices it enrolls. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
 - **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
 

@@ -222,18 +222,9 @@ async fn enroll_inner(
         return Err(refused("TOKEN_UNKNOWN", None));
     }
     let request = db::string(v, "request_id", 128).map_err(|_| malformed())?;
-    let name = db::string(v, "name", 100)
-        .map_err(|_| malformed())?
-        .trim()
-        .to_ascii_lowercase();
-    if name.is_empty()
-        || !name.as_bytes()[0].is_ascii_alphanumeric()
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-    {
-        return Err(malformed());
-    }
+    let name =
+        crate::enrollment_scope::device_name(db::string(v, "name", 100).map_err(|_| malformed())?)
+            .ok_or_else(malformed)?;
     for field in ["os", "arch", "agent_version", "vector_version"] {
         db::string(v, field, 64).map_err(|_| malformed())?;
     }
@@ -269,6 +260,9 @@ async fn enroll_inner(
         .is_some_and(|prefix| !name.starts_with(prefix))
     {
         return Err(refused("NAME_PREFIX_MISMATCH", token_ref));
+    }
+    if let Some(reason) = crate::enrollment_scope::refusal(&record, &name) {
+        return Err(refused(reason, token_ref));
     }
     if record["recovery_name"]
         .as_str()
@@ -308,6 +302,8 @@ async fn enroll_inner(
     let id = db::id();
     let issued = s.keys.issue(&id, csr).map_err(|_| malformed())?;
     let mut device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"configuration_mode":mode,"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
+    // Descriptive labels from the token's scope; they grant nothing.
+    device["labels"] = crate::enrollment_scope::device_labels(&record);
     if let Some(kind) = service_manager(v) {
         // Setup says what will keep the agent running; "none" lets Add device
         // say so from the first check-in.
@@ -335,6 +331,7 @@ async fn enroll_inner(
         .bind(issued.response.to_string())
         .execute(&mut *tx)
         .await?;
+    crate::enrollment_scope::record_use(&mut record, &name);
     record["uses"] = json!(record["uses"].as_u64().unwrap_or(0) + 1);
     sqlx::query("UPDATE enrollment_tokens SET data=? WHERE id=?")
         .bind(record.to_string())
