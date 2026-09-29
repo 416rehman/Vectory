@@ -1,31 +1,62 @@
-# Platform help source
+# How the Help center works
 
-The platform help center is built with Astro Starlight in `help-center/` and served at `/help/` by the same Vectory instance. These Markdown files are the authored source. The prepare step generates frontmatter and rewrites legacy `#/docs/<topic>#<section>` links to stable help URLs; generated copies are ignored and must not be edited. The home page is authored in `help-center/home.md`.
+The Help center is an [Astro Starlight](https://starlight.astro.build/) site in `help-center/`, built from the Markdown in `docs/user/` and served by every Vectory server at `/help/`. It works offline: search, fonts and scripts all ship with the server.
 
-Guides cover onboarding, agent installation, visual pipeline editing and typed values, resources, deployment, monitoring, troubleshooting, administration, compatibility and concepts. API reference is a secondary developer appendix. Markdown tables, nested lists, headings, code copy, section links and full-text Pagefind search are supported. Generic docs and the search index are publicly available before sign-in, contain no instance/session data, and make no external runtime requests. External Vector references are clearly identified and may document a newer runtime than this release.
+For how to write pages, see [WRITING.md](WRITING.md).
 
-## Build and verify
+## Build
 
-Install the locked dependencies in both `dashboard/` and `help-center/` with `npm ci`. Run `npm run build` in `dashboard/` to build both applications. The help build copies its static output to `dashboard/dist/help` after Vite completes. It checks all internal article/section links, local HTML assets and explicitly declared application context links. Images, fonts, search, scripts and code examples ship locally.
+```sh
+(cd help-center && npm ci)
+(cd dashboard && npm ci && npm run build)   # builds the dashboard, then the Help center
+(cd help-center && npm run build)           # the Help center alone
+```
 
-Astro inline executable scripts are emitted as local content-addressed script files to retain the server's restrictive CSP. Only help responses permit WebAssembly compilation for Pagefind; ordinary dashboard and API policies are unchanged. The server provides canonical help redirects and real 404 responses. Docker/CI install both lockfiles; SPDX source/dependency inventory includes both.
+The build:
 
-Run `node help-center/tests/browser.mjs` from the repository root against the production bundle (default localhost:8080) for public search, section navigation, responsive layout, themes, copy, accessibility and security-header checks. Run `node help-center/tests/polish.mjs` for full-page Markdown, clipboard fallback, contextual navigation and navigation icons. Generator and link validation tests run with `node --test help-center/scripts/markdown.test.mjs help-center/scripts/check-links.test.mjs`. The dashboard's `e2e/help-center.spec.ts` verifies exact application destinations, preservation of unfinished editor input, and old guide bookmarks. Run `node docs/user/verify-browser.mjs` for the help suite plus the separate API reference checks. Reports identify their actual scope.
+1. Reads `help-center/pages.mjs`, the page list and sidebar. Each page's sidebar label is its own H1.
+2. Turns each `docs/user/<page>.md` into an MDX page, converting GitHub alerts, `<!-- steps -->`, `<!-- tabs -->` and `<!-- diagram -->` into components, and removing maintainer comments.
+3. Writes the plain Markdown copy of each page to `/help/_markdown/<page>.md` (used by **Copy as Markdown**) and an index of them to `/help/llms.txt`.
+4. Builds the site and its Pagefind search index.
+5. Moves Astro's inline scripts into files under `/help/_scripts/`, so pages work under the server's `script-src 'self'` policy. Only `/help/` responses allow WebAssembly, for search.
+6. Checks every link, then copies the site to `dashboard/dist/help/`.
 
-For a clean integration fixture, build the Rust server and run `node help-center/tests/ci.mjs`. It starts its own loopback server, bootstraps a synthetic account, runs public, polish and contextual-help checks, then removes the temporary identity and state. It does not need or use the preview's private credentials. CI runs this harness; outputs are kept under `artifacts/help-ci` by default. Set `VECTORY_HELP_SERVER` to use another built server path.
+The Docker image builds the Help center from `docs/user/`, `help-center/` and `contracts/` only, so the build must not read other folders.
 
-## Contextual help
+## Links from the dashboard
 
-`DocLink` supports a topic and optional section. Links open a separate tab with an accessible label, preserving the canvas selection, draft and even invalid field text. Normal application navigation keeps its existing unsaved-change guard. Old `#/docs/` bookmarks resolve to the new help center. Use stable heading names for linked sections; changing one must update its callers. Keep short explanations inside the application so users can understand a control before opening a longer procedure.
+The dashboard links into the Help center in three ways, and the build checks all of them:
 
-When help is opened from a pipeline, only its UUID follows help navigation and search results. Application links return to that pipeline in the help tab; the original editor stays open. Without a pipeline context, a settings/history/details link opens a pipeline chooser. Use ordinary Markdown links such as `[Pipeline settings](/#/configurations?panel=settings)` and `[Secrets](/#/configurations?panel=settings&section=secret)`. Panels and sections are explicitly allowlisted. Navigation opens a view; saving, publishing, deploying and running tests still require their normal application actions. If a dialog is already open, a pending destination waits until it closes.
+- `<DocLink topic="..." section="...">` for a term or setting.
+- `<HelpLink topic="..." section="..." />` and page headers' `help={{ topic, section }}` for a page's (?) button.
+- Plain `/help/<page>/#<section>` paths.
 
-## Page presentation and Markdown
+`topic` is a page slug and `section` a heading anchor. Help opens in a new tab, so an unsaved pipeline stays untouched. When opened from a pipeline, only that pipeline's ID follows help navigation (`?pipeline=<uuid>`), so app links in a page, such as `/#/configurations?panel=settings`, open that pipeline. Markdown copies never contain it.
 
-Navigation uses locally bundled outline icons alongside text labels and Vectory's existing typography, cobalt accent and light/dark colors. Article breadcrumbs derive their section from the same Starlight sidebar configuration. Each article and the home page provide **Copy as Markdown** and **View Markdown**. The build emits complete canonical Markdown at `/help/_markdown/<topic>.md`, with the home page at `/help/_markdown/index.md`; these files have no frontmatter, application state or pipeline context. Markdown links retain usable canonical destinations, while code examples remain unchanged. Copy failures show a selectable full-page fallback instead of reporting success. New generated guide entries receive these actions automatically.
+### Moving a section
 
-## API appendix
+Old anchors must keep working. When a heading changes or moves, add the old anchor to `help-center/legacy-anchors.json`:
 
-`api-reference.html` remains built with the official Scalar API Reference React package and the actual `contracts/openapi.json`. Dashboard requests use the current session and CSRF token; redirects, foreign origins and agent requests are rejected by its fetch adapter. Agent protocol documentation remains read-only. It is a separate developer tool, not the platform help engine.
+```json
+{ "installation": { "upgrade-an-existing-agent": "agents#upgrade-the-agent" } }
+```
 
-Sources: [Starlight](https://starlight.astro.build/), [Pagefind search](https://starlight.astro.build/guides/site-search/), [Scalar API Reference](https://scalar.com/products/api-references/integrations/react).
+A small script on every page follows these entries, keeping the pipeline context. The build fails if an entry points to a missing section, or shadows an anchor that still exists, so the map can't rot. Update the dashboard's link to the new anchor when you can.
+
+## Tests
+
+```sh
+node --test help-center/scripts/*.test.mjs   # rendering, links, lint and reference drift
+node help-center/tests/ci.mjs                # the built site on a disposable server
+```
+
+- `markdown.test.mjs`: rendering hints, Markdown copies and `llms.txt`.
+- `check-links.test.mjs`: the link checker and legacy anchors.
+- `docs-lint.test.mjs`: the writing rules that can be checked mechanically.
+- `reference.test.mjs`: [Server configuration](../user/server-config.md) and [Agent CLI](../user/cli.md) must name every variable, command and flag the code defines.
+- `tests/ci.mjs` starts its own loopback server with a fresh account, then runs `tests/browser.mjs` (search, navigation, themes, 375-pixel layout, accessibility, security headers), `tests/polish.mjs` (Markdown copies, clipboard fallback, pipeline context) and the dashboard's contextual-help tests. It needs `server/target/debug/vectory-server`.
+- `tests/api-reference.mjs` checks the separate API reference at `/api-reference.html` with a signed-in session.
+
+## API reference
+
+`/api-reference.html` is a separate page built from `contracts/openapi.json` with the Scalar API reference component (`dashboard/src/ScalarReference.tsx`). `contracts/generate.mjs` groups operations by resource, gives each a short name and states the session authentication. Requests from the page go only to the same server.
