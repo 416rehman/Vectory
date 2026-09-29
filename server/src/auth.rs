@@ -458,25 +458,6 @@ async fn initialized(s: &State) -> Result<bool> {
         .await?;
     Ok(n > 0)
 }
-/// Log once at startup when the instance still needs its first administrator.
-pub async fn announce_setup(s: &State, listener: &str) {
-    if initialized(s).await.unwrap_or(true) {
-        return;
-    }
-    let hint = setup_hint();
-    let source = match hint["source"].as_str() {
-        Some("file") => format!(
-            "the file {} (VECTORY_BOOTSTRAP_SECRET_FILE)",
-            hint["path"].as_str().unwrap_or("")
-        ),
-        Some("environment") => "VECTORY_BOOTSTRAP_SECRET".to_owned(),
-        _ => "the configured bootstrap secret".to_owned(),
-    };
-    tracing::info!(
-        %listener,
-        "Vectory is not set up yet. Open the dashboard and paste the setup secret from {source} to create the first administrator."
-    );
-}
 pub async fn status(AppState(s): AppState<State>) -> Result<Json<Value>> {
     let initialized = initialized(&s).await?;
     let mut out = json!({

@@ -184,7 +184,6 @@ async fn main() -> anyhow::Result<()> {
     let app =
         api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
-    vectory_server::auth::announce_setup(&state, &web_addr).await;
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
         tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state,&agent_addr,&cert,&key)=>{result?},_=tokio::signal::ctrl_c()=>{}}
     } else {
