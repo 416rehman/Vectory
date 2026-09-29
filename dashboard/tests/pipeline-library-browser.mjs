@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { configuredChannels } from "./notification-fixtures.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -128,6 +129,8 @@ await context.route("**/api/v1/**", async (route) => {
     });
   // The Overview's first-run checklist asks whether agent downloads exist.
   if (path === "/releases") return reply([]);
+  // An administrator's Overview asks whether a notification channel exists.
+  if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/configurations/library" && method === "GET") {
     const query = Object.fromEntries(url.searchParams);
     requests.push(query);

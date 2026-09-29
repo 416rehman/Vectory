@@ -6,6 +6,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
+import { configuredChannels } from "./notification-fixtures.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -389,6 +390,9 @@ async function open(options = {}) {
     requests.push({ method: req.method(), path: path + url.search });
     if (req.method() === "GET" && path === "/overview")
       return route.fulfill({ json: state.overview });
+    // An administrator's Overview asks whether a notification channel exists.
+    if (req.method() === "GET" && path === "/notifications/channels")
+      return route.fulfill({ json: configuredChannels });
     if (req.method() === "GET" && path === "/telemetry/summary")
       return state.summary
         ? route.fulfill({ json: state.summary })

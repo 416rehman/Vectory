@@ -35,6 +35,7 @@ import { leadingDiagnostic } from "./runtimeModel";
 import { isDataPlaneCode, issueDispositions } from "./status";
 import "./control.css";
 import "./issues.css";
+import NotificationsHint from "./NotificationsHint";
 import type { Notify } from "./toast";
 
 const issueTime = (value: string | null) =>
@@ -296,6 +297,7 @@ export default function Issues({
           onRefresh: () => void active.reload(),
         }}
       />
+      <NotificationsHint user={user} placement="page" />
       <div className="control-toolbar issue-toolbar">
         <SearchBox
           value={search}

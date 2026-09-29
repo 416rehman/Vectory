@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import net from "node:net";
+import { configuredChannels } from "./notification-fixtures.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -152,6 +153,8 @@ await context.route("**/*", async (route) => {
   if (path === "/mfa") return reply({ enabled: false });
   if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/users") return reply([user]);
+  // An administrator's Overview and Issues ask whether a notification channel exists.
+  if (path === "/notifications/channels") return reply(configuredChannels);
   // A server without the fleet summary answers 404; the Overview falls back.
   if (path === "/telemetry/summary")
     return route.fulfill({
