@@ -239,6 +239,7 @@ try {
     "archived_at",
     "component_counts",
     "latest_version",
+    "assigned_devices",
   ].sort();
   function projection(page) {
     assert(page.items.length <= 50);
@@ -250,12 +251,22 @@ try {
         transforms: 0,
         sinks: 1,
       });
-      if (item.latest_version)
+      assert(Number.isSafeInteger(item.assigned_devices));
+      assert(item.assigned_devices >= 0);
+      if (item.latest_version) {
         assert.deepEqual(Object.keys(item.latest_version).sort(), [
+          "author",
           "created_at",
+          "draft_changed",
           "id",
           "number",
         ]);
+        assert.equal(typeof item.latest_version.draft_changed, "boolean");
+        assert(
+          item.latest_version.author === null ||
+            item.latest_version.author.length <= 240,
+        );
+      }
     }
   }
   const route = (values) =>

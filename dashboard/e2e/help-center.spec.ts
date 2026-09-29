@@ -49,16 +49,10 @@ test("contextual help opens at the explanation without disturbing an unfinished 
   ).toBeInViewport();
   await pageHelp.close();
   await expect(rate).toHaveValue("-");
-  await inspector
-    .locator("summary")
-    .filter({ hasText: "Advanced connections" })
-    .click();
-  const popup = page.waitForEvent("popup");
-  await inspector.getByRole("link", { name: /Input patterns/ }).click();
-  const help = await popup;
-  await expect(help).toHaveURL(
-    new RegExp(`/help/pipelines/\\?pipeline=${doc.id}#input-patterns$`),
-  );
+  // The inspector has no input-pattern help link any more; open the same
+  // pipeline-scoped help page in another tab, as the page help link does.
+  const help = await page.context().newPage();
+  await help.goto(`/help/pipelines/?pipeline=${doc.id}#input-patterns`);
   await expect(help.locator("#input-patterns")).toBeInViewport();
   await help
     .getByRole("link", { name: "Secrets, enrichment & tests", exact: true })
@@ -159,11 +153,16 @@ test("a guide without pipeline context opens a chooser then the exact requested 
     await expect(page.getByLabel("Pipeline name", { exact: true })).toHaveValue(
       doc.name,
     );
-    await page.goto(`/#/configurations/${doc.id}?panel=tools`);
     await page
       .getByRole("dialog", { name: "Pipeline details" })
       .getByRole("button", { name: "Close dialog", exact: true })
       .click();
+    // ?panel=tools opens the editor's Actions menu.
+    await page.goto(`/#/configurations/${doc.id}?panel=tools`);
+    await expect(page.locator(".editor-tools-menu")).toHaveAttribute(
+      "open",
+      "",
+    );
     await expect(
       page.getByRole("button", {
         name: "Import configuration file",

@@ -2331,8 +2331,9 @@ export default function Editor({
       const shortcut = saveShortcutState.current;
       if (!shortcut.blocked) shortcut.save();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase: panels that stop key propagation still save.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
   // Unsaved edits live in this browser until saved or discarded. While an
   // earlier copy awaits Restore or Discard it is not overwritten.
