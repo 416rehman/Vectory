@@ -71,7 +71,7 @@ async fn pinned_vector_confirms_known_option_failures() {
     }
 }
 #[tokio::test]
-async fn legacy_worker_cannot_claim_file_path_static_check() {
+async fn outdated_worker_replies_are_refused() {
     use axum::{Json, Router, routing::post};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -81,7 +81,7 @@ async fn legacy_worker_cannot_claim_file_path_static_check() {
             Router::new().route(
                 "/validate",
                 post(|| async {
-                    Json(json!({"valid":true,"vector_validated":false,"deferred":true,"vector_version":"0.58.0","errors":[],"warnings":[]}))
+                    Json(json!({"valid":true,"vector_validated":true,"static_checked":true,"vector_version":"0.58.0","errors":[],"warnings":[]}))
                 }),
             ),
         )
@@ -105,19 +105,19 @@ async fn legacy_worker_cannot_claim_file_path_static_check() {
     let result = vectory_server::validation::validate_isolated(&state, &config)
         .await
         .unwrap();
+    // A reply without the structured protocol is never a completed check.
     assert_eq!(result["valid"], false, "{result}");
-    assert_eq!(result["deferred"], true);
+    assert_eq!(result["static_checked"], false);
     assert_eq!(result["vector_validated"], false);
-    assert!(result.get("static_checked").is_none());
+    assert!(
+        result["errors"]
+            .to_string()
+            .contains("publication is blocked")
+    );
     worker.abort();
 }
 
-#[tokio::test]
-async fn real_vector_worker_accepts_and_rejects_configuration() {
-    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
-        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; native validator execution unverified");
-        return;
-    };
+async fn start_worker(vector: &str) -> (tokio::process::Child, String, reqwest::Client) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
@@ -127,87 +127,48 @@ async fn real_vector_worker_accepts_and_rejects_configuration() {
         .env("VECTORY_VECTOR_BINARY", vector)
         .env("VECTORY_VALIDATOR_ADDR", addr.to_string())
         .kill_on_drop(true);
-    let mut child = worker.spawn().unwrap();
+    let child = worker.spawn().unwrap();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
     let url = format!("http://{addr}");
-    let mut ready = false;
-    for _ in 0..50 {
+    for _ in 0..100 {
         if client.get(format!("{url}/health")).send().await.is_ok() {
-            ready = true;
-            break;
+            return (child, url, client);
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    assert!(ready, "worker did not start");
-    let config = json!({"sources":{"sample":{"type":"demo_logs","format":"json"}},"sinks":{"console":{"type":"console","inputs":["sample"],"encoding":{"codec":"json"}}}});
-    let accepted: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":config}))
+    panic!("worker did not start");
+}
+
+async fn post(
+    client: &reqwest::Client,
+    url: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    client
+        .post(format!("{url}/{path}"))
+        .json(&body)
         .send()
         .await
         .unwrap()
         .json()
         .await
-        .unwrap();
-    assert_eq!(accepted["valid"], true, "{accepted}");
-    assert_eq!(accepted["vector_validated"], true);
-    let invalid = json!({"sources":{"sample":{"type":"demo_logs","format":"json"}},"transforms":{"broken":{"type":"remap","inputs":["sample"],"source":"THIS IS NOT VALID VRL!!!"}},"sinks":{"console":{"type":"console","inputs":["broken"],"encoding":{"codec":"json"}}}});
-    let rejected: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":invalid}))
-        .send()
-        .await
         .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(rejected["valid"], false, "{rejected}");
-    assert_eq!(rejected["vector_validated"], false);
-    assert_eq!(
-        rejected["native_issue"]["code"], "VRL_COMPILE_ERROR",
-        "{rejected}"
-    );
-    assert!(rejected["errors"].to_string().contains("transforms.broken"));
-    assert!(!rejected.to_string().contains("THIS IS NOT"));
-    let mut fixture_path = invalid.clone();
-    fixture_path["tests"] = json!([{"name":"Synthetic path is event data","inputs":[{"insert_at":"broken","type":"log","log_fields":{"path":"/synthetic/event.jsonl"}}],"outputs":[{"extract_from":"broken","conditions":[{"type":"vrl","source":"true"}]}]}]);
-    let fixture_rejected: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":fixture_path}))
-        .send()
-        .await
+}
+
+fn diagnostic<'a>(result: &'a serde_json::Value, component: &str) -> &'a serde_json::Value {
+    result["diagnostics"]
+        .as_array()
         .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(fixture_rejected["valid"], false, "{fixture_rejected}");
-    assert_ne!(fixture_rejected["deferred"], true);
-    assert!(!fixture_rejected.to_string().contains("THIS IS NOT"));
-    // A file sink needs its final path checked on the device, but must not
-    // suppress independent static checks such as VRL compilation.
-    let path_fixture = tempfile::tempdir().unwrap();
-    let path_only = path_fixture
-        .path()
-        .join("vectory-native-validation-only.jsonl")
-        .to_string_lossy()
-        .to_string();
-    let mut with_path = json!({"sources":{"sample":{"type":"demo_logs","format":"json"}},"transforms":{"normalize":{"type":"remap","inputs":["sample"],"source":".ok = true"}},"sinks":{"out":{"type":"file","inputs":["normalize"],"path":path_only,"encoding":{"codec":"json"}}}});
-    let path_checked: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":with_path}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(path_checked["valid"], true, "{path_checked}");
-    assert_eq!(path_checked["static_checked"], true, "{path_checked}");
-    assert_eq!(path_checked["deferred"], true);
-    assert_eq!(path_checked["vector_validated"], false);
+        .iter()
+        .find(|d| d["component"] == component && d["severity"] == "error")
+        .unwrap_or_else(|| panic!("no error for {component}: {result}"))
+}
+
+async fn public_state(url: &str) -> (tempfile::TempDir, vectory_server::State) {
     let isolated_state = tempfile::tempdir().unwrap();
     let state = vectory_server::initialize(vectory_server::Settings {
         data_dir: isolated_state.path().join("state"),
@@ -216,224 +177,247 @@ async fn real_vector_worker_accepts_and_rejects_configuration() {
         dashboard_dir: isolated_state.path().join("dist"),
         releases_dir: isolated_state.path().join("releases"),
         instance_name: "Native validation test".into(),
-        validation_url: Some(url.clone()),
+        validation_url: Some(url.to_owned()),
         ..Default::default()
     })
     .await
     .unwrap();
-    let public_checked = vectory_server::validation::validate_isolated(&state, &with_path)
+    (isolated_state, state)
+}
+
+#[tokio::test]
+async fn real_vector_worker_reports_precise_diagnostics() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; native validator execution unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    let config = json!({"sources":{"sample":{"type":"demo_logs","format":"json"}},"sinks":{"console":{"type":"console","inputs":["sample"],"encoding":{"codec":"json"}}}});
+    let accepted = post(&client, &url, "validate", json!({"config":config})).await;
+    assert_eq!(accepted["valid"], true, "{accepted}");
+    assert_eq!(accepted["static_checked"], true);
+    assert_eq!(accepted["worker_protocol"], 2);
+    let (_state_dir, state) = public_state(&url).await;
+    let public = vectory_server::validation::validate_isolated(&state, &config)
         .await
         .unwrap();
-    assert_eq!(public_checked["valid"], true, "{public_checked}");
-    assert_eq!(public_checked["deferred"], true);
-    assert_eq!(public_checked["vector_validated"], false);
-    assert!(public_checked.get("static_checked").is_none());
-    with_path["transforms"]["normalize"]["source"] = json!("THIS IS NOT VALID VRL!!!");
-    let path_rejected: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":with_path}))
-        .send()
+    assert_eq!(public["valid"], true, "{public}");
+    assert_eq!(public["vector_validated"], true);
+    assert_eq!(public["deferred"], false);
+    assert_eq!(public["warnings"], json!([]));
+
+    // Every VRL error is reported with its location, route output and Vector's fix.
+    let nginx = json!({
+        "data_dir":"/var/lib/vector",
+        "sources":{"file":{"type":"file","include":["/var/log/nginx/access.log"]}},
+        "transforms":{
+            "parse":{"type":"remap","inputs":["file"],"source":". = parse_nginx_log(.message, \"combined\")"},
+            "by_status":{"type":"route","inputs":["parse"],"route":{"server_errors":".status >= 500","client_errors":".status >= 400 && .status < 500"}}
+        },
+        "sinks":{
+            "loki":{"type":"loki","inputs":["by_status.server_errors"],"endpoint":"http://127.0.0.1:3100","encoding":{"codec":"json"},"labels":{"source":"vector"}},
+            "archive":{"type":"aws_s3","inputs":["by_status.client_errors"],"bucket":"logs","region":"us-east-1","encoding":{"codec":"json"},"compression":"gzip"}
+        }
+    });
+    let rejected = vectory_server::validation::validate_isolated(&state, &nginx)
         .await
+        .unwrap();
+    assert_eq!(rejected["valid"], false, "{rejected}");
+    assert_eq!(rejected["static_checked"], true);
+    let parse = diagnostic(&rejected, "parse");
+    assert_eq!(parse["code"], "E103");
+    assert_eq!(
+        (parse["line"].clone(), parse["column"].clone()),
+        (json!(1), json!(5))
+    );
+    assert_eq!(parse["field"], "source");
+    assert_eq!(
+        parse["fix"]["replacement"],
+        "parse_nginx_log!(.message, \"combined\")"
+    );
+    let conditions: Vec<&serde_json::Value> = rejected["diagnostics"]
+        .as_array()
         .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(path_rejected["valid"], false, "{path_rejected}");
-    assert_eq!(path_rejected["static_checked"], true, "{path_rejected}");
-    assert_eq!(path_rejected["deferred"], true);
-    assert!(!path_rejected.to_string().contains("THIS IS NOT"));
-    let public_rejected = vectory_server::validation::validate_isolated(&state, &with_path)
-        .await
-        .unwrap();
-    assert_eq!(public_rejected["valid"], false, "{public_rejected}");
-    assert_eq!(public_rejected["deferred"], true);
-    assert_eq!(public_rejected["vector_validated"], false);
+        .iter()
+        .filter(|d| d["component"] == "by_status" && d["severity"] == "error")
+        .collect();
+    assert_eq!(conditions.len(), 3, "{rejected}");
     assert!(
-        public_rejected["errors"]
-            .to_string()
-            .contains("transforms.normalize")
+        conditions
+            .iter()
+            .any(|d| d["route_output"] == "server_errors"
+                && d["fix"]["replacement"] == "(.status >= 500) ?? false")
     );
-    assert!(public_rejected.get("static_checked").is_none());
-    assert!(!public_rejected.to_string().contains("THIS IS NOT"));
-    // Device-local paths (data_dir, file globs, TLS files) must not suppress VRL
-    // compilation: a fallible route condition is caught before publication.
-    let mut device_paths = json!({"data_dir":"/var/lib/vector","sources":{"logs":{"type":"file","include":["/var/log/app/*.log"]}},"transforms":{"by_status":{"type":"route","inputs":["logs"],"route":{"errors":".status >= 500"}}},"sinks":{"out":{"type":"http","inputs":["by_status.errors"],"uri":"https://collector.example.test/ingest","encoding":{"codec":"json"},"tls":{"ca_file":"/etc/vector/ca.pem"}}}});
-    let device_rejected = vectory_server::validation::validate_isolated(&state, &device_paths)
+    assert!(conditions.iter().all(|d| d["code"] == "E100"));
+    let mut fixed = nginx.clone();
+    fixed["transforms"]["parse"]["source"] = json!(". = parse_nginx_log!(.message, \"combined\")");
+    fixed["transforms"]["by_status"]["route"] = json!({"server_errors":"(.status >= 500) ?? false","client_errors":"(.status >= 400 && .status < 500) ?? false"});
+    let accepted = vectory_server::validation::validate_isolated(&state, &fixed)
         .await
         .unwrap();
-    assert_eq!(device_rejected["valid"], false, "{device_rejected}");
-    assert_eq!(device_rejected["deferred"], true);
+    assert_eq!(accepted["valid"], true, "{accepted}");
+    assert_eq!(
+        accepted["deferred"], true,
+        "device paths stay device checks"
+    );
+    assert_eq!(accepted["vector_validated"], false);
     assert!(
-        device_rejected["errors"]
+        accepted["diagnostics"]
             .to_string()
-            .contains("transforms.by_status"),
-        "{device_rejected}"
+            .contains("Events that match no route are dropped")
     );
-    device_paths["transforms"]["by_status"]["route"]["errors"] =
-        json!("(int(.status) ?? 0) >= 500");
-    let device_accepted = vectory_server::validation::validate_isolated(&state, &device_paths)
+
+    // Option errors surface together, not one per check.
+    let broken = json!({
+        "bogus_top_level": true,
+        "sources":{"input":{"type":"file"},"typo":{"type":"demo_logz"}},
+        "transforms":{"tag":{"type":"remap","inputs":["input","typo"],"source":".x = 1","drop_on_eror":true}},
+        "sinks":{"out":{"type":"blackhole","inputs":["tag"]}}
+    });
+    let all = post(&client, &url, "validate", json!({"config":broken})).await;
+    assert_eq!(all["valid"], false, "{all}");
+    for (component, code) in [
+        ("input", "missing_field"),
+        ("typo", "unknown_variant"),
+        ("tag", "unknown_field"),
+    ] {
+        assert_eq!(diagnostic(&all, component)["code"], code, "{all}");
+    }
+    assert!(all["diagnostics"].to_string().contains("bogus_top_level"));
+    assert_eq!(
+        diagnostic(&all, "tag")["hint"],
+        "Did you mean `drop_on_error`?"
+    );
+
+    // Secrets and environment references no longer skip Vector: placeholders
+    // keep static checks running, so a logs→metrics mismatch is still caught.
+    let secrets = json!({
+        "secret":{"vault":{"type":"exec","command":["SHOULD_NEVER_EXECUTE"]}},
+        "sources":{"otel":{"type":"opentelemetry","grpc":{"address":"0.0.0.0:${OTLP_GRPC_PORT}"},"http":{"address":"${OTLP_HTTP}"}}},
+        "sinks":{"datadog":{"type":"datadog_metrics","inputs":["otel.logs"],"default_api_key":"SECRET[vault.dd_key]"}}
+    });
+    let mismatch = vectory_server::validation::validate_isolated(&state, &secrets)
         .await
         .unwrap();
-    assert_eq!(device_accepted["valid"], true, "{device_accepted}");
-    assert_eq!(device_accepted["deferred"], true);
-    assert_eq!(device_accepted["vector_validated"], false);
-    let unknown: serde_json::Value = client.post(format!("{url}/validate")).json(&json!({"config":{"sources":{"input":{"type":"not_a_real_vector_type"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}}})).send().await.unwrap().json().await.unwrap();
+    assert_eq!(mismatch["valid"], false, "{mismatch}");
+    assert_eq!(diagnostic(&mismatch, "datadog")["code"], "type_mismatch");
+    assert_eq!(mismatch["deferred"], true);
+    assert_eq!(
+        mismatch["placeholders"],
+        json!(["${OTLP_GRPC_PORT}", "${OTLP_HTTP}", "SECRET[vault.dd_key]"])
+    );
+    assert!(!mismatch.to_string().contains("SHOULD_NEVER"));
+
+    let unknown = post(&client, &url, "validate", json!({"config":{"sources":{"input":{"type":"not_a_real_vector_type"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}}})).await;
     assert_eq!(
         unknown["valid"], false,
         "Unknown types must not be silently deferred"
     );
-    assert_eq!(
-        unknown["native_issue"]["code"], "UNKNOWN_VARIANT",
-        "{unknown}"
-    );
-    assert!(unknown["errors"].to_string().contains("sources.input"));
-    assert_ne!(unknown["deferred"], true);
-    let missing: serde_json::Value = client
-        .post(format!("{url}/validate"))
-        .json(&json!({"config":{"sources":{"input":{"type":"file"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}}}))
-        .send().await.unwrap().json().await.unwrap();
-    assert_eq!(missing["valid"], false, "{missing}");
-    assert_eq!(
-        missing["native_issue"],
-        json!({"code":"REQUIRED_FIELD","section":"sources","component":"input","field":"include"})
-    );
-    assert!(
-        missing["errors"]
-            .to_string()
-            .contains("required setting `include`")
-    );
-    let platform: serde_json::Value = client.post(format!("{url}/validate")).json(&json!({"config":{"sources":{"input":{"type":"journald"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}}})).send().await.unwrap().json().await.unwrap();
-    assert_eq!(platform["valid"], true);
+    assert_eq!(diagnostic(&unknown, "input")["code"], "unknown_variant");
+
+    let platform = vectory_server::validation::validate_isolated(&state, &json!({"sources":{"input":{"type":"journald"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}})).await.unwrap();
+    assert_eq!(platform["valid"], true, "{platform}");
     assert_eq!(platform["deferred"], true);
     assert!(
         platform["deferred_reasons"]
             .to_string()
             .contains("platform-specific source journald")
     );
-    // The six pinned Unix transport projections all require a device-local path.
-    // They must not be rejected by a Windows worker or reported as native-validated.
-    // This establishes truthful deferral, not Unix runtime compatibility.
-    for (kind, component, mode) in [
-        ("sources", "socket", "unix_datagram"),
-        ("sources", "socket", "unix_stream"),
-        ("sources", "syslog", "unix"),
-        ("sources", "fluent", "unix"),
-        ("sources", "statsd", "unix"),
-        ("sinks", "statsd", "unix"),
-    ] {
-        let mut projected = if kind == "sources" {
-            json!({"sources":{"input":{"type":component,"mode":mode,"path":"/tmp/vectory-review.sock"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}})
-        } else {
-            json!({"sources":{"input":{"type":"internal_metrics"}},"sinks":{"out":{"type":component,"mode":mode,"path":"/tmp/vectory-review.sock","inputs":["input"]}}})
-        };
-        for endpoint in ["validate", "tests"] {
-            let deferred: serde_json::Value = client
-                .post(format!("{url}/{endpoint}"))
-                .json(&json!({"config":projected}))
-                .send()
-                .await
-                .unwrap()
-                .json()
-                .await
-                .unwrap();
-            assert_eq!(
-                deferred["deferred"], true,
-                "{kind}/{component}/{mode}: {deferred}"
-            );
-            assert_eq!(deferred["vector_validated"], false);
-            assert_eq!(deferred["valid"], endpoint == "validate");
-            assert_eq!(
-                deferred["deferred_reasons"],
-                json!(["device-local paths or external code files"])
-            );
-            if endpoint == "tests" {
-                assert_eq!(deferred["tests_run"], false);
-            }
-        }
-        let id = if kind == "sources" { "input" } else { "out" };
-        projected[kind][id].as_object_mut().unwrap().remove("path");
-        assert!(
-            !vectory_server::validation::needs_device_context(&projected),
-            "A transport mode alone must not hide missing required fields from native validation"
-        );
-    }
-    let transformed:serde_json::Value=client.post(format!("{url}/vrl-test")).json(&json!({"program":".message = upcase!(.message)","sample":{"message":"synthetic only"}})).send().await.unwrap().json().await.unwrap();
-    assert_eq!(transformed["valid"], true, "{transformed}");
-    assert_eq!(transformed["output"]["message"], "SYNTHETIC ONLY");
-    let denied: serde_json::Value = client
-        .post(format!("{url}/vrl-test"))
-        .json(&json!({"program":".secret = get_env_var!(\"SECRET\")","sample":{}}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(denied["valid"], false);
+
+    // Providers are never fetched and secret backends never executed.
+    let local = json!({"provider":{"type":"http","url":"http://127.0.0.1:1/SHOULD_NEVER_RESOLVE"},"secret":{"device":{"type":"exec","command":["SHOULD_NEVER_EXECUTE"]}}});
+    let deferred = post(&client, &url, "validate", json!({"config":local})).await;
+    assert_eq!(deferred["static_checked"], false);
+    assert!(!deferred.to_string().contains("SHOULD_NEVER"));
+    let tests = post(&client, &url, "tests", json!({"config":local})).await;
+    assert_eq!(tests["tests_run"], false);
+    child.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_vector_worker_runs_samples_and_tests() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; synthetic sample execution unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    // Timestamps are real JSON, not VRL literal syntax.
+    let parsed = post(&client, &url, "transform-test", json!({
+        "transform":{"type":"remap","source":". = parse_nginx_log!(.message, \"combined\")\n.checked_at = now()"},
+        "samples":[{"message":"127.0.0.1 - - [29/Sep/2026:01:02:03 +0000] \"GET /x HTTP/1.1\" 503 12 \"-\" \"curl\""},{"message":"not nginx"}]
+    })).await;
+    assert_eq!(parsed["compiled"], true, "{parsed}");
+    let event = &parsed["results"][0]["outputs"][0]["event"];
+    assert_eq!(event["status"], 503);
+    assert_eq!(event["timestamp"], "2026-09-29T01:02:03Z");
+    assert!(event["checked_at"].is_string());
+    assert_eq!(
+        parsed["results"][0]["outputs"][0]["timestamps"],
+        json!(["checked_at", "timestamp"])
+    );
+    assert_eq!(parsed["results"][1]["outcome"], "error");
+    assert_eq!(parsed["results"][1]["line"], 1);
+    let routed = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({
+            "transform":{"type":"route","route":{"errors":"(.status >= 500) ?? false"}},
+            "samples":[{"status":503},{"status":200}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        routed["results"][0]["outputs"][0]["port"], "errors",
+        "{routed}"
+    );
+    assert_eq!(routed["results"][1]["outputs"][0]["port"], "_unmatched");
+    let failing = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({
+            "transform":{"type":"filter","condition":".status >= 500"},
+            "samples":[{"status":503}]
+        }),
+    )
+    .await;
+    assert_eq!(failing["compiled"], false, "{failing}");
+    assert_eq!(failing["diagnostics"][0]["code"], "E100");
+    assert_eq!(failing["diagnostics"][0]["field"], "condition");
+    let legacy = post(&client, &url, "vrl-test", json!({"program":".message = upcase!(.message)\n.at = now()","sample":{"message":"synthetic only"}})).await;
+    assert_eq!(legacy["valid"], true, "{legacy}");
+    assert_eq!(legacy["output"]["message"], "SYNTHETIC ONLY");
+    let denied = post(
+        &client,
+        &url,
+        "vrl-test",
+        json!({"program":".secret = get_env_var!(\"SECRET\")","sample":{}}),
+    )
+    .await;
+    assert_eq!(
+        denied["valid"], false,
+        "The worker environment is empty: {denied}"
+    );
+
     let mut tested = json!({
         "timezone":"UTC","sources":{"sample_one":{"type":"demo_logs","format":"json"}},
         "transforms":{"normalize":{"type":"remap","inputs":["sample_*"],"source":".message = upcase!(.message)"}},
         "sinks":{"out":{"type":"blackhole","inputs":["normal*"]}},
-        "tests":[{"name":"Uppercase message","inputs":[{"insert_at":"normalize","type":"log","log_fields":{"message":"synthetic","path":"/synthetic/event.jsonl"}}],"outputs":[{"extract_from":"normalize","conditions":[{"type":"vrl","source":".message == \"SYNTHETIC\""}]}]}]
+        "tests":[{"name":"Uppercase message","inputs":[{"insert_at":"normalize","type":"log","log_fields":{"message":"synthetic"}}],"outputs":[{"extract_from":"normalize","conditions":[{"type":"vrl","source":"assert_eq!(.message, \"SYNTHETIC\")"}]}]}]
     });
-    let test_result: serde_json::Value = client
-        .post(format!("{url}/tests"))
-        .json(&json!({"config":tested}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(test_result["valid"], true, "{test_result}");
-    assert_eq!(test_result["tests_run"], true);
-    assert!(!test_result.to_string().contains("SYNTHETIC"));
-    let without_tests: serde_json::Value = client
-        .post(format!("{url}/tests"))
-        .json(&json!({"config":{"sources":{"sample_one":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["sample_one"]}}}}))
-        .send().await.unwrap().json().await.unwrap();
-    assert_eq!(without_tests["valid"], false);
-    assert_eq!(without_tests["tests_run"], false);
-    tested["tests"][0]["outputs"][0]["conditions"][0]["source"] =
-        json!(".message == \"INTENTIONAL_FAILED_EXPECTATION\"");
-    let failed: serde_json::Value = client
-        .post(format!("{url}/tests"))
-        .json(&json!({"config":tested}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(failed["valid"], false, "{failed}");
-    assert_eq!(failed["tests_run"], true);
+    let passed = post(&client, &url, "tests", json!({"config":tested})).await;
+    assert_eq!(passed["tests_run"], true, "{passed}");
     assert_eq!(
-        failed["native_issue"]["code"], "PIPELINE_TEST_FAILED",
-        "{failed}"
+        passed["tests"],
+        json!([{"name":"Uppercase message","passed":true}])
     );
-    assert!(
-        !failed
-            .to_string()
-            .contains("INTENTIONAL_FAILED_EXPECTATION")
-    );
-    let local = json!({"provider":{"type":"http","url":"http://127.0.0.1:1/SHOULD_NEVER_RESOLVE"},"secret":{"device":{"type":"exec","command":["SHOULD_NEVER_EXECUTE"]}}});
-    for endpoint in ["validate", "tests"] {
-        let deferred: serde_json::Value = client
-            .post(format!("{url}/{endpoint}"))
-            .json(&json!({"config":local}))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(deferred["deferred"], true, "{deferred}");
-        assert_eq!(deferred["vector_validated"], false);
-        assert!(!deferred.to_string().contains("SHOULD_NEVER"));
-        if endpoint == "tests" {
-            assert_eq!(deferred["tests_run"], false);
-            assert_eq!(deferred["valid"], false);
-        }
-    }
+    tested["tests"][0]["outputs"][0]["conditions"][0]["source"] =
+        json!("assert_eq!(.message, \"LOWER\", message: \"message should be LOWER\")");
+    let failed = post(&client, &url, "tests", json!({"config":tested})).await;
+    assert_eq!(failed["tests_run"], true, "{failed}");
+    assert_eq!(failed["tests"][0]["passed"], false);
+    assert_eq!(failed["tests"][0]["message"], "message should be LOWER");
+    assert_eq!(failed["tests"][0]["outputs"][0]["message"], "SYNTHETIC");
     child.kill().await.unwrap();
 }

@@ -586,14 +586,26 @@ fn base() -> Value {
 }
 
 #[tokio::test]
-async fn public_validation_and_test_routes_never_forward_worker_diagnostics() {
+async fn public_validation_and_test_routes_forward_only_sanitized_diagnostics() {
     use axum::{Json, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     let hostile = "SECRET_VALUE /private/host/path";
+    let forge = Arc::new(AtomicBool::new(false));
+    let forged = forge.clone();
     let worker = Router::new()
         .route(
             "/validate",
-            post(move || async move {
-                Json(json!({"valid":false,"vector_validated":false,"vector_version":"0.58.0","errors":[hostile],"warnings":[hostile],"native_issue":{"code":"REQUIRED_FIELD","section":"sources","component":"sample","field":"SECRET_VALUE","message":hostile}}))
+            post(move || {
+                let forged = forged.load(Ordering::SeqCst);
+                async move {
+                    let component = if forged { "not_in_the_draft" } else { "sample" };
+                    Json(json!({"worker_protocol":2,"valid":false,"static_checked":true,"vector_version":"0.58.0","stubbed":[],"placeholders":[],
+                        "errors":[hostile],"warnings":[hostile],"native_issue":{"message":hostile},
+                        "diagnostics":[{"severity":"error","section":"sources","component":component,"code":"missing_field","field":"format","message":"Required setting `format` is missing.","smuggled":hostile}]}))
+                }
             }),
         )
         .route(
@@ -602,16 +614,19 @@ async fn public_validation_and_test_routes_never_forward_worker_diagnostics() {
                 let has_tests = input["config"]["tests"]
                     .as_array()
                     .is_some_and(|tests| !tests.is_empty());
-                Json(json!({"valid":false,"tests_run":has_tests,"vector_version":"0.58.0","errors":[hostile],"warnings":[hostile],"output":hostile,"native_issue":{"code":"PIPELINE_TEST_FAILED"}}))
+                Json(json!({"worker_protocol":2,"tests_run":has_tests,"vector_version":"0.58.0","errors":[hostile],"warnings":[hostile],"output":hostile,"placeholders":[],"diagnostics":[],
+                    "tests":[{"name":"synthetic","passed":false,"message":"assertion failed","smuggled":hostile}]}))
             }),
         )
         .route(
-            "/vrl-test",
+            "/transform-test",
             post(move |Json(input): Json<Value>| async move {
-                if input["program"] == "fail" {
-                    Json(json!({"valid":false,"output":hostile,"errors":[hostile]}))
+                if input["transform"]["source"] == "fail" {
+                    Json(json!({"worker_protocol":2,"vector_version":"0.58.0","compiled":false,"output":hostile,"errors":[hostile],"results":[],"placeholders":[],
+                        "diagnostics":[{"severity":"error","code":"E203","message":"syntax error","line":1,"column":1,"length":4}]}))
                 } else {
-                    Json(json!({"valid":true,"output":{"ok":true},"errors":[]}))
+                    Json(json!({"worker_protocol":2,"vector_version":"0.58.0","compiled":true,"diagnostics":[],"placeholders":[],"errors":[hostile],
+                        "results":[{"sample":0,"outcome":"emitted","outputs":[{"port":"","event":{"ok":true},"timestamps":[]}]}]}))
                 }
             }),
         );
@@ -630,8 +645,27 @@ async fn public_validation_and_test_routes_never_forward_worker_diagnostics() {
     .await;
     assert_eq!(status, StatusCode::OK, "{checked}");
     assert_eq!(checked["valid"], false);
-    assert!(!checked.to_string().contains(hostile));
+    assert_eq!(checked["diagnostics"][0]["component"], "sample");
+    assert_eq!(checked["diagnostics"][0]["field"], "format");
+    assert!(!checked.to_string().contains(hostile), "{checked}");
     assert!(!checked.to_string().contains("native_issue"));
+    // A diagnostic about a component the draft doesn't have is a faulty worker.
+    forge.store(true, Ordering::SeqCst);
+    let (_, refused) = call(
+        &app,
+        "POST",
+        &path(&pipeline, "validate"),
+        json!({"config":base()}),
+        Some(&actor),
+    )
+    .await;
+    assert_eq!(refused["valid"], false);
+    assert!(
+        refused["errors"]
+            .to_string()
+            .contains("publication is blocked")
+    );
+    assert!(!refused.to_string().contains("not_in_the_draft"));
 
     let mut with_tests = base();
     with_tests["tests"] = json!([{"name":"synthetic","inputs":[{"insert_at":"sample","type":"log","log_fields":{"message":"example"}}],"outputs":[{"extract_from":"sample","conditions":["true"]}]}]);
@@ -646,8 +680,11 @@ async fn public_validation_and_test_routes_never_forward_worker_diagnostics() {
     assert_eq!(status, StatusCode::OK, "{tested}");
     assert_eq!(tested["tests_run"], true);
     assert_eq!(tested["valid"], false);
+    assert_eq!(
+        tested["tests"],
+        json!([{"name":"synthetic","passed":false,"message":"assertion failed"}])
+    );
     assert!(!tested.to_string().contains(hostile));
-    assert!(!tested.to_string().contains("native_issue"));
 
     let (status, empty) = call(
         &app,
@@ -677,10 +714,31 @@ async fn public_validation_and_test_routes_never_forward_worker_diagnostics() {
         assert!(!tested.to_string().contains(hostile));
         if expected_valid {
             assert_eq!(tested["output"], json!({"ok":true}));
+            assert_eq!(tested["results"][0]["outcome"], "emitted");
         } else {
             assert_eq!(tested["output"], Value::Null);
+            assert_eq!(tested["diagnostics"][0]["code"], "E203");
         }
     }
+    let (status, samples) = call(
+        &app,
+        "POST",
+        "/api/v1/vrl/test",
+        json!({"transform":{"type":"route","route":{"a":"true"}},"samples":[{"n":1}]}),
+        Some(&actor),
+    )
+    .await;
+    // The mock replies with the default port, which a route doesn't have.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{samples}");
+    let (status, unsupported) = call(
+        &app,
+        "POST",
+        "/api/v1/vrl/test",
+        json!({"transform":{"type":"lua","source":"x"},"samples":[{}]}),
+        Some(&actor),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unsupported}");
     worker_task.abort();
 }
 async fn create(app: &Router, actor: &Identity, name: &str) -> Value {
@@ -728,21 +786,23 @@ async fn configured_worker_outage_blocks_device_deferred_publication() {
             async move {
                 match mode {
                     0 => (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({}))),
+                    // A worker without the structured protocol is never trusted.
                     1 => (
                         StatusCode::OK,
                         axum::Json(json!({"valid":true,"deferred":false,"vector_validated":true,"vector_version":"0.58.0"})),
                     ),
+                    // A finding about a component the draft doesn't have is refused.
                     2 => (
                         StatusCode::OK,
-                        axum::Json(json!({"valid":true,"deferred":true,"deferred_reasons":["unrelated resource"],"vector_validated":false,"vector_version":"0.58.0"})),
+                        axum::Json(json!({"worker_protocol":2,"valid":true,"static_checked":true,"stubbed":[],"placeholders":[],"vector_version":"0.58.0","diagnostics":[{"severity":"warning","section":"sinks","component":"elsewhere","message":"x"}]})),
                     ),
                     3 => (
                         StatusCode::OK,
-                        axum::Json(json!({"valid":false,"vector_validated":false,"vector_version":"0.58.0"})),
+                        axum::Json(json!({"worker_protocol":2,"valid":false,"static_checked":true,"stubbed":[],"placeholders":[],"vector_version":"0.58.0","diagnostics":[{"severity":"error","section":"sources","component":"input","code":"invalid_value","message":"Isolated validator rejected the journald units."}]})),
                     ),
                     _ => (
                         StatusCode::OK,
-                        axum::Json(json!({"valid":true,"deferred":true,"deferred_reasons":["platform-specific source journald"],"vector_validated":false,"vector_version":"0.58.0"})),
+                        axum::Json(json!({"worker_protocol":2,"valid":true,"static_checked":true,"stubbed":[],"placeholders":[],"vector_version":"0.58.0","diagnostics":[]})),
                     ),
                 }
             }
@@ -794,9 +854,10 @@ async fn configured_worker_outage_blocks_device_deferred_publication() {
             assert!(
                 rejection
                     .to_string()
-                    .contains("Isolated validator rejected")
+                    .contains("sources.input: Isolated validator rejected")
             );
-            assert!(!rejection.to_string().contains("Vector rejected"));
+        } else {
+            assert!(rejection.to_string().contains("publication is blocked"));
         }
     }
     let (_, versions) = call(
@@ -813,6 +874,7 @@ async fn configured_worker_outage_blocks_device_deferred_publication() {
     let version = command(&app, &actor, &draft, "publish", json!({})).await;
     assert_eq!(version["validation"]["valid"], true);
     assert_eq!(version["validation"]["deferred"], true);
+    assert_eq!(version["validation"]["static_checked"], true);
     assert_eq!(version["validation"]["vector_validated"], false);
     assert!(
         version["validation"]["deferred_reasons"]
@@ -822,7 +884,7 @@ async fn configured_worker_outage_blocks_device_deferred_publication() {
     assert!(
         version["validation"]["warnings"]
             .to_string()
-            .contains("Native validation is deferred")
+            .contains("Each device checks the journald source's platform")
     );
     worker_task.abort();
 
@@ -833,6 +895,12 @@ async fn configured_worker_outage_blocks_device_deferred_publication() {
     assert_eq!(local["valid"], true);
     assert_eq!(local["deferred"], true);
     assert_eq!(local["vector_validated"], false);
+    assert_eq!(local["static_checked"], false);
+    assert!(
+        local["warnings"]
+            .to_string()
+            .contains("Only the pipeline structure was checked")
+    );
 }
 
 #[tokio::test]
@@ -1380,7 +1448,7 @@ async fn publication_rechecks_archive_after_delayed_validation() {
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (signal, wait) = (entered.clone(), release.clone());
-    let worker=Router::new().route("/validate",axum::routing::post(move || {let signal=signal.clone();let wait=wait.clone();async move {signal.notify_one();wait.notified().await;axum::Json(json!({"valid":true,"vector_validated":true,"errors":[],"warnings":[],"vector_version":"0.58.0"}))}}));
+    let worker=Router::new().route("/validate",axum::routing::post(move || {let signal=signal.clone();let wait=wait.clone();async move {signal.notify_one();wait.notified().await;axum::Json(json!({"worker_protocol":2,"valid":true,"static_checked":true,"stubbed":[],"placeholders":[],"diagnostics":[],"vector_version":"0.58.0"}))}}));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let worker_task = tokio::spawn(async move { axum::serve(listener, worker).await.unwrap() });

@@ -1,3 +1,4 @@
+use crate::vector_diagnostics::Diagnostic;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -6,348 +7,6 @@ use std::{
 
 pub const VECTOR_VERSION: &str = "0.58.0";
 
-// Native Vector diagnostics can contain configuration values, local paths, VRL
-// source, test events, and credentials. The isolated worker emits only these
-// categories and identifiers that are already present in the submitted config.
-// The API independently checks them before constructing public error text.
-fn diagnostic_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-}
-
-fn curated_field(section: &str, component_type: &str, field: &str) -> bool {
-    static FIELDS: OnceLock<BTreeSet<(String, String, String)>> = OnceLock::new();
-    FIELDS
-        .get_or_init(|| {
-            let catalog: Value =
-                serde_json::from_str(include_str!("../../vector-catalog/catalog.json"))
-                    .expect("pinned Vector component catalog must be JSON");
-            catalog["components"]
-                .as_array()
-                .expect("pinned Vector component catalog must have components")
-                .iter()
-                .flat_map(|component| {
-                    let section = component["kind"].as_str().unwrap_or("").to_owned();
-                    let kind = component["type"].as_str().unwrap_or("").to_owned();
-                    component["fields"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(move |field| (section.clone(), kind.clone(), field.to_owned()))
-                })
-                .collect()
-        })
-        .contains(&(
-            section.to_owned(),
-            component_type.to_owned(),
-            field.to_owned(),
-        ))
-}
-
-fn native_location(config: &Value, section: &str, component: &str) -> bool {
-    ["sources", "transforms", "sinks"].contains(&section)
-        && diagnostic_identifier(component)
-        && config[section].get(component).is_some()
-}
-
-/// Extract a bounded category from pinned Vector's output. Never copy a
-/// message, value, test name, event, or path from the native process.
-pub fn classify_native_issue(config: &Value, stdout: &[u8], stderr: &[u8], tests: bool) -> Value {
-    let output = [stdout, stderr]
-        .into_iter()
-        .filter_map(|bytes| std::str::from_utf8(bytes).ok())
-        .collect::<Vec<_>>();
-    if tests
-        && output
-            .iter()
-            .any(|part| part.lines().any(|line| line.trim() == "Running tests"))
-        && output.iter().any(|part| {
-            part.lines().any(|line| {
-                let line = line.trim();
-                line.starts_with("test ") && line.ends_with(" ... failed")
-            })
-        })
-    {
-        return json!({"code":"PIPELINE_TEST_FAILED"});
-    }
-    for part in &output {
-        let mut transform_errors = false;
-        let mut transform = None;
-        for line in part.lines() {
-            let line = line.trim();
-            if line == "Transform errors" {
-                transform_errors = true;
-                continue;
-            }
-            let Some(detail) = line.strip_prefix("x ") else {
-                continue;
-            };
-            if transform_errors {
-                if let Some(name) = detail
-                    .strip_prefix("Transform \"")
-                    .and_then(|text| text.split_once("\":").map(|(name, _)| name))
-                    && native_location(config, "transforms", name)
-                {
-                    transform = Some(name);
-                }
-                continue;
-            }
-            for section in ["sources", "transforms", "sinks"] {
-                let Some(rest) = detail
-                    .strip_prefix(section)
-                    .and_then(|text| text.strip_prefix('.'))
-                else {
-                    continue;
-                };
-                let Some((component, reason)) = rest.split_once(':') else {
-                    continue;
-                };
-                if !native_location(config, section, component) {
-                    continue;
-                }
-                let reason = reason.trim();
-                let code = if reason.starts_with("missing field `") {
-                    "REQUIRED_FIELD"
-                } else if reason.starts_with("unknown variant ") {
-                    "UNKNOWN_VARIANT"
-                } else if reason.starts_with("unknown field ") {
-                    "UNKNOWN_FIELD"
-                } else if reason.starts_with("invalid type") {
-                    "INVALID_TYPE"
-                } else if reason.starts_with("invalid value") {
-                    "INVALID_VALUE"
-                } else {
-                    continue;
-                };
-                let mut issue = json!({"code":code,"section":section,"component":component});
-                if code == "REQUIRED_FIELD"
-                    && let Some(field) = reason
-                        .strip_prefix("missing field `")
-                        .and_then(|text| text.split_once('`').map(|(field, _)| field))
-                    && diagnostic_identifier(field)
-                    && curated_field(
-                        section,
-                        config[section][component]["type"].as_str().unwrap_or(""),
-                        field,
-                    )
-                {
-                    issue["field"] = json!(field);
-                }
-                return issue;
-            }
-        }
-        if transform_errors {
-            if let Some(component) = transform {
-                return json!({"code":"VRL_COMPILE_ERROR","section":"transforms","component":component});
-            }
-            return json!({"code":"VRL_COMPILE_ERROR"});
-        }
-    }
-    Value::Null
-}
-
-/// Accept only a fixed category and an existing, conservatively named config
-/// location. This guards the public API even if a validator worker is faulty.
-pub fn public_native_issue(config: &Value, issue: &Value) -> Option<String> {
-    let object = issue.as_object()?;
-    if object
-        .keys()
-        .any(|key| !["code", "section", "component", "field"].contains(&key.as_str()))
-    {
-        return None;
-    }
-    let code = issue["code"].as_str()?;
-    if ![
-        "PIPELINE_TEST_FAILED",
-        "VRL_COMPILE_ERROR",
-        "REQUIRED_FIELD",
-        "UNKNOWN_VARIANT",
-        "UNKNOWN_FIELD",
-        "INVALID_TYPE",
-        "INVALID_VALUE",
-        "VALIDATION_TIMEOUT",
-        "VALIDATION_OUTPUT_LIMIT",
-    ]
-    .contains(&code)
-    {
-        return None;
-    }
-    let location = match (issue.get("section"), issue.get("component")) {
-        (None, None) => None,
-        (Some(section), Some(component)) => {
-            let (section, component) = (section.as_str()?, component.as_str()?);
-            if !native_location(config, section, component) {
-                return None;
-            }
-            if code == "VRL_COMPILE_ERROR" && section != "transforms" {
-                return None;
-            }
-            Some((section, component))
-        }
-        _ => return None,
-    };
-    if [
-        "PIPELINE_TEST_FAILED",
-        "VALIDATION_TIMEOUT",
-        "VALIDATION_OUTPUT_LIMIT",
-    ]
-    .contains(&code)
-        && location.is_some()
-    {
-        return None;
-    }
-    let field = match issue.get("field") {
-        Some(value) => {
-            let field = value.as_str()?;
-            let (section, component) = location?;
-            if code != "REQUIRED_FIELD"
-                || !diagnostic_identifier(field)
-                || config[section][component].get(field).is_some()
-                || !curated_field(
-                    section,
-                    config[section][component]["type"].as_str().unwrap_or(""),
-                    field,
-                )
-            {
-                return None;
-            }
-            Some(field)
-        }
-        None => None,
-    };
-    let at = location
-        .map(|(section, component)| format!("{section}.{component}: "))
-        .unwrap_or_default();
-    Some(match code {
-        "PIPELINE_TEST_FAILED" => "A Vector pipeline test assertion failed. Review its expected outputs and run the test locally for details.".into(),
-        "VRL_COMPILE_ERROR" => format!("{at}Vector could not compile a transform program. Review its VRL syntax and fallible operations."),
-        "REQUIRED_FIELD" => match field {
-            Some(field) => format!("{at}required setting `{field}` is missing."),
-            None => format!("{at}a required setting is missing."),
-        },
-        "UNKNOWN_VARIANT" => format!("{at}Vector {VECTOR_VERSION} does not recognize a component type or option value. Review the documented choices."),
-        "UNKNOWN_FIELD" => format!("{at}Vector {VECTOR_VERSION} does not recognize an option name. Review the component settings."),
-        "INVALID_TYPE" => format!("{at}an option has the wrong value type for Vector {VECTOR_VERSION}."),
-        "INVALID_VALUE" => format!("{at}an option value is invalid for Vector {VECTOR_VERSION}."),
-        "VALIDATION_TIMEOUT" => "Native Vector validation exceeded the isolated worker's five-second limit.".into(),
-        "VALIDATION_OUTPUT_LIMIT" => "Native Vector diagnostics exceeded the isolated worker's output limit.".into(),
-        _ => unreachable!(),
-    })
-}
-
-/// Rebuild the test response from safe fields. The validator is a separate
-/// process, and its raw diagnostics (including event payloads) are never a
-/// public API value, even when the worker itself returns an `errors` array.
-pub fn public_pipeline_test_result(config: &Value, worker: &Value) -> Option<Value> {
-    if worker["vector_version"] != VECTOR_VERSION {
-        return None;
-    }
-    // A worker must not claim that device-local checks were deferred while
-    // reporting a completed, passing pipeline test to the public API.
-    if worker
-        .get("deferred")
-        .is_some_and(|value| value != &Value::Bool(false))
-    {
-        return None;
-    }
-    let valid = worker["valid"].as_bool()?;
-    let tests_run = worker["tests_run"].as_bool()?;
-    let has_tests = config["tests"]
-        .as_array()
-        .is_some_and(|tests| !tests.is_empty());
-    if (valid
-        && (!tests_run
-            || !has_tests
-            || worker["errors"]
-                .as_array()
-                .is_none_or(|errors| !errors.is_empty())
-            || !worker["native_issue"].is_null()))
-        || (!has_tests && tests_run)
-    {
-        return None;
-    }
-    let native_message = if !tests_run && worker["native_issue"]["code"] == "PIPELINE_TEST_FAILED" {
-        None
-    } else {
-        public_native_issue(config, &worker["native_issue"])
-    };
-    let message = if !has_tests {
-        "Add at least one Vector pipeline test before running tests.".to_owned()
-    } else if tests_run {
-        native_message.unwrap_or_else(|| {
-            "Vector pipeline tests failed. Review the assertions and run local Vector for detailed diagnostics.".into()
-        })
-    } else {
-        native_message.unwrap_or_else(|| {
-            "The isolated Vector worker could not run pipeline tests. Review the configuration and try again.".into()
-        })
-    };
-    Some(json!({
-        "valid":valid,
-        "tests_run":tests_run,
-        "errors": if valid { Vec::<String>::new() } else { vec![message] },
-        "warnings": if tests_run { vec!["Tests ran in the isolated Vector worker. Each target device still validates its local environment before activation."] } else { vec![] },
-        "output":if valid { "Vector pipeline tests passed." } else if tests_run { "Vector pipeline tests failed." } else { "Vector pipeline tests did not run." },
-        "deferred":false,
-        "vector_version":VECTOR_VERSION,
-    }))
-}
-/// Turn `vector vrl` stderr into a bounded plain-text diagnostic. The program
-/// and sample are the caller's own synthetic input, so the compiler's message
-/// (code, span, hint) is safe to return; process log lines and terminal escape
-/// sequences are removed and output is capped.
-pub fn vrl_diagnostic(stderr: &[u8]) -> Option<String> {
-    const LIMIT: usize = 4000;
-    let text = String::from_utf8_lossy(stderr);
-    let mut plain = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c in chars.by_ref() {
-                    if c.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        if ch == '\n' || ch == '\t' || !ch.is_control() {
-            plain.push(ch);
-        }
-    }
-    let lines: Vec<&str> = plain
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            // Drop Vector's own tracing lines, e.g. `2026-...Z  INFO vector::app: ...`.
-            !(trimmed.len() > 20
-                && trimmed.as_bytes()[..4].iter().all(u8::is_ascii_digit)
-                && trimmed.as_bytes()[4] == b'-'
-                && [" INFO ", " WARN ", " DEBUG ", " TRACE ", " ERROR "]
-                    .iter()
-                    .any(|level| trimmed.contains(level)))
-        })
-        .collect();
-    let joined = lines.join("\n");
-    let trimmed = joined.trim_matches('\n').trim_end();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() <= LIMIT {
-        return Some(trimmed.to_owned());
-    }
-    let mut end = LIMIT;
-    while !trimmed.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(format!("{}\n…", &trimmed[..end]))
-}
 pub fn is_native_secret_reference(text: &str) -> bool {
     let text = text
         .strip_prefix("Bearer ")
@@ -489,52 +148,6 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
         }
     }
     reasons.into_iter().collect()
-}
-// `vector validate --no-environment` compiles transforms (VRL, routes) but does
-// not build sources, sinks or health checks, so device-local paths outside
-// transforms (data_dir, file globs, TLS files, sink paths, Unix sockets) are
-// parsed but never opened. The isolated worker can therefore still catch
-// compile and topology errors. Transforms that load external code, providers,
-// secrets, environment interpolation and enrichment data stay deferred.
-pub fn can_static_check_device_paths(config: &Value) -> bool {
-    let reasons = device_context_reasons(config);
-    if reasons.len() != 1 || reasons[0] != "device-local paths or external code files" {
-        return false;
-    }
-    // Only transforms are built. Remap programs loaded from files and Lua
-    // modules resolved from search paths would be read on the worker.
-    !config["transforms"].as_object().is_some_and(|transforms| {
-        transforms
-            .values()
-            .any(|transform| match transform["type"].as_str() {
-                Some("remap") => !transform["file"].is_null() || !transform["files"].is_null(),
-                Some("lua") => true,
-                _ => false,
-            })
-    })
-}
-pub fn mark_device_deferred(result: &mut Value, config: &Value) -> bool {
-    let reasons = device_context_reasons(config);
-    if reasons.is_empty() {
-        return false;
-    }
-    result["deferred"] = json!(true);
-    result["deferred_reasons"] = json!(reasons);
-    let mut warnings: Vec<String> = result["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect();
-    warnings.push(format!(
-        "Native validation is deferred to the device: {}. The server has not verified the target platform or resolved or executed these device resources.",
-        reasons.join(", ")
-    ));
-    warnings.sort();
-    warnings.dedup();
-    result["warnings"] = json!(warnings);
-    true
 }
 pub fn is_local_secret(value: &str) -> bool {
     let Some(name) = value.strip_prefix("vectory-secret:") else {
@@ -757,122 +370,1309 @@ fn validate_known_options(section: &str, name: &str, item: &Value, errors: &mut 
         }
     }
 }
-pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error::Result<Value> {
-    let mut result = validate(config);
-    if result["valid"] != true {
-        return Ok(result);
+/// Version of the private worker reply. The API refuses replies from a worker
+/// that cannot report structured diagnostics, placeholders and stand-ins, so
+/// an outdated worker is never mistaken for a completed check.
+pub const WORKER_PROTOCOL: u64 = 2;
+/// Token substituted for a secret or environment reference. A diagnostic that
+/// quotes it describes the placeholder, not the device's real value.
+pub const PLACEHOLDER: &str = "vectory-placeholder";
+
+/// A copy of a draft prepared for `vector validate --no-environment` in the
+/// isolated worker. It never contains resolved secrets: native references are
+/// replaced by typed placeholders, secret backends and configuration
+/// providers are removed (they may run programs or fetch remote content), and
+/// components that only a device can load are replaced by inert stand-ins.
+pub struct StaticCandidate {
+    pub config: Value,
+    /// Distinct `${VAR}`, `$VAR` and `SECRET[backend.key]` references replaced by placeholders.
+    pub placeholders: Vec<String>,
+    /// Component ID → reason it was replaced by an inert stand-in.
+    pub stubbed: BTreeMap<String, String>,
+    /// False when a configuration provider supplies the pipeline on the device.
+    pub checkable: bool,
+}
+
+fn valid_reference_name(name: &str) -> bool {
+    name.as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// A placeholder that still parses where the reference stood: a socket
+/// address for `*address`, a URL for endpoints, a path for file fields and a
+/// port after `host:`. Anything else becomes a plain token.
+fn placeholder_value(key: &str, whole: bool, after_colon: bool) -> &'static str {
+    if !whole {
+        return if after_colon { "9" } else { PLACEHOLDER };
     }
-    let static_paths = can_static_check_device_paths(config);
-    // A configured worker must answer even when device resources prevent it
-    // from running Vector. The worker reports an honest deferral for that
-    // configuration; skipping the request would let its outage publish drafts.
-    let deferred = !static_paths && mark_device_deferred(&mut result, config);
-    let Some(url) = &s.settings.validation_url else {
-        if static_paths {
-            mark_device_deferred(&mut result, config);
+    let key = key.to_ascii_lowercase();
+    if key.ends_with("address") {
+        "127.0.0.1:9"
+    } else if ["endpoint", "endpoints", "uri", "url", "urls"].contains(&key.as_str())
+        || key.ends_with("_url")
+        || key.ends_with("_uri")
+        || key.ends_with("_endpoint")
+    {
+        "http://127.0.0.1:9"
+    } else if key == "path"
+        || key.ends_with("_path")
+        || key.ends_with("_file")
+        || key.ends_with("_dir")
+    {
+        "/vectory-placeholder"
+    } else {
+        PLACEHOLDER
+    }
+}
+
+/// Replace native references in one string, following Vector's interpolation
+/// syntax (`${NAME}`, `${NAME:-default}`, `${NAME-default}`, `${NAME:?err}`,
+/// `$NAME`, `$$` escapes) and `SECRET[backend.key]`. A declared default is used
+/// as-is. Returns `None` when the string holds no reference.
+pub fn substitute_references(
+    text: &str,
+    key: &str,
+    found: &mut BTreeSet<String>,
+) -> Option<String> {
+    let mut spans: Vec<(usize, usize, String, Option<String>)> = Vec::new();
+    let mut index = 0;
+    while index < text.len() {
+        let rest = &text[index..];
+        if rest.starts_with("SECRET[")
+            && let Some(end) = rest.find(']')
+            && is_native_secret_reference(&rest[..=end])
+        {
+            spans.push((index, index + end + 1, rest[..=end].to_owned(), None));
+            index += end + 1;
+            continue;
         }
-        return Ok(result);
+        if rest.starts_with("$$") {
+            index += 2;
+            continue;
+        }
+        if let Some(inner) = rest.strip_prefix("${")
+            && let Some(end) = inner.find('}')
+        {
+            let body = &inner[..end];
+            let name_end = body
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(body.len());
+            let (name, modifier) = body.split_at(name_end);
+            let default = modifier
+                .strip_prefix(":-")
+                .or_else(|| modifier.strip_prefix('-'));
+            if valid_reference_name(name)
+                && (modifier.is_empty()
+                    || default.is_some()
+                    || modifier.starts_with(":?")
+                    || modifier.starts_with('?'))
+            {
+                spans.push((
+                    index,
+                    index + end + 3,
+                    rest[..end + 3].to_owned(),
+                    default.map(str::to_owned),
+                ));
+                index += end + 3;
+                continue;
+            }
+        }
+        if let Some(inner) = rest.strip_prefix('$') {
+            let end = inner
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(inner.len());
+            if valid_reference_name(&inner[..end]) {
+                spans.push((index, index + end + 1, rest[..end + 1].to_owned(), None));
+                index += end + 1;
+                continue;
+            }
+        }
+        index += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    let whole = spans.len() == 1 && spans[0].0 == 0 && spans[0].1 == text.len();
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (start, end, reference, default) in spans {
+        out.push_str(&text[last..start]);
+        match default {
+            Some(value) => out.push_str(&value),
+            None => out.push_str(placeholder_value(key, whole, text[..start].ends_with(':'))),
+        }
+        found.insert(reference);
+        last = end;
+    }
+    out.push_str(&text[last..]);
+    Some(out)
+}
+
+/// An inert component with the same ID and inputs, used where a component
+/// can't be built on the worker. Diagnostics about stand-ins are discarded.
+fn stand_in(section: &str, inputs: Option<&Value>) -> Value {
+    let inputs = inputs.cloned().unwrap_or_else(|| json!([]));
+    match section {
+        "sources" => json!({"type":"demo_logs","format":"json"}),
+        "transforms" => json!({"type":"remap","inputs":inputs,"source":"."}),
+        _ => json!({"type":"blackhole","inputs":inputs}),
+    }
+}
+
+pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) -> StaticCandidate {
+    fn walk(value: &mut Value, key: &str, found: &mut BTreeSet<String>) {
+        match value {
+            Value::String(text) => {
+                if let Some(next) = substitute_references(text, key, found) {
+                    *text = next;
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| walk(item, key, found)),
+            Value::Object(fields) => {
+                for (field, item) in fields.iter_mut() {
+                    walk(item, field, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut candidate = config.clone();
+    let checkable = config.get("provider").is_none_or(Value::is_null);
+    if let Some(root) = candidate.as_object_mut() {
+        root.remove("secret");
+        root.remove("provider");
+    }
+    let mut placeholders = BTreeSet::new();
+    walk(&mut candidate, "", &mut placeholders);
+    let mut stubbed = BTreeMap::new();
+    for section in ["sources", "transforms", "sinks"] {
+        let Some(components) = candidate.get_mut(section).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (id, component) in components.iter_mut() {
+            let kind = component["type"].as_str().unwrap_or("").to_owned();
+            let reason = if known_component(section, &kind) && !available(section, &kind) {
+                Some(format!(
+                    "`{kind}` isn't included in this server's Vector build; each device checks it"
+                ))
+            } else if section == "transforms"
+                && kind == "remap"
+                && (!component["file"].is_null() || !component["files"].is_null())
+            {
+                Some("loads its VRL program from a file on each device".to_owned())
+            } else if section == "transforms"
+                && kind == "lua"
+                && !component["search_dirs"].is_null()
+            {
+                Some("loads Lua modules from each device".to_owned())
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                *component = stand_in(section, component.get("inputs"));
+                stubbed.insert(id.clone(), reason);
+            }
+        }
+    }
+    StaticCandidate {
+        config: candidate,
+        placeholders: placeholders.into_iter().take(64).collect(),
+        stubbed,
+        checkable,
+    }
+}
+
+/// After a failed load, repair the candidate so the next run can report the
+/// remaining problems. Vector stops at the first option error, so each broken
+/// component is replaced by a stand-in (or loses the unknown option) until the
+/// topology and VRL compile stages are reached. Returns false when nothing
+/// could be repaired.
+pub fn repair_candidate(
+    candidate: &mut Value,
+    errors: &[Diagnostic],
+    stubbed: &mut BTreeMap<String, String>,
+) -> bool {
+    fn component<'a>(candidate: &'a mut Value, section: &str, id: &str) -> Option<&'a mut Value> {
+        candidate.get_mut(section)?.get_mut(id)
+    }
+    let mut changed = false;
+    for error in errors {
+        let section = error.section.as_deref().unwrap_or("");
+        match (section, error.component.as_deref(), error.code.as_deref()) {
+            ("global", _, Some("unknown_field")) => {
+                if let (Some(field), Some(root)) = (&error.field, candidate.as_object_mut()) {
+                    changed |= root.remove(field).is_some();
+                }
+            }
+            ("tests", _, _) => {
+                if let Some(root) = candidate.as_object_mut() {
+                    changed |= root.remove("tests").is_some();
+                }
+            }
+            (section, Some(id), code) if ["sources", "transforms", "sinks"].contains(&section) => {
+                let Some(item) = component(candidate, section, id) else {
+                    continue;
+                };
+                match code {
+                    Some("missing_input" | "type_mismatch") => {
+                        let related = error.related.first().cloned().unwrap_or_default();
+                        if let Some(inputs) = item.get_mut("inputs").and_then(Value::as_array_mut) {
+                            let before = inputs.len();
+                            inputs.retain(|input| input.as_str() != Some(related.as_str()));
+                            changed |= inputs.len() != before;
+                        }
+                    }
+                    Some("unknown_field") => {
+                        if let (Some(field), Some(object)) = (&error.field, item.as_object_mut()) {
+                            changed |= object.remove(field).is_some();
+                        }
+                    }
+                    Some("cycle") => {}
+                    _ if error.line.is_none() && !stubbed.contains_key(id) => {
+                        let inputs = item.get("inputs").cloned();
+                        *item = stand_in(section, inputs.as_ref());
+                        stubbed.insert(id.to_owned(), "reported above".into());
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    // A consumer left without inputs is removed with every reference to it, so
+    // the next run can reach the checks that follow.
+    loop {
+        let mut removed = Vec::new();
+        for section in ["transforms", "sinks"] {
+            if let Some(items) = candidate.get_mut(section).and_then(Value::as_object_mut) {
+                items.retain(|id, item| {
+                    let empty = item["inputs"].as_array().is_some_and(Vec::is_empty);
+                    if empty {
+                        removed.push(id.clone());
+                    }
+                    !empty
+                });
+            }
+        }
+        if removed.is_empty() {
+            break;
+        }
+        changed = true;
+        for id in &removed {
+            stubbed.insert(id.clone(), "reported above".into());
+        }
+        for section in ["transforms", "sinks"] {
+            if let Some(items) = candidate.get_mut(section).and_then(Value::as_object_mut) {
+                for item in items.values_mut() {
+                    if let Some(inputs) = item.get_mut("inputs").and_then(Value::as_array_mut) {
+                        inputs.retain(|input| {
+                            let name = input.as_str().unwrap_or("");
+                            !removed
+                                .iter()
+                                .any(|id| name == id || name.starts_with(&format!("{id}.")))
+                        });
+                    }
+                }
+            }
+        }
+    }
+    changed
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    fn matches(pattern: &[u8], text: &[u8]) -> bool {
+        match (pattern.first(), text.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => {
+                matches(&pattern[1..], text) || (!text.is_empty() && matches(pattern, &text[1..]))
+            }
+            (Some(b'?'), Some(_)) => matches(&pattern[1..], &text[1..]),
+            (Some(p), Some(t)) if p == t => matches(&pattern[1..], &text[1..]),
+            _ => false,
+        }
+    }
+    pattern.len() <= 256 && matches(pattern.as_bytes(), text.as_bytes())
+}
+
+/// True when the original draft connects `id` (or its named output) to a
+/// consumer, including through a wildcard input. A "no consumers" warning for
+/// such a component only reflects a repair made during checking.
+pub fn consumed(config: &Value, id: &str, output: Option<&str>) -> bool {
+    let reference = match output {
+        Some(output) => format!("{id}.{output}"),
+        None => id.to_owned(),
     };
-    let _permit = s.validation_slots.try_acquire().map_err(|_| {
-        crate::error::ApiError::new(
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            "RATE_LIMITED",
-            "Validation capacity busy; retry later",
-        )
-    })?;
-    let client = reqwest::Client::builder()
+    ["transforms", "sinks", "enrichment_tables"]
+        .iter()
+        .any(|section| {
+            config[*section].as_object().is_some_and(|items| {
+                items.values().any(|item| {
+                    item["inputs"].as_array().is_some_and(|inputs| {
+                        inputs.iter().filter_map(Value::as_str).any(|input| {
+                            input == reference
+                                || (input.contains(['*', '?']) && glob_match(input, &reference))
+                        })
+                    })
+                })
+            })
+        })
+}
+
+/// True when a diagnostic only concerns a stand-in component.
+pub fn about_stand_in(diagnostic: &Diagnostic, stubbed: &BTreeMap<String, String>) -> bool {
+    diagnostic
+        .component
+        .as_deref()
+        .is_some_and(|id| stubbed.contains_key(id))
+        || diagnostic
+            .related
+            .iter()
+            .any(|related| stubbed.contains_key(related.split('.').next().unwrap_or(related)))
+}
+
+/// A placeholder can make Vector reject a value the device will supply. Such
+/// a finding is a device check, not an error in the draft.
+pub fn soften_placeholder(mut diagnostic: Diagnostic) -> Diagnostic {
+    let mentions = |text: &Option<String>| text.as_deref().is_some_and(|t| t.contains(PLACEHOLDER));
+    if diagnostic.severity == "error"
+        && (diagnostic.message.contains(PLACEHOLDER) || mentions(&diagnostic.detail))
+    {
+        diagnostic.severity = "warning";
+        diagnostic.code = Some("device_value".into());
+        diagnostic.message =
+            "This value comes from a secret or environment reference. Each device checks it before applying.".into();
+        diagnostic.hint = None;
+        diagnostic.fix = None;
+    }
+    diagnostic
+}
+
+/// Convert server structural errors and warnings into diagnostics.
+pub fn structural_diagnostics(config: &Value, result: &Value) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for (key, severity) in [("errors", "error"), ("warnings", "warning")] {
+        for message in result[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let mut diagnostic = Diagnostic {
+                severity,
+                message: message.to_owned(),
+                ..Default::default()
+            };
+            if let Some((id, rest)) = message.split_once(": ")
+                && let Some(section) = crate::vector_diagnostics::section_of(config, id)
+            {
+                diagnostic.section = Some(section.into());
+                diagnostic.component = Some(id.into());
+                diagnostic.message = rest.trim().to_owned();
+                if let Some(input) = rest.strip_prefix("unknown input ") {
+                    diagnostic.code = Some("missing_input".into());
+                    diagnostic.field = Some("inputs".into());
+                    diagnostic.related = vec![input.trim().to_owned()];
+                    diagnostic.message =
+                        format!("Input `{}` does not match any component.", input.trim());
+                } else if rest.contains("input") || rest.contains("output") {
+                    diagnostic.field = Some("inputs".into());
+                }
+            } else if let Some(id) = message.strip_prefix("Duplicate component ID: ") {
+                diagnostic = diagnostic.at(config, id.trim());
+                diagnostic.code = Some("duplicate_id".into());
+            } else if message == "Pipeline contains a cycle" {
+                diagnostic.code = Some("cycle".into());
+            } else if message.starts_with("At least one source")
+                || message.starts_with("At least one sink")
+            {
+                diagnostic.section = Some("global".into());
+                diagnostic.code = Some("empty_pipeline".into());
+            }
+            out.push(diagnostic);
+        }
+    }
+    out
+}
+
+fn reason_phrase(reasons: &[String]) -> String {
+    let phrases: Vec<String> = reasons
+        .iter()
+        .map(|reason| match reason.as_str() {
+            "environment variables" => "environment variables".into(),
+            "native secret references" | "native secret providers" => "secrets".into(),
+            "VRL access to device resources" => "VRL that reads device resources".into(),
+            "native configuration provider" => "the configuration provider".into(),
+            "device enrichment data" => "enrichment data files".into(),
+            "device-local paths or external code files" => "local files and paths".into(),
+            other => other.strip_prefix("platform-specific source ").map_or_else(
+                || other.to_owned(),
+                |kind| format!("the {kind} source's platform"),
+            ),
+        })
+        .collect();
+    let mut unique: Vec<String> = Vec::new();
+    for phrase in phrases {
+        if !unique.contains(&phrase) {
+            unique.push(phrase);
+        }
+    }
+    match unique.len() {
+        0 => String::new(),
+        1 => unique[0].clone(),
+        n => format!("{} and {}", unique[..n - 1].join(", "), unique[n - 1]),
+    }
+}
+
+/// Assemble the public check result from diagnostics. `errors` and `warnings`
+/// remain for existing clients; `diagnostics` is the structured form.
+fn check_result(
+    diagnostics: Vec<Diagnostic>,
+    vector_ran: bool,
+    vector_clean: bool,
+    reasons: Vec<String>,
+    placeholders: Vec<String>,
+) -> Value {
+    let mut diagnostics = diagnostics;
+    let mut seen = BTreeSet::new();
+    diagnostics.retain(|d| {
+        seen.insert((
+            d.severity,
+            d.component.clone(),
+            d.route_output.clone(),
+            d.code.clone(),
+            d.line,
+            d.column,
+            d.message.clone(),
+        ))
+    });
+    let hidden = diagnostics
+        .len()
+        .saturating_sub(crate::vector_diagnostics::MAX_DIAGNOSTICS);
+    diagnostics.sort_by_key(|d| d.severity != "error");
+    diagnostics.truncate(crate::vector_diagnostics::MAX_DIAGNOSTICS);
+    let valid = !diagnostics.iter().any(|d| d.severity == "error");
+    let deferred = !reasons.is_empty() || !placeholders.is_empty();
+    let mut warnings: Vec<String> = diagnostics
+        .iter()
+        .filter(|d| d.severity == "warning")
+        .map(Diagnostic::summary)
+        .collect();
+    if hidden > 0 {
+        warnings.push(format!("{hidden} more findings are not shown."));
+    }
+    if deferred {
+        let what = reason_phrase(&reasons);
+        warnings.push(if what.is_empty() {
+            "Each device checks this version with its own Vector before applying it.".into()
+        } else {
+            format!("Each device checks {what} before applying this version.")
+        });
+    }
+    let mut result = json!({
+        "valid": valid,
+        "vector_validated": valid && vector_ran && vector_clean && !deferred,
+        "static_checked": vector_ran,
+        "deferred": deferred,
+        "diagnostics": diagnostics.iter().map(Diagnostic::to_json).collect::<Vec<_>>(),
+        "errors": diagnostics.iter().filter(|d| d.severity == "error").map(Diagnostic::summary).collect::<Vec<_>>(),
+        "warnings": warnings,
+        "vector_version": VECTOR_VERSION,
+    });
+    if !reasons.is_empty() {
+        result["deferred_reasons"] = json!(reasons);
+    }
+    if !placeholders.is_empty() {
+        result["placeholders"] = json!(placeholders);
+    }
+    result
+}
+
+fn worker_client() -> crate::error::Result<reqwest::Client> {
+    reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(8))
         .build()
-        .map_err(|_| crate::error::ApiError::invalid("Validator client unavailable"))?;
-    let outcome = async {
-        let mut response = client
-            .post(format!("{}/validate", url.trim_end_matches('/')))
-            .json(&json!({"config":config}))
-            .send()
-            .await
-            .ok()?;
-        if !response.status().is_success() || response.content_length().is_some_and(|n| n > 65536) {
+        .map_err(|_| crate::error::ApiError::invalid("Validator client unavailable"))
+}
+
+/// POST to the isolated worker and read a bounded JSON reply.
+async fn worker_call(url: &str, path: &str, body: &Value, limit: usize) -> Option<Value> {
+    let client = worker_client().ok()?;
+    let mut response = client
+        .post(format!("{}/{path}", url.trim_end_matches('/')))
+        .json(body)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|n| n as usize > limit)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if bytes.len() + chunk.len() > limit {
             return None;
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
-            if bytes.len() + chunk.len() > 65536 {
-                return None;
-            }
-            bytes.extend_from_slice(&chunk)
-        }
-        let value: Value = serde_json::from_slice(&bytes).ok()?;
-        if value["vector_version"] != VECTOR_VERSION
+        bytes.extend_from_slice(&chunk);
+    }
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    (value["worker_protocol"] == WORKER_PROTOCOL && value["vector_version"] == VECTOR_VERSION)
+        .then_some(value)
+}
+
+fn worker_busy() -> crate::error::ApiError {
+    crate::error::ApiError::new(
+        axum::http::StatusCode::TOO_MANY_REQUESTS,
+        "RATE_LIMITED",
+        "Validation capacity busy; retry later",
+    )
+}
+
+/// Placeholders must be references that literally appear in the checked draft.
+fn worker_placeholders(config: &Value, value: &Value) -> Option<Vec<String>> {
+    let text = config.to_string();
+    let items = value.as_array()?;
+    if items.len() > 64 {
+        return None;
+    }
+    items
+        .iter()
+        .map(|item| {
+            let item = item.as_str()?;
+            (item.len() <= 200 && text.contains(item)).then(|| item.to_owned())
+        })
+        .collect()
+}
+
+pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error::Result<Value> {
+    let structural = validate(config);
+    let mut diagnostics = structural_diagnostics(config, &structural);
+    let mut reasons = device_context_reasons(config);
+    let Some(url) = &s.settings.validation_url else {
+        diagnostics.push(Diagnostic {
+            code: Some("structural_only".into()),
+            ..Diagnostic::warning(
+                "Only the pipeline structure was checked here. Vector isn't configured on this server; each device validates before applying.",
+            )
+        });
+        return Ok(check_result(diagnostics, false, false, reasons, vec![]));
+    };
+    if !config.is_object() {
+        return Ok(check_result(diagnostics, false, false, reasons, vec![]));
+    }
+    if config.get("provider").is_some_and(|p| !p.is_null()) {
+        diagnostics.push(Diagnostic {
+            code: Some("provider".into()),
+            section: Some("global".into()),
+            ..Diagnostic::warning(
+                "A configuration provider supplies this pipeline on each device, so Vector can't check it here.",
+            )
+        });
+        return Ok(check_result(diagnostics, false, false, reasons, vec![]));
+    }
+    let _permit = s
+        .validation_slots
+        .try_acquire()
+        .map_err(|_| worker_busy())?;
+    let reply = worker_call(url, "validate", &json!({"config":config}), 256 * 1024).await;
+    let checked = reply.as_ref().and_then(|value| {
+        let native = crate::vector_diagnostics::sanitize(config, &value["diagnostics"])?;
+        let placeholders = worker_placeholders(config, &value["placeholders"])?;
+        let stubbed = value["stubbed"].as_array()?;
+        if stubbed.len() > 64
+            || !value["static_checked"].is_boolean()
             || !value["valid"].is_boolean()
-            || !value["vector_validated"].is_boolean()
-            || (value["valid"] == false && value["vector_validated"] == true)
-            || (value["valid"] == true && !value["native_issue"].is_null())
-            || (static_paths
-                && (value["static_checked"] != true
-                    || value["deferred"] != true
-                    || value["vector_validated"] != false))
-            || (deferred
-                && (value["vector_validated"] != false
-                    || (value["valid"] == true
-                        && (value["deferred"] != true
-                            || value["deferred_reasons"] != result["deferred_reasons"]))))
-            || (!static_paths
-                && !deferred
-                && value["valid"] == true
-                && value["vector_validated"] != true)
         {
             return None;
         }
-        Some(value)
-    }
-    .await;
-    match outcome {
-        Some(value) => {
-            result["valid"] = value["valid"].clone();
-            result["vector_validated"] = value["vector_validated"].clone();
-            let native_message = if value["native_issue"]["code"] == "PIPELINE_TEST_FAILED" {
-                None
-            } else {
-                public_native_issue(config, &value["native_issue"])
-            };
-            if deferred {
-                // Preserve the server's exact device-context reasons. A worker
-                // acknowledgement is availability evidence, not native Vector
-                // validation or a reason to drop the deferral warning.
-                if value["valid"] != true {
-                    result["errors"] = json!([
-                        native_message.clone().unwrap_or_else(|| "Isolated validator rejected the configuration. Validate on the device for local details.".into())
-                    ]);
-                }
-            } else if static_paths {
-                mark_device_deferred(&mut result, config);
-                result["warnings"] = json!([
-                    "Isolated Vector static checks completed with environment checks disabled. Device-local paths and environment remain unverified until device validation."
-                ]);
-            } else {
-                result["warnings"] = json!([
-                    "Validated by the isolated Vector worker with environment checks disabled; devices still validate local environment and capability policy before activation."
-                ]);
-            }
-            if value["valid"] != true && !deferred {
-                result["errors"] = json!([
-                    native_message.unwrap_or_else(|| "Vector rejected the configuration. Validate it locally to inspect detailed diagnostics.".into())
-                ])
-            }
+        let stubbed: Vec<String> = stubbed
+            .iter()
+            .map(|id| id.as_str().filter(|id| id.len() <= 128).map(str::to_owned))
+            .collect::<Option<_>>()?;
+        Some((
+            native,
+            placeholders,
+            stubbed,
+            value["static_checked"] == true,
+            value["valid"] == true,
+        ))
+    });
+    let Some((native, placeholders, stubbed, ran, worker_valid)) = checked else {
+        diagnostics.push(Diagnostic {
+            code: Some("validator_unavailable".into()),
+            ..Diagnostic::error(
+                "Configured isolated Vector validator is unavailable; publication is blocked.",
+            )
+        });
+        return Ok(check_result(diagnostics, false, false, reasons, vec![]));
+    };
+    let structural_components: BTreeSet<Option<String>> = diagnostics
+        .iter()
+        .filter(|d| d.severity == "error")
+        .map(|d| d.component.clone())
+        .collect();
+    for item in native {
+        let diagnostic = Diagnostic::from_json(&item);
+        // The server's structural checks already explain topology errors.
+        if matches!(diagnostic.code.as_deref(), Some("missing_input" | "cycle"))
+            && structural_components.contains(&diagnostic.component)
+        {
+            continue;
         }
-        None => {
-            result["valid"] = json!(false);
-            if static_paths {
-                mark_device_deferred(&mut result, config);
-            }
-            result["errors"] = json!([
-                "Configured isolated Vector validator is unavailable; publication is blocked."
-            ]);
-        }
+        diagnostics.push(diagnostic);
     }
-    Ok(result)
+    if !ran {
+        diagnostics.push(Diagnostic {
+            code: Some("validator_incomplete".into()),
+            ..Diagnostic::error("Vector did not finish checking this pipeline. Try again.")
+        });
+    } else if !worker_valid && !diagnostics.iter().any(|d| d.severity == "error") {
+        diagnostics.push(Diagnostic::error(
+            "Vector rejected the configuration without a specific message.",
+        ));
+    }
+    if !stubbed.is_empty()
+        && !reasons
+            .iter()
+            .any(|r| r.contains("platform") || r.contains("paths"))
+    {
+        reasons.push("device-local paths or external code files".into());
+    }
+    Ok(check_result(
+        diagnostics,
+        ran,
+        stubbed.is_empty(),
+        reasons,
+        placeholders,
+    ))
 }
+
+/// Maximum synthetic samples in one tester run and their combined JSON size.
+pub const MAX_SAMPLES: usize = 20;
+pub const MAX_SAMPLE_BYTES: usize = 65536;
+
+/// The transform types the sample tester can run: they need only the event.
+pub fn testable_transform(transform: &Value) -> std::result::Result<&str, &'static str> {
+    let kind = transform["type"].as_str().unwrap_or("");
+    if !["remap", "filter", "route", "exclusive_route"].contains(&kind) {
+        return Err("Sample testing supports remap, filter, route and exclusive route steps.");
+    }
+    if kind == "remap" && (!transform["file"].is_null() || !transform["files"].is_null()) {
+        return Err(
+            "This step loads VRL from a file on each device. Paste the program inline to test it with samples.",
+        );
+    }
+    if kind == "remap" && !transform["source"].is_string() {
+        return Err("Enter a VRL program to test.");
+    }
+    Ok(kind)
+}
+
+fn port_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The output ports a sample run observes, in display order.
+pub fn sample_ports(transform: &Value) -> Vec<String> {
+    match transform["type"].as_str().unwrap_or("") {
+        "route" => {
+            let mut ports: Vec<String> = transform["route"]
+                .as_object()
+                .map(|routes| routes.keys().filter(|k| port_name(k)).cloned().collect())
+                .unwrap_or_default();
+            if transform["reroute_unmatched"] != false {
+                ports.push("_unmatched".into());
+            }
+            ports
+        }
+        "exclusive_route" => {
+            let mut ports: Vec<String> = transform["routes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|route| route["name"].as_str())
+                .filter(|name| port_name(name))
+                .map(str::to_owned)
+                .collect();
+            ports.push("_unmatched".into());
+            ports
+        }
+        "remap" => vec![String::new(), "dropped".into()],
+        _ => vec![String::new()],
+    }
+}
+
+/// Build the isolated micro-pipeline for synthetic samples:
+/// stdin (one JSON line per sample) → sample intake → the step under test →
+/// one tagging remap per output → console (JSON). Remap runs with
+/// `drop_on_error`, `drop_on_abort` and `reroute_dropped` enabled so errors and
+/// aborts are observed with Vector's own reason; the UI explains what the
+/// step's real settings do with such an event.
+pub fn sample_pipeline(transform: &Value, data_dir: &str, timezone: Option<&str>) -> Value {
+    let mut step = transform.clone();
+    if let Some(object) = step.as_object_mut() {
+        object.remove("inputs");
+        object.remove("graph");
+        object.insert("inputs".into(), json!(["vectory_sample_in"]));
+        if object.get("type").and_then(Value::as_str) == Some("remap") {
+            object.insert("drop_on_error".into(), json!(true));
+            object.insert("drop_on_abort".into(), json!(true));
+            object.insert("reroute_dropped".into(), json!(true));
+        }
+    }
+    let mut transforms = serde_json::Map::new();
+    transforms.insert(
+        "vectory_sample_in".into(),
+        json!({"type":"remap","inputs":["vectory_samples"],"source":"sample = object!(parse_json!(string!(.message)))\n%vectory_sample = sample.i\n. = object!(sample.e)"}),
+    );
+    transforms.insert("vectory_step".into(), step);
+    for (index, port) in sample_ports(transform).iter().enumerate() {
+        let input = if port.is_empty() {
+            "vectory_step".to_owned()
+        } else {
+            format!("vectory_step.{port}")
+        };
+        let label = serde_json::to_string(port).unwrap_or_else(|_| "\"\"".into());
+        let source = if port == "dropped" {
+            format!(". = {{\"s\": %vectory_sample, \"o\": {label}, \"d\": .metadata.dropped}}")
+        } else {
+            format!(
+                "vectory_timestamps = keys(filter(flatten(.)) -> |_key, value| {{ is_timestamp(value) }})\n. = {{\"s\": %vectory_sample, \"o\": {label}, \"e\": ., \"t\": vectory_timestamps}}"
+            )
+        };
+        transforms.insert(
+            format!("vectory_out_{index}"),
+            json!({"type":"remap","inputs":[input],"source":source}),
+        );
+    }
+    let mut config = json!({
+        "data_dir": data_dir,
+        "sources": {"vectory_samples": {"type":"stdin"}},
+        "transforms": transforms,
+        "sinks": {"vectory_console": {"type":"console","inputs":["vectory_out_*"],"encoding":{"codec":"json"},"target":"stdout"}},
+    });
+    if let Some(timezone) = timezone {
+        config["timezone"] = json!(timezone);
+    }
+    config
+}
+
+/// Byte offsets from a VRL runtime error, `at (37:75)`, as a 1-based line,
+/// column and length in the program.
+pub fn runtime_position(program: &str, message: &str) -> Option<(u64, u64, u64)> {
+    let (_, rest) = message.split_once(" at (")?;
+    let (span, _) = rest.split_once(')')?;
+    let (start, end) = span.split_once(':')?;
+    let (start, end): (usize, usize) = (start.parse().ok()?, end.parse().ok()?);
+    if start > end
+        || end > program.len()
+        || !program.is_char_boundary(start)
+        || !program.is_char_boundary(end)
+    {
+        return None;
+    }
+    let before = &program[..start];
+    let line = before.matches('\n').count() as u64 + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count() as u64 + 1;
+    Some((line, column, program[start..end].chars().count() as u64))
+}
+
+/// Group the console lines of a sample run by sample, in port order.
+pub fn sample_results(transform: &Value, samples: usize, stdout: &[u8]) -> Vec<Value> {
+    let kind = transform["type"].as_str().unwrap_or("");
+    let ports = sample_ports(transform);
+    let program = transform["source"].as_str().unwrap_or("");
+    let mut results: Vec<Value> = (0..samples)
+        .map(|index| json!({"sample":index,"outputs":[]}))
+        .collect();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let Ok(item) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(index) = item["s"]
+            .as_u64()
+            .map(|i| i as usize)
+            .filter(|i| *i < samples)
+        else {
+            continue;
+        };
+        let port = item["o"].as_str().unwrap_or("");
+        let result = &mut results[index];
+        if port == "dropped" {
+            let dropped = &item["d"];
+            let reason = dropped["reason"].as_str().unwrap_or("error");
+            let message = dropped["message"].as_str().unwrap_or("").to_owned();
+            result["outcome"] = json!(if reason == "abort" {
+                "aborted"
+            } else {
+                "error"
+            });
+            if reason != "abort" {
+                result["message"] = json!(crate::vector_diagnostics::bounded(&message, 600));
+                if let Some((line, column, length)) = runtime_position(program, &message) {
+                    result["line"] = json!(line);
+                    result["column"] = json!(column);
+                    result["length"] = json!(length);
+                }
+            }
+            continue;
+        }
+        if !ports.iter().any(|p| p == port) || !item["e"].is_object() {
+            continue;
+        }
+        let timestamps: Vec<Value> = item["t"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t.as_str().is_some_and(|t| t.len() <= 256))
+            .take(256)
+            .cloned()
+            .collect();
+        if let Some(outputs) = result["outputs"].as_array_mut()
+            && outputs.len() < 8
+            && item["e"].to_string().len() <= 32 * 1024
+        {
+            outputs.push(json!({"port":port,"event":item["e"],"timestamps":timestamps}));
+        }
+    }
+    for result in &mut results {
+        let emitted = result["outputs"].as_array().is_some_and(|o| !o.is_empty());
+        if result.get("outcome").is_some() {
+            continue;
+        }
+        result["outcome"] = json!(match (emitted, kind) {
+            (true, _) => "emitted",
+            (false, "filter") => "filtered",
+            (false, "route" | "exclusive_route") => "unmatched",
+            (false, _) => "dropped",
+        });
+        if let Some(outputs) = result["outputs"].as_array_mut() {
+            outputs.sort_by_key(|output| {
+                ports
+                    .iter()
+                    .position(|port| output["port"].as_str() == Some(port))
+                    .unwrap_or(usize::MAX)
+            });
+        }
+    }
+    results
+}
+
+fn sanitize_results(value: &Value, samples: usize, ports: &[String]) -> Option<Vec<Value>> {
+    let items = value.as_array()?;
+    if items.len() != samples {
+        return None;
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            if item["sample"].as_u64() != Some(index as u64) {
+                return None;
+            }
+            let outcome = item["outcome"].as_str().filter(|o| {
+                [
+                    "emitted",
+                    "filtered",
+                    "unmatched",
+                    "dropped",
+                    "error",
+                    "aborted",
+                ]
+                .contains(o)
+            })?;
+            let outputs = item["outputs"].as_array()?;
+            if outputs.len() > 8 {
+                return None;
+            }
+            let outputs = outputs
+                .iter()
+                .map(|output| {
+                    let port = output["port"]
+                        .as_str()
+                        .filter(|p| ports.iter().any(|q| q == p))?;
+                    let event = output["event"].as_object()?;
+                    if output["event"].to_string().len() > 32 * 1024 {
+                        return None;
+                    }
+                    let timestamps = output["timestamps"].as_array()?;
+                    if timestamps.len() > 256
+                        || timestamps
+                            .iter()
+                            .any(|t| t.as_str().is_none_or(|t| t.len() > 256))
+                    {
+                        return None;
+                    }
+                    Some(json!({"port":port,"event":event,"timestamps":timestamps}))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let mut clean = json!({"sample":index,"outcome":outcome,"outputs":outputs});
+            if let Some(message) = item.get("message") {
+                let message = message.as_str().filter(|m| m.len() <= 2400)?;
+                clean["message"] = json!(crate::vector_diagnostics::bounded(
+                    &message
+                        .chars()
+                        .filter(|c| !c.is_control() || *c == '\n')
+                        .collect::<String>(),
+                    600
+                ));
+            }
+            for key in ["line", "column", "length"] {
+                if let Some(number) = item.get(key) {
+                    clean[key] = json!(number.as_u64().filter(|n| *n <= 1_000_000)?);
+                }
+            }
+            Some(clean)
+        })
+        .collect()
+}
+
+fn api_error(
+    status: axum::http::StatusCode,
+    code: &'static str,
+    message: &'static str,
+) -> crate::error::ApiError {
+    crate::error::ApiError::new(status, code, message)
+}
+
+/// `POST /api/v1/vrl/test`. Runs user-provided synthetic samples through one
+/// transform in the isolated worker. Accepts the original `{program, sample}`
+/// body or `{transform, samples, timezone?}`.
+pub async fn synthetic_vrl(
+    axum::extract::State(s): axum::extract::State<crate::State>,
+    h: axum::http::HeaderMap,
+    axum::Json(input): axum::Json<Value>,
+) -> crate::error::Result<axum::Json<Value>> {
+    use axum::http::StatusCode;
+    let user = crate::auth::authorize(&s, &h, &["editor", "operator"], true).await?;
+    let legacy = input.get("transform").is_none();
+    let (transform, samples) = if legacy {
+        crate::db::string(&input, "program", 16384)?;
+        if !input["sample"].is_object() {
+            return Err(crate::error::ApiError::invalid(
+                "Provide one synthetic sample object of at most 64 KiB",
+            ));
+        }
+        (
+            json!({"type":"remap","source":input["program"]}),
+            vec![input["sample"].clone()],
+        )
+    } else {
+        let transform = input["transform"].clone();
+        if !transform.is_object() || transform.to_string().len() > 65536 {
+            return Err(crate::error::ApiError::invalid(
+                "Provide the step's settings as an object of at most 64 KiB",
+            ));
+        }
+        let samples = input["samples"].as_array().cloned().unwrap_or_default();
+        if samples.is_empty()
+            || samples.len() > MAX_SAMPLES
+            || samples.iter().any(|s| !s.is_object())
+        {
+            return Err(crate::error::ApiError::invalid(
+                "Provide 1 to 20 synthetic sample objects",
+            ));
+        }
+        (transform, samples)
+    };
+    if json!(samples).to_string().len() > MAX_SAMPLE_BYTES {
+        return Err(crate::error::ApiError::invalid(
+            "Synthetic samples must total at most 64 KiB",
+        ));
+    }
+    let timezone = match input.get("timezone") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(zone)) if zone.len() <= 64 && !zone.chars().any(char::is_control) => {
+            Some(zone.clone())
+        }
+        Some(_) => {
+            return Err(crate::error::ApiError::invalid(
+                "Timezone must be a short name",
+            ));
+        }
+    };
+    if let Err(message) = testable_transform(&transform) {
+        return Err(crate::error::ApiError::invalid(message));
+    }
+    // A debounced auto-run fires after typing pauses; the worker still has two slots.
+    s.limit(
+        format!("vrl:{}", crate::api::text(&user, "id")),
+        120,
+        std::time::Duration::from_secs(60),
+    )?;
+    let url = s.settings.validation_url.as_ref().ok_or_else(|| {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CAPABILITY_DENIED",
+            "Isolated synthetic sample runner is not configured",
+        )
+    })?;
+    let _permit = s
+        .validation_slots
+        .try_acquire()
+        .map_err(|_| worker_busy())?;
+    let request = json!({"transform":transform,"samples":samples,"timezone":timezone});
+    let reply = worker_call(url, "transform-test", &request, 512 * 1024)
+        .await
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "VALIDATION_FAILED",
+                "Isolated sample runner unavailable or busy",
+            )
+        })?;
+    let ports = sample_ports(&transform);
+    let parsed = (|| {
+        let compiled = reply["compiled"].as_bool()?;
+        let diagnostics = crate::vector_diagnostics::sanitize(&json!({}), &reply["diagnostics"])?;
+        let results = if compiled {
+            sanitize_results(&reply["results"], samples.len(), &ports)?
+        } else {
+            vec![]
+        };
+        let placeholders = worker_placeholders(&transform, &reply["placeholders"])?;
+        Some((compiled, diagnostics, results, placeholders))
+    })();
+    let (compiled, diagnostics, results, placeholders) = parsed.ok_or_else(|| {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "VALIDATION_FAILED",
+            "Invalid sample runner response",
+        )
+    })?;
+    let first = results.first();
+    let output = first
+        .and_then(|r| r["outputs"].as_array())
+        .and_then(|o| o.first())
+        .map(|o| o["event"].clone())
+        .unwrap_or(Value::Null);
+    let diagnostic_text = diagnostics
+        .iter()
+        .filter_map(|d| d["detail"].as_str().or(d["message"].as_str()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut public = json!({
+        "valid": compiled,
+        "compiled": compiled,
+        "output": output,
+        "errors": if compiled { vec![] } else { vec!["VRL compilation failed. Review the program."] },
+        "diagnostics": diagnostics,
+        "results": results,
+        "ports": ports,
+    });
+    if !diagnostic_text.is_empty() {
+        public["diagnostic"] = json!(crate::vector_diagnostics::bounded(&diagnostic_text, 4000));
+    }
+    if !placeholders.is_empty() {
+        public["placeholders"] = json!(placeholders);
+    }
+    if legacy
+        && let Some(result) = first
+        && ["error", "aborted"].contains(&result["outcome"].as_str().unwrap_or(""))
+    {
+        public["valid"] = json!(false);
+        public["errors"] = json!([result["message"]
+            .as_str()
+            .unwrap_or("The program aborted the event.")]);
+    }
+    // Record that this account used the isolated runner, at most once per ten
+    // minutes, instead of one audit row per auto-run.
+    if s.limit(
+        format!("vrl-audit:{}", crate::api::text(&user, "id")),
+        1,
+        std::time::Duration::from_secs(600),
+    )
+    .is_ok()
+    {
+        let _guard = s.writer.lock().await;
+        let mut tx = s.pool.begin().await?;
+        crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
+        crate::db::audit(
+            &mut tx,
+            crate::api::text(&user, "id"),
+            "vrl.synthetic_test",
+            "",
+            if compiled { "success" } else { "failed" },
+        )
+        .await?;
+        tx.commit().await?;
+    }
+    Ok(axum::Json(public))
+}
+
+fn sanitize_tests(value: &Value) -> Option<Vec<Value>> {
+    let items = value.as_array()?;
+    if items.len() > 100 {
+        return None;
+    }
+    items
+        .iter()
+        .map(|item| {
+            let name = item["name"].as_str().filter(|n| n.len() <= 1000)?;
+            let passed = item["passed"].as_bool()?;
+            let mut clean =
+                json!({"name":crate::vector_diagnostics::bounded(name,240),"passed":passed});
+            for (key, limit) in [("message", 600), ("detail", 3000)] {
+                if let Some(text) = item.get(key) {
+                    let text = text.as_str().filter(|t| t.len() <= limit * 4)?;
+                    let text: String = text
+                        .chars()
+                        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                        .collect();
+                    clean[key] = json!(crate::vector_diagnostics::bounded(&text, limit));
+                }
+            }
+            if let Some(outputs) = item.get("outputs") {
+                let outputs = outputs.as_array().filter(|o| o.len() <= 10)?;
+                if outputs.iter().any(|o| o.to_string().len() > 8192) {
+                    return None;
+                }
+                clean["outputs"] = json!(outputs);
+            }
+            Some(clean)
+        })
+        .collect()
+}
+
+/// `POST /api/v1/configurations/test`: run the draft's native `tests` with
+/// `vector test` in the isolated worker and report every test's result.
+pub async fn pipeline_tests(
+    axum::extract::State(s): axum::extract::State<crate::State>,
+    h: axum::http::HeaderMap,
+    axum::Json(input): axum::Json<Value>,
+) -> crate::error::Result<axum::Json<Value>> {
+    use axum::http::StatusCode;
+    let user = crate::auth::authorize(&s, &h, &["editor", "operator"], true).await?;
+    s.limit(
+        format!("pipeline-tests:{}", crate::api::text(&user, "id")),
+        20,
+        std::time::Duration::from_secs(60),
+    )?;
+    let config = &input["config"];
+    let structural = validate(config);
+    let finish = |mut result: Value, tests: Vec<Value>, tests_run: bool| {
+        let passed = tests.iter().filter(|t| t["passed"] == true).count();
+        result["tests"] = json!(tests);
+        result["tests_run"] = json!(tests_run);
+        if tests_run {
+            result["output"] = json!(format!("{passed} of {} tests passed.", tests.len()));
+        }
+        result
+    };
+    if structural["valid"] != true {
+        let result = check_result(
+            structural_diagnostics(config, &structural),
+            false,
+            false,
+            vec![],
+            vec![],
+        );
+        return Ok(axum::Json(finish(result, vec![], false)));
+    }
+    let reasons = device_context_reasons(config);
+    if config.get("provider").is_some_and(|p| !p.is_null()) {
+        let mut result = check_result(
+            vec![Diagnostic {
+                code: Some("provider".into()),
+                ..Diagnostic::error(
+                    "A configuration provider supplies this pipeline on each device. Run these tests on the device.",
+                )
+            }],
+            false,
+            false,
+            reasons,
+            vec![],
+        );
+        result["deferred"] = json!(true);
+        return Ok(axum::Json(finish(result, vec![], false)));
+    }
+    let unavailable = || {
+        api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CAPABILITY_DENIED",
+            "Isolated Vector pipeline test runner is unavailable",
+        )
+    };
+    let url = s.settings.validation_url.as_ref().ok_or_else(unavailable)?;
+    if config["tests"]
+        .as_array()
+        .is_none_or(|tests| tests.is_empty())
+    {
+        let result = check_result(
+            vec![Diagnostic {
+                section: Some("tests".into()),
+                code: Some("no_tests".into()),
+                ..Diagnostic::error("Add at least one Vector pipeline test before running tests.")
+            }],
+            false,
+            false,
+            vec![],
+            vec![],
+        );
+        return Ok(axum::Json(finish(result, vec![], false)));
+    }
+    let _permit = s
+        .validation_slots
+        .try_acquire()
+        .map_err(|_| worker_busy())?;
+    let reply = worker_call(url, "tests", &json!({"config":config}), 512 * 1024)
+        .await
+        .ok_or_else(unavailable)?;
+    let parsed = (|| {
+        let tests_run = reply["tests_run"].as_bool()?;
+        let tests = sanitize_tests(&reply["tests"])?;
+        let diagnostics = crate::vector_diagnostics::sanitize(config, &reply["diagnostics"])?;
+        let placeholders = worker_placeholders(config, &reply["placeholders"])?;
+        Some((tests_run, tests, diagnostics, placeholders))
+    })();
+    let (tests_run, tests, native, placeholders) = parsed.ok_or_else(unavailable)?;
+    let mut diagnostics: Vec<Diagnostic> = native.iter().map(Diagnostic::from_json).collect();
+    let failed = tests.iter().filter(|t| t["passed"] == false).count();
+    if tests_run && failed > 0 {
+        diagnostics.push(Diagnostic {
+            section: Some("tests".into()),
+            code: Some("test_failed".into()),
+            ..Diagnostic::error(format!(
+                "{failed} of {} pipeline tests failed.",
+                tests.len()
+            ))
+        });
+    } else if !tests_run && !diagnostics.iter().any(|d| d.severity == "error") {
+        diagnostics.push(Diagnostic::error(
+            "The isolated Vector worker could not run pipeline tests. Try again.",
+        ));
+    }
+    let mut result = check_result(diagnostics, tests_run, true, reasons, placeholders);
+    result["vector_validated"] = json!(false);
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
+    crate::db::audit(
+        &mut tx,
+        crate::api::text(&user, "id"),
+        "configuration.tests",
+        "",
+        if result["valid"] == true {
+            "success"
+        } else {
+            "failed"
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(axum::Json(finish(result, tests, tests_run)))
+}
+
 pub fn render(config: &Value) -> std::result::Result<String, serde_json::Error> {
     // serde_json's default map is ordered: artifact bytes are stable and exclude canvas layout.
     serde_json::to_string_pretty(config).map(|s| s + "\n")
@@ -918,7 +1718,7 @@ fn output_exists(kind: &str, item: &Value, port: Option<&str>) -> Option<bool> {
 }
 pub fn validate(config: &Value) -> Value {
     let mut errors = Vec::<String>::new();
-    let mut warnings=vec!["Vector validation unavailable; structural checks only. The device must validate with its installed Vector binary before activation.".to_owned()];
+    let mut warnings = Vec::<String>::new();
     if !config.is_object() {
         errors.push("Configuration must be a JSON object".into());
         return json!({"valid":false,"errors":errors,"warnings":warnings,"vector_validated":false,"vector_version":VECTOR_VERSION});
@@ -966,30 +1766,6 @@ pub fn validate(config: &Value) -> Value {
                         }
                     } else if item.get("inputs").is_some() {
                         errors.push(format!("{name}: sources cannot have inputs"))
-                    }
-                    if ![
-                        "file",
-                        "syslog",
-                        "http_server",
-                        "opentelemetry",
-                        "remap",
-                        "filter",
-                        "route",
-                        "sample",
-                        "console",
-                        "http",
-                        "elasticsearch",
-                        "aws_s3",
-                        "loki",
-                        "demo_logs",
-                        "internal_metrics",
-                        "prometheus_exporter",
-                    ]
-                    .contains(&item["type"].as_str().unwrap_or(""))
-                    {
-                        warnings.push(format!(
-                            "{name}: generic component; requires native Vector validation"
-                        ))
                     }
                 }
             } else {
@@ -1199,9 +1975,6 @@ pub fn validate(config: &Value) -> Value {
         }
     }
     security(config, &mut errors);
-    if needs_device_context(config) {
-        warnings.push("Device-local environment, secret providers or files are required; full Vector mode may be required and native validation must run on the device".into());
-    }
     let (_, reference_errors) = local_secret_references(config);
     errors.extend(reference_errors);
     errors.sort();
@@ -1298,95 +2071,6 @@ mod tests {
         config["sinks"]["out"]["type"] = json!("opaque_future_sink");
         config["sinks"]["out"]["buffer"] = json!({"type":"opaque_future_buffer"});
         assert_eq!(validate(&config)["valid"], true);
-    }
-    #[test]
-    fn device_deferral_keeps_structural_warnings() {
-        let config = json!({"sources":{"opaque":{"type":"future_source","path":"/device/input"}},"sinks":{"out":{"type":"blackhole","inputs":["opaque"]}}});
-        let mut result = validate(&config);
-        assert_eq!(result["valid"], true, "{result}");
-        assert!(mark_device_deferred(&mut result, &config));
-        assert!(mark_device_deferred(&mut result, &config));
-        let warnings = result["warnings"].as_array().unwrap();
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.as_str().unwrap().contains("generic component"))
-        );
-        assert_eq!(
-            warnings
-                .iter()
-                .filter(|warning| warning
-                    .as_str()
-                    .unwrap()
-                    .contains("Native validation is deferred"))
-                .count(),
-            1
-        );
-    }
-    #[test]
-    fn synthetic_test_event_path_does_not_defer_native_checks() {
-        let mut config = json!({"sources":{"sample":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["sample"]}},"tests":[{"name":"Synthetic path","inputs":[{"insert_at":"sample","type":"log","log_fields":{"path":"/synthetic/event","search_dirs":["/synthetic/only"],"message":"${LITERAL_EVENT}"}}]}]});
-        config["tests"][0]["inputs"]
-            .as_array_mut()
-            .unwrap()
-            .extend([
-                json!({"insert_at":"sample","type":"raw","value":"${LITERAL_RAW_EVENT}"}),
-                json!({"insert_at":"sample","type":"metric","metric":{"name":"synthetic","tags":{"path":"/synthetic/metric"}}}),
-            ]);
-        assert!(device_context_reasons(&config).is_empty());
-        config["sinks"]["out"] = json!({"type":"file","inputs":["sample"],"path":"/device/output.jsonl","encoding":{"codec":"json"}});
-        assert!(can_static_check_device_paths(&config));
-        config["tests"][0]["inputs"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"insert_at":"sample","type":"vrl","source":".host = get_env_var!(\"DEVICE_HOST\")"}));
-        assert!(
-            device_context_reasons(&config).contains(&"VRL access to device resources".to_owned())
-        );
-        assert!(!can_static_check_device_paths(&config));
-    }
-    #[test]
-    fn vrl_diagnostic_strips_logs_and_escapes_and_bounds_output() {
-        let stderr = b"2026-09-29T02:07:28.361246Z  INFO vector::app: Log level is enabled. level=\"info\"\n\n\x1b[0m\x1b[1m\x1b[38;5;9merror[E103]\x1b[0m\x1b[1m: unhandled fallible assignment\x1b[0m\n  \x1b[0m\x1b[34m\xe2\x94\x8c\xe2\x94\x80\x1b[0m :1:6\n";
-        let diagnostic = vrl_diagnostic(stderr).unwrap();
-        assert!(diagnostic.starts_with("error[E103]: unhandled fallible assignment"));
-        assert!(!diagnostic.contains('\u{1b}'));
-        assert!(!diagnostic.contains("Log level"));
-        assert!(diagnostic.contains(":1:6"));
-        assert_eq!(
-            vrl_diagnostic(b"2026-09-29T02:07:28Z  INFO vector::app: only logs\n"),
-            None
-        );
-        let long = vec![b'x'; 9000];
-        let bounded = vrl_diagnostic(&long).unwrap();
-        assert!(bounded.len() <= 4005 && bounded.ends_with('…'));
-    }
-    #[test]
-    fn static_worker_checks_device_paths_but_not_external_code() {
-        let mut config = json!({"data_dir":"/var/lib/vector","sources":{"input":{"type":"file","include":["/var/log/app/*.log"]}},"transforms":{"parse":{"type":"remap","inputs":["input"],"source":". = parse_json!(.message)"}},"sinks":{"out":{"type":"file","inputs":["parse"],"path":"/device/events.jsonl","encoding":{"codec":"json"}}}});
-        assert!(can_static_check_device_paths(&config));
-        // Sources and sinks are not built with --no-environment: TLS files and
-        // Unix sockets are parsed, never opened.
-        config["sinks"]["out"]["tls"]["ca_file"] = json!("/device/ca.pem");
-        assert!(can_static_check_device_paths(&config));
-        config["sources"]["input"] =
-            json!({"type":"socket","mode":"unix_stream","path":"/device/input.sock"});
-        assert!(can_static_check_device_paths(&config));
-        // Environment interpolation changes the loaded bytes; keep it deferred.
-        config["sinks"]["out"]["path"] = json!("${DEVICE_OUTPUT}");
-        assert!(!can_static_check_device_paths(&config));
-        config["sinks"]["out"]["path"] = json!("/device/events.jsonl");
-        // Component IDs and route names are labels, not path fields.
-        let labels = json!({"sources":{"file":{"type":"demo_logs","format":"json"}},"transforms":{"logs_dir":{"type":"route","inputs":["file"],"route":{"file":".a == 1"}}},"sinks":{"out_path":{"type":"blackhole","inputs":["logs_dir.file"]}}});
-        assert!(
-            device_context_reasons(&labels).is_empty(),
-            "{:?}",
-            device_context_reasons(&labels)
-        );
-        // Transforms are compiled, so external VRL files cannot be read on the worker.
-        config["transforms"]["parse"] =
-            json!({"type":"remap","inputs":["input"],"file":"/etc/vector/parse.vrl"});
-        assert!(!can_static_check_device_paths(&config));
     }
     #[test]
     fn memory_enrichment_registers_only_declared_native_outputs() {
@@ -1531,11 +2215,14 @@ mod tests {
     fn platform_deferral_is_exact_and_reports_resource_reasons() {
         for component in ["dnstap", "file_descriptor", "journald", "windows_event_log"] {
             let config = json!({"sources":{"input":{"type":component}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}});
-            let mut result = validate(&config);
-            assert!(mark_device_deferred(&mut result, &config));
+            let result = validate(&config);
             assert_eq!(result["valid"], true);
             assert_eq!(result["vector_validated"], false);
-            assert!(result["deferred_reasons"].to_string().contains(component));
+            assert!(
+                device_context_reasons(&config)
+                    .iter()
+                    .any(|r| r.contains(component))
+            );
         }
         for component in ["demo_logs", "kafka", "not_a_real_type"] {
             let config = json!({"sources":{"input":{"type":component}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}});
@@ -1591,97 +2278,252 @@ mod tests {
     }
 
     #[test]
-    fn native_diagnostics_classify_pinned_output_without_copying_values() {
-        let config = json!({"sources":{"input":{"type":"file"}},"transforms":{"normalize":{"type":"remap","inputs":["input"],"source":"THIS IS NOT VALID VRL!!!"}},"sinks":{"out":{"type":"blackhole","inputs":["normalize"]}}});
-        let vrl = b"Transform errors\n----------------\nx Transform \"normalize\": \nerror[E203]: syntax error\n1 | THIS IS NOT VALID VRL!!!\n  | /host/private/SECRET_VALUE\n";
-        let issue = classify_native_issue(&config, &[], vrl, false);
-        assert_eq!(
-            issue,
-            json!({"code":"VRL_COMPILE_ERROR","section":"transforms","component":"normalize"})
-        );
-        let public = public_native_issue(&config, &issue).unwrap();
-        assert!(public.contains("transforms.normalize"));
-        assert!(!public.contains("SECRET_VALUE"));
-        assert!(!public.contains("THIS IS NOT"));
-
-        let missing =
-            b"Failed to load [\"/private/path\"]\nx sources.input: missing field `include`\n";
-        let issue = classify_native_issue(&config, &[], missing, false);
-        assert_eq!(
-            issue,
-            json!({"code":"REQUIRED_FIELD","section":"sources","component":"input","field":"include"})
-        );
-        assert_eq!(
-            public_native_issue(&config, &issue).unwrap(),
-            "sources.input: required setting `include` is missing."
-        );
-
-        let unknown = b"x sources.input: unknown variant `SECRET_VALUE`, expected one of `file`\n";
-        let issue = classify_native_issue(&config, &[], unknown, false);
-        assert_eq!(issue["code"], "UNKNOWN_VARIANT");
-        assert!(
-            !public_native_issue(&config, &issue)
-                .unwrap()
-                .contains("SECRET_VALUE")
-        );
-
-        let test_output = b"Running tests\ntest private-secret-name ... failed\noutput payloads:\n  {\"secret\":\"SECRET_VALUE\"}\n";
-        let issue = classify_native_issue(&config, test_output, &[], true);
-        assert_eq!(issue, json!({"code":"PIPELINE_TEST_FAILED"}));
-        let public = public_native_issue(&config, &issue).unwrap();
-        assert!(!public.contains("private-secret-name"));
-        assert!(!public.contains("SECRET_VALUE"));
-    }
-
-    #[test]
-    fn native_diagnostic_boundary_rejects_forged_locations_and_fields() {
-        let config = json!({"sources":{"input":{"type":"file"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}});
-        for issue in [
-            json!({"code":"REQUIRED_FIELD","section":"sources","component":"input","field":"SECRET_VALUE"}),
-            json!({"code":"REQUIRED_FIELD","section":"sources","component":"other","field":"include"}),
-            json!({"code":"UNKNOWN_VARIANT","section":"sources","component":"input","message":"SECRET_VALUE"}),
-            json!({"code":"PIPELINE_TEST_FAILED","section":"sources","component":"input"}),
-            json!({"code":"VRL_COMPILE_ERROR","section":"sources","component":"input"}),
-            json!({"code":"SECRET_VALUE"}),
-        ] {
-            assert_eq!(public_native_issue(&config, &issue), None, "{issue}");
-        }
-        assert_eq!(
-            classify_native_issue(
-                &config,
-                &[],
-                b"x sources.other: missing field `include`",
-                false
+    fn placeholders_follow_vector_interpolation_and_keep_values_parseable() {
+        let mut found = BTreeSet::new();
+        let cases = [
+            ("address", "0.0.0.0:${PORT}", "0.0.0.0:9"),
+            ("address", "${LISTEN}", "127.0.0.1:9"),
+            (
+                "endpoint",
+                "https://${ES_HOST}:9200",
+                "https://vectory-placeholder:9200",
             ),
-            Value::Null
+            ("uri", "SECRET[vault.url]", "http://127.0.0.1:9"),
+            (
+                "token",
+                "Bearer SECRET[vault.token]",
+                "Bearer vectory-placeholder",
+            ),
+            ("bucket", "${BUCKET:-logs}", "logs"),
+            ("bucket", "${BUCKET-archive}", "archive"),
+            ("path", "$LOG_DIR", "/vectory-placeholder"),
+            ("source", ".cost = \"$$5 and $5\"", ".cost = \"$$5 and $5\""),
+        ];
+        for (key, text, expected) in cases {
+            let replaced =
+                substitute_references(text, key, &mut found).unwrap_or_else(|| text.to_owned());
+            assert_eq!(replaced, expected, "{key}={text}");
+        }
+        assert!(
+            found.contains("${PORT}")
+                && found.contains("SECRET[vault.token]")
+                && found.contains("$LOG_DIR")
         );
-        assert_eq!(
-            classify_native_issue(
-                &config,
-                &[],
-                b"x sources.input: missing field `SECRET_VALUE`",
-                false
-            )["field"],
-            Value::Null
-        );
+        assert!(substitute_references("no references", "x", &mut found).is_none());
     }
 
     #[test]
-    fn public_test_result_discards_worker_diagnostics_and_claims() {
-        let config = json!({"tests":[{"name":"private-name"}]});
-        let hostile = json!({"valid":false,"tests_run":true,"vector_version":"0.58.0","errors":["SECRET_VALUE /private/path"],"output":"SECRET_VALUE","warnings":["SECRET_VALUE"],"native_issue":{"code":"PIPELINE_TEST_FAILED"},"deferred":false});
-        let public = public_pipeline_test_result(&config, &hostile).unwrap();
-        assert_eq!(public["valid"], false);
-        assert_eq!(public["tests_run"], true);
-        assert_eq!(public["deferred"], false);
-        assert!(!public.to_string().contains("SECRET_VALUE"));
-        assert!(!public.to_string().contains("/private/path"));
-        assert!(!public.to_string().contains("native_issue"));
-        let malformed = json!({"valid":true,"tests_run":false,"vector_version":"0.58.0"});
-        assert_eq!(public_pipeline_test_result(&config, &malformed), None);
-        let contradictory = json!({"valid":true,"tests_run":true,"vector_version":"0.58.0","errors":["SECRET_VALUE"]});
-        assert_eq!(public_pipeline_test_result(&config, &contradictory), None);
-        let deferred_pass = json!({"valid":true,"tests_run":true,"vector_version":"0.58.0","errors":[],"native_issue":null,"deferred":true});
-        assert_eq!(public_pipeline_test_result(&config, &deferred_pass), None);
+    fn static_candidate_never_runs_secret_backends_or_providers() {
+        let config = json!({
+            "secret": {"vault": {"type": "exec", "command": ["/bin/steal"]}},
+            "sources": {"in": {"type": "socket", "mode": "tcp", "address": "0.0.0.0:${PORT}"}},
+            "transforms": {
+                "external": {"type": "remap", "inputs": ["in"], "file": "/etc/vector/parse.vrl"},
+                "inline": {"type": "remap", "inputs": ["external"], "source": ".token = \"SECRET[vault.t]\""}
+            },
+            "sinks": {"out": {"type": "http", "inputs": ["inline"], "uri": "${URL}", "encoding": {"codec": "json"}}}
+        });
+        let candidate = static_candidate(&config, |_, _| true);
+        assert!(candidate.checkable);
+        assert!(candidate.config.get("secret").is_none());
+        assert_eq!(candidate.config["sources"]["in"]["address"], "0.0.0.0:9");
+        assert_eq!(
+            candidate.config["sinks"]["out"]["uri"],
+            "http://127.0.0.1:9"
+        );
+        assert_eq!(candidate.config["transforms"]["external"]["source"], ".");
+        assert!(candidate.stubbed["external"].contains("file"));
+        assert_eq!(
+            candidate.placeholders,
+            vec!["${PORT}", "${URL}", "SECRET[vault.t]"]
+        );
+        assert!(!candidate.config.to_string().contains("/bin/steal"));
+        // A platform component missing from this worker's build is replaced, not rejected.
+        let missing = static_candidate(&config, |_, kind| kind != "socket");
+        assert_eq!(missing.config["sources"]["in"]["type"], "demo_logs");
+        let mut provider = config.clone();
+        provider["provider"] = json!({"type":"http","url":"https://config.example/"});
+        let candidate = static_candidate(&provider, |_, _| true);
+        assert!(!candidate.checkable);
+        assert!(candidate.config.get("provider").is_none());
+        // No section is created where the draft had none.
+        let bare = static_candidate(&json!({"sources":{}}), |_, _| true);
+        assert!(bare.config.get("transforms").is_none());
+    }
+
+    #[test]
+    fn repair_removes_reported_problems_so_later_stages_are_checked() {
+        let mut candidate = json!({
+            "bogus": true,
+            "sources": {"a": {"type": "demo_logs", "format": "json"}, "b": {"type": "file"}},
+            "transforms": {"t": {"type": "remap", "inputs": ["a", "gone"], "source": ".", "drop_on_eror": true}},
+            "sinks": {"only_gone": {"type": "blackhole", "inputs": ["gone"]}, "fed": {"type": "blackhole", "inputs": ["t"]}}
+        });
+        let error = |section: &str,
+                     component: Option<&str>,
+                     code: &str,
+                     field: Option<&str>,
+                     related: Option<&str>| Diagnostic {
+            section: Some(section.into()),
+            component: component.map(str::to_owned),
+            code: Some(code.into()),
+            field: field.map(str::to_owned),
+            related: related.into_iter().map(str::to_owned).collect(),
+            ..Diagnostic::error("x")
+        };
+        let mut stubbed = BTreeMap::new();
+        assert!(repair_candidate(
+            &mut candidate,
+            &[
+                error("global", None, "unknown_field", Some("bogus"), None),
+                error("sources", Some("b"), "missing_field", Some("include"), None),
+                error(
+                    "transforms",
+                    Some("t"),
+                    "unknown_field",
+                    Some("drop_on_eror"),
+                    None
+                ),
+                error(
+                    "transforms",
+                    Some("t"),
+                    "missing_input",
+                    Some("inputs"),
+                    Some("gone")
+                ),
+                error(
+                    "sinks",
+                    Some("only_gone"),
+                    "missing_input",
+                    Some("inputs"),
+                    Some("gone")
+                ),
+            ],
+            &mut stubbed,
+        ));
+        assert!(candidate.get("bogus").is_none());
+        assert_eq!(candidate["sources"]["b"]["type"], "demo_logs");
+        assert_eq!(candidate["transforms"]["t"]["inputs"], json!(["a"]));
+        assert!(candidate["transforms"]["t"].get("drop_on_eror").is_none());
+        assert!(candidate["sinks"].get("only_gone").is_none());
+        assert!(stubbed.contains_key("b") && stubbed.contains_key("only_gone"));
+        assert!(!repair_candidate(
+            &mut candidate,
+            &[error("transforms", Some("t"), "cycle", None, None)],
+            &mut stubbed
+        ));
+    }
+
+    #[test]
+    fn consumers_include_named_outputs_and_wildcards() {
+        let config = json!({"transforms":{"r":{"type":"route","inputs":["in"],"route":{"a":"true"}}},"sinks":{"s":{"type":"blackhole","inputs":["r.a","app_*"]}}});
+        assert!(consumed(&config, "r", Some("a")));
+        assert!(!consumed(&config, "r", Some("_unmatched")));
+        assert!(consumed(&config, "app_web", None));
+        assert!(!consumed(&config, "web", None));
+    }
+
+    #[test]
+    fn sample_pipeline_tags_every_output_and_forces_observable_drops() {
+        let remap =
+            json!({"type":"remap","inputs":["upstream"],"source":".a = 1","drop_on_error":false});
+        let pipeline = sample_pipeline(&remap, "/tmp/data", Some("UTC"));
+        let step = &pipeline["transforms"]["vectory_step"];
+        assert_eq!(step["inputs"], json!(["vectory_sample_in"]));
+        assert_eq!(step["drop_on_error"], true);
+        assert_eq!(step["reroute_dropped"], true);
+        assert_eq!(pipeline["timezone"], "UTC");
+        assert_eq!(
+            pipeline["transforms"]["vectory_out_1"]["inputs"],
+            json!(["vectory_step.dropped"])
+        );
+        let route = json!({"type":"route","route":{"errors":".status >= 500","ok":"true"},"reroute_unmatched":false});
+        assert_eq!(sample_ports(&route), vec!["errors", "ok"]);
+        let exclusive = json!({"type":"exclusive_route","routes":[{"name":"a","condition":"true"},{"name":"bad name","condition":"true"}]});
+        assert_eq!(sample_ports(&exclusive), vec!["a", "_unmatched"]);
+        assert!(testable_transform(&json!({"type":"remap","file":"/x.vrl"})).is_err());
+        assert!(testable_transform(&json!({"type":"lua","source":"x"})).is_err());
+    }
+
+    #[test]
+    fn sample_results_group_outputs_and_locate_runtime_errors() {
+        let program = "if .x { abort }\n. = parse_json!(.message)";
+        let remap = json!({"type":"remap","source":program});
+        let start = program.find("parse_json!").unwrap();
+        let end = program.len();
+        let stdout = format!(
+            "{}\n{}\n{}\nnot json\n{}\n",
+            json!({"s":0,"o":"","e":{"a":1,"ts":"2026-01-01T00:00:00Z"},"t":["ts"]}),
+            json!({"s":1,"o":"dropped","d":{"reason":"abort","message":"aborted"}}),
+            json!({"s":2,"o":"dropped","d":{"reason":"error","message":format!("function call error for \"parse_json\" at ({start}:{end}): unable to parse json")}}),
+            json!({"s":9,"o":"","e":{}}),
+        );
+        let results = sample_results(&remap, 4, stdout.as_bytes());
+        assert_eq!(results[0]["outcome"], "emitted");
+        assert_eq!(results[0]["outputs"][0]["timestamps"], json!(["ts"]));
+        assert_eq!(results[1]["outcome"], "aborted");
+        assert_eq!(results[2]["outcome"], "error");
+        assert_eq!(
+            (results[2]["line"].clone(), results[2]["column"].clone()),
+            (json!(2), json!(5))
+        );
+        assert_eq!(results[3]["outcome"], "dropped");
+        let filter = json!({"type":"filter","condition":"true"});
+        assert_eq!(sample_results(&filter, 1, b"")[0]["outcome"], "filtered");
+        assert_eq!(runtime_position("abc", "at (5:9)"), None);
+    }
+
+    #[test]
+    fn check_result_reports_every_problem_and_honest_deferral() {
+        let config = json!({"transforms":{"t":{"type":"remap","inputs":["a"],"source":"x"}}});
+        let diagnostics = vec![
+            Diagnostic::warning("w"),
+            Diagnostic {
+                code: Some("E103".into()),
+                line: Some(1),
+                column: Some(2),
+                ..Diagnostic::error("unhandled fallible assignment").at(&config, "t")
+            },
+            Diagnostic::error("second"),
+        ];
+        let result = check_result(
+            diagnostics,
+            true,
+            true,
+            vec!["native secret references".into()],
+            vec!["SECRET[a.b]".into()],
+        );
+        assert_eq!(result["valid"], false);
+        assert_eq!(result["static_checked"], true);
+        assert_eq!(result["vector_validated"], false);
+        assert_eq!(result["deferred"], true);
+        assert_eq!(result["diagnostics"][0]["severity"], "error");
+        assert_eq!(
+            result["errors"][0],
+            "transforms.t line 1:2: E103 unhandled fallible assignment"
+        );
+        assert_eq!(result["placeholders"], json!(["SECRET[a.b]"]));
+        assert!(
+            result["warnings"]
+                .to_string()
+                .contains("Each device checks secrets")
+        );
+        let clean = check_result(vec![], true, true, vec![], vec![]);
+        assert_eq!(clean["valid"], true);
+        assert_eq!(clean["vector_validated"], true);
+        assert_eq!(clean["deferred"], false);
+        assert_eq!(clean["warnings"], json!([]));
+    }
+
+    #[test]
+    fn softened_placeholder_findings_are_device_checks() {
+        let softened =
+            soften_placeholder(Diagnostic::error(format!("invalid value `{PLACEHOLDER}`")));
+        assert_eq!(softened.severity, "warning");
+        assert_eq!(softened.code.as_deref(), Some("device_value"));
+        assert_eq!(
+            soften_placeholder(Diagnostic::error("real")).severity,
+            "error"
+        );
     }
 }
