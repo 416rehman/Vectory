@@ -17,7 +17,7 @@ python3 tests/load/capacity.py --server server/target/release/vectory-server \
   --driver /private/capacity-driver --out /private/new-directory --result /private/capacity.json
 ```
 
-It needs Python 3.11 or later with `cryptography`, and Go 1.24 or later. `--devices`, `--phases`, `--duration`, `--deploy-at` and `--enroll-per-minute` change the scenario. The fixture directory holds private keys and is deleted afterwards unless `--keep` is given; the result file holds measurements only. The server, the load generator and anything else running on the host share its CPUs, and the result records all three. Simulated devices never run Vector: their `verified_applied` reports are fixture input, not activation.
+It needs Python 3.11 or later with `cryptography`, and Go 1.24 or later. `--devices`, `--phases`, `--duration`, `--deploy-at` and `--enroll-per-minute` change the scenario. `--server-memory-mb` and `--driver-memory-mb` (4,096 each by default) cap each process's address space, so a runaway allocation fails in that process instead of exhausting a shared host. The fixture directory holds private keys and is deleted afterwards unless `--keep` is given; the result file holds measurements only. The server, the load generator and anything else running on the host share its CPUs, and the result records all three. Simulated devices never run Vector: their `verified_applied` reports are fixture input, not activation.
 
 ## Earlier protocol experiments
 
