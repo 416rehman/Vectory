@@ -149,12 +149,15 @@ func TestMetricsEndpointCLIInvalidRequestsPreserveSettings(t *testing.T) {
 }
 
 func TestMetricsEndpointCLIHelpAndFreshRefusal(t *testing.T) {
-	_, _, help := metricsCommand(t, []string{"help"})
-	if !strings.Contains(help, "configure-metrics") || !strings.Contains(help, "--clear-metrics-url") || strings.ContainsAny(help, "\ufffd\u2014") {
+	// Help goes to standard output; the command list names the command and its
+	// own help documents both flags.
+	code, general, _ := metricsCommand(t, []string{"help"})
+	_, detail, _ := metricsCommand(t, []string{"help", "configure-metrics"})
+	if code != 0 || !strings.Contains(general, "configure-metrics") || !strings.Contains(detail, "--clear-metrics-url") || !strings.Contains(detail, "--metrics-url URL") || strings.ContainsAny(general+detail, "\ufffd\u2014") {
 		t.Fatal("new command not discoverable in unambiguous help")
 	}
 	dir := filepath.Join(t.TempDir(), "never-created")
-	code, _, _ := metricsCommand(t, []string{"install", "--state-dir", dir, "--adopt", "--metrics-url=http://127.0.0.1:9800/metrics", "--clear-metrics-url"})
+	code, _, _ = metricsCommand(t, []string{"install", "--state-dir", dir, "--adopt", "--metrics-url=http://127.0.0.1:9800/metrics", "--clear-metrics-url"})
 	if code != 2 {
 		t.Fatal("fresh contradictory flags not rejected as usage")
 	}

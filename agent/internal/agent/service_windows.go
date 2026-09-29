@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -12,9 +13,22 @@ import (
 	"time"
 )
 
-// Service installation is a local administrator action and never a wire capability.
-// Registration does not start the workload or imply verified service operation.
+// ServiceName is how the Service Control Manager knows the agent.
+const ServiceName = "Vectory"
+
+// ServiceInstall registers the running executable.
 func ServiceInstall(dir, user string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return ServiceInstallFor(exe, dir, user)
+}
+
+// ServiceInstallFor registers exe. Service installation is a local
+// administrator action and never a wire capability. Registration does not
+// start the workload or imply verified service operation.
+func ServiceInstallFor(exe, dir, user string) error {
 	releaseLifecycle, err := lockLifecycle(dir)
 	if err != nil {
 		return err
@@ -28,10 +42,6 @@ func ServiceInstall(dir, user string) error {
 		return err
 	}
 	if err = CheckManagedDirectory(s.ManagedConfig, dir); err != nil {
-		return err
-	}
-	exe, err := os.Executable()
-	if err != nil {
 		return err
 	}
 	m, err := mgr.Connect()
@@ -144,4 +154,39 @@ func ServiceControl(action string) error {
 		return s.Delete()
 	}
 	return errors.New("invalid service operation")
+}
+
+// ServiceStatus asks the Service Control Manager about the agent service.
+func ServiceStatus(ctx context.Context) ServiceInfo {
+	info := ServiceInfo{Manager: "Windows services", Name: ServiceName}
+	m, err := mgr.Connect()
+	if err != nil {
+		return info
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(ServiceName)
+	if err != nil {
+		return info
+	}
+	defer s.Close()
+	info.Installed = true
+	if status, err := s.Query(); err == nil {
+		switch status.State {
+		case svc.Running:
+			info.State = "running"
+		case svc.Stopped:
+			info.State = "stopped"
+		case svc.StartPending:
+			info.State = "starting"
+		case svc.StopPending:
+			info.State = "stopping"
+		default:
+			info.State = "paused"
+		}
+		info.PID = int(status.ProcessId)
+	}
+	if cfg, err := s.Config(); err == nil {
+		info.Enabled = cfg.StartType == mgr.StartAutomatic
+	}
+	return info
 }
