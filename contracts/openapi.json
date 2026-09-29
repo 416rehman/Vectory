@@ -3,7 +3,7 @@
   "info": {
     "title": "Vectory control plane",
     "version": "0.1.0",
-    "description": "Single-instance self-hosted Vector configuration control plane. Agent paths use the separately configured TLS listener. Session mutations require CSRF. No request-body device UUID is trusted for authentication."
+    "description": "The HTTP API behind the Vectory dashboard. Everything the dashboard does goes through it.\n\n**Authentication.** Sign in with `POST /api/v1/login`. The reply sets the `vectory_session` cookie (HttpOnly, SameSite=Strict, 12 hours) and returns a `csrf_token`. Send the cookie with every request, and the token as the `X-CSRF-Token` header with every `POST`, `PUT` and `DELETE`. Requests run with your role. There are no separate API keys.\n\n**Agent protocol.** `/agent/v1/` operations are served only on the separate agent listener and authenticate devices with mutual TLS. A device ID in a request body is never trusted for authentication."
   },
   "servers": [
     {
@@ -72,7 +72,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/bootstrap": {
@@ -167,7 +170,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/login": {
@@ -259,7 +265,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/login/mfa": {
@@ -370,7 +379,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/session": {
@@ -437,7 +449,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/logout": {
@@ -511,7 +526,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/devices": {
@@ -581,7 +599,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/configurations": {
@@ -651,7 +672,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       },
       "post": {
         "summary": "Create canonical configuration and first immutable draft revision. Optional actor-scoped request_id returns PipelineCreateReceipt; exact retries return the current original result without another creation or audit.",
@@ -792,7 +816,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/deployments": {
@@ -862,7 +889,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       },
       "post": {
         "summary": "Create immediate or scheduled deployment. Keyed requests return DeploymentReceipt with durable request correlation; unkeyed legacy requests return Deployment.",
@@ -946,7 +976,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/groups": {
@@ -1016,7 +1049,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       },
       "post": {
         "summary": "Create operator-controlled group; optional actor-scoped request_id returns a GroupCreateReceipt and replays the same current group without another mutation or audit",
@@ -1125,7 +1161,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       }
     },
     "/api/v1/tokens": {
@@ -1195,7 +1234,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       },
       "post": {
         "summary": "Create scoped enrollment token; optional actor-scoped request_id prevents duplicate creation and supports cancellation without retaining its one-time secret",
@@ -1324,7 +1366,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       }
     },
     "/api/v1/releases": {
@@ -1394,7 +1439,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       }
     },
     "/api/v1/users": {
@@ -1464,7 +1512,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       },
       "post": {
         "summary": "Admin creates a local user; optional one-shot actor-scoped request_id permits secret-free status recovery and a cancellation fence, never password replay",
@@ -1629,7 +1680,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/devices/{id}": {
@@ -1705,7 +1759,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/configurations/{id}": {
@@ -1781,7 +1838,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/deployments/{id}": {
@@ -1857,7 +1917,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/versions/{id}": {
@@ -1933,7 +1996,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Versions"
+        ]
       }
     },
     "/api/v1/overview": {
@@ -2000,7 +2066,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Instance"
+        ]
       }
     },
     "/api/v1/issues": {
@@ -2070,7 +2139,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Issues"
+        ]
       }
     },
     "/api/v1/audit": {
@@ -2135,7 +2207,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/policies": {
@@ -2200,7 +2275,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent settings"
+        ]
       },
       "post": {
         "summary": "Save complete agent settings; optional actor-scoped request_id recovers the same original template without another save or audit",
@@ -2310,7 +2388,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent settings"
+        ]
       }
     },
     "/api/v1/settings": {
@@ -2375,7 +2456,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Instance"
+        ]
       }
     },
     "/api/v1/audit/history": {
@@ -2568,7 +2652,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/audit/{id}": {
@@ -2644,7 +2731,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/audit/exports": {
@@ -2715,7 +2805,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       },
       "post": {
         "summary": "Prepare a complete private JSONL snapshot before returning download metadata; requires CSRF",
@@ -2829,7 +2922,10 @@
               }
             }
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/audit/exports/{id}": {
@@ -2922,7 +3018,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/audit/exports/{id}/download": {
@@ -3020,7 +3119,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Audit"
+        ]
       }
     },
     "/api/v1/issues/history": {
@@ -3166,7 +3268,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Issues"
+        ]
       }
     },
     "/api/v1/issues/{id}": {
@@ -3243,7 +3348,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Issues"
+        ]
       }
     },
     "/api/v1/issues/{id}/acknowledge": {
@@ -3356,7 +3464,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Issues"
+        ]
       }
     },
     "/api/v1/issues/{id}/reopen": {
@@ -3469,7 +3580,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Issues"
+        ]
       }
     },
     "/api/v1/configurations/library": {
@@ -3602,7 +3716,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/requests/{request_id}": {
@@ -3678,7 +3795,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/requests": {
@@ -3766,7 +3886,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/draft": {
@@ -3918,7 +4041,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/revisions": {
@@ -3997,7 +4123,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/versions": {
@@ -4076,7 +4205,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Versions"
+        ]
       }
     },
     "/api/v1/configurations/{id}/history": {
@@ -4183,7 +4315,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/revisions/{revision_id}": {
@@ -4267,7 +4402,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/duplicate": {
@@ -4388,7 +4526,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/archive": {
@@ -4492,7 +4633,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/unarchive": {
@@ -4596,7 +4740,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/restore": {
@@ -4734,7 +4881,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/validate": {
@@ -4838,7 +4988,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/configurations/{id}/publish": {
@@ -4952,7 +5105,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Versions"
+        ]
       }
     },
     "/api/v1/configurations/publish-requests/{request_id}": {
@@ -5028,7 +5184,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Versions"
+        ]
       }
     },
     "/api/v1/configurations/publish-requests": {
@@ -5125,7 +5284,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Versions"
+        ]
       }
     },
     "/api/v1/deployments/history": {
@@ -5275,7 +5437,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/summary": {
@@ -5351,7 +5516,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/targets": {
@@ -5491,7 +5659,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/preview": {
@@ -5577,7 +5748,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/requests/{request_id}": {
@@ -5653,7 +5827,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/requests": {
@@ -5753,7 +5930,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/pause": {
@@ -5837,7 +6017,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/resume": {
@@ -5921,7 +6104,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/cancel": {
@@ -6005,7 +6191,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/unassign": {
@@ -6099,7 +6288,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/rollback-preview": {
@@ -6175,7 +6367,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/rollback": {
@@ -6269,7 +6464,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/refresh-preview": {
@@ -6366,7 +6564,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/unassign-preview": {
@@ -6450,7 +6651,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/deployments/{id}/refresh": {
@@ -6544,7 +6748,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Deployments"
+        ]
       }
     },
     "/api/v1/groups/requests/{request_id}": {
@@ -6620,7 +6827,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       }
     },
     "/api/v1/groups/requests": {
@@ -6708,7 +6918,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       }
     },
     "/api/v1/groups/{id}": {
@@ -6784,7 +6997,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       },
       "put": {
         "summary": "Update reviewed metadata and membership under revision CAS; stale revisions return 409 STALE_REVISION; new persistent members overlapping another active canary return 409 ACTIVE_CANARY_OVERLAP; rejected edits leave assignments unchanged",
@@ -6903,7 +7119,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Groups"
+        ]
       }
     },
     "/api/v1/policies/requests": {
@@ -6991,7 +7210,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent settings"
+        ]
       }
     },
     "/api/v1/policies/requests/{request_id}": {
@@ -7067,7 +7289,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent settings"
+        ]
       }
     },
     "/api/v1/tokens/requests/{request_id}": {
@@ -7143,7 +7368,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       }
     },
     "/api/v1/tokens/requests/{request_id}/cancel": {
@@ -7240,7 +7468,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       }
     },
     "/api/v1/tokens/{id}/revoke": {
@@ -7322,7 +7553,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Enrollment"
+        ]
       }
     },
     "/api/v1/devices/{id}/revocation": {
@@ -7399,7 +7633,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/revoke": {
@@ -7497,7 +7734,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/recover": {
@@ -7592,7 +7832,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/recovery-requests/{request_id}": {
@@ -7678,7 +7921,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/recovery-requests/{request_id}/cancel": {
@@ -7785,7 +8031,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/telemetry": {
@@ -7861,7 +8110,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/devices/{id}/retry": {
@@ -7955,7 +8207,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Devices"
+        ]
       }
     },
     "/api/v1/users/requests/{request_id}": {
@@ -8032,7 +8287,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/requests/{request_id}/cancel": {
@@ -8130,7 +8388,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}": {
@@ -8304,7 +8565,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}/access-requests/{request_id}": {
@@ -8390,7 +8654,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}/access-requests/{request_id}/cancel": {
@@ -8497,7 +8764,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/account/password": {
@@ -8597,7 +8867,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/account/revoke-sessions": {
@@ -8701,7 +8974,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/users/{id}/password-reset": {
@@ -8841,7 +9117,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}/password-reset/requests/{request_id}": {
@@ -8927,7 +9206,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}/password-reset/requests/{request_id}/cancel": {
@@ -9034,7 +9316,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/password-reset": {
@@ -9130,7 +9415,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/mfa": {
@@ -9206,7 +9494,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/mfa/setup": {
@@ -9314,7 +9605,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/mfa/confirm": {
@@ -9425,7 +9719,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/mfa/disable": {
@@ -9524,7 +9821,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/configurations/test": {
@@ -9620,7 +9920,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/vrl/test": {
@@ -9750,7 +10053,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Pipelines"
+        ]
       }
     },
     "/api/v1/openapi.json": {
@@ -9815,7 +10121,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Instance"
+        ]
       }
     },
     "/agent/v1/enroll": {
@@ -9888,7 +10197,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent protocol"
+        ]
       }
     },
     "/agent/v1/heartbeat": {
@@ -9965,7 +10277,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent protocol"
+        ]
       }
     },
     "/agent/v1/renew": {
@@ -10051,7 +10366,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent protocol"
+        ]
       }
     },
     "/agent/v1/artifacts/{sha256}": {
@@ -10128,7 +10446,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Agent protocol"
+        ]
       }
     }
   },
@@ -16788,5 +17109,64 @@
         "additionalProperties": false
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "name": "Sign-in and account",
+      "description": "First-run setup, sign-in, sessions, your password and two-factor authentication."
+    },
+    {
+      "name": "Pipelines",
+      "description": "Pipelines and their drafts, history, validation and tests."
+    },
+    {
+      "name": "Versions",
+      "description": "Publishing a pipeline as an immutable version, and reading published versions."
+    },
+    {
+      "name": "Deployments",
+      "description": "Assigning versions to devices: previews, rollouts, canary gates, pauses, removal and rollback."
+    },
+    {
+      "name": "Groups",
+      "description": "Named sets of devices that deployments target."
+    },
+    {
+      "name": "Agent settings",
+      "description": "Check-in, sync and telemetry settings that deployments assign to devices."
+    },
+    {
+      "name": "Devices",
+      "description": "Enrolled devices: status, telemetry, retries, revocation and identity recovery."
+    },
+    {
+      "name": "Enrollment",
+      "description": "Enrollment tokens and the agent downloads this server offers."
+    },
+    {
+      "name": "Issues",
+      "description": "Problems detected on devices and deployments, and their acknowledgement."
+    },
+    {
+      "name": "Audit",
+      "description": "The append-only record of changes, and private exports of it."
+    },
+    {
+      "name": "Users",
+      "description": "Workspace accounts, roles, access changes and password reset codes."
+    },
+    {
+      "name": "Instance",
+      "description": "The fleet overview, instance settings and this contract."
+    },
+    {
+      "name": "Agent protocol",
+      "description": "Device endpoints on the separate agent listener (port 8443). Enrollment uses a one-time token; every other call needs the device's mutual-TLS certificate. Dashboard sessions cannot call them."
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ]
 }

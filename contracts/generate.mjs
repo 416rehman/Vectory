@@ -287,6 +287,42 @@ route('/agent/v1/renew','post','Renew or rotate key with current active authenti
 route('/agent/v1/artifacts/{sha256}','get','Fetch only current released device artifact',{type:'string'},null,false,true);
 paths['/agent/v1/artifacts/{sha256}'].get.responses['200'].content={'application/json':{schema:{type:'string',description:'Exact UTF-8 Vector JSON artifact bytes, not a JSON string wrapper'}}};
 const spec={openapi:'3.1.0',info:{title:'Vectory control plane',version:'0.1.0',description:'Single-instance self-hosted Vector configuration control plane. Agent paths use the separately configured TLS listener. Session mutations require CSRF. No request-body device UUID is trusted for authentication.'},servers:[{url:'/',description:'Same-origin dashboard API; agent endpoints served separately on verified TLS :8443'}],paths,components:{securitySchemes:{sessionCookie:{type:'apiKey',in:'cookie',name:'vectory_session'},deviceMTLS:{type:'mutualTLS'}},schemas}};
+// Reference metadata, applied after every route above is defined. It groups
+// operations by resource for the API reference, in this order, and states the
+// default authentication. It never changes a path, parameter, schema, response
+// or an operation's own security. The longest matching path prefix wins.
+const tagGroups=[
+  ['Sign-in and account',['/api/v1/status','/api/v1/bootstrap','/api/v1/login','/api/v1/session','/api/v1/logout','/api/v1/password-reset','/api/v1/account/','/api/v1/mfa'],'First-run setup, sign-in, sessions, your password and two-factor authentication.'],
+  ['Pipelines',['/api/v1/configurations','/api/v1/vrl/'],'Pipelines and their drafts, history, validation and tests.'],
+  ['Versions',['/api/v1/versions/','/api/v1/configurations/{id}/publish','/api/v1/configurations/{id}/versions','/api/v1/configurations/publish-requests'],'Publishing a pipeline as an immutable version, and reading published versions.'],
+  ['Deployments',['/api/v1/deployments'],'Assigning versions to devices: previews, rollouts, canary gates, pauses, removal and rollback.'],
+  ['Groups',['/api/v1/groups'],'Named sets of devices that deployments target.'],
+  ['Agent settings',['/api/v1/policies'],'Check-in, sync and telemetry settings that deployments assign to devices.'],
+  ['Devices',['/api/v1/devices'],'Enrolled devices: status, telemetry, retries, revocation and identity recovery.'],
+  ['Enrollment',['/api/v1/tokens','/api/v1/releases'],'Enrollment tokens and the agent downloads this server offers.'],
+  ['Issues',['/api/v1/issues'],'Problems detected on devices and deployments, and their acknowledgement.'],
+  ['Audit',['/api/v1/audit'],'The append-only record of changes, and private exports of it.'],
+  ['Users',['/api/v1/users'],'Workspace accounts, roles, access changes and password reset codes.'],
+  ['Instance',['/api/v1/overview','/api/v1/settings','/api/v1/openapi.json'],'The fleet overview, instance settings and this contract.'],
+  ['Agent protocol',['/agent/v1/'],'Device endpoints on the separate agent listener (port 8443). Enrollment uses a one-time token; every other call needs the device\'s mutual-TLS certificate. Dashboard sessions cannot call them.'],
+];
+const otherTag=['Other',[],'Operations not yet assigned to a group in contracts/generate.mjs.'];
+const tagFor=path=>tagGroups.flatMap(([name,prefixes])=>prefixes.filter(prefix=>path.startsWith(prefix)).map(prefix=>[prefix.length,name])).sort((a,b)=>b[0]-a[0])[0]?.[1]??otherTag[0];
+const usedTags=new Set(),untagged=[];
+for(const [path,methods] of Object.entries(paths)){
+  const name=tagFor(path);
+  if(name===otherTag[0])untagged.push(path);
+  usedTags.add(name);
+  for(const operation of Object.values(methods))operation.tags=[name];
+}
+if(untagged.length)console.warn(`Tagged as "Other"; add them to tagGroups in contracts/generate.mjs: ${untagged.join(', ')}`);
+spec.tags=[...tagGroups,otherTag].filter(([name])=>usedTags.has(name)).map(([name,,description])=>({name,description}));
+spec.security=[{sessionCookie:[]}];
+spec.info.description=[
+  'The HTTP API behind the Vectory dashboard. Everything the dashboard does goes through it.',
+  '**Authentication.** Sign in with `POST /api/v1/login`. The reply sets the `vectory_session` cookie (HttpOnly, SameSite=Strict, 12 hours) and returns a `csrf_token`. Send the cookie with every request, and the token as the `X-CSRF-Token` header with every `POST`, `PUT` and `DELETE`. Requests run with your role. There are no separate API keys.',
+  '**Agent protocol.** `/agent/v1/` operations are served only on the separate agent listener and authenticate devices with mutual TLS. A device ID in a request body is never trusted for authentication.',
+].join('\n\n');
 await fs.writeFile(new URL('./openapi.json',import.meta.url),JSON.stringify(spec,null,2)+'\n');
 const replaceRefs=value=>JSON.parse(JSON.stringify(value).replaceAll('#/components/schemas/','#/$defs/'));
 await fs.writeFile(new URL('./protocol.schema.json',import.meta.url),JSON.stringify({$schema:'https://json-schema.org/draft/2020-12/schema',$id:'https://vectory.local/schemas/protocol-v1',title:'Vectory protocol v1',description:'Validate one named schema via $defs. Cryptographic, authorization and semantic checks remain mandatory.',$defs:replaceRefs(schemas)},null,2)+'\n');
