@@ -364,6 +364,24 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			if count > 1 {
 				return c.fail(errors.New("choose only one token input"))
 			}
+			// Token input is checked before any state is touched: a public or
+			// alternate-stream token file is refused at input preflight.
+			var fileToken string
+			if *tokenFile != "" {
+				path, ok := c.resolvePath("token-file", *tokenFile)
+				if !ok {
+					return exitUsage
+				}
+				f, err := agent.OpenEnrollmentTokenFile(path)
+				if err != nil {
+					return c.fail(err)
+				}
+				fileToken, err = readToken(f)
+				_ = f.Close()
+				if err != nil {
+					return c.fail(err)
+				}
+			}
 			dir := *c.state
 			if err := agent.CheckInstalled(dir); err != nil {
 				var missing *agent.NotInstalledError
@@ -408,15 +426,7 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			case *stdin:
 				value, err = readToken(os.Stdin)
 			case *tokenFile != "":
-				path, ok := c.resolvePath("token-file", *tokenFile)
-				if !ok {
-					return exitUsage
-				}
-				var f *os.File
-				if f, err = agent.OpenEnrollmentTokenFile(path); err == nil {
-					value, err = readToken(f)
-					_ = f.Close()
-				}
+				value = fileToken
 			case *token != "":
 				fmt.Fprintln(c.stderr, "Warning: command-line tokens may appear in shell history and process listings; prefer --token-stdin.")
 				value = *token
