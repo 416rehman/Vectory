@@ -1219,24 +1219,30 @@ export default function TargetDialog({
             message={`To keep each device's check-in and metrics settings, choose devices that share them. These devices differ or haven't reported settings: ${settingsMismatch.map((device) => device.name).join(", ")}.`}
           />
         )}
-        {!!requirements.length && (capabilityBlocked || !effective.size) && (
+        {!!requirements.length && (
           <div className="control-note" role="status">
             <strong>
               {capabilityBlocked
                 ? `${restrictedTargets.length === 1 ? `${restrictedTargets[0].name} runs` : `${restrictedTargets.length} selected devices run`} in restricted mode and will refuse this version`
-                : "This version needs Full Vector mode"}
+                : effective.size
+                  ? "This pipeline uses full Vector capabilities"
+                  : "This version needs Full Vector mode"}
             </strong>
             <p>
               It uses {requirements.join(", ")}.{" "}
               {capabilityBlocked
                 ? "Choose devices in Full Vector mode, or have the host operator enable it; the dashboard can't."
-                : "Choose devices in Full Vector mode."}{" "}
-              <DocLink
-                topic="installation"
-                section="choose-configuration-capabilities"
-              >
-                Enable Full Vector mode on a device
-              </DocLink>
+                : effective.size
+                  ? "All selected devices currently report full Vector mode."
+                  : "Choose devices in Full Vector mode."}{" "}
+              {!effective.size || capabilityBlocked ? (
+                <DocLink
+                  topic="installation"
+                  section="choose-configuration-capabilities"
+                >
+                  Enable Full Vector mode on a device
+                </DocLink>
+              ) : null}
             </p>
             {capabilityBlocked && restrictedTargets.length > 1 && (
               <p>

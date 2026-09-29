@@ -1317,12 +1317,21 @@ try {
           },
         },
       });
+      // Before anyone is chosen the note says what the version needs.
+      await expect(
+        dialog().getByText("This version needs Full Vector mode", { exact: true }),
+      ).toBeVisible();
+      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
+      await expect(dialog().getByText(/All selected devices/)).toHaveCount(0);
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
       await expect(
         dialog().getByText("This pipeline uses full Vector capabilities", { exact: true }),
       ).toBeVisible();
       await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
       await expect(dialog().getByText(/All selected devices currently report full Vector mode/)).toBeVisible();
-      await expect(dialog().getByText(/must be enabled locally by the host operator/)).toHaveCount(0);
+      await expect(dialog().getByText(/have the host operator enable it/)).toHaveCount(0);
       await preview();
       await expect(dialog().getByRole("button", { name: "Deploy to devices" })).toBeEnabled();
       expect(state.creates).toHaveLength(0);
@@ -1367,9 +1376,11 @@ try {
         },
       ];
       await preview();
-      await expect(dialog().getByText("Some selected devices use restricted mode", { exact: true })).toBeVisible();
+      await expect(
+        dialog().getByText("Synthetic alpha runs in restricted mode and will refuse this version", { exact: true }),
+      ).toBeVisible();
       await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
-      await expect(dialog().getByText(/must be enabled locally by the host operator/)).toBeVisible();
+      await expect(dialog().getByText(/have the host operator enable it/)).toBeVisible();
       await expect(
         dialog().getByText("Full Vector mode is required on these devices", { exact: true }),
       ).toBeVisible();

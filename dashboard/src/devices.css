@@ -471,6 +471,10 @@ a.device-version-name:hover {
   color: var(--text);
   font-size: var(--text-base);
 }
+.device-failure-details-head small {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
 .device-failure-details-head code {
   padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);

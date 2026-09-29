@@ -603,7 +603,8 @@ async function load({
       }),
     { app, kind, policy, version, extra },
   );
-  if (!app)
+  // With browser storage refused the dialog opens on its recovery view instead.
+  if (!app && !storageBlocked)
     await expect(
       page.getByRole("checkbox", {
         name: "Select Synthetic alpha",
@@ -935,8 +936,7 @@ try {
       ).toEqual([]);
       expect(state.creates).toHaveLength(0);
       await load({ storageBlocked: true });
-      await preview();
-      await send();
+      // Refused before any selection or send, so nothing can be lost.
       await expect(
         page
           .getByText(
@@ -944,6 +944,12 @@ try {
           )
           .first(),
       ).toBeVisible();
+      await expect(
+        page.getByRole("checkbox", {
+          name: "Select Synthetic alpha",
+          exact: true,
+        }),
+      ).toHaveCount(0);
       expect(state.creates).toHaveLength(0);
       expect(state.rollbacks).toHaveLength(0);
       await lost({ app: true, kind: "version" });

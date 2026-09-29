@@ -2,6 +2,44 @@
 .agent-settings-page > .control-muted {
   margin-top: 14px;
 }
+.agent-settings-unsaved {
+  margin-bottom: 16px;
+}
+.agent-settings-unsaved h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.agent-settings-unsaved > p {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.agent-settings-unsaved ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-settings-unsaved li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.agent-settings-unsaved-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-settings-unsaved-copy small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.agent-settings-unsaved-copy small a {
+  color: var(--accent-ink);
+}
 .agent-settings-actions {
   display: flex;
   flex-wrap: wrap;
