@@ -872,8 +872,13 @@ async fn running(
     Ok((items, total))
 }
 
+/// Released devices of a canary rollout the Overview looks at: fewer than the
+/// gate reads at once, so one read covers them.
+const CANARY_SAMPLE: i64 = 50;
 /// The newest active canary rollout of each running version, with the devices
-/// it released and what its gate is doing.
+/// it released and what its gate is doing: observing once every released
+/// device verified (as the scheduler recorded it), otherwise measuring while
+/// one of the first released devices still has its delivery measured.
 async fn canaries(
     db: &mut SqliteConnection,
     rows: &[(&str, Vec<usize>)],
@@ -896,21 +901,30 @@ async fn canaries(
         if out.contains_key(&version) {
             continue;
         }
-        let released: BTreeSet<String> = sqlx::query_scalar(
-            "SELECT device_id FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed'",
+        let released_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed'",
         )
         .bind(&id)
+        .fetch_one(&mut *db)
+        .await?;
+        let released: BTreeSet<String> = sqlx::query_scalar(
+            "SELECT device_id FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed' ORDER BY device_id LIMIT ?",
+        )
+        .bind(&id)
+        .bind(CANARY_SAMPLE)
         .fetch_all(&mut *db)
         .await?
         .into_iter()
         .collect();
         let context = crate::canary_gate::load(db, &id).await?;
-        let gate = crate::canary_gate::evaluate(db, &context, Some(&released))
-            .await?
-            .projection(&context);
-        let phase = if gate["state"] == "observing" {
+        let phase = if context["observation_started_at"].is_string() {
             "observing"
-        } else if gate["reasons"]["measuring"].as_u64().unwrap_or(0) > 0 {
+        } else if crate::canary_gate::evaluate(db, &context, Some(&released))
+            .await?
+            .reasons
+            .get("measuring")
+            .is_some_and(|measuring| *measuring > 0)
+        {
             "measuring"
         } else {
             "waiting"
@@ -923,7 +937,7 @@ async fn canaries(
         names.sort_by(|a, b| natural(a, b));
         out.insert(
             version,
-            json!({"deployment_id":id,"phase":phase,"device_count":released.len(),"device_names":names.into_iter().take(CANARY_NAMES).collect::<Vec<_>>()}),
+            json!({"deployment_id":id,"phase":phase,"device_count":released_count,"device_names":names.into_iter().take(CANARY_NAMES).collect::<Vec<_>>()}),
         );
     }
     Ok(out)
