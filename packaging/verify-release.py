@@ -55,7 +55,7 @@ def verify(directory, allow_new_files=False):
             static_elf(path)
         service = {
             'linux': 'packaging/systemd/vectory.service',
-            'darwin': 'packaging/launchd/com.vectory.agent.plist',
+            'darwin': 'packaging/launchd/io.vectory.agent.plist',
             'windows': 'packaging/windows/install-service.ps1',
         }.get(item['os'])
         if service is None:

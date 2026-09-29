@@ -75,7 +75,7 @@ def main():
             file = ROOT / rel
             if file.exists():
                 members.append((rel, file.read_bytes(), 0o644))
-        service = {'linux': 'packaging/systemd/vectory.service', 'darwin': 'packaging/launchd/com.vectory.agent.plist', 'windows': 'packaging/windows/install-service.ps1'}[goos]
+        service = {'linux': 'packaging/systemd/vectory.service', 'darwin': 'packaging/launchd/io.vectory.agent.plist', 'windows': 'packaging/windows/install-service.ps1'}[goos]
         members.append((service, (ROOT / service).read_bytes(), 0o644))
         archive(out / (name + ('.zip' if goos == 'windows' else '.tar.gz')), members)
     (out / 'catalog.json').write_text(json.dumps(catalog, indent=2) + '\n', encoding='utf-8')

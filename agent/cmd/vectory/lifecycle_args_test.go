@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vectory/vectory/agent/internal/agent"
@@ -32,17 +33,13 @@ func TestLifecycleCommandsRejectTrailingOperandsBeforeLocalChanges(t *testing.T)
 }
 
 func TestFixedServiceTargetDoesNotAcceptStateDirectory(t *testing.T) {
-	fs := flag.NewFlagSet("service-stop", flag.ContinueOnError)
-	fs.String("state-dir", "default", "state directory")
-	if !parseFlagsOnly(fs, []string{"--state-dir", t.TempDir()}, "service-stop") {
-		t.Fatal("valid flag syntax was rejected")
-	}
-	if !flagSupplied(fs, "state-dir") {
-		t.Fatal("explicit state directory was not detected")
+	code, _, stderr := invoke("service-stop", "--state-dir", t.TempDir())
+	if code != exitUsage || !strings.Contains(stderr, "--state-dir cannot select another service") {
+		t.Fatalf("explicit state directory accepted: exit=%d stderr=%q", code, stderr)
 	}
 	defaultTarget := flag.NewFlagSet("service-stop", flag.ContinueOnError)
 	defaultTarget.String("state-dir", "default", "state directory")
-	if !parseFlagsOnly(defaultTarget, nil, "service-stop") || flagSupplied(defaultTarget, "state-dir") {
+	if err := defaultTarget.Parse(nil); err != nil || flagSupplied(defaultTarget, "state-dir") {
 		t.Fatal("default state directory should not look like an explicit service target")
 	}
 }

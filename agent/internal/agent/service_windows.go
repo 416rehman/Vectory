@@ -25,6 +25,38 @@ func ServiceInstall(dir, user string) (ServiceRegistration, error) {
 	return ServiceInstallFor(exe, dir, user)
 }
 
+// checkServiceConfig refuses a registration for another executable, state
+// directory or account.
+func checkServiceConfig(cfg mgr.Config, exe, dir string) error {
+	if cfg.ServiceStartName != "NT SERVICE\\Vectory" || cfg.BinaryPathName != windows.EscapeArg(exe)+" service --state-dir "+windows.EscapeArg(dir) {
+		return errors.New("the Vectory service is registered for another executable, state directory or account; review it (sc.exe qc Vectory), then remove it with `vectory service-stop` and `vectory service-uninstall` before registering again")
+	}
+	return nil
+}
+
+// serviceRegistrationCheck reports, reading only, whether the Vectory service
+// is registered for another executable, state directory or account, which
+// ServiceInstallFor refuses. Setup runs it before it stops a running service
+// to replace the agent. Without access to the Service Control Manager it
+// can't tell, and registration decides.
+func serviceRegistrationCheck(exe, dir, account string) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return nil
+	}
+	defer m.Disconnect()
+	existing, err := m.OpenService(ServiceName)
+	if err != nil {
+		return nil
+	}
+	defer existing.Close()
+	cfg, err := existing.Config()
+	if err != nil {
+		return err
+	}
+	return checkServiceConfig(cfg, exe, dir)
+}
+
 // ServiceInstallFor registers exe. Service installation is a local
 // administrator action and never a wire capability. Registration does not
 // start the workload or imply verified service operation.
@@ -55,8 +87,8 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		if e != nil {
 			return "", e
 		}
-		if cfg.ServiceStartName != "NT SERVICE\\Vectory" || cfg.BinaryPathName != windows.EscapeArg(exe)+" service --state-dir "+windows.EscapeArg(dir) {
-			return "", errors.New("existing Vectory service uses another binary, state directory or account; preserve and inspect it locally")
+		if e = checkServiceConfig(cfg, exe, dir); e != nil {
+			return "", e
 		}
 		return ServiceUnchanged, nil
 	}
@@ -100,16 +132,14 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		}
 		return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, u.User.Sid, nil, acl, nil)
 	}
-	for _, root := range []string{dir} {
-		if err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			return grant(path, entry.IsDir())
-		}); err != nil {
-			_ = service.Delete()
-			return "", err
+	if err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
+		return grant(path, entry.IsDir())
+	}); err != nil {
+		_ = service.Delete()
+		return "", err
 	}
 	if err = grant(filepath.Dir(s.ManagedConfig), true); err != nil {
 		_ = service.Delete()
