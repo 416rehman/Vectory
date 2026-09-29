@@ -183,7 +183,15 @@ async function load({
         return reply(current.document);
       if (path === `/configurations/${pipelineId}/history`)
         return reply({
-          items: published ? [{ id: versionId, configuration_id: pipelineId, created_at: created }] : [],
+          items: published
+            ? [
+                {
+                  id: versionId,
+                  configuration_id: pipelineId,
+                  created_at: created,
+                },
+              ]
+            : [],
           total: published ? 1 : 0,
           page: 1,
           page_size: Number(url.searchParams.get("page_size")),
@@ -241,7 +249,12 @@ async function load({
     }
     unexpected.push(`${method} ${path}`);
     return reply(
-      { error: { code: "UNEXPECTED_REQUEST", message: "Synthetic transport refuses this request" } },
+      {
+        error: {
+          code: "UNEXPECTED_REQUEST",
+          message: "Synthetic transport refuses this request",
+        },
+      },
       500,
     );
   });
@@ -254,7 +267,10 @@ async function load({
   await expect(page.locator(".react-flow__node")).toHaveCount(
     Object.values(current.document.config).reduce(
       (count, section) =>
-        count + (section && typeof section === "object" ? Object.keys(section).length : 0),
+        count +
+        (section && typeof section === "object"
+          ? Object.keys(section).length
+          : 0),
       0,
     ),
     { timeout: 30000 },
@@ -391,7 +407,8 @@ try {
       await expect(statsd).toHaveCount(1);
       await expect(statsd).toHaveAttribute("aria-disabled", "true");
       await expect(statsd).toContainText("Accepts metrics; sample sends logs.");
-      await statsd.click();
+      // Even forced, a click on a greyed step adds nothing.
+      await statsd.click({ force: true });
       await expect(picker()).toBeVisible();
       await picker().getByLabel("Search components").fill("filter");
       await page.keyboard.press("Enter");
@@ -487,26 +504,25 @@ try {
     },
   );
 
-  await check(
-    "Ctrl+F finds a step by ID and Escape closes it",
-    async () => {
-      await load();
-      await node("seed").click();
-      await inspector().locator("h2").click();
-      await page.keyboard.press("ControlOrMeta+f");
-      const find = page.getByRole("combobox", { name: "Find a step" });
-      await expect(find).toBeFocused();
-      await find.fill("oth");
-      await expect(page.getByRole("option")).toHaveCount(1);
-      await expect(page.getByRole("option")).toContainText("other");
-      await page.keyboard.press("Enter");
-      await expect(find).toHaveCount(0);
-      await expect(inspector().locator("h2")).toContainText("Discard events");
-      await page.keyboard.press("ControlOrMeta+f");
-      await page.keyboard.press("Escape");
-      await expect(page.getByRole("combobox", { name: "Find a step" })).toHaveCount(0);
-    },
-  );
+  await check("Ctrl+F finds a step by ID and Escape closes it", async () => {
+    await load();
+    await node("seed").click();
+    await inspector().locator("h2").click();
+    await page.keyboard.press("ControlOrMeta+f");
+    const find = page.getByRole("combobox", { name: "Find a step" });
+    await expect(find).toBeFocused();
+    await find.fill("oth");
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await expect(page.getByRole("option")).toContainText("other");
+    await page.keyboard.press("Enter");
+    await expect(find).toHaveCount(0);
+    await expect(inspector().locator("h2")).toContainText("Discard events");
+    await page.keyboard.press("ControlOrMeta+f");
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("combobox", { name: "Find a step" }),
+    ).toHaveCount(0);
+  });
 
   await check(
     "wildcard inputs draw dashed edges with a pattern chip and only warn when nothing matches",
@@ -529,12 +545,19 @@ try {
       ).toHaveText("a*");
       await expect(page.locator(".pipeline-connection-pattern")).toHaveCount(2);
       await node("out").click();
-      await expect(inspector().locator(".pipeline-input-patterns")).toContainText(
+      await expect(
+        inspector().locator(".pipeline-input-patterns"),
+      ).toContainText(
         "a* matches a1 and a2. Vector resolves the pattern on each device.",
       );
-      await page.getByRole("button", { name: /warning/ }).first().click();
+      await page
+        .getByRole("button", { name: /warning/ })
+        .first()
+        .click();
       const panel = page.getByRole("region", { name: "Problems", exact: true });
-      await expect(panel).toContainText("zzz* matches no step in this pipeline.");
+      await expect(panel).toContainText(
+        "zzz* matches no step in this pipeline.",
+      );
       await expect(panel).not.toContainText("dynamic input pattern");
     },
   );
@@ -552,7 +575,7 @@ try {
       const rows = dialog.locator(".publish-change-row");
       await expect(rows).toHaveCount(1);
       await expect(rows.first()).toContainText("sample");
-      await expect(rows.first()).toContainText("rate changed");
+      await expect(rows.first()).toContainText("rate 10 → 20");
     },
   );
 
@@ -638,31 +661,28 @@ try {
     },
   );
 
-  await check(
-    "the minimap fits its docked frame",
-    async () => {
-      const document = baseDocument();
-      document.config.sources = Object.fromEntries(
-        Array.from({ length: 14 }, (_, index) => [
-          `s${index}`,
-          { type: "demo_logs" },
-        ]),
-      );
-      document.config.transforms = {};
-      document.config.sinks = {
-        out: { type: "blackhole", inputs: ["s0", "s1"] },
-      };
-      await load({ document });
-      const minimap = page.locator(".react-flow__minimap");
-      await expect(minimap).toBeVisible();
-      const [frame, drawing] = await Promise.all([
-        minimap.boundingBox(),
-        minimap.locator("svg").boundingBox(),
-      ]);
-      expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
-      expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
-    },
-  );
+  await check("the minimap fits its docked frame", async () => {
+    const document = baseDocument();
+    document.config.sources = Object.fromEntries(
+      Array.from({ length: 14 }, (_, index) => [
+        `s${index}`,
+        { type: "demo_logs" },
+      ]),
+    );
+    document.config.transforms = {};
+    document.config.sinks = {
+      out: { type: "blackhole", inputs: ["s0", "s1"] },
+    };
+    await load({ document });
+    const minimap = page.locator(".react-flow__minimap");
+    await expect(minimap).toBeVisible();
+    const [frame, drawing] = await Promise.all([
+      minimap.boundingBox(),
+      minimap.locator("svg").boundingBox(),
+    ]);
+    expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
+    expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
+  });
   expect(results).toHaveLength(10);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
@@ -686,7 +706,10 @@ try {
       .digest("hex");
   if (failure && page && !page.isClosed())
     await page
-      .screenshot({ path: resolve(output, "failure.png"), animations: "disabled" })
+      .screenshot({
+        path: resolve(output, "failure.png"),
+        animations: "disabled",
+      })
       .catch(() => {});
   await writeFile(
     resolve(output, "report.json"),

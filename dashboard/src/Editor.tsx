@@ -3592,8 +3592,11 @@ export default function Editor({
         ? 0
         : 220;
       const node = selected ? nodes.find((node) => node.id === selected) : null;
-      if (node && nodeInView(node)) return;
-      if (node)
+      const reveal = node ? revealViewport(node) : null;
+      if (node && !reveal) return;
+      if (node && reveal?.mode === "pan")
+        void flow.current?.setViewport(reveal.viewport, { duration });
+      else if (node)
         flow.current?.setCenter(
           node.position.x + PIPELINE_NODE_WIDTH / 2,
           node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
@@ -3609,21 +3612,47 @@ export default function Editor({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [selected, view, nodes.length]);
-  /** Whether a node is fully visible in the canvas as laid out now. */
-  function nodeInView(node: { position: { x: number; y: number } }) {
+  /**
+   * How to bring a node into view: null when it already is, a small pan when
+   * it is partly hidden (by the edge or the inspector), and a centering only
+   * when it is entirely out of sight. Nothing else moves the canvas.
+   */
+  function revealViewport(node: { position: { x: number; y: number } }) {
     const instance = flow.current,
       pane = graphRef.current?.querySelector(".react-flow");
-    if (!instance || !pane) return false;
+    if (!instance || !pane) return null;
     const bounds = pane.getBoundingClientRect();
     const { x, y, zoom } = instance.getViewport();
+    const margin = 28;
     const left = node.position.x * zoom + x,
-      top = node.position.y * zoom + y;
-    return (
+      top = node.position.y * zoom + y,
+      right = left + PIPELINE_NODE_WIDTH * zoom,
+      bottom = top + PIPELINE_NODE_BODY_HEIGHT * zoom;
+    if (
       left >= 0 &&
       top >= 0 &&
-      left + PIPELINE_NODE_WIDTH * zoom <= bounds.width &&
-      top + PIPELINE_NODE_BODY_HEIGHT * zoom <= bounds.height
-    );
+      right <= bounds.width &&
+      bottom <= bounds.height
+    )
+      return null;
+    if (right < 0 || bottom < 0 || left > bounds.width || top > bounds.height)
+      return { mode: "center" as const };
+    const shift = (start: number, end: number, size: number) =>
+      end - start > size - 2 * margin
+        ? margin - start
+        : start < margin
+          ? margin - start
+          : end > size - margin
+            ? size - margin - end
+            : 0;
+    return {
+      mode: "pan" as const,
+      viewport: {
+        x: x + shift(left, right, bounds.width),
+        y: y + shift(top, bottom, bounds.height),
+        zoom,
+      },
+    };
   }
   useEffect(() => {
     if (!selected || view !== "canvas" || historyOpen) return;
