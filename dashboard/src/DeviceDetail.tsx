@@ -31,6 +31,7 @@ import AgentUpgrade from "./AgentUpgrade";
 import TargetDialog from "./TargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
+import DeviceSecrets from "./DeviceSecrets";
 import DeviceRevocation from "./DeviceAccessRevocation";
 import { DeviceIdentityRecovery, DeviceRetryAction } from "./RecoveryActions";
 import {
@@ -1043,12 +1044,6 @@ export default function DeviceDetail({
                 ? deviceApplicationExplanation(device, version.data)
                 : "No published pipeline is assigned. An adopted local workload may continue running; a device without a managed configuration waits without starting Vector. An agent check-in alone does not confirm a running workload."}
             </p>
-            {device.uses_local_secrets && (
-              <p className="device-secret-note">
-                This pipeline uses credentials stored on the device. Secret
-                values are never sent to this dashboard.
-              </p>
-            )}
             <FailureDetails device={device} version={version.data} />
             <DeviceRetryAction
               device={device}
@@ -1073,6 +1068,12 @@ export default function DeviceDetail({
               )}
             </div>
           </section>
+          <DeviceSecrets
+            device={device}
+            version={version.data}
+            loading={version.loading}
+            failed={!!version.error}
+          />
           {/* Vector's warnings and errors have their own card below. */}
           <TelemetryPanel device={device} logs={false} />
           <VectorLogs device={device} />

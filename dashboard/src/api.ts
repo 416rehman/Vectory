@@ -597,6 +597,8 @@ export type Device = {
   applied_template_sha256?: string;
   secret_revision?: number;
   uses_local_secrets?: boolean;
+  /** Device secret names bound on the host, from its last check-in. Names only. */
+  secret_names?: string[];
   apply_state: string;
   sync_paused: boolean;
   local_paused?: boolean;

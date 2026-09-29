@@ -79,27 +79,35 @@ export function secretNameOf(value: unknown): string | null {
 }
 
 /**
- * A name that is really the credential: long, with digits and letters and no
- * separators, like an API key pasted into the name box.
+ * A name that is really the credential, pasted into the name box: a UUID or
+ * well-known token prefix, a long run of letters and digits without
+ * separators, or a long mixed-case string with digits. Names are stored in
+ * the pipeline, so these are refused. Names such as DD_API_KEY_2 pass.
  */
 export function looksLikeCredential(name: string): boolean {
-  return (
-    name.length >= 20 &&
-    !/[_.-]/.test(name) &&
-    /\d/.test(name) &&
-    /[A-Za-z]/.test(name)
-  );
+  if (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(name)) return true;
+  if (
+    name.length >= 16 &&
+    /^(?:gh[oprsu]_|github_pat_|glpat-|xox[abeprs]-|sk-)/.test(name)
+  )
+    return true;
+  const digits = /\d/.test(name),
+    lower = /[a-z]/.test(name),
+    upper = /[A-Z]/.test(name);
+  if (name.length >= 20 && digits && (lower || upper) && !/[_.-]/.test(name))
+    return true;
+  return name.length >= 24 && digits && lower && upper;
 }
 
 /** What is wrong with a secret name while it is typed, or null. */
 export function secretNameProblem(name: string): string | null {
   if (!name) return "Enter a name for this secret.";
+  if (looksLikeCredential(name))
+    return "That looks like the credential itself. Use a name, such as DD_API_KEY, and keep the value in a file on each device.";
   if (!/^[A-Za-z]/.test(name)) return "Start the name with a letter.";
   if (/[^A-Za-z0-9_.-]/.test(name))
     return "Use only letters, digits, dots, dashes and underscores.";
   if (name.length > 64) return "Use at most 64 characters.";
-  if (looksLikeCredential(name))
-    return "That looks like the credential itself. Use a name, such as DD_API_KEY, and keep the value in a file on each device.";
   return null;
 }
 
@@ -211,6 +219,59 @@ export function secretReferences(config: Config): SecretUse[] {
 /** Distinct secret names a configuration needs, sorted. */
 export function secretNamesOf(config: Config): string[] {
   return [...new Set(secretReferences(config).map((use) => use.name))].sort();
+}
+
+export type SecretNeed = {
+  name: string;
+  /** Where the configuration reads it: `dd.default_api_key`. */
+  uses: string[];
+};
+
+/** Each secret a configuration needs, sorted by name, with where it is read. */
+export function secretNeeds(config: Config | null | undefined): SecretNeed[] {
+  const uses = new Map<string, string[]>();
+  for (const use of config ? secretReferences(config) : [])
+    uses.set(use.name, [
+      ...(uses.get(use.name) ?? []),
+      `${use.id}.${use.field}`,
+    ]);
+  return [...uses.keys()]
+    .sort()
+    .map((name) => ({ name, uses: uses.get(name)! }));
+}
+
+/**
+ * The secrets a draft reads, for the publish review. `added` marks a name the
+ * published version doesn't read (never set for a first version).
+ */
+export function secretReview(
+  before: Config | null,
+  after: Config,
+): (SecretNeed & { added: boolean })[] {
+  const known = new Set(before ? secretNamesOf(before) : []);
+  return secretNeeds(after).map((need) => ({
+    ...need,
+    added: !!before && !known.has(need.name),
+  }));
+}
+
+export type DeviceSecretState = SecretNeed & {
+  /** Bound on the device; null when the device doesn't report its names. */
+  bound: boolean | null;
+};
+
+/**
+ * The secrets a version needs, checked against the names a device reported
+ * binding at its last check-in (names only; values never leave the device).
+ */
+export function deviceSecretStates(
+  config: Config | null | undefined,
+  bound: readonly string[] | null | undefined,
+): DeviceSecretState[] {
+  return secretNeeds(config).map((need) => ({
+    ...need,
+    bound: Array.isArray(bound) ? bound.includes(need.name) : null,
+  }));
 }
 
 /**

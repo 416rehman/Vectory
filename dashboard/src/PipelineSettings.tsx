@@ -311,6 +311,17 @@ export type SettingsFocus = {
   nonce: number;
 };
 
+/** A step's own issue without its `id: ` or `id.field: ` prefix. */
+function withoutStep(issue: string, id: string) {
+  if (issue.startsWith(`${id}: `)) return issue.slice(id.length + 2);
+  const colon = issue.indexOf(": ");
+  return colon > id.length + 1 &&
+    issue.startsWith(`${id}.`) &&
+    !/\s/.test(issue.slice(id.length + 1, colon))
+    ? issue.slice(colon + 2)
+    : issue;
+}
+
 /** The heading over Vector's findings for one step: problems, or notes. */
 function summaryHeading(findings: readonly Problem[]) {
   const errors = findings.filter((item) => item.severity === "error").length;
@@ -687,7 +698,9 @@ export default function PipelineSettings({
                   <strong>Finish this step</strong>
                   <ul>
                     {issues.map((issue) => (
-                      <li key={issue}>{issue.replace(`${id}: `, "")}</li>
+                      <li key={issue}>
+                        <ProblemText text={withoutStep(issue, id)} />
+                      </li>
                     ))}
                   </ul>
                 </div>

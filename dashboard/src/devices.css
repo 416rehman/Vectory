@@ -489,11 +489,6 @@ a.device-version-name:hover {
   font-size: var(--text-base);
   line-height: var(--leading-base);
 }
-.device-secret-note {
-  margin: var(--space-2) 0 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
 .device-pipeline .control-inline-actions,
 .device-pipeline .control-section-space {
   margin-top: var(--space-3);
