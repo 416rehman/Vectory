@@ -1,0 +1,843 @@
+/* People & security: your account, workspace access and their dialogs. */
+.account-page {
+  display: grid;
+  gap: 20px;
+}
+.account-page > .control-card + .control-card {
+  margin-top: 0;
+}
+
+/* Your account */
+.account-card {
+  padding: 0;
+  overflow: hidden;
+}
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 14px;
+}
+.account-identity > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.account-identity h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  overflow-wrap: anywhere;
+}
+.account-identity p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.account-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 22px;
+}
+.account-row + .account-row,
+.account-row + .account-sessions,
+.account-sessions + .account-row {
+  border-top: 1px solid var(--line);
+}
+.account-row h3,
+.account-sessions h3 {
+  margin: 0 0 3px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.account-row-copy {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+.account-row-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.account-row-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 13px;
+}
+.account-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+}
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.status-dot::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+.status-dot.on::before {
+  background: var(--green);
+}
+.status-dot.warn::before {
+  background: #c4861c;
+}
+.status-dot.off::before {
+  background: var(--muted);
+}
+.account-row-warning {
+  color: var(--va-warning);
+  font-weight: 500;
+}
+.account-row-copy p.account-row-warning {
+  color: var(--va-warning);
+}
+.account-row-copy p.account-row-note {
+  color: var(--ink);
+}
+.account-role strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.role-reference.compact {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.role-reference.compact > summary {
+  width: max-content;
+  color: var(--accent-ink);
+  cursor: pointer;
+  font-weight: 500;
+}
+.role-reference.compact .role-matrix-wrap {
+  margin-top: 10px;
+}
+.role-reference .role-capabilities-note {
+  font-size: 12.5px;
+}
+.factor-toggle {
+  margin: -8px 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.field-note {
+  margin: -6px 0 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.modal-copy {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.change-summary {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+.change-summary > strong {
+  font-weight: 600;
+}
+.change-summary ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.stale-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Sessions */
+.account-sessions {
+  padding: 18px 22px 20px;
+}
+.account-sessions-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.account-sessions-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.session-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.session-list > li {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 14px;
+}
+.session-list > li + li {
+  border-top: 1px solid var(--line);
+}
+.session-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+.session-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.session-copy strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.session-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.this-browser {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+.session-list .quiet-state {
+  padding: 16px;
+}
+.session-more {
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Secure your workspace */
+.secure-card {
+  display: grid;
+  gap: 14px;
+}
+.secure-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.secure-card-head h2 {
+  margin: 0;
+}
+.secure-card-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.secure-card .checklist {
+  margin: 0;
+}
+.secure-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+.secure-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 300ms var(--ease);
+}
+
+/* Permission notes */
+.permission-note {
+  display: flex;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.permission-note > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.permission-note h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.permission-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Workspace access */
+.people-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-bottom: 14px;
+}
+.people-head h2 {
+  margin: 0;
+}
+.people-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.person-cell {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.person-cell strong {
+  font-weight: 600;
+}
+.person-cell > span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.person-you {
+  color: var(--muted);
+  font-weight: 400;
+}
+.people-table .person-highlight > td,
+.people-cards > li.person-highlight {
+  animation: person-highlight 2.6s var(--ease);
+}
+@keyframes person-highlight {
+  0%,
+  40% {
+    background: var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-table .person-highlight > td,
+  .people-cards > li.person-highlight {
+    animation: none;
+    background: var(--accent-soft);
+  }
+}
+.people-table.data-table td:nth-child(n + 3) {
+  white-space: nowrap;
+}
+.people-card-actions {
+  display: flex;
+}
+.people-table td {
+  vertical-align: middle;
+}
+.people-table .person-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.person-actions-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.person-status {
+  display: inline-grid;
+  gap: 1px;
+  font-size: 13px;
+}
+.person-status small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.person-muted {
+  color: var(--muted);
+}
+.person-menu {
+  z-index: 2200;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.person-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+.person-menu-item[data-highlighted] {
+  background: var(--surface-soft);
+}
+.person-menu-item.danger {
+  color: var(--va-danger);
+}
+.person-menu-item > svg {
+  color: var(--muted);
+}
+.person-menu-item.danger > svg {
+  color: inherit;
+}
+.people-cards {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.people-cards > li {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+.people-cards > li + li {
+  border-top: 1px solid var(--line);
+}
+.people-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.people-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.people-card-facts > div {
+  display: flex;
+  gap: 4px;
+}
+.people-card-facts dt {
+  font-weight: 500;
+}
+.people-card-facts dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+/* Role hint popover in the table */
+.role-hint-popover {
+  white-space: normal;
+}
+
+/* Role picker preview and matrix */
+.role-field {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.role-field > .field {
+  margin-bottom: 0;
+}
+.role-capabilities {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  font-size: 12.5px;
+}
+.role-capabilities > p:first-child {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.role-capabilities ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.role-capabilities li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.role-capabilities li > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.role-capabilities li.yes > svg {
+  color: var(--green);
+}
+.role-capabilities li.no {
+  color: var(--muted);
+}
+.role-capabilities-note {
+  margin: 10px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.role-reference .role-capabilities-note {
+  border-top: 0;
+  padding-top: 0;
+}
+.role-matrix-wrap {
+  max-width: 640px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.role-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.role-matrix th,
+.role-matrix td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  text-align: center;
+}
+.role-matrix tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.role-matrix thead th {
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.role-matrix tbody th {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+.role-matrix td {
+  width: 1%;
+  padding-inline: 14px;
+}
+.role-matrix td.yes {
+  color: var(--green);
+}
+.role-matrix td.no {
+  color: var(--line-strong);
+}
+.role-matrix .current {
+  background: var(--accent-soft);
+}
+.role-matrix thead th.current {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.role-you {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+/* Phones get the same facts as one short list per role. */
+.role-list {
+  display: none;
+  margin: 0;
+}
+.role-list > div {
+  padding: 9px 0;
+}
+.role-list > div + div {
+  border-top: 1px solid var(--line);
+}
+.role-list dt {
+  font-size: 13px;
+  font-weight: 600;
+}
+.role-list dd {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+@media (max-width: 600px) {
+  .role-matrix-wrap {
+    display: none;
+  }
+  .role-list {
+    display: block;
+  }
+}
+
+/* Add person: how they sign in */
+.choice-group {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+}
+.choice-group > legend {
+  margin-bottom: 7px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.choice input {
+  margin-top: 2px;
+}
+.choice span {
+  display: grid;
+  gap: 2px;
+}
+.choice small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.password-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -8px 0 18px;
+}
+
+/* Created links and codes */
+.link-result {
+  display: grid;
+  gap: 12px;
+}
+.link-result > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.link-result > p strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.link-result .unconfirmed {
+  margin-bottom: 0;
+}
+.link-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+.instructions {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+.instructions > p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.instructions > .copy-button {
+  justify-self: start;
+}
+.dialog-footer-split {
+  justify-content: space-between;
+}
+.dialog-footer-split > div {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* Recovery codes */
+.recovery-codes {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  list-style: none;
+  counter-reset: codes;
+}
+.recovery-codes > li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.recovery-codes code {
+  padding: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 13px;
+  letter-spacing: 0.03em;
+}
+.recovery-codes > li::before {
+  counter-increment: codes;
+  content: counter(codes) ".";
+  min-width: 1.6em;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.recovery-context {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.recovery-print {
+  display: none;
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .recovery-print,
+  .recovery-print * {
+    visibility: visible;
+  }
+  .recovery-print {
+    display: block;
+    position: absolute;
+    inset: 0 auto auto 0;
+    padding: 24px;
+    color: #000;
+    font:
+      12pt/1.6 "Cascadia Code",
+      Consolas,
+      monospace;
+    white-space: pre-wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .account-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .account-row-actions {
+    justify-content: flex-start;
+  }
+  .account-identity {
+    flex-wrap: wrap;
+  }
+  .people-table-wrap {
+    display: none;
+  }
+  .people-cards {
+    display: block;
+  }
+  .account-sessions-head {
+    flex-direction: column;
+  }
+}
