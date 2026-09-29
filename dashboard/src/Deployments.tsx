@@ -324,28 +324,6 @@ export function Deployments({
   }, [detailId, loading]);
   const searching = query.search !== search.trim();
   const waiting = loading || searching || correcting;
-  /** The row's title, shared by the table and the phone cards. */
-  const detailLink = (d: DeploymentSummary) => (
-    <a
-      className="control-row-title"
-      data-deployment-link={d.id}
-      href={`#/${deploymentRoute(scheduled, d.id, query)}`}
-      onClick={(event) => {
-        if (
-          event.button !== 0 ||
-          event.ctrlKey ||
-          event.metaKey ||
-          event.shiftKey ||
-          event.altKey
-        )
-          return;
-        event.preventDefault();
-        openDetail(d.id);
-      }}
-    >
-      {title(d)}
-    </a>
-  );
   function reset() {
     setSearch("");
     setQuery({ search: "", status: "all", page: 1 });

@@ -266,8 +266,7 @@ export function checklist(state: ChecklistState): ChecklistStep[] {
 }
 
 /** "1 device", "3 devices". */
-export const countLabel = (count: number, word: string, many = `${word}s`) =>
-  `${count.toLocaleString()} ${count === 1 ? word : many}`;
+export { countLabel } from "./countLabel";
 
 /** A rate for display: "0", "0.42", "4.9", "1,284", "12.3K". */
 export function formatRate(value: number) {

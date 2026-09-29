@@ -5,6 +5,7 @@ import type {
   Policy,
   PreviewReplacement,
 } from "./api";
+import { countLabel } from "./countLabel";
 import { interval } from "./deploymentStatus";
 import { relativeTime } from "./time";
 
@@ -18,11 +19,8 @@ export type RequestedChange =
     }
   | { kind: "policy"; policy: Policy; name: string | null };
 
-function plural(count: number, one: string, many = `${one}s`) {
-  return `${count} ${count === 1 ? one : many}`;
-}
 export function devicesText(count: number) {
-  return plural(count, "device");
+  return countLabel(count, "device");
 }
 
 /** "Web access logs v3", or "version 3" when the pipeline name is unknown. */

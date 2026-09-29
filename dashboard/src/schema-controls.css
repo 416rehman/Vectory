@@ -85,7 +85,6 @@
   box-shadow: inset 0 0 0 1px var(--ed-danger-line);
 }
 .schema-control-hint,
-.schema-default-note,
 .schema-empty-note,
 .schema-null-note {
   font-size: 12px;
@@ -97,8 +96,7 @@
 .schema-control-hint:empty {
   display: none;
 }
-.schema-control-hint code,
-.schema-default-note code {
+.schema-control-hint code {
   font-size: 11px;
 }
 .schema-code-control {
@@ -171,47 +169,6 @@
 .schema-array-entry-draft {
   border-style: dashed;
 }
-.schema-entry-header {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 9px;
-  min-width: 0;
-}
-.schema-entry-header > strong {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  min-width: 0;
-  font-weight: 550;
-}
-.schema-entry-header > strong > small {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 400;
-}
-.schema-entry-actions {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: 0;
-}
-.schema-entry-actions .icon-button {
-  width: 25px;
-  height: 27px;
-  border: 0;
-  background: transparent;
-  padding: 3px;
-  color: var(--muted);
-}
-.schema-entry-actions .icon-button svg {
-  width: 14px;
-  height: 14px;
-}
-.schema-entry-actions .icon-button:disabled {
-  opacity: 0.28;
-}
 .schema-key-editor {
   display: flex;
   align-items: end;
@@ -258,45 +215,6 @@
   padding: 0 0 10px;
   border-bottom: 1px solid var(--line);
 }
-.schema-null-control {
-  display: flex;
-  margin: 7px 0;
-  font-size: 12px;
-  color: var(--muted);
-}
-.schema-null-control label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.schema-null-control input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-.schema-null-action-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: -4px;
-}
-.schema-null-action {
-  appearance: none;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.5;
-  padding: 3px 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.schema-null-action:hover {
-  color: var(--ink);
-}
 .schema-explicit-null {
   display: flex;
   align-items: center;
@@ -315,17 +233,6 @@
   margin: 5px 0;
   font-size: 10px;
   color: var(--muted);
-}
-.schema-raw-details {
-  margin: 9px 0 15px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.schema-raw-details > summary {
-  cursor: pointer;
-}
-.schema-raw-details .pipeline-json-field {
-  margin-top: 10px;
 }
 .schema-additional {
   margin-top: 14px;
@@ -346,15 +253,6 @@
   line-height: 1.6;
   margin: 5px 0;
 }
-.schema-fields .pipeline-schema-option-list > button {
-  min-width: 0;
-}
-.schema-fields .pipeline-schema-option-list > button span {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
 .schema-fields .pipeline-schema-field {
   min-width: 0;
 }
@@ -362,9 +260,6 @@
   .schema-map-entry,
   .schema-array-entry {
     padding: 9px;
-  }
-  .schema-entry-actions .icon-button {
-    width: 23px;
   }
 }
 
@@ -388,19 +283,6 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-.schema-collection-object > .schema-object-description {
-  margin: 0 0 10px;
-}
-.schema-collection-object > .schema-fields > .pipeline-schema-field:last-child {
-  margin-bottom: 0;
-}
-.schema-fields .pipeline-schema-options {
-  padding: 9px 10px;
-  margin-top: 10px;
-}
-.schema-fields .pipeline-schema-options > summary {
-  font-size: 12px;
 }
 .schema-field-control .schema-empty-note {
   margin-bottom: 4px;
@@ -436,48 +318,6 @@
   font-size: 13px;
   line-height: 1;
 }
-.schema-record-actions {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: 3px;
-}
-.schema-record-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--muted);
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.schema-record-action:hover,
-.schema-record-actions .icon-button:hover {
-  background: var(--surface-soft);
-  color: var(--ink);
-}
-.schema-record-action[aria-pressed="true"] {
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-}
-.schema-record-actions .icon-button {
-  width: 28px;
-  height: 28px;
-  padding: 5px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-}
-.schema-record-actions .icon-button svg {
-  width: 14px;
-  height: 14px;
-}
 .schema-field-owned
   > .schema-structured-value
   > .schema-value
@@ -510,30 +350,6 @@
 }
 .schema-fields .pipeline-schema-field {
   margin-bottom: 16px;
-}
-.schema-field-owned > .schema-structured-value > .schema-object {
-  margin: 0;
-  border: 0;
-  background: transparent;
-}
-.schema-field-owned > .schema-structured-value > .schema-object > summary {
-  padding: 4px 0 8px;
-}
-.schema-field-owned
-  > .schema-structured-value
-  > .schema-object
-  > .schema-object-body {
-  padding: 0 0 0 10px;
-  border-left: 1px solid var(--line);
-}
-.schema-field-owned
-  > .schema-structured-value
-  > .schema-object
-  > .schema-object-description {
-  margin: 0 0 10px;
-}
-.schema-field-owned .schema-object-description {
-  font-size: 12px;
 }
 .schema-map-entry,
 .schema-array-entry {
@@ -684,8 +500,7 @@
 .schema-field-search:focus-within {
   box-shadow: inset 0 -1px var(--line-strong);
 }
-.schema-field-picker button:focus-visible,
-.schema-record-actions :is(button):focus-visible {
+.schema-field-picker button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -852,15 +667,8 @@
   padding: 0;
   border: 0;
 }
-.schema-field-owned .schema-object-body {
-  border: 0;
-  padding: 0;
-}
 .schema-fields .pipeline-schema-field {
   margin-bottom: 10px;
-}
-.schema-field-control > .schema-default-note {
-  margin-bottom: 0;
 }
 
 /* Nested properties share the available width; paths carry hierarchy, not indentation. */

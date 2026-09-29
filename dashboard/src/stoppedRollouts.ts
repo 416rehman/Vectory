@@ -1,4 +1,5 @@
 import type { DeploymentSummary } from "./api";
+import { countLabel } from "./countLabel";
 import { progressSegments } from "./deploymentStatus";
 
 /** A rollout that stopped, or was rolled back, and still deserves a look. */
@@ -16,9 +17,6 @@ function name(d: DeploymentSummary) {
   if (d.policy) return d.policy_name || "Agent settings";
   const pipeline = d.configuration_name || d.name || "A pipeline";
   return d.version_number ? `${pipeline} v${d.version_number}` : pipeline;
-}
-function plural(count: number, one: string, many = `${one}s`) {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 /**
@@ -63,7 +61,7 @@ export function stoppedRollouts(
           d.verified_count ? `${d.verified_count} applied` : "",
         ]
           .filter(Boolean)
-          .join(" · ") || plural(current, "device"),
+          .join(" · ") || countLabel(current, "device"),
     });
   }
   for (const d of rolledBack) {

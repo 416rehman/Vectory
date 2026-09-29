@@ -1,4 +1,3 @@
-import { relativeTime } from "./time";
 import { z } from "zod";
 import type { DataPlaneSummary } from "./status";
 import {
@@ -1860,11 +1859,6 @@ export function when(value?: string | null) {
         hour: "2-digit",
         minute: "2-digit",
       });
-}
-/** @deprecated Use relativeTime from time.ts; kept for its remaining callers. */
-export function ago(value?: string | null) {
-  const text = relativeTime(value, Date.now(), "never connected");
-  return text[0].toUpperCase() + text.slice(1);
 }
 export function download(name: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));

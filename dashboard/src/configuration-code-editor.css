@@ -154,13 +154,10 @@
 .configuration-code-editor[data-readonly] .cm-activeLine {
   background: transparent;
 }
-.inspector-json-editor .configuration-code-editor,
-.inspector-json-editor .configuration-code-editor .cm-editor,
 .editor-component-json .configuration-code-editor,
 .editor-component-json .configuration-code-editor .cm-editor {
   min-height: 180px;
 }
-.inspector-json-editor .cm-scroller,
 .editor-component-json .cm-scroller {
   max-height: 360px;
 }
