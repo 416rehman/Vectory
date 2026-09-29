@@ -565,6 +565,17 @@ async fn creation_rechecks_mode_and_version_after_a_clean_preview() {
         StatusCode::CONFLICT
     );
     assert_eq!(deployment_count(&state).await, 0);
+    // A patch release of the pinned series is compatible.
+    set_device(&state, &ids[0], "full", "0.58.2").await;
+    let (status, created) = call(
+        &app,
+        "/api/v1/deployments",
+        request(FULL_VERSION, &[ids[0].clone()], "snapshot"),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
 }
 
 #[tokio::test]
