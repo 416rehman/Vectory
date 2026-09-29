@@ -345,7 +345,9 @@ function RecoveryCenter({ user, onRecovered, onReview }: Props) {
               ? "Find groups saved by your account, including requests from other tabs and devices."
               : screen === "local"
                 ? "These reminders are saved in this browser. Confirm their result before creating another group."
-                : "Check whether your group was saved before trying again."
+                : found
+                  ? "The server confirmed that your group was saved."
+                  : "Check whether your group was saved before trying again."
           }
         >
           <div className="modal-body group-recovery-body">

@@ -1,4 +1,5 @@
-// Before-fix investigation: actual Groups component, synthetic shared transport only.
+// Regression check for a fixed defect: a stale group edit can't overwrite a peer's
+// membership change. Actual Groups component, synthetic shared transport only.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import { createHash } from "node:crypto";
@@ -41,7 +42,7 @@ const server = await createServer({
           res.end(
             await vite.transformIndexHtml(
               req.url,
-              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic group stale-edit reproduction</title></head><body><main style="padding:24px"><div id="root"></div></main><script type="module">import "virtual:group-stale-review";</script></body></html>',
+              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic group stale-edit check</title></head><body><main style="padding:24px"><div id="root"></div></main><script type="module">import "virtual:group-stale-review";</script></body></html>',
             ),
           );
         });
@@ -57,7 +58,7 @@ const devices = [1, 2].map((n) => ({
   name: `Synthetic edge ${n}`,
   os: "windows",
   arch: "amd64",
-  status: "online",
+  status: "verified",
   apply_state: "verified_applied",
   desired_generation: 1,
   reported_generation: 1,
@@ -69,6 +70,8 @@ let group = {
   name: "Synthetic production group",
   description: "Original description",
   device_ids: [id(1)],
+  revision: 1,
+  created_at: "2026-09-27T00:00:00Z",
 };
 const browser = await chromium.launch();
 const context = await browser.newContext({
@@ -76,6 +79,7 @@ const context = await browser.newContext({
 });
 const requests = [],
   errors = [],
+  attempts = [],
   observations = [];
 let failure;
 await context.route("**/*", async (route) => {
@@ -108,10 +112,24 @@ await context.route("**/*", async (route) => {
   }
   if (method === "GET" && path === "/groups")
     return route.fulfill({ json: [group] });
+  if (method === "GET" && path === `/groups/${group.id}`)
+    return route.fulfill({ json: group });
   if (method === "PUT" && path === `/groups/${group.id}`) {
     const body = req.postDataJSON();
+    attempts.push({ before: structuredClone(group), submitted: body });
+    // The server's rule: a write names the revision it was made against.
+    if (body.revision !== group.revision)
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: "STALE_REVISION",
+            message: "Group changed; review it before saving",
+          },
+        },
+      });
     observations.push({ before: structuredClone(group), submitted: body });
-    group = { id: group.id, ...body };
+    group = { ...group, ...body, revision: group.revision + 1 };
     return route.fulfill({ json: group });
   }
   throw Error(`Unexpected request ${method} ${path}`);
@@ -152,13 +170,24 @@ try {
   await tabs[1]
     .getByRole("button", { name: "Save changes", exact: true })
     .click();
-  await expect(tabs[1].getByRole("dialog")).toHaveCount(0);
-  expect(observations).toHaveLength(2);
-  expect(observations[1].before.device_ids).toEqual([id(1), id(2)]);
-  expect(observations[1].submitted.device_ids).toEqual([id(1)]);
-  expect(observations[1].submitted).not.toHaveProperty("revision");
-  expect(group.device_ids).toEqual([id(1)]);
-  expect(await tabs[1].evaluate(() => window.notices)).toContain(
+  // The older modal is refused and asks for a review; nothing is overwritten.
+  const review = tabs[1].getByRole("region", { name: "Review group changes" });
+  await expect(review).toContainText("This group changed");
+  await expect(review).toContainText("Your edits would remove 1 device");
+  await expect(review).toContainText("Synthetic edge 2");
+  await expect(tabs[1].getByRole("dialog")).toBeVisible();
+  await expect(
+    tabs[1].getByLabel("Description (optional)", { exact: true }),
+  ).toHaveValue("Description edited by second operator");
+  await tabs[1].screenshot({
+    path: resolve(output, "stale-dialog-refused.png"),
+  });
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1].submitted.revision).toBe(1);
+  expect(observations).toHaveLength(1);
+  expect(group.device_ids).toEqual([id(1), id(2)]);
+  expect(group.description).toBe("Original description");
+  expect(await tabs[1].evaluate(() => window.notices)).not.toContain(
     "Group saved.",
   );
   expect(errors).toEqual([]);
@@ -184,10 +213,8 @@ try {
         recorded_at: new Date().toISOString(),
         passed: !failure,
         scope:
-          "Expected-defect reproduction: two actual Groups component tabs with shared intercepted synthetic transport. Proves stale membership submission and unqualified success UI; does not independently prove SQLite behavior or real deployment effects. No preview access, credentials or live writes.",
-        observed_defect: !failure
-          ? "A description-only edit from an older modal sends the old full device list, removes the peer-added device and reports Group saved without stale-review protection."
-          : null,
+          "Regression check: two actual Groups component tabs with shared intercepted synthetic transport. Proves a description-only edit from an older modal is refused for review, keeps the peer-added device and never reports Group saved; does not independently prove SQLite behavior or real deployment effects. No preview access, credentials or live writes.",
+        attempts,
         observations,
         final_group: group,
         requests,
@@ -204,5 +231,5 @@ try {
 }
 if (failure) throw failure;
 console.log(
-  "Reproduced stale group membership overwrite; evidence .local/group-stale-review/report.json",
+  "A stale group edit is refused for review and overwrites nothing; evidence .local/group-stale-review/report.json",
 );

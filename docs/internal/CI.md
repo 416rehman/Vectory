@@ -14,7 +14,7 @@ Runs on every push and pull request.
 | `operational` | Python backup and VRL-list tests, release verifier regressions, `docker compose config`, image builds | Backups restore and reject tampering; the images build | That the images start: see `compose` |
 | `end-to-end` | A fresh loopback instance (`scripts/preview.sh`, real validator) with `tests/native-workflow.mjs`, `scripts/check-installer.mjs`, `tests/contracts.mjs`, four dashboard specs and `tests/templates.mjs` | Section 15's first test on Linux with real Vector: first administrator, agent download checked by SHA-256, install, enroll over verified TLS, publish, assign, verified apply, drift repair, pause and resume, metrics, device secret rotation; the one-command installer; live API responses match the shared schemas; a 201-component pipeline loads; every starter validates | Compose or the TLS proxy (it is a development instance), service managers, other operating systems, long-running operation |
 | `compose` | `docs/user/install-server.md` on one runner: a private CA, protected secret files, `.env`, build, `up --wait`, the first administrator, a device enrolled with the installer through the published agent port, and probes from inside the validator | The quickstart works as written; health checks pass; the image's bundled agent installs; the validator has no network route (resolved configuration, a refused connection and a failed name lookup) | Upgrades, backup and restore in containers, a public CA, production networking |
-| `dashboard-browsers` | 36 more browser harnesses, each green in two runs before it was added; `scripts/check-ci-table.mjs` | The same as the dashboard job's harnesses; this page names every job | Anything about the server: their transport is synthetic |
+| `dashboard-browsers` | 39 more browser harnesses, each green locally before it was added; `scripts/check-ci-table.mjs` | The same as the dashboard job's harnesses; this page names every job | Anything about the server: their transport is synthetic |
 
 ## release-candidate.yml
 
@@ -34,8 +34,6 @@ Runs only when dispatched; [packaging/README.md](../../packaging/README.md#relea
 
 | Check | Why |
 | --- | --- |
-| `dashboard/tests/group-stale-review-browser.mjs` | Reproduces a fixed defect, so it passes only while the defect exists. Archive it. |
-| `dashboard/tests/agent-settings-create-observation.mjs`, `group-create-uncertainty-observation.mjs` | Declared expected-defect observations (`correctness_acceptance: false`) of defects that request tracking later fixed. |
 | `tests/editor-connections-browser.mjs` | Waits for autosave; the editor now saves on an explicit Save. Needs updating. |
 | `tests/catalog.mjs` | Rewrites the tracked `vector-catalog/catalog.json`, and its labels differ from the committed file. Decide which is right, then make it a check. |
 | `tests/fleet-browser.mjs` | Written for Windows (`vectory-server.exe`, a `python` command). |

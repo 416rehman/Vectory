@@ -1,6 +1,6 @@
 # Official Vector references
 
-The user supplied [Vector's official documentation](https://vector.dev/docs/) as the technical reference for Vectory. Reviewed 2026-09-26. Use the following pages when implementing or extending the integration.
+[Vector's official documentation](https://vector.dev/docs/) is the technical reference for Vectory. Reviewed 2026-09-26. Use the following pages when implementing or extending the integration.
 
 | Area | Official reference | Application in Vectory |
 | --- | --- | --- |
