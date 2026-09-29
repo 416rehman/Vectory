@@ -1760,6 +1760,47 @@ async fn signed_manifest_binds_nonce_and_artifact_is_current_only() {
 }
 
 #[tokio::test]
+async fn artifact_downloads_never_wait_for_the_writer_lock() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 1).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "INSERT INTO credentials(fingerprint,device_id,expires_at) VALUES('fingerprint',?,?)",
+    )
+    .bind(&ids[0])
+    .bind((chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let app = device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(
+        "fingerprint".into(),
+    ))));
+    let path = format!("/agent/v1/artifacts/{}", db::hash("{}\n"));
+    // A heartbeat or the scheduler is writing. A download is a read: it
+    // must not queue behind the writer, nor make writers queue behind it.
+    let writing = s.writer.lock().await;
+    let download = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        call(app.clone(), "GET", &path, Value::Null, "", ""),
+    )
+    .await;
+    drop(writing);
+    let (status, artifact, _) = download.expect("the download waited for the writer lock");
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    assert_eq!(artifact, json!({}));
+    // The digest still decides: anything but the current artifact is refused.
+    let other = format!("/agent/v1/artifacts/{}", db::hash("other"));
+    assert_eq!(
+        call(app, "GET", &other, Value::Null, "", "").await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn mfa_requires_second_factor_and_recovery_codes_are_single_use() {
     let (_temp, s) = state().await;
     let app = api::router(s.clone());
