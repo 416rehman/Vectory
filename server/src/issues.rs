@@ -271,7 +271,10 @@ pub(crate) async fn record_data_plane(
     issue["reports"] = increment(counter(&issue, "reports"))?;
     issue["last_seen"] = json!(now);
     issue["component"] = json!(r.component);
-    issue["diagnostics"] = crate::configuration_attempt::diagnostics(r.diagnostics)?;
+    // Never fail a heartbeat over presentation: an invalid finding renders
+    // from the code's generic message instead.
+    issue["diagnostics"] =
+        crate::configuration_attempt::diagnostics(r.diagnostics).unwrap_or_else(|_| json!([]));
     issue["evidence"] = r.evidence.clone();
     issue["desired_version_id"] = json!(r.version_id);
     issue["deployment_id"] = json!(r.deployment_id);
@@ -355,7 +358,7 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>) {
         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) ELSE NULL END,\
         'deployment_id',CASE WHEN json_type(i.data,'$.deployment_id')='text' THEN substr(json_extract(i.data,'$.deployment_id'),1,128) ELSE NULL END,\
         'resolved',json(CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'true' ELSE 'false' END),\
-        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
+        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded','unmonitored') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
         'resolved_at',").push(timestamp("json_extract(i.data,'$.resolved_at')")).push(",\
         'revision',CASE WHEN json_type(i.data,'$.revision')='integer' AND json_extract(i.data,'$.revision') BETWEEN 1 AND 9007199254740991 THEN json_extract(i.data,'$.revision') ELSE 1 END,\
         'acknowledged',json(CASE WHEN json_type(i.data,'$.acknowledged')='true' THEN 'true' ELSE 'false' END),\

@@ -111,6 +111,36 @@ impl Finding {
     }
 }
 
+/// Agent diagnostics are at most this many serialized bytes.
+const MAX_DIAGNOSTIC_BYTES: usize = 512;
+/// Shorten the hint, then the message, until the record fits the stored
+/// bound, so a long component ID can never make a heartbeat fail.
+fn fit(mut diagnostic: Value) -> Value {
+    let size = |d: &Value| serde_json::to_vec(d).map_or(usize::MAX, |b| b.len());
+    for key in ["hint", "message"] {
+        let total = size(&diagnostic);
+        let Some(text) = diagnostic[key]
+            .as_str()
+            .filter(|_| total > MAX_DIAGNOSTIC_BYTES)
+        else {
+            continue;
+        };
+        let chars = text.chars().count();
+        // Cut the excess plus room for the ellipsis, keeping a readable stub.
+        let cut = (total - MAX_DIAGNOSTIC_BYTES + 3).min(chars.saturating_sub(24));
+        if cut > 0 {
+            diagnostic[key] = json!(bounded(text.to_owned(), chars - cut));
+        }
+    }
+    if size(&diagnostic) > MAX_DIAGNOSTIC_BYTES {
+        if let Some(fields) = diagnostic.as_object_mut() {
+            fields.remove("hint");
+            fields.insert("message".into(), json!("A delivery problem was found."));
+        }
+    }
+    diagnostic
+}
+
 fn number(value: f64) -> String {
     if value >= 100.0 || value.fract() == 0.0 {
         format!("{value:.0}")
@@ -169,14 +199,14 @@ fn finding(
     if let Some(kind) = kind {
         first["component_kind"] = json!(kind);
     }
-    let mut diagnostics = vec![first];
+    let mut diagnostics = vec![fit(first)];
     if let Some(message) = log.and_then(|item| item["message"].as_str()) {
         let mut line =
             json!({"severity":"warning","code":"VECTOR_LOG","message":bounded(message.into(),300)});
         if let Some(id) = component {
             line["component_id"] = json!(id);
         }
-        diagnostics.push(line);
+        diagnostics.push(fit(line));
     }
     Finding {
         code,
@@ -429,6 +459,8 @@ pub struct Observation<'a> {
     pub assignment_id: Option<String>,
     /// The accepted sample, or null when telemetry is off or unavailable.
     pub sample: &'a Value,
+    /// Whether the device's settings collect metrics at all.
+    pub monitoring: bool,
 }
 
 /// Evaluate a heartbeat's sample and keep issues and the device's
@@ -439,8 +471,13 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
             .bind(o.device_id)
             .fetch_optional(&mut *db)
             .await?;
-    if o.desired_version.is_none() {
-        // Unassigned: the heartbeat already resolved every issue.
+    if o.desired_version.is_none() || !o.monitoring {
+        // Unassigned: the heartbeat already resolved every issue. Metrics
+        // turned off: delivery can't be judged any more, so the flag can't
+        // stay (or claim recovery); its issues close as unmonitored.
+        if !o.monitoring {
+            issues::resolve_data_plane(db, o.device_id, None, "unmonitored").await?;
+        }
         if stored.is_some() {
             sqlx::query("DELETE FROM data_plane_state WHERE device_id=?")
                 .bind(o.device_id)
@@ -682,6 +719,24 @@ mod tests {
         assert_eq!(verdict(&found, SINK_ERRORS), Verdict::Hold);
         assert_eq!(verdict(&found, BUFFER), Verdict::Bad);
         assert_eq!(verdict(&found, STALLED), Verdict::Bad);
+    }
+
+    #[test]
+    fn diagnostics_always_fit_the_stored_bound_even_for_the_longest_names() {
+        let id = "a".repeat(100);
+        let kind = "k".repeat(64);
+        // Multi-byte redaction marks make the log line as wide as it can be.
+        let log = json!({"component_id":id,"reason":"connection_refused","message":"«redacted» ".repeat(30),"count":9});
+        let sink = json!({"id":id,"kind":"sink","type":kind,"errors_per_minute":9999999.0,"dropped_per_minute":9999999.0,"buffer_utilization":1.0,"events_per_second":0.0});
+        let sample =
+            json!({"events_per_second":123456.0,"events_out_per_second":0.0,"components":[sink]});
+        let found = assess(&sample, &Map::new(), &[log]);
+        assert_eq!(found.len(), 4);
+        for f in found {
+            crate::configuration_attempt::diagnostics(&f.diagnostics)
+                .unwrap_or_else(|_| panic!("{} does not fit: {}", f.code, f.diagnostics));
+            assert!(f.diagnostics[0]["message"].as_str().unwrap().len() > 24);
+        }
     }
 
     #[test]

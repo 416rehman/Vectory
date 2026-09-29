@@ -100,6 +100,8 @@ function resolution(issue: Issue) {
       return "Resolved when the pipeline delivered normally for three checks in a row.";
     case "superseded":
       return "Resolved when the device stopped running the version this was measured on.";
+    case "unmonitored":
+      return "Resolved when metrics were turned off, so delivery can't be checked any more.";
     default:
       return "Resolved when the device verified a configuration after this failure.";
   }

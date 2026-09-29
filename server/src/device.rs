@@ -943,6 +943,7 @@ pub async fn heartbeat(
             } else {
                 &Value::Null
             },
+            monitoring: policy["telemetry_enabled"] == true,
         },
     )
     .await?;
