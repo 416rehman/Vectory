@@ -331,6 +331,61 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
         detail["details"],
         json!({"reason_code":"TOKEN_EXPIRED","name":"edge-12","token_id":expired_id,"agent_os":"linux","agent_arch":"amd64","agent_version":"0.1.0","configuration_mode":"restricted","client_address":"10.0.4.17"})
     );
+
+    // Viewers read the same events without where anyone connected from, and
+    // the enrollment activity feed is for the people who add devices.
+    let viewer = db::id();
+    let viewer_session = auth::random_secret();
+    sqlx::query(
+        "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&viewer)
+    .bind("vic@example.invalid")
+    .bind("Vic Viewer")
+    .bind("viewer")
+    .bind("unused-test-hash")
+    .bind(db::now())
+    .execute(&f.s.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
+        .bind(db::hash(&viewer_session))
+        .bind(&viewer)
+        .bind(auth::random_secret())
+        .bind("2099-01-01T00:00:00Z")
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let as_viewer = |path: String| {
+        Request::builder()
+            .uri(path)
+            .header("cookie", format!("vectory_session={viewer_session}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, _) = send(&f.api, as_viewer("/api/v1/agent-install/activity".into())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, bytes) = send(&f.api, as_viewer(format!("/api/v1/audit/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut redacted = detail.clone();
+    redacted["details"]
+        .as_object_mut()
+        .unwrap()
+        .remove("client_address");
+    assert_eq!(json_of(&bytes), redacted);
+    let (status, _, bytes) = send(&f.api, as_viewer("/api/v1/audit".into())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!String::from_utf8(bytes).unwrap().contains("10.0.4.17"));
+    // An encoded offset is an ordinary RFC3339 timestamp.
+    let (status, _, _) = f
+        .get(
+            &f.api,
+            "/api/v1/agent-install/activity?since=2026-01-01T00%3A00%3A00%2B00%3A00",
+            "vectory.example.test",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
     for secret in [&single, &reusable, &web_only, &expired, &unknown] {
         let leaked: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE instr(data,?)>0")
             .bind(secret)

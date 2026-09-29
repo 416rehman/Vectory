@@ -422,6 +422,16 @@ pub(crate) async fn count(
     filter(&mut q, f, cutoff);
     Ok(q.build_query_scalar().fetch_one(conn).await?)
 }
+/// Where someone connected from is for the people who run devices and
+/// accounts: viewers read every event without its client address.
+pub(crate) fn for_reader(mut event: Value, reader: &Value) -> Value {
+    if reader["role"] == "viewer" {
+        if let Some(details) = event["details"].as_object_mut() {
+            details.remove("client_address");
+        }
+    }
+    event
+}
 pub(crate) async fn legacy(conn: &mut SqliteConnection, size: i64) -> Result<Vec<Value>> {
     let records = rows(conn, &Filters::default(), size, 0, None, None, true).await?;
     Ok(records
@@ -627,7 +637,7 @@ pub async fn detail(
     RawQuery(raw): RawQuery,
     parsed: std::result::Result<Query<crate::deployment_history::EmptyQuery>, QueryRejection>,
 ) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
+    let reader = auth::authorize(&s, &h, &[], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let mut q = QueryBuilder::new(base(true));
     q.push(" SELECT ")
@@ -641,7 +651,7 @@ pub async fn detail(
         .ok_or_else(ApiError::missing)?;
     let mut v = db::parse(r.get("summary"))?;
     v["details"] = details(&v, &db::parse(r.get("extra"))?);
-    Ok(Json(v))
+    Ok(Json(for_reader(v, &reader)))
 }
 
 #[cfg(test)]
