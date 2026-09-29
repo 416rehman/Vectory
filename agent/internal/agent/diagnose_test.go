@@ -209,6 +209,26 @@ func TestBoundedOutputNeverKeepsAPartialSecret(t *testing.T) {
 	}
 }
 
+func TestCredentialsUnderFourBytesAreRedactedAsWholeWords(t *testing.T) {
+	r := newRedactor()
+	r.learnConfiguration([]byte(`{"sinks":{"out":{"type":"http","inputs":["in"],"uri":"https://example.invalid","encoding":{"codec":"json"},"auth":{"strategy":"basic","user":"ops","password":"k9x"}}}}`), false)
+	got := r.text("authentication failed for ops with k9x, retry (k9x) k9xyz")
+	// The credential goes wherever it stands alone. The same letters inside
+	// other words stay, so ordinary messages are not mangled.
+	want := "authentication failed for " + redactedToken + " with " + redactedToken + ", retry (" + redactedToken + ") k9xyz"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if !r.containsSecret("k9x") || r.containsSecret("k9xyz") {
+		t.Fatal("a short credential overlaps only as a whole word")
+	}
+	one := newRedactor()
+	one.addSecret("7")
+	if got := one.text("port 87 attempt 7 of 9 _7"); got != "port 87 attempt "+redactedToken+" of 9 _7" {
+		t.Fatalf("single character credential: %q", got)
+	}
+}
+
 func TestRedactionEchoesOnlyTemplateTokens(t *testing.T) {
 	config := `{"data_dir":"/srv/vector/data","sinks":{"es":{"type":"elasticsearch","endpoints":["https://logs.example.com:9200"],"auth":{"strategy":"basic","user":"svc","password":"hunter2-resolved-secret"}}},"transforms":{"parse":{"type":"remap","source":". = parse_apache_log!(.message, format: \"common\")"}}}`
 	r := testRedactor(config)
