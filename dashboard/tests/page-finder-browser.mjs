@@ -270,6 +270,7 @@ await context.route("**/*", async (route) => {
       instance_name: "Synthetic workspace label must not appear in the rail",
     });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/overview")
     return reply({
       devices_total: 1,

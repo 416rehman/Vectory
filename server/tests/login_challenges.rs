@@ -677,7 +677,7 @@ async fn strict_factor_shape_cross_site_expiry_and_durable_attempt_budget() {
         assert_eq!(
             error["error"]["code"],
             if attempt == 5 {
-                "MFA_CHALLENGE_EXPIRED"
+                "MFA_TOO_MANY_ATTEMPTS"
             } else {
                 "INVALID_MFA_CODE"
             }
@@ -921,18 +921,19 @@ async fn concurrent_failures_cannot_exceed_challenge_budget_or_bypass_user_rate(
             post(&app, "/api/v1/login/mfa", body).await
         }));
     }
-    let mut retryable = 0;
+    let (mut retryable, mut exhausted) = (0, 0);
     for task in requests {
         let (status, error, h) = task.await.unwrap();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert!(!h.contains_key("set-cookie"));
-        if error["error"]["code"] == "INVALID_MFA_CODE" {
-            retryable += 1;
-        } else {
-            assert_eq!(error["error"]["code"], "MFA_CHALLENGE_EXPIRED");
+        match error["error"]["code"].as_str() {
+            Some("INVALID_MFA_CODE") => retryable += 1,
+            // The fifth wrong code exhausts the challenge; later racers find it gone.
+            Some("MFA_TOO_MANY_ATTEMPTS") => exhausted += 1,
+            code => assert_eq!(code, Some("MFA_CHALLENGE_EXPIRED")),
         }
     }
-    assert_eq!(retryable, 4);
+    assert_eq!((retryable, exhausted), (4, 1));
     assert_eq!(count(&f, "login_challenges").await, 0);
     let token = challenge(&f).await;
     for _ in 0..5 {

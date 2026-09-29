@@ -1886,7 +1886,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": false}),
+        json!({"enabled": false, "recovery_codes_remaining": null}),
         "a pending setup is not a recoverable secret or enabled state"
     );
     let first_ciphertext: String = sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa")
@@ -1931,7 +1931,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": true})
+        json!({"enabled": true, "recovery_codes_remaining": 8})
     );
     let recovery_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
         .fetch_one(&s.pool)
@@ -1970,7 +1970,7 @@ async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_
         call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
             .await
             .1,
-        json!({"enabled": false})
+        json!({"enabled": false, "recovery_codes_remaining": null})
     );
     let remaining_codes: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
         .fetch_one(&s.pool)
