@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-09-29T06:01:26.533Z",
+  "server_sha256": "240a29438fd4f4fcb39442cfe6ac1536eb17f3e9cce66c405d6f1ecace6f1c62",
+  "scope": "Disposable real HTTP audit chronology checks with synthetic same-second events, migration backfill, transaction rollback and offline VACUUM/restart. Historical backfill uses the surviving insertion-order approximation; it cannot recover previously lost chronology.",
+  "checks": [
+    {
+      "name": "migration backfills every audit without rewriting records and preserves surviving tied insertion order",
+      "passed": true
+    },
+    {
+      "name": "Overview and Audit Log use timestamp then permanent sequence, preserve names and reject anonymous reads",
+      "passed": true
+    },
+    {
+      "name": "rolled-back audit inserts leave neither record nor sequence mapping",
+      "passed": true
+    },
+    {
+      "name": "offline VACUUM and server restart retain exact audit bytes, sequence values and both HTTP orderings",
+      "passed": true
+    }
+  ],
+  "synthetic_audit_events": 62,
+  "passed": true,
+  "fixture_removed": true,
+  "finished_at": "2026-09-29T06:01:28.854Z"
+}
