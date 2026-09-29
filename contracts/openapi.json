@@ -12795,7 +12795,7 @@
     },
     "/agent/v1/wait": {
       "get": {
-        "summary": "Wake-up hint (mTLS, no body): held until this device's desired or policy generation differs from the agent's last accepted values, the device is revoked, or 25 seconds pass. The response head is sent at once and the body when the answer is known. Authenticated like the heartbeat; unsigned, carries no configuration and changes no state",
+        "summary": "Wake-up hint (mTLS, no body): held until this device's desired or policy generation differs from the agent's last accepted values, the device is revoked, or 25 seconds pass. Answers go out after the writer commits, up to 100 at once and then 50 a second, oldest first. The response head is sent at once and the body when the answer is known. Authenticated like the heartbeat; unsigned, carries no configuration and changes no state",
         "operationId": "get__agent_v1_wait",
         "security": [
           {
@@ -12891,7 +12891,7 @@
             "description": "Rate limit"
           },
           "503": {
-            "description": "CAPACITY_BUSY: VECTORY_AGENT_WAKE_LIMIT waits (default 20,000) are parked, or the server is stopping. The agent keeps its ordinary schedule and waits again no sooner than Retry-After",
+            "description": "CAPACITY_BUSY: VECTORY_AGENT_WAKE_LIMIT waits (default 20,000) are parked (Retry-After 60), or the server is stopping (Retry-After 1, before any database read). The agent keeps its ordinary schedule and waits again no sooner than Retry-After",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -19584,7 +19584,7 @@
             "properties": {
               "listening": {
                 "type": "boolean",
-                "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+                "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change usually reaches it within seconds (a large release is paced, never past the device's next check-in). False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
               }
             },
             "required": [
@@ -20513,7 +20513,7 @@
             "properties": {
               "listening": {
                 "type": "boolean",
-                "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+                "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change usually reaches it within seconds (a large release is paced, never past the device's next check-in). False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
               }
             },
             "required": [

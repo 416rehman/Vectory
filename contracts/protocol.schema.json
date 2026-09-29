@@ -5321,7 +5321,7 @@
           "properties": {
             "listening": {
               "type": "boolean",
-              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change usually reaches it within seconds (a large release is paced, never past the device's next check-in). False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
             }
           },
           "required": [
@@ -6250,7 +6250,7 @@
           "properties": {
             "listening": {
               "type": "boolean",
-              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change reaches it within seconds. False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
+              "description": "The device's agent holds a wait (GET /agent/v1/wait) at this instant, so a change usually reaches it within seconds (a large release is paced, never past the device's next check-in). False between waits, for agents with wake-ups off or without them, and for offline devices. Never evidence that anything was delivered or applied."
             }
           },
           "required": [
