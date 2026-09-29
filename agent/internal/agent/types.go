@@ -2,6 +2,7 @@ package agent
 
 import (
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -11,14 +12,51 @@ const Version = "0.1.0-dev"
 // Any patch release of the same minor version is supported (VectorSeries).
 const VectorVersion = "0.58.0"
 
-// VectorSeries names the supported Vector releases for people: 0.58.x.
-const VectorSeries = "0.58.x"
+// vectorSupportedSeries is the supported major.minor; VectorSeries names it
+// for people: 0.58.x.
+const (
+	vectorSupportedSeries = "0.58"
+	VectorSeries          = vectorSupportedSeries + ".x"
+)
 
-var supportedVector = regexp.MustCompile(`^0\.58\.[0-9]+$`)
+var vectorTriple = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.[0-9]{1,4}$`)
+
+// vectorRelease normalizes a Vector version as a binary, a device or a
+// manifest reports it to "major.minor.patch", and names its "major.minor"
+// series. It accepts what the server's own compatibility check accepts: a
+// leading "v" and build details after the first space, as in
+// "0.58.1 (x86_64-unknown-linux-gnu 2bcad9b 2026-08-26)". Anything else, a
+// pre-release for example, isn't a release the agent knows.
+func vectorRelease(reported string) (release, series string, ok bool) {
+	words := strings.Fields(reported)
+	if len(words) == 0 {
+		return "", "", false
+	}
+	match := vectorTriple.FindStringSubmatch(strings.TrimPrefix(words[0], "v"))
+	if match == nil {
+		return "", "", false
+	}
+	return match[0], match[1] + "." + match[2], true
+}
 
 // SupportedVectorVersion reports whether a Vector version is a patch release
 // of the supported minor version.
-func SupportedVectorVersion(version string) bool { return supportedVector.MatchString(version) }
+func SupportedVectorVersion(version string) bool {
+	_, series, ok := vectorRelease(version)
+	return ok && series == vectorSupportedSeries
+}
+
+// sameVectorSeries reports whether two Vector versions share major.minor.
+// Patch releases fix bugs without changing configuration, so a patch
+// difference between a manifest and the adopted binary is not a conflict.
+func sameVectorSeries(a, b string) bool {
+	_, first, ok := vectorRelease(a)
+	if !ok {
+		return false
+	}
+	_, second, ok := vectorRelease(b)
+	return ok && first == second
+}
 
 const MaxArtifact = 1024 * 1024
 const MaxJSONCounter uint64 = 9007199254740991
@@ -190,8 +228,8 @@ type Settings struct {
 // adoptedVectorVersion is the adopted binary's version, or the release this
 // agent is built with for installations adopted before it was recorded.
 func (s Settings) adoptedVectorVersion() string {
-	if SupportedVectorVersion(s.VectorVersion) {
-		return s.VectorVersion
+	if release, series, ok := vectorRelease(s.VectorVersion); ok && series == vectorSupportedSeries {
+		return release
 	}
 	return VectorVersion
 }
