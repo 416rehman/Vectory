@@ -262,10 +262,12 @@ try {
     await page.getByRole("button", { name: "Search", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Search", exact: true });
     // Pagefind falls back to the longest indexed prefix of an unknown word, so
-    // start with a letter that never stands alone in the guides ("Ctrl Z" does).
+    // start with a letter that never stands alone in the guides ("Ctrl Z" and
+    // the API's `q` parameter do; e, i, j, l and y do not at the time of
+    // writing: if this fails after a docs change, look for a new lone letter).
     await dialog
       .getByRole("textbox", { name: "Search", exact: true })
-      .fill("qxjnovectorydocmatch9371");
+      .fill("jxqnovectorydocmatch9371");
     await expect(dialog.getByText(/no results/i)).toBeVisible();
     evidence.search.empty_summary = await dialog
       .getByText(/no results/i)
