@@ -5,7 +5,13 @@ import {
   useUpdateNodeInternals,
   type NodeProps,
 } from "@xyflow/react";
-import { AlertTriangle, ArrowRight, Ellipsis, Unplug } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CircleX,
+  Ellipsis,
+  Unplug,
+} from "lucide-react";
 import type { Config } from "./api";
 import type { Kind } from "./catalog";
 import ComponentIcon from "./ComponentIcon";
@@ -103,6 +109,14 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
     typeof data.issueMessage === "string"
       ? data.issueMessage
       : "Settings need attention";
+  const issueCount =
+    typeof data.issueCount === "number" && data.issueCount > 1
+      ? data.issueCount
+      : 0;
+  const warning =
+    !data.hasIssue && typeof data.warningMessage === "string"
+      ? data.warningMessage
+      : undefined;
   const connectivityWarning =
     typeof data.connectivityWarning === "string"
       ? data.connectivityWarning
@@ -220,10 +234,25 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
             <span
               className="pipeline-node-attention"
               role="img"
-              aria-label={issue}
-              title={issue}
+              aria-label={
+                issueCount ? `${issueCount} problems. First: ${issue}` : issue
+              }
+              title={
+                issueCount ? `${issueCount} problems. First: ${issue}` : issue
+              }
             >
-              <AlertTriangle size={16} />
+              <CircleX size={15} aria-hidden="true" />
+              {issueCount > 0 && <span>{issueCount}</span>}
+            </span>
+          )}
+          {warning && (
+            <span
+              className="pipeline-node-caution"
+              role="img"
+              aria-label={`Warning: ${warning}`}
+              title={warning}
+            >
+              <AlertTriangle size={14} aria-hidden="true" />
             </span>
           )}
         </div>

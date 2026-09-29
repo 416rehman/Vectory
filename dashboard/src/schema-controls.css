@@ -1,3 +1,4 @@
+@import "./editor-tokens.css";
 /* Dense typed controls for the persistent component inspector. */
 .schema-fields,
 .schema-field-control {
@@ -52,6 +53,36 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 6px 0;
+}
+/* Findings for one option, from the local check or Vector. */
+.schema-field-problems {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 2px;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.schema-field-problems li {
+  padding-left: 10px;
+  border-left: 2px solid var(--ed-danger);
+  color: var(--ed-danger);
+}
+.schema-field-problems li[data-severity="warning"] {
+  border-left-color: var(--ed-warning);
+  color: var(--ed-warning);
+}
+.schema-field-problems small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.schema-field-control[data-field-problem="error"]
+  > .schema-structured-value
+  :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) {
+  border-color: var(--ed-danger-line);
+  box-shadow: inset 0 0 0 1px var(--ed-danger-line);
 }
 .schema-control-hint,
 .schema-default-note,

@@ -1,0 +1,5597 @@
+{
+  "functions": [
+    {
+      "arguments": [
+        {
+          "description": "The number to calculate the absolute value.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        }
+      ],
+      "category": "Number",
+      "description": "Computes the absolute value of `value`.",
+      "example": {
+        "result": "42",
+        "source": "abs(-42)"
+      },
+      "fallible": false,
+      "name": "abs",
+      "returns": "integer | float",
+      "summary": "Computes the absolute value of `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The initial array.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The items to append.",
+          "name": "items",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Array",
+      "description": "Appends each item in the `items` array to the end of the `value` array.",
+      "example": {
+        "result": "[1,2,3,4]",
+        "source": "append([1, 2], [3, 4])"
+      },
+      "fallible": false,
+      "name": "append",
+      "returns": "array",
+      "summary": "Appends each item in the `items` array to the end of the `value` array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an array.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is an array, otherwise returns an error. This enables the type checker to guarantee that the returned value is an array and can be used in any function that expects an array.",
+      "example": {
+        "result": "[1,2,3]",
+        "source": "array!(.value)"
+      },
+      "failure": "`value` is not an array.",
+      "fallible": true,
+      "name": "array",
+      "returns": "array",
+      "summary": "Returns `value` if it is an array, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The condition to check.",
+          "name": "condition",
+          "required": true,
+          "type": "boolean"
+        },
+        {
+          "description": "An optional custom error message.",
+          "name": "message",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Debug",
+      "description": "Asserts the `condition`, which must be a Boolean expression. The program is aborted with `message` if the condition evaluates to `false`.",
+      "example": {
+        "result": "true",
+        "source": "assert!(\"foo\" == \"foo\", message: \"\\\"foo\\\" must be \\\"foo\\\"!\")"
+      },
+      "failure": "`condition` evaluates to `false`.",
+      "fallible": true,
+      "name": "assert",
+      "returns": "boolean",
+      "summary": "Asserts the `condition`, which must be a Boolean expression."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check for equality against `right`.",
+          "name": "left",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "description": "The value to check for equality against `left`.",
+          "name": "right",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "description": "An optional custom error message.",
+          "name": "message",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Debug",
+      "description": "Asserts that two expressions, `left` and `right`, have the same value. The program is aborted with `message` if they do not have the same value.",
+      "example": {
+        "result": "true",
+        "source": "assert_eq!(1, 1)"
+      },
+      "fallible": false,
+      "name": "assert_eq",
+      "returns": "boolean",
+      "summary": "Asserts that two expressions, `left` and `right`, have the same value."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path from which to extract the basename.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Returns the filename component of the given `path`. This is similar to the Unix `basename` command. If the path ends in a directory separator, the function returns the name of the directory.",
+      "example": {
+        "result": "\"vrl\"",
+        "source": "basename!(\"/usr/local/bin/vrl\")"
+      },
+      "failure": "`value` is not a valid string.",
+      "fallible": true,
+      "name": "basename",
+      "returns": "string | null",
+      "summary": "Returns the filename component of the given `path`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a Boolean.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is a Boolean, otherwise returns an error. This enables the type checker to guarantee that the returned value is a Boolean and can be used in any function that expects a Boolean.",
+      "example": {
+        "result": "false",
+        "source": "bool(false)"
+      },
+      "failure": "`value` is not a Boolean.",
+      "fallible": true,
+      "name": "bool",
+      "returns": "boolean",
+      "summary": "Returns `value` if it is a Boolean, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to camelCase.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional hint on the original case type.",
+          "enum": [
+            "kebab-case",
+            "camelCase",
+            "PascalCase",
+            "SCREAMING_SNAKE",
+            "snake_case"
+          ],
+          "name": "original_case",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Takes the `value` string, and turns it into camelCase. Optionally, you can pass in the existing case of the function, or else an attempt is made to determine the case automatically.",
+      "example": {
+        "result": "\"inputString\"",
+        "source": "camelcase(\"input-string\")"
+      },
+      "fallible": false,
+      "name": "camelcase",
+      "returns": "string",
+      "summary": "Takes the `value` string, and turns it into camelCase."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number to round up.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        },
+        {
+          "default": "0",
+          "description": "The number of decimal places to round to.",
+          "name": "precision",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Number",
+      "description": "Rounds the `value` up to the specified `precision`.",
+      "example": {
+        "result": "5",
+        "source": "ceil(4.345)"
+      },
+      "fallible": false,
+      "name": "ceil",
+      "returns": "integer | float",
+      "summary": "Rounds the `value` up to the specified `precision`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array of bytes to split.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The desired length of each chunk in bytes.",
+          "name": "chunk_size",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "Array",
+      "description": "Chunks `value` into slices of length `chunk_size` bytes.",
+      "example": {
+        "result": "[\"abcd\",\"efgh\"]",
+        "source": "chunks(\"abcdefgh\", 4)"
+      },
+      "failure": "`chunk_size` must be at least 1 byte.",
+      "fallible": true,
+      "name": "chunks",
+      "returns": "array",
+      "summary": "Chunks `value` into slices of length `chunk_size` bytes."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The source IP address.",
+          "name": "source_ip",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The destination IP address.",
+          "name": "destination_ip",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The protocol number.",
+          "name": "protocol",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "description": "The source port or ICMP type.",
+          "name": "source_port",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "The destination port or ICMP code.",
+          "name": "destination_port",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "The custom seed number.",
+          "name": "seed",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Generates an ID based on the Community ID Spec.",
+      "example": {
+        "result": "\"1:wCb3OG7yAFWelaUydu0D+125CLM=\"",
+        "source": "community_id!(source_ip: \"1.2.3.4\", destination_ip: \"5.6.7.8\", source_port: 1122, destination_port: 3344, protocol: 6)"
+      },
+      "fallible": false,
+      "name": "community_id",
+      "returns": "string",
+      "summary": "Generates an ID based on the Community ID Spec."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to compact.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "default": "true",
+          "description": "Whether the compaction be recursive.",
+          "name": "recursive",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Whether null should be treated as an empty value.",
+          "name": "null",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Whether an empty string should be treated as an empty value.",
+          "name": "string",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Whether an empty object should be treated as an empty value.",
+          "name": "object",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Whether an empty array should be treated as an empty value.",
+          "name": "array",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Tests whether the value is \"nullish\" as defined by the `is_nullish` function.",
+          "name": "nullish",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Compacts the `value` by removing empty values, where empty values are defined using the available parameters.",
+      "example": {
+        "result": "{\"field1\":1}",
+        "source": "compact({\"field1\": 1, \"field2\": \"\", \"field3\": [], \"field4\": null})"
+      },
+      "fallible": false,
+      "name": "compact",
+      "returns": "object | array",
+      "summary": "Compacts the `value` by removing empty values, where empty values are defined using the available parameters."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text to search.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The substring to search for in `value`.",
+          "name": "substring",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether the match should be case sensitive.",
+          "name": "case_sensitive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether the `value` string contains the specified `substring`.",
+      "example": {
+        "result": "false",
+        "source": "contains(\"banana\", \"AnA\")"
+      },
+      "fallible": false,
+      "name": "contains",
+      "returns": "boolean",
+      "summary": "Determines whether the `value` string contains the specified `substring`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text to search.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "An array of substrings to search for in `value`.",
+          "name": "substrings",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "Whether the match should be case sensitive.",
+          "name": "case_sensitive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether the `value` string contains all the specified `substrings`.",
+      "example": {
+        "result": "true",
+        "source": "contains_all(\"The NEEDLE in the Haystack\", [\"NEEDLE\", \"Haystack\"])"
+      },
+      "fallible": false,
+      "name": "contains_all",
+      "returns": "boolean",
+      "summary": "Determines whether the `value` string contains all the specified `substrings`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the checksum for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "CRC_32_ISO_HDLC",
+          "description": "The CRC algorithm to use.",
+          "enum": [
+            "CRC_3_GSM",
+            "CRC_3_ROHC",
+            "CRC_4_G_704",
+            "CRC_4_INTERLAKEN",
+            "CRC_5_EPC_C1G2",
+            "CRC_5_G_704",
+            "CRC_5_USB",
+            "CRC_6_CDMA2000_A",
+            "CRC_6_CDMA2000_B",
+            "CRC_6_DARC",
+            "CRC_6_GSM",
+            "CRC_6_G_704"
+          ],
+          "name": "algorithm",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Checksum",
+      "description": "Calculates a CRC of the `value`.The CRC `algorithm` used can be optionally specified.",
+      "example": {
+        "result": "\"2356372769\"",
+        "source": "crc(\"foo\")"
+      },
+      "failure": "`value` is not a string.",
+      "fallible": true,
+      "name": "crc",
+      "returns": "string",
+      "summary": "Calculates a CRC of the `value`.The CRC `algorithm` used can be optionally specified."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Base16 data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Base16 string) into its original string.",
+      "example": {
+        "result": "\"some string value\"",
+        "source": "decode_base16!(\"736F6D6520737472696E672076616C7565\")"
+      },
+      "failure": "`value` isn't a valid encoded Base16 string.",
+      "fallible": true,
+      "name": "decode_base16",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Base16 string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Base64 data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "standard",
+          "description": "The character set to use when decoding the data.",
+          "enum": [
+            "standard",
+            "url_safe"
+          ],
+          "name": "charset",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Base64 string) into its original string.",
+      "example": {
+        "result": "\"you have successfully decoded me\"",
+        "source": "decode_base64!(\"eW91IGhhdmUgc3VjY2Vzc2Z1bGx5IGRlY29kZWQgbWU=\")"
+      },
+      "failure": "`value` isn't a valid encoded Base64 string.",
+      "fallible": true,
+      "name": "decode_base64",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Base64 string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The non-UTF8 string to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The character set to use when decoding the data.",
+          "name": "from_charset",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a non-UTF8 string) to a UTF8 string using the specified character set.",
+      "example": {
+        "result": "\"안녕하세요\"",
+        "source": "decode_charset!(decode_base64!(\"vsiz58fPvLy/5A==\"), \"euc-kr\")"
+      },
+      "failure": "`from_charset` isn't a valid character set.",
+      "fallible": true,
+      "name": "decode_charset",
+      "returns": "string",
+      "summary": "Decodes the `value` (a non-UTF8 string) to a UTF8 string using the specified character set."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Gzip data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Gzip string) into its original string.",
+      "example": {
+        "result": "\"please decode me\"",
+        "source": "decode_gzip!(decode_base64!(\"H4sIAB8BymMAAyvISU0sTlVISU3OT0lVyE0FAJsZ870QAAAA\"))"
+      },
+      "failure": "`value` isn't a valid encoded Gzip string.",
+      "fallible": true,
+      "name": "decode_gzip",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Gzip string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The lz4 block data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "1000000",
+          "description": "The size of the buffer to decode into, this must be equal to or larger than the uncompressed size.",
+          "name": "buf_size",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "default": "false",
+          "description": "Some implementations of lz4 require the original uncompressed size to be prepended to the compressed data.",
+          "name": "prepended_size",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (an lz4 string) into its original string. `buf_size` is the size of the buffer to decode into, this must be equal to or larger than the uncompressed size. If `prepended_size` is set to `true`, it expects the original uncompressed size to be prepended to the compressed data. `prepended_size` is useful for some implementations of lz4 that require the original size to be known before decoding.",
+      "example": {
+        "result": "\"The quick brown fox jumps over 13 lazy dogs.\"",
+        "source": "decode_lz4!(decode_base64!(\"LAAAAPAdVGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIDEzIGxhenkgZG9ncy4=\"), prepended_size: true)"
+      },
+      "failure": "`value` unable to decode value with lz4 frame decoder.",
+      "fallible": true,
+      "name": "decode_lz4",
+      "returns": "string",
+      "summary": "Decodes the `value` (an lz4 string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string with encoded-words to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Replaces q-encoded or base64-encoded encoded-word substrings in the `value` with their original string.",
+      "example": {
+        "result": "\"Hello, World!\"",
+        "source": "decode_mime_q!(\"=?utf-8?b?SGVsbG8sIFdvcmxkIQ==?=\")"
+      },
+      "failure": "`value` has invalid encoded encoded-word string.",
+      "fallible": true,
+      "name": "decode_mime_q",
+      "returns": "string",
+      "summary": "Replaces q-encoded or base64-encoded encoded-word substrings in the `value` with their original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes a percent-encoded `value` like a URL.",
+      "example": {
+        "result": "\"foo bar?\"",
+        "source": "decode_percent(\"foo%20bar%3F\")"
+      },
+      "fallible": false,
+      "name": "decode_percent",
+      "returns": "string",
+      "summary": "Decodes a percent-encoded `value` like a URL."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "If enabled, checks if the input string is a valid domain name.",
+          "name": "validate",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes a punycode encoded `value`, such as an internationalized domain name (IDN). This function assumes that the value passed is meant to be used in IDN context and that it is either a domain name or a part of it.",
+      "example": {
+        "result": "\"www.café.com\"",
+        "source": "decode_punycode!(\"www.xn--caf-dma.com\")"
+      },
+      "failure": "`value` is not valid `punycode`",
+      "fallible": true,
+      "name": "decode_punycode",
+      "returns": "string",
+      "summary": "Decodes a punycode encoded `value`, such as an internationalized domain name (IDN)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Snappy data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Snappy string) into its original string.",
+      "example": {
+        "result": "\"The quick brown fox jumps over 13 lazy dogs.\"",
+        "source": "decode_snappy!(decode_base64!(\"LKxUaGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgMTMgbGF6eSBkb2dzLg==\"))"
+      },
+      "failure": "`value` isn't a valid encoded Snappy string.",
+      "fallible": true,
+      "name": "decode_snappy",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Snappy string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Zlib data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Zlib string) into its original string.",
+      "example": {
+        "result": "\"encode_me\"",
+        "source": "decode_zlib!(decode_base64!(\"eJxLzUvOT0mNz00FABI5A6A=\"))"
+      },
+      "failure": "`value` isn't a valid encoded Zlib string.",
+      "fallible": true,
+      "name": "decode_zlib",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Zlib string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Zstandard data to decode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Decodes the `value` (a Zstandard string) into its original string.",
+      "example": {
+        "result": "\"you_have_successfully_decoded_me.congratulations.you_are_breathtaking.\"",
+        "source": "decode_zstd!(decode_base64!(\"KLUv/QBY/QEAYsQOFKClbQBedqXsb96EWDax/f/F/z+gNU4ZTInaUeAj82KqPFjUzKqhcfDqAIsLvAsnY1bI/N2mHzDixRQA\"))"
+      },
+      "failure": "`value` isn't a valid encoded Zstd string.",
+      "fallible": true,
+      "name": "decode_zstd",
+      "returns": "string",
+      "summary": "Decodes the `value` (a Zstandard string) into its original string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string in raw bytes (not encoded) to decrypt.",
+          "name": "ciphertext",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The algorithm to use.",
+          "name": "algorithm",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The key in raw bytes (not encoded) for decryption.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The IV in raw bytes (not encoded) for decryption.",
+          "name": "iv",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Decrypts a string with a symmetric encryption algorithm.",
+      "example": {
+        "result": "\"data\"",
+        "source": "iv = \"0123456789012345\"\nkey = \"01234567890123456789012345678912\"\nciphertext = decode_base64!(\"c/dIOA==\")\ndecrypt!(ciphertext, \"AES-256-CFB\", key: key, iv: iv)\n"
+      },
+      "failure": "`algorithm` is not a supported algorithm.",
+      "fallible": true,
+      "name": "decrypt",
+      "returns": "string",
+      "summary": "Decrypts a string with a symmetric encryption algorithm."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The encrypted IP address to decrypt (v4 or v6).",
+          "name": "ip",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The decryption key in raw bytes (not encoded).",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The decryption mode to use.",
+          "name": "mode",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Decrypts an IP address that was previously encrypted, restoring the original IP address.",
+      "example": {
+        "result": "\"192.168.1.1\"",
+        "source": "decrypt_ip!(\"72b9:a747:f2e9:72af:76ca:5866:6dcf:c3b0\", \"sixteen byte key\", \"aes128\")"
+      },
+      "failure": "`ip` is not a valid IP address.",
+      "fallible": true,
+      "name": "decrypt_ip",
+      "returns": "string",
+      "summary": "Decrypts an IP address that was previously encrypted, restoring the original IP address."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path of the field to delete",
+          "name": "target",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "default": "false",
+          "description": "After deletion, if `compact` is `true` and there is an empty object or array left, the empty object or array is also removed, cascading up to the root.",
+          "name": "compact",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Path",
+      "description": "Removes the field specified by the static `path` from the target.",
+      "example": {
+        "result": "\"bar\"",
+        "source": ". = { \"foo\": \"bar\" }\ndel(.foo)\n"
+      },
+      "fallible": false,
+      "name": "del",
+      "returns": "any",
+      "summary": "Removes the field specified by the static `path` from the target."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path from which to extract the directory name.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Returns the directory component of the given `path`. This is similar to the Unix `dirname` command. The directory component is the path with the final component removed.",
+      "example": {
+        "result": "\"/usr/local/bin\"",
+        "source": "dirname!(\"/usr/local/bin/vrl\")"
+      },
+      "failure": "`value` is not a valid string.",
+      "fallible": true,
+      "name": "dirname",
+      "returns": "string",
+      "summary": "Returns the directory component of the given `path`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The domain name to query.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "A",
+          "description": "The DNS record type to query (e.g., A, AAAA, MX, TXT).",
+          "name": "qtype",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "IN",
+          "description": "The DNS query class.",
+          "name": "class",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "{  }",
+          "description": "DNS resolver options.",
+          "name": "options",
+          "required": false,
+          "type": "object"
+        }
+      ],
+      "category": "System",
+      "description": "Performs a DNS lookup on the provided domain name.",
+      "fallible": false,
+      "name": "dns_lookup",
+      "returns": "object",
+      "summary": "Performs a DNS lookup on the provided domain name."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to lowercase.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Downcases the `value` string, where downcase is defined according to the Unicode Derived Core Property Lowercase.",
+      "example": {
+        "result": "\"hello, world!\"",
+        "source": "downcase(\"Hello, World!\")"
+      },
+      "fallible": false,
+      "name": "downcase",
+      "returns": "string",
+      "summary": "Downcases the `value` string, where downcase is defined according to the Unicode Derived Core Property Lowercase."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Base16.",
+      "example": {
+        "result": "\"736f6d6520737472696e672076616c7565\"",
+        "source": "encode_base16(\"some string value\")"
+      },
+      "fallible": false,
+      "name": "encode_base16",
+      "returns": "string",
+      "summary": "Encodes the `value` to Base16."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether the Base64 output is padded.",
+          "name": "padding",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "standard",
+          "description": "The character set to use when encoding the data.",
+          "enum": [
+            "standard",
+            "url_safe"
+          ],
+          "name": "charset",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Base64.",
+      "example": {
+        "result": "\"cGxlYXNlIGVuY29kZSBtZQ==\"",
+        "source": "encode_base64(\"please encode me\")"
+      },
+      "fallible": false,
+      "name": "encode_base64",
+      "returns": "string",
+      "summary": "Encodes the `value` to Base64."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The UTF8 string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The character set to use when encoding the data.",
+          "name": "to_charset",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` (a UTF8 string) to a non-UTF8 string using the specified character set.",
+      "example": {
+        "result": "\"vsiz58fPvLy/5A==\"",
+        "source": "encode_base64(encode_charset!(\"안녕하세요\", \"euc-kr\"))"
+      },
+      "failure": "`to_charset` isn't a valid character set.",
+      "fallible": true,
+      "name": "encode_charset",
+      "returns": "string",
+      "summary": "Encodes the `value` (a UTF8 string) to a non-UTF8 string using the specified character set."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a CSV string.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "default": ",",
+          "description": "The field delimiter to use when encoding.",
+          "name": "delimiter",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to a single CSV formatted row.",
+      "example": {
+        "result": "\"foo,bar,\\\"foo \\\"\\\", bar\\\"\"",
+        "source": "encode_csv!([\"foo\",\"bar\",\"foo \\\", bar\"])"
+      },
+      "failure": "The delimiter must be a single-byte UTF-8 character.",
+      "fallible": true,
+      "name": "encode_csv",
+      "returns": "string",
+      "summary": "Encodes the `value` to a single CSV formatted row."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "6",
+          "description": "The default compression level.",
+          "name": "compression_level",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Gzip.",
+      "example": {
+        "result": "\"H4sIAAAAAAAA/yvISU0sTlVIzUvOT0lVyE0FAI4R4vcQAAAA\"",
+        "source": "encode_base64(encode_gzip(\"please encode me\"))"
+      },
+      "fallible": false,
+      "name": "encode_gzip",
+      "returns": "string",
+      "summary": "Encodes the `value` to Gzip."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a JSON string.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "default": "false",
+          "description": "Whether to pretty print the JSON string or not.",
+          "name": "pretty",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to JSON.",
+      "example": {
+        "result": "\"s'{\\\"another\\\":[1,2,3],\\\"field\\\":\\\"value\\\"}'\"",
+        "source": "encode_json({\"field\": \"value\", \"another\": [1,2,3]})"
+      },
+      "fallible": false,
+      "name": "encode_json",
+      "returns": "string",
+      "summary": "Encodes the `value` to JSON."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a string.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "default": "[]",
+          "description": "The ordering of fields to preserve.",
+          "name": "fields_ordering",
+          "required": false,
+          "type": "array"
+        },
+        {
+          "default": "=",
+          "description": "The string that separates the key from the value.",
+          "name": "key_value_delimiter",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": " ",
+          "description": "The string that separates each key-value pair.",
+          "name": "field_delimiter",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "false",
+          "description": "Whether to encode key-value with a boolean value as a standalone key if `true` and nothing if `false`.",
+          "name": "flatten_boolean",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` into key-value format with customizable delimiters. Default delimiters match the logfmt format.",
+      "example": {
+        "result": "\"lvl=info msg=\\\"This is a message\\\" ts=2021-06-05T17:20:00Z\"",
+        "source": "encode_key_value(\n    {\n        \"ts\": \"2021-06-05T17:20:00Z\",\n        \"msg\": \"This is a message\",\n        \"lvl\": \"info\"\n    }\n)\n"
+      },
+      "failure": "`fields_ordering` contains a non-string element.",
+      "fallible": true,
+      "name": "encode_key_value",
+      "returns": "string",
+      "summary": "Encodes the `value` into key-value format with customizable delimiters."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a logfmt string.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "default": "[]",
+          "description": "The ordering of fields to preserve.",
+          "name": "fields_ordering",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to logfmt.",
+      "example": {
+        "result": "\"lvl=info msg=\\\"This is a message\\\" ts=2021-06-05T17:20:00Z\"",
+        "source": "encode_logfmt({\"ts\": \"2021-06-05T17:20:00Z\", \"msg\": \"This is a message\", \"lvl\": \"info\"})"
+      },
+      "failure": "`fields_ordering` contains a non-string element.",
+      "fallible": true,
+      "name": "encode_logfmt",
+      "returns": "string",
+      "summary": "Encodes the `value` to logfmt."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether to prepend the original size to the compressed data.",
+          "name": "prepend_size",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Lz4. This function compresses the input string into an lz4 block. If `prepend_size` is set to `true`, it prepends the original uncompressed size to the compressed data. This is useful for some implementations of lz4 that require the original size to be known before decoding.",
+      "example": {
+        "result": "\"LAAAAPAdVGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIDEzIGxhenkgZG9ncy4=\"",
+        "source": "encode_base64(encode_lz4!(\"The quick brown fox jumps over 13 lazy dogs.\", true))"
+      },
+      "fallible": false,
+      "name": "encode_lz4",
+      "returns": "string",
+      "summary": "Encodes the `value` to Lz4."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "NON_ALPHANUMERIC",
+          "description": "The ASCII set to use when encoding the data.",
+          "enum": [
+            "NON_ALPHANUMERIC",
+            "CONTROLS",
+            "FRAGMENT",
+            "QUERY",
+            "SPECIAL",
+            "PATH",
+            "USERINFO",
+            "COMPONENT",
+            "WWW_FORM_URLENCODED"
+          ],
+          "name": "ascii_set",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes a `value` with percent encoding to safely be used in URLs.",
+      "example": {
+        "result": "\"foo%20bar%3F\"",
+        "source": "encode_percent(\"foo bar?\")"
+      },
+      "fallible": false,
+      "name": "encode_percent",
+      "returns": "string",
+      "summary": "Encodes a `value` with percent encoding to safely be used in URLs."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object to convert to a protocol buffer payload.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "description": "The path to the protobuf descriptor set file.",
+          "name": "desc_file",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The name of the message type to use for serializing.",
+          "name": "message_type",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether to permit lossy coercion of `Boolean`, `Integer`, `Float`, and `Timestamp` values into protobuf `string` fields by stringifying the value.",
+          "name": "allow_lossy_string_coercion",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` into a protocol buffer payload.",
+      "failure": "`desc_file` file does not exist.",
+      "fallible": true,
+      "name": "encode_proto",
+      "returns": "string",
+      "summary": "Encodes the `value` into a protocol buffer payload."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether to validate the input string to check if it is a valid domain name.",
+          "name": "validate",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes a `value` to punycode. Useful for internationalized domain names (IDN). This function assumes that the value passed is meant to be used in IDN context and that it is either a domain name or a part of it.",
+      "example": {
+        "result": "\"www.xn--caf-dma.com\"",
+        "source": "encode_punycode!(\"www.café.com\")"
+      },
+      "failure": "`value` can not be encoded to `punycode`",
+      "fallible": true,
+      "name": "encode_punycode",
+      "returns": "string",
+      "summary": "Encodes a `value` to punycode."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Snappy.",
+      "example": {
+        "result": "\"LKxUaGUgcXVpY2sgYnJvd24gZm94IGp1bXBzIG92ZXIgMTMgbGF6eSBkb2dzLg==\"",
+        "source": "encode_base64(encode_snappy!(\"The quick brown fox jumps over 13 lazy dogs.\"))"
+      },
+      "failure": "`value` cannot be encoded into a Snappy string.",
+      "fallible": true,
+      "name": "encode_snappy",
+      "returns": "string",
+      "summary": "Encodes the `value` to Snappy."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "6",
+          "description": "The default compression level.",
+          "name": "compression_level",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Zlib.",
+      "example": {
+        "result": "\"eJwryElNLE5VSM1Lzk9JVchNBQA0RQX7\"",
+        "source": "encode_base64(encode_zlib(\"please encode me\"))"
+      },
+      "fallible": false,
+      "name": "encode_zlib",
+      "returns": "string",
+      "summary": "Encodes the `value` to Zlib."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encode.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "3",
+          "description": "The default compression level.",
+          "name": "compression_level",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Codec",
+      "description": "Encodes the `value` to Zstandard.",
+      "example": {
+        "result": "\"KLUv/QBYgQAAcGxlYXNlIGVuY29kZSBtZQ==\"",
+        "source": "encode_base64(encode_zstd(\"please encode me\"))"
+      },
+      "fallible": false,
+      "name": "encode_zstd",
+      "returns": "string",
+      "summary": "Encodes the `value` to Zstandard."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to encrypt.",
+          "name": "plaintext",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The algorithm to use.",
+          "name": "algorithm",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The key in raw bytes (not encoded) for encryption.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The IV in raw bytes (not encoded) for encryption.",
+          "name": "iv",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Encrypts a string with a symmetric encryption algorithm.",
+      "failure": "`algorithm` is not a supported algorithm.",
+      "fallible": true,
+      "name": "encrypt",
+      "returns": "string",
+      "summary": "Encrypts a string with a symmetric encryption algorithm."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address to encrypt (v4 or v6).",
+          "name": "ip",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The encryption key in raw bytes (not encoded).",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The encryption mode to use.",
+          "name": "mode",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Encrypts an IP address, transforming it into a different valid IP address.",
+      "example": {
+        "result": "\"72b9:a747:f2e9:72af:76ca:5866:6dcf:c3b0\"",
+        "source": "encrypt_ip!(\"192.168.1.1\", \"sixteen byte key\", \"aes128\")"
+      },
+      "failure": "`ip` is not a valid IP address.",
+      "fallible": true,
+      "name": "encrypt_ip",
+      "returns": "string",
+      "summary": "Encrypts an IP address, transforming it into a different valid IP address."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to search.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The substring with which `value` must end.",
+          "name": "substring",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether the match should be case sensitive.",
+          "name": "case_sensitive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether the `value` string ends with the specified `substring`.",
+      "example": {
+        "result": "true",
+        "source": "ends_with(\"The Needle In The Haystack\", \"The Haystack\")"
+      },
+      "fallible": false,
+      "name": "ends_with",
+      "returns": "boolean",
+      "summary": "Determines whether the `value` string ends with the specified `substring`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path of the field to check.",
+          "name": "field",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Path",
+      "description": "Checks whether the `path` exists for the target.",
+      "example": {
+        "result": "true",
+        "source": ". = { \"field\": 1 }\nexists(.field)\n"
+      },
+      "fallible": false,
+      "name": "exists",
+      "returns": "boolean",
+      "summary": "Checks whether the `path` exists for the target."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array or object to filter.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Filter elements from a collection.",
+      "example": {
+        "result": "[\"bar\",\"baz\"]",
+        "source": ". = { \"tags\": [\"foo\", \"bar\", \"foo\", \"baz\"] }\nfilter(array(.tags)) -> |_index, value| {\n    value != \"foo\"\n}\n"
+      },
+      "fallible": false,
+      "name": "filter",
+      "returns": "object | array",
+      "summary": "Filter elements from a collection."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to find the pattern in.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The regular expression or string pattern to match against.",
+          "name": "pattern",
+          "required": true,
+          "type": "string | regex"
+        },
+        {
+          "default": "0",
+          "description": "Offset to start searching.",
+          "name": "from",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Determines from left to right the start position of the first found element in `value` that matches `pattern`. Returns null if not found.",
+      "example": {
+        "result": "3",
+        "source": "find(\"foobar\", \"bar\")"
+      },
+      "fallible": false,
+      "name": "find",
+      "returns": "integer | null",
+      "summary": "Determines from left to right the start position of the first found element in `value` that matches `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array or object to flatten.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "default": ".",
+          "description": "The separator to join nested keys",
+          "name": "separator",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "[]",
+          "description": "An array of key names to exclude from flattening at any depth.",
+          "name": "except",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Flattens the `value` into a single-level representation.",
+      "example": {
+        "result": "[1,2,3,4,5,6,7,8,9]",
+        "source": "flatten([1, [2, 3, 4], [5, [6, 7], 8], 9])"
+      },
+      "fallible": false,
+      "name": "flatten",
+      "returns": "object | array",
+      "summary": "Flattens the `value` into a single-level representation."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a float.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is a float, otherwise returns an error. This enables the type checker to guarantee that the returned value is a float and can be used in any function that expects a float.",
+      "example": {
+        "result": "42",
+        "source": ". = { \"value\": 42.0 }\nfloat(.value)\n"
+      },
+      "failure": "`value` is not a float.",
+      "fallible": true,
+      "name": "float",
+      "returns": "float",
+      "summary": "Returns `value` if it is a float, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number to round down.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        },
+        {
+          "default": "0",
+          "description": "The number of decimal places to round to.",
+          "name": "precision",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Number",
+      "description": "Rounds the `value` down to the specified `precision`.",
+      "example": {
+        "result": "9",
+        "source": "floor(9.8)"
+      },
+      "fallible": false,
+      "name": "floor",
+      "returns": "integer | float",
+      "summary": "Rounds the `value` down to the specified `precision`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array or object to iterate.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Iterate over a collection.",
+      "example": {
+        "result": "3",
+        "source": "count = 0\nfor_each({ \"a\": 1, \"b\": 2 }) -> |_key, value| {\n    count = count + value\n}\ncount\n"
+      },
+      "fallible": false,
+      "name": "for_each",
+      "returns": "null",
+      "summary": "Iterate over a collection."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number to format.",
+          "name": "value",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "default": "10",
+          "description": "The base to format the number in.",
+          "name": "base",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Number",
+      "description": "Formats the integer `value` into a string representation using the given base/radix.",
+      "example": {
+        "result": "\"2a\"",
+        "source": "format_int!(42, 16)"
+      },
+      "failure": "The base is not between 2 and 36.",
+      "fallible": true,
+      "name": "format_int",
+      "returns": "string",
+      "summary": "Formats the integer `value` into a string representation using the given base/radix."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number to format as a string.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        },
+        {
+          "description": "The number of decimal places to display.",
+          "name": "scale",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "default": ".",
+          "description": "The character to use between the whole and decimal parts of the number.",
+          "name": "decimal_separator",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "The character to use between each thousands part of the number.",
+          "name": "grouping_separator",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Number",
+      "description": "Formats the `value` into a string representation of the number.",
+      "example": {
+        "result": "\"1,234,567.890\"",
+        "source": "format_number(1234567.89, 3, decimal_separator: \".\", grouping_separator: \",\")"
+      },
+      "fallible": false,
+      "name": "format_number",
+      "returns": "string",
+      "summary": "Formats the `value` into a string representation of the number."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The timestamp to format as text.",
+          "name": "value",
+          "required": true,
+          "type": "timestamp"
+        },
+        {
+          "description": "The format string as described by the Chrono library.",
+          "name": "format",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The timezone to use when formatting the timestamp.",
+          "name": "timezone",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Timestamp",
+      "description": "Formats `value` into a string representation of the timestamp.",
+      "example": {
+        "result": "\"2020-10-21T16:00:00+00:00\"",
+        "source": "format_timestamp!(t'2020-10-21T16:00:00Z', format: \"%+\")"
+      },
+      "fallible": false,
+      "name": "format_timestamp",
+      "returns": "string",
+      "summary": "Formats `value` into a string representation of the timestamp."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array of key/value objects to convert.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Object",
+      "description": "Converts array of key/value objects into an object.",
+      "example": {
+        "result": "{}",
+        "source": "from_entries([])"
+      },
+      "fallible": false,
+      "name": "from_entries",
+      "returns": "object",
+      "summary": "Converts array of key/value objects into an object."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Unix timestamp to convert.",
+          "name": "value",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "default": "seconds",
+          "description": "The time unit.",
+          "enum": [
+            "seconds",
+            "milliseconds",
+            "nanoseconds",
+            "microseconds"
+          ],
+          "name": "unit",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value` integer from a Unix timestamp to a VRL `timestamp`.",
+      "example": {
+        "result": "\"t'1970-01-01T00:00:05Z'\"",
+        "source": "from_unix_timestamp!(5)"
+      },
+      "fallible": false,
+      "name": "from_unix_timestamp",
+      "returns": "timestamp",
+      "summary": "Converts the `value` integer from a Unix timestamp to a VRL `timestamp`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to query.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "description": "An array of path segments to look for the value.",
+          "name": "path",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Path",
+      "description": "Dynamically get the value of a given path.",
+      "example": {
+        "result": "\"bar\"",
+        "source": "get!(value: {\"foo\": \"bar\"}, path: [\"foo\"])"
+      },
+      "failure": "The `path` segment must be a string or an integer.",
+      "fallible": true,
+      "name": "get",
+      "returns": "any",
+      "summary": "Dynamically get the value of a given path."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The name of the environment variable.",
+          "name": "name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "System",
+      "description": "Returns the value of the environment variable specified by `name`.",
+      "example": {
+        "result": "\"/root\"",
+        "source": "get_env_var!(\"HOME\")"
+      },
+      "failure": "Environment variable `name` does not exist.",
+      "fallible": true,
+      "name": "get_env_var",
+      "returns": "string",
+      "summary": "Returns the value of the environment variable specified by `name`."
+    },
+    {
+      "arguments": [],
+      "category": "System",
+      "description": "Returns the local system's hostname.",
+      "example": {
+        "result": "\"my-hostname\"",
+        "source": "get_hostname!()"
+      },
+      "failure": "Internal hostname resolution failed.",
+      "fallible": true,
+      "name": "get_hostname",
+      "returns": "string",
+      "summary": "Returns the local system's hostname."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The name of the secret.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Event",
+      "description": "Returns the value of the given secret from an event.",
+      "example": {
+        "source": "get_secret(\"datadog_api_key\")"
+      },
+      "fallible": false,
+      "name": "get_secret",
+      "returns": "string | null",
+      "summary": "Returns the value of the given secret from an event.",
+      "vector": true
+    },
+    {
+      "arguments": [],
+      "category": "System",
+      "description": "Returns the name of the timezone in the Vector configuration (see global configuration options). If the configuration is set to `local`, then it attempts to determine the name of the timezone from the host OS. If this is not possible, then it returns the fixed offset of the local timezone for the current time in the format `\"[+-]HH:MM\"`, for example, `\"+02:00\"`.",
+      "example": {
+        "result": "\"UTC\"",
+        "source": "get_timezone_name!()"
+      },
+      "failure": "Retrieval of local timezone information failed.",
+      "fallible": true,
+      "name": "get_timezone_name",
+      "returns": "string",
+      "summary": "Returns the name of the timezone in the Vector configuration (see global configuration options)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "Latitude of the first point.",
+          "name": "latitude1",
+          "required": true,
+          "type": "float"
+        },
+        {
+          "description": "Longitude of the first point.",
+          "name": "longitude1",
+          "required": true,
+          "type": "float"
+        },
+        {
+          "description": "Latitude of the second point.",
+          "name": "latitude2",
+          "required": true,
+          "type": "float"
+        },
+        {
+          "description": "Longitude of the second point.",
+          "name": "longitude2",
+          "required": true,
+          "type": "float"
+        },
+        {
+          "description": "Measurement system to use for resulting distance.",
+          "enum": [
+            "kilometers",
+            "miles"
+          ],
+          "name": "measurement_unit",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Map",
+      "description": "Calculates haversine distance and bearing between two points.",
+      "example": {
+        "result": "{\"bearing\":44.561,\"distance\":1568.5227233}",
+        "source": "haversine(0.0, 0.0, 10.0, 10.0)"
+      },
+      "fallible": false,
+      "name": "haversine",
+      "returns": "object",
+      "summary": "Calculates haversine distance and bearing between two points."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the HMAC for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The string to use as the cryptographic key.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "SHA-256",
+          "description": "The hashing algorithm to use.",
+          "enum": [
+            "SHA1",
+            "SHA-224",
+            "SHA-256",
+            "SHA-384",
+            "SHA-512"
+          ],
+          "name": "algorithm",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates a HMAC of the `value` using the given `key`. The hashing `algorithm` used can be optionally specified.",
+      "example": {
+        "result": "\"eLGE8YMviv85NPXgISRUZxstBNSU47JQdcXkUWcClmI=\"",
+        "source": "encode_base64(hmac(\"Hello there\", \"super-secret-key\"))"
+      },
+      "fallible": false,
+      "name": "hmac",
+      "returns": "string",
+      "summary": "Calculates a HMAC of the `value` using the given `key`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The URL to make the HTTP request to.",
+          "name": "url",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "get",
+          "description": "The HTTP method to use (e.g., GET, POST, PUT, DELETE).",
+          "name": "method",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "{  }",
+          "description": "An object containing HTTP headers to send with the request.",
+          "name": "headers",
+          "required": false,
+          "type": "object"
+        },
+        {
+          "default": "",
+          "description": "The request body content to send.",
+          "name": "body",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "HTTP proxy URL to use for the request.",
+          "name": "http_proxy",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "HTTPS proxy URL to use for the request.",
+          "name": "https_proxy",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether to redact sensitive header values in error messages.",
+          "name": "redact_headers",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "System",
+      "description": "Makes an HTTP request to the specified URL.",
+      "example": {
+        "result": "{\"authenticated\":true,\"token\":\"my_token\"}",
+        "source": "parse_json!(http_request!(\"https://httpbin.org/bearer\", headers: {\"Authorization\": \"Bearer my_token\"}))"
+      },
+      "fallible": false,
+      "name": "http_request",
+      "returns": "string",
+      "summary": "Makes an HTTP request to the specified URL."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The item to check.",
+          "name": "item",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Determines whether the `value` array includes the specified `item`.",
+      "example": {
+        "result": "true",
+        "source": "includes([\"apple\", \"orange\", \"banana\"], \"banana\")"
+      },
+      "fallible": false,
+      "name": "includes",
+      "returns": "boolean",
+      "summary": "Determines whether the `value` array includes the specified `item`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an integer.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is an integer, otherwise returns an error. This enables the type checker to guarantee that the returned value is an integer and can be used in any function that expects an integer.",
+      "example": {
+        "result": "42",
+        "source": ". = { \"value\": 42 }\nint(.value)\n"
+      },
+      "failure": "`value` is not an integer.",
+      "fallible": true,
+      "name": "int",
+      "returns": "integer",
+      "summary": "Returns `value` if it is an integer, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address to convert to binary.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts IPv4 address in numbers-and-dots notation into network-order bytes represented as an integer.",
+      "example": {
+        "result": "16909060",
+        "source": "ip_aton!(\"1.2.3.4\")"
+      },
+      "failure": "`value` is not a valid IPv4 address.",
+      "fallible": true,
+      "name": "ip_aton",
+      "returns": "integer",
+      "summary": "Converts IPv4 address in numbers-and-dots notation into network-order bytes represented as an integer."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The CIDR mask (v4 or v6).",
+          "name": "cidr",
+          "required": true,
+          "type": "string | array"
+        },
+        {
+          "description": "The IP address (v4 or v6).",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Determines whether the `ip` is contained in the block referenced by the `cidr`.",
+      "example": {
+        "result": "true",
+        "source": "ip_cidr_contains!(\"192.168.0.0/16\", \"192.168.10.32\")"
+      },
+      "failure": "`cidr` is not a valid CIDR.",
+      "fallible": true,
+      "name": "ip_cidr_contains",
+      "returns": "boolean",
+      "summary": "Determines whether the `ip` is contained in the block referenced by the `cidr`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The integer representation of an IPv4 address.",
+          "name": "value",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts numeric representation of IPv4 address in network-order bytes to numbers-and-dots notation.",
+      "example": {
+        "result": "\"1.2.3.4\"",
+        "source": "ip_ntoa!(16909060)"
+      },
+      "failure": "`value` cannot fit in an unsigned 32-bit integer.",
+      "fallible": true,
+      "name": "ip_ntoa",
+      "returns": "string",
+      "summary": "Converts numeric representation of IPv4 address in network-order bytes to numbers-and-dots notation."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The binary data to convert from.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts IPv4 and IPv6 addresses from binary to text form.",
+      "example": {
+        "result": "\"192.168.0.1\"",
+        "source": "ip_ntop!(decode_base64!(\"wKgAAQ==\"))"
+      },
+      "failure": "`value` must be of length 4 or 16 bytes.",
+      "fallible": true,
+      "name": "ip_ntop",
+      "returns": "string",
+      "summary": "Converts IPv4 and IPv6 addresses from binary to text form."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address (v4 or v6) to convert to binary form.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts IPv4 and IPv6 addresses from text to binary form.",
+      "example": {
+        "result": "\"wKgAAQ==\"",
+        "source": "encode_base64(ip_pton!(\"192.168.0.1\"))"
+      },
+      "failure": "`value` is not a valid IP (v4 or v6) address in text form.",
+      "fallible": true,
+      "name": "ip_pton",
+      "returns": "string",
+      "summary": "Converts IPv4 and IPv6 addresses from text to binary form."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address (v4 or v6).",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The subnet to extract from the IP address.",
+          "name": "subnet",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Extracts the subnet address from the `ip` using the supplied `subnet`.",
+      "example": {
+        "result": "\"192.168.10.0\"",
+        "source": "ip_subnet!(\"192.168.10.32\", \"255.255.255.0\")"
+      },
+      "failure": "`ip` is not a valid IP address.",
+      "fallible": true,
+      "name": "ip_subnet",
+      "returns": "string",
+      "summary": "Extracts the subnet address from the `ip` using the supplied `subnet`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address to convert to IPv6.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts the `ip` to an IPv6 address.",
+      "example": {
+        "result": "\"::ffff:192.168.10.32\"",
+        "source": "ip_to_ipv6!(\"192.168.10.32\")"
+      },
+      "failure": "`ip` is not a valid IP address.",
+      "fallible": true,
+      "name": "ip_to_ipv6",
+      "returns": "string",
+      "summary": "Converts the `ip` to an IPv6 address."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IPv4-mapped IPv6 address to convert.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Converts the `ip` to an IPv4 address. `ip` is returned unchanged if it's already an IPv4 address. If `ip` is currently an IPv6 address then it needs to be IPv4 compatible, otherwise an error is thrown.",
+      "example": {
+        "result": "\"192.168.0.1\"",
+        "source": "ipv6_to_ipv4!(\"::ffff:192.168.0.1\")"
+      },
+      "failure": "`ip` is not a valid IP address.",
+      "fallible": true,
+      "name": "ipv6_to_ipv4",
+      "returns": "string",
+      "summary": "Converts the `ip` to an IPv4 address."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an array.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the `value`'s type is an array.",
+      "example": {
+        "result": "true",
+        "source": "is_array([1, 2, 3])"
+      },
+      "fallible": false,
+      "name": "is_array",
+      "returns": "boolean",
+      "summary": "Check if the `value`'s type is an array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a Boolean.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the `value`'s type is a boolean.",
+      "example": {
+        "result": "true",
+        "source": "is_boolean(false)"
+      },
+      "fallible": false,
+      "name": "is_boolean",
+      "returns": "boolean",
+      "summary": "Check if the `value`'s type is a boolean."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check.",
+          "name": "value",
+          "required": true,
+          "type": "string | object | array"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the object, array, or string has a length of `0`.",
+      "example": {
+        "result": "true",
+        "source": "is_empty([])"
+      },
+      "fallible": false,
+      "name": "is_empty",
+      "returns": "boolean",
+      "summary": "Check if the object, array, or string has a length of `0`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a float.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the `value`'s type is a float.",
+      "example": {
+        "result": "true",
+        "source": "is_float(0.577)"
+      },
+      "fallible": false,
+      "name": "is_float",
+      "returns": "boolean",
+      "summary": "Check if the `value`'s type is a float."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an integer.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the `value`'s type is an integer.",
+      "example": {
+        "result": "true",
+        "source": "is_integer(1)"
+      },
+      "fallible": false,
+      "name": "is_integer",
+      "returns": "boolean",
+      "summary": "Check if the `value`'s type is an integer."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address to check",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Check if the string is a valid IPv4 address or not.",
+      "example": {
+        "result": "true",
+        "source": "is_ipv4(\"10.0.102.37\")"
+      },
+      "fallible": false,
+      "name": "is_ipv4",
+      "returns": "boolean",
+      "summary": "Check if the string is a valid IPv4 address or not."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address to check",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "IP",
+      "description": "Check if the string is a valid IPv6 address or not.",
+      "example": {
+        "result": "true",
+        "source": "is_ipv6(\"2001:0db8:85a3:0000:0000:8a2e:0370:7334\")"
+      },
+      "fallible": false,
+      "name": "is_ipv6",
+      "returns": "boolean",
+      "summary": "Check if the string is a valid IPv6 address or not."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a valid JSON document.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The variant of the JSON type to explicitly check for.",
+          "enum": [
+            "object",
+            "array",
+            "string",
+            "number",
+            "bool",
+            "null"
+          ],
+          "name": "variant",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if the string is a valid JSON document.",
+      "example": {
+        "result": "true",
+        "source": "is_json(\"{}\")"
+      },
+      "fallible": false,
+      "name": "is_json",
+      "returns": "boolean",
+      "summary": "Check if the string is a valid JSON document."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is `null`.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value`'s type is `null`. For a more relaxed function, see `is_nullish`.",
+      "example": {
+        "result": "true",
+        "source": "is_null(null)"
+      },
+      "fallible": false,
+      "name": "is_null",
+      "returns": "boolean",
+      "summary": "Check if `value`'s type is `null`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check for nullishness, for example, a useless value.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Determines whether `value` is nullish. Returns `true` if the specified `value` is `null`, an empty string, a string containing only whitespace, or the string `\"-\"`. Returns `false` otherwise.",
+      "example": {
+        "result": "true",
+        "source": "is_nullish(\"\")"
+      },
+      "fallible": false,
+      "name": "is_nullish",
+      "returns": "boolean",
+      "summary": "Determines whether `value` is nullish."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an object.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value`'s type is an object.",
+      "example": {
+        "result": "true",
+        "source": "is_object({\"foo\": \"bar\"})"
+      },
+      "fallible": false,
+      "name": "is_object",
+      "returns": "boolean",
+      "summary": "Check if `value`'s type is an object."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a regex.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value`'s type is a regex.",
+      "example": {
+        "result": "true",
+        "source": "is_regex(r'pattern')"
+      },
+      "fallible": false,
+      "name": "is_regex",
+      "returns": "boolean",
+      "summary": "Check if `value`'s type is a regex."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a string.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value`'s type is a string.",
+      "example": {
+        "result": "true",
+        "source": "is_string(\"a string\")"
+      },
+      "fallible": false,
+      "name": "is_string",
+      "returns": "boolean",
+      "summary": "Check if `value`'s type is a string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a timestamp.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value`'s type is a timestamp.",
+      "example": {
+        "result": "true",
+        "source": "is_timestamp(t'2021-03-26T16:00:00Z')"
+      },
+      "fallible": false,
+      "name": "is_timestamp",
+      "returns": "boolean",
+      "summary": "Check if `value`'s type is a timestamp."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array of strings to join together.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The string separating each original element when joined.",
+          "name": "separator",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Joins each string in the `value` array into a single string, with items optionally separated from one another by a `separator`.",
+      "example": {
+        "result": "\"bringustogether\"",
+        "source": "join!([\"bring\", \"us\", \"together\"])"
+      },
+      "fallible": false,
+      "name": "join",
+      "returns": "string",
+      "summary": "Joins each string in the `value` array into a single string, with items optionally separated from one another by a `separator`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to kebab-case.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional hint on the original case type.",
+          "enum": [
+            "kebab-case",
+            "camelCase",
+            "PascalCase",
+            "SCREAMING_SNAKE",
+            "snake_case"
+          ],
+          "name": "original_case",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Takes the `value` string, and turns it into kebab-case. Optionally, you can pass in the existing case of the function, or else we will try to figure out the case automatically.",
+      "example": {
+        "result": "\"input-string\"",
+        "source": "kebabcase(\"InputString\")"
+      },
+      "fallible": false,
+      "name": "kebabcase",
+      "returns": "string",
+      "summary": "Takes the `value` string, and turns it into kebab-case."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object to extract keys from.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Returns the keys from the object passed into the function.",
+      "example": {
+        "result": "[\"key1\",\"key2\"]",
+        "source": "keys({\n    \"key1\": \"val1\",\n    \"key2\": \"val2\"\n})\n"
+      },
+      "fallible": false,
+      "name": "keys",
+      "returns": "array",
+      "summary": "Returns the keys from the object passed into the function."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array or object.",
+          "name": "value",
+          "required": true,
+          "type": "string | object | array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Returns the length of the `value`.",
+      "example": {
+        "result": "2",
+        "source": "length({\n    \"portland\": \"Trail Blazers\",\n    \"seattle\": \"Supersonics\"\n})\n"
+      },
+      "fallible": false,
+      "name": "length",
+      "returns": "integer",
+      "summary": "Returns the length of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to log.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "default": "info",
+          "description": "The log level.",
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "name": "level",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "1",
+          "description": "Specifies that the log message is output no more than once per the given number of seconds.",
+          "name": "rate_limit_secs",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Debug",
+      "description": "Logs the `value` to stdout) at the specified `level`.",
+      "example": {
+        "result": "null",
+        "source": "log(\"Hello, World!\", level: \"info\", rate_limit_secs: 60)"
+      },
+      "fallible": false,
+      "name": "log",
+      "returns": "null",
+      "summary": "Logs the `value` to stdout) at the specified `level`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object to iterate.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "default": "false",
+          "description": "Whether to recursively iterate the collection.",
+          "name": "recursive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Map the keys within an object.",
+      "example": {
+        "result": "{\"BAR\":\"bar\",\"BAZ\":{\"nested key\":\"val\"},\"FOO\":\"foo\"}",
+        "source": ". = {\n    \"foo\": \"foo\",\n    \"bar\": \"bar\",\n    \"baz\": {\"nested key\": \"val\"}\n}\nmap_keys(.) -> |key| { upcase(key) }\n"
+      },
+      "fallible": false,
+      "name": "map_keys",
+      "returns": "object",
+      "summary": "Map the keys within an object."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to iterate.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "default": "false",
+          "description": "Whether to recursively iterate the collection.",
+          "name": "recursive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Map the values within a collection.",
+      "example": {
+        "result": "{\"bar\":\"BAR\",\"foo\":\"FOO\"}",
+        "source": ". = {\n    \"foo\": \"foo\",\n    \"bar\": \"bar\"\n}\nmap_values(.) -> |value| { upcase(value) }\n"
+      },
+      "fallible": false,
+      "name": "map_values",
+      "returns": "object | array",
+      "summary": "Map the values within a collection."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to match.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The regular expression pattern to match against.",
+          "name": "pattern",
+          "required": true,
+          "type": "regex"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether the `value` matches the `pattern`.",
+      "example": {
+        "result": "true",
+        "source": "match(\"I'm a little teapot\", r'teapot')"
+      },
+      "fallible": false,
+      "name": "match",
+      "returns": "boolean",
+      "summary": "Determines whether the `value` matches the `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to match.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The array of regular expression patterns to match against.",
+          "name": "patterns",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether `value` matches any of the given `patterns`. All patterns are checked in a single pass over the target string, giving this function a potential performance advantage over the multiple calls in the `match` function.",
+      "example": {
+        "result": "true",
+        "source": "match_any(\"I'm a little teapot\", [r'frying pan', r'teapot'])"
+      },
+      "fallible": false,
+      "name": "match_any",
+      "returns": "boolean",
+      "summary": "Determines whether `value` matches any of the given `patterns`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The regular expression pattern to match against.",
+          "name": "pattern",
+          "required": true,
+          "type": "regex"
+        },
+        {
+          "default": "false",
+          "description": "Whether to match on all elements of `value`.",
+          "name": "all",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Determines whether the elements in the `value` array matches the `pattern`. By default, it checks that at least one element matches, but can be set to determine if all the elements match.",
+      "example": {
+        "result": "true",
+        "source": "match_array([\"foobar\", \"bazqux\"], r'foo')"
+      },
+      "fallible": false,
+      "name": "match_array",
+      "returns": "boolean",
+      "summary": "Determines whether the elements in the `value` array matches the `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "description": "The Datadog Search Syntax query.",
+          "name": "query",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Object",
+      "description": "Matches an object against a Datadog Search Syntax query.",
+      "example": {
+        "result": "true",
+        "source": "match_datadog_query({\"message\": \"contains this and that\"}, \"this OR that\")"
+      },
+      "fallible": false,
+      "name": "match_datadog_query",
+      "returns": "boolean",
+      "summary": "Matches an object against a Datadog Search Syntax query."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates an md5 hash of the `value`.",
+      "example": {
+        "result": "\"acbd18db4cc2f85cedef654fccc4a4d8\"",
+        "source": "md5(\"foo\")"
+      },
+      "fallible": false,
+      "name": "md5",
+      "returns": "string",
+      "summary": "Calculates an md5 hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object to merge into.",
+          "name": "to",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "description": "The object to merge from.",
+          "name": "from",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "default": "false",
+          "description": "A deep merge is performed if `true`, otherwise only top-level fields are merged.",
+          "name": "deep",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Object",
+      "description": "Merges the `from` object into the `to` object.",
+      "fallible": false,
+      "name": "merge",
+      "returns": "object",
+      "summary": "Merges the `from` object into the `to` object."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value the `modulus` is applied to.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        },
+        {
+          "description": "The `modulus` value.",
+          "name": "modulus",
+          "required": true,
+          "type": "integer | float"
+        }
+      ],
+      "category": "Number",
+      "description": "Calculates the remainder of `value` divided by `modulus`.",
+      "example": {
+        "result": "1",
+        "source": "mod(5, 2)"
+      },
+      "failure": "`value` is not an integer or float.",
+      "fallible": true,
+      "name": "mod",
+      "returns": "integer | float",
+      "summary": "Calculates the remainder of `value` divided by `modulus`."
+    },
+    {
+      "arguments": [],
+      "category": "Timestamp",
+      "description": "Returns the current timestamp in the UTC timezone with nanosecond precision.",
+      "example": {
+        "result": "\"2012-03-04T12:34:56.789012345Z\"",
+        "source": "now()"
+      },
+      "fallible": false,
+      "name": "now",
+      "returns": "timestamp",
+      "summary": "Returns the current timestamp in the UTC timezone with nanosecond precision."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is an object.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is an object, otherwise returns an error. This enables the type checker to guarantee that the returned value is an object and can be used in any function that expects an object.",
+      "example": {
+        "result": "{\"field1\":\"value1\",\"field2\":\"value2\"}",
+        "source": ". = { \"value\": { \"field1\": \"value1\", \"field2\": \"value2\" } }\nobject(.value)\n"
+      },
+      "failure": "`value` is not an object.",
+      "fallible": true,
+      "name": "object",
+      "returns": "object",
+      "summary": "Returns `value` if it is an object, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The first array of elements, or the array of input arrays if no other parameter is present.",
+          "name": "values",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The second array of elements.",
+          "name": "keys",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "Object",
+      "description": "Iterate over either one array of arrays or a pair of arrays and create an object out of all the key-value pairs contained in them. With one array of arrays, any entries with no value use `null` instead. Any keys that are `null` skip the corresponding value.",
+      "example": {
+        "result": "{\"one\":1,\"two\":3}",
+        "source": "object_from_array([[\"one\", 1], [null, 2], [\"two\", 3]])"
+      },
+      "failure": "`values` and `keys` must be arrays.",
+      "fallible": true,
+      "name": "object_from_array",
+      "returns": "object",
+      "summary": "Iterate over either one array of arrays or a pair of arrays and create an object out of all the key-value pairs contained in them."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The format to use for parsing the log.",
+          "enum": [
+            "common",
+            "combined",
+            "error"
+          ],
+          "name": "format",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "%d/%b/%Y:%T %z",
+          "description": "The date/time format to use for encoding the timestamp.",
+          "name": "timestamp_format",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses Apache access and error log lines. Lines can be in `common`, `combined`, or the default `error` format.",
+      "example": {
+        "source": "parse_apache_log!(s'127.0.0.1 bob frank [10/Oct/2000:13:55:36 -0700] \"GET /apache_pb.gif HTTP/1.0\" 200 2326', format: \"common\")"
+      },
+      "failure": "`value` does not match the specified format.",
+      "fallible": true,
+      "name": "parse_apache_log",
+      "returns": "object",
+      "summary": "Parses Apache access and error log lines."
+    },
+    {
+      "arguments": [
+        {
+          "description": "Access log of the Application Load Balancer.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "When set to `false`, the parser ignores any newly added or trailing fields in AWS ALB logs instead of failing.",
+          "name": "strict_mode",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses `value` in the Elastic Load Balancer Access format.",
+      "failure": "`value` is not a properly formatted AWS ALB log.",
+      "fallible": true,
+      "name": "parse_aws_alb_log",
+      "returns": "object",
+      "summary": "Parses `value` in the Elastic Load Balancer Access format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the message to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses AWS CloudWatch Logs events (configured through AWS Cloudwatch subscriptions) from the `aws_kinesis_firehose` source.",
+      "failure": "`value` is not a properly formatted AWS CloudWatch Log subscription message.",
+      "fallible": true,
+      "name": "parse_aws_cloudwatch_log_subscription_message",
+      "returns": "object",
+      "summary": "Parses AWS CloudWatch Logs events (configured through AWS Cloudwatch subscriptions) from the `aws_kinesis_firehose` source."
+    },
+    {
+      "arguments": [
+        {
+          "description": "VPC Flow Log.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "VPC Flow Log format.",
+          "name": "format",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses `value` in the VPC Flow Logs format.",
+      "example": {
+        "source": "parse_aws_vpc_flow_log!(\"2 123456789010 eni-1235b8ca123456789 - - - - - - - 1431280876 1431280934 - NODATA\")"
+      },
+      "failure": "`value` is not a properly formatted AWS VPC Flow log.",
+      "fallible": true,
+      "name": "parse_aws_vpc_flow_log",
+      "returns": "object",
+      "summary": "Parses `value` in the VPC Flow Logs format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string of the duration with either binary or SI unit.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The output units for the byte.",
+          "enum": [
+            "B",
+            "kiB",
+            "MiB",
+            "GiB",
+            "TiB",
+            "PiB",
+            "EiB",
+            "kB",
+            "MB",
+            "GB",
+            "TB",
+            "PB"
+          ],
+          "name": "unit",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "2",
+          "description": "The base for the byte, either 2 or 10.",
+          "name": "base",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` into a human-readable bytes format specified by `unit` and `base`.",
+      "example": {
+        "result": "1",
+        "source": "parse_bytes!(\"1024KiB\", unit: \"MiB\")"
+      },
+      "failure": "`value` is not a properly formatted bytes.",
+      "fallible": true,
+      "name": "parse_bytes",
+      "returns": "float",
+      "summary": "Parses the `value` into a human-readable bytes format specified by `unit` and `base`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The CBOR payload to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as CBOR.",
+      "example": {
+        "result": "{\"field\":\"value\"}",
+        "source": "parse_cbor!(decode_base64!(\"oWVmaWVsZGV2YWx1ZQ==\"))"
+      },
+      "failure": "`value` is not a valid CBOR-formatted payload.",
+      "fallible": true,
+      "name": "parse_cbor",
+      "returns": "string | integer | float | boolean | object | array | null",
+      "summary": "Parses the `value` as CBOR."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "false",
+          "description": "Toggles translation of custom field pairs to `key:value`.",
+          "name": "translate_custom_fields",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "When set to `false`, attempts best-effort parsing of malformed CEF input rather than failing.",
+          "name": "strict",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in CEF (Common Event Format) format. Ignores everything up to CEF header. Empty values are returned as empty strings. Surrounding quotes are removed from values.",
+      "example": {
+        "source": "parse_cef!(\n    \"Sep 29 08:26:10 host CEF:1|Security|threatmanager|1.0|100|worm successfully stopped|10|src=10.0.0.1 dst=2.1.2.2 spt=1232\"\n)\n"
+      },
+      "failure": "`value` is not a properly formatted CEF string.",
+      "fallible": true,
+      "name": "parse_cef",
+      "returns": "object",
+      "summary": "Parses the `value` in CEF (Common Event Format) format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "%d/%b/%Y:%T %z",
+          "description": "The date/time format to use for encoding the timestamp.",
+          "name": "timestamp_format",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the Common Log Format (CLF).",
+      "example": {
+        "source": "parse_common_log!(s'127.0.0.1 bob frank [10/Oct/2000:13:55:36 -0700] \"GET /apache_pb.gif HTTP/1.0\" 200 2326')"
+      },
+      "failure": "`value` does not match the Common Log Format.",
+      "fallible": true,
+      "name": "parse_common_log",
+      "returns": "object",
+      "summary": "Parses the `value` using the Common Log Format (CLF)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": ",",
+          "description": "The field delimiter to use when parsing.",
+          "name": "delimiter",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses a single CSV formatted row. Only the first row is parsed in case of multiline input value.",
+      "example": {
+        "result": "[\"foo\",\"bar\",\"foo \\\", bar\"]",
+        "source": "parse_csv!(s'foo,bar,\"foo \"\", bar\"')"
+      },
+      "failure": "The delimiter must be a single-byte UTF-8 character.",
+      "fallible": true,
+      "name": "parse_csv",
+      "returns": "array",
+      "summary": "Parses a single CSV formatted row."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string of the duration.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The output units for the duration.",
+          "enum": [
+            "ns",
+            "us",
+            "µs",
+            "ms",
+            "cs",
+            "ds",
+            "s",
+            "m",
+            "h",
+            "d"
+          ],
+          "name": "unit",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` into a human-readable duration format specified by `unit`.",
+      "example": {
+        "result": "1.005",
+        "source": "parse_duration!(\"1005ms\", unit: \"s\")"
+      },
+      "failure": "`value` is not a properly formatted duration.",
+      "fallible": true,
+      "name": "parse_duration",
+      "returns": "float",
+      "summary": "Parses the `value` into a human-readable duration format specified by `unit`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The domain string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "0",
+          "description": "Can be provided to get additional parts of the domain name.",
+          "name": "plus_parts",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "Can be provided to use a different public suffix list.",
+          "name": "psl",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the eTLD from `value` representing domain name.",
+      "example": {
+        "result": "{\"etld\":\"ac.uk\",\"etld_plus\":\"ac.uk\",\"known_suffix\":true}",
+        "source": "parse_etld!(\"sub.sussex.ac.uk\")"
+      },
+      "failure": "unable to determine eTLD for `value`",
+      "fallible": true,
+      "name": "parse_etld",
+      "returns": "object",
+      "summary": "Parses the eTLD from `value` representing domain name."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Parses the string `value` representing a floating point number in base 10 to a float.",
+      "example": {
+        "result": "-42",
+        "source": "parse_float!(\"-42\")"
+      },
+      "failure": "`value` is not a string.",
+      "fallible": true,
+      "name": "parse_float",
+      "returns": "float",
+      "summary": "Parses the string `value` representing a floating point number in base 10 to a float."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the glog (Google Logging Library) format.",
+      "example": {
+        "result": "{\"file\":\"main.c++\",\"id\":15520,\"level\":\"info\",\"line\":9,\"message\":\"Hello world!\",\"timestamp\":\"2021-01-31T14:48:54.411655Z\"}",
+        "source": "parse_glog!(\"I20210131 14:48:54.411655 15520 main.c++:9] Hello world!\")"
+      },
+      "failure": "`value` does not match the `glog` format.",
+      "fallible": true,
+      "name": "parse_glog",
+      "returns": "object",
+      "summary": "Parses the `value` using the glog (Google Logging Library) format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The Grok pattern.",
+          "name": "pattern",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the `grok` format. All patterns listed here are supported.",
+      "failure": "`value` fails to parse using the provided `pattern`.",
+      "fallible": true,
+      "name": "parse_grok",
+      "returns": "object",
+      "summary": "Parses the `value` using the `grok` format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The Grok patterns, which are tried in order until the first match.",
+          "name": "patterns",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "default": "{  }",
+          "description": "The shared set of grok aliases that can be referenced in the patterns to simplify them.",
+          "name": "aliases",
+          "required": false,
+          "type": "object"
+        },
+        {
+          "default": "[]",
+          "description": "Path to the file containing aliases in a JSON format.",
+          "name": "alias_sources",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using multiple `grok` patterns. All patterns listed here are supported.",
+      "failure": "`value` fails to parse using the provided `pattern`.",
+      "fallible": true,
+      "name": "parse_groks",
+      "returns": "object",
+      "summary": "Parses the `value` using multiple `grok` patterns."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the InfluxDB line protocol to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as an InfluxDB line protocol string, producing a list of Vector-compatible metrics.",
+      "example": {
+        "source": "parse_influxdb!(\"cpu,host=A,region=us-west usage_system=64i,usage_user=10u,temperature=50.5,on=true,sleep=false 1590488773254420000\")"
+      },
+      "failure": "`value` is not a valid InfluxDB line protocol string.",
+      "fallible": true,
+      "name": "parse_influxdb",
+      "returns": "array",
+      "summary": "Parses the `value` as an InfluxDB line protocol string, producing a list of Vector-compatible metrics."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The base the number is in.",
+          "name": "base",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the string `value` representing a number in an optional base/radix to an integer.",
+      "example": {
+        "result": "-42",
+        "source": "parse_int!(\"-42\")"
+      },
+      "failure": "The base is not between 2 and 36.",
+      "fallible": true,
+      "name": "parse_int",
+      "returns": "integer",
+      "summary": "Parses the string `value` representing a number in an optional base/radix to an integer."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the JSON to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Number of layers to parse for nested JSON-formatted documents.",
+          "name": "max_depth",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "default": "true",
+          "description": "Whether to parse the JSON in a lossy manner.",
+          "name": "lossy",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the provided `value` as JSON.",
+      "example": {
+        "result": "{\"key\":\"val\"}",
+        "source": "parse_json!(s'{\"key\": \"val\"}')"
+      },
+      "failure": "`value` is not a valid JSON-formatted payload.",
+      "fallible": true,
+      "name": "parse_json",
+      "returns": "string | integer | float | boolean | object | array | null",
+      "summary": "Parses the provided `value` as JSON."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "=",
+          "description": "The string that separates the key from the value.",
+          "name": "key_value_delimiter",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": " ",
+          "description": "The string that separates each key-value pair.",
+          "name": "field_delimiter",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "lenient",
+          "description": "Defines the acceptance of unnecessary whitespace surrounding the configured `key_value_delimiter`.",
+          "enum": [
+            "lenient",
+            "strict"
+          ],
+          "name": "whitespace",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether a standalone key should be accepted, the resulting object associates such keys with the boolean value `true`.",
+          "name": "accept_standalone_key",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in key-value format. Also known as logfmt.",
+      "example": {
+        "result": "{\"zonk\":\"nork\",\"zork\":\"zook\"}",
+        "source": "parse_key_value!(\"zork=zook zonk=nork\")"
+      },
+      "failure": "`value` is not a properly formatted key-value string.",
+      "fallible": true,
+      "name": "parse_key_value",
+      "returns": "object",
+      "summary": "Parses the `value` in key-value format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the klog format used by Kubernetes components.",
+      "example": {
+        "result": "{\"file\":\"klog.go\",\"id\":28133,\"level\":\"info\",\"line\":70,\"message\":\"hello from klog\",\"timestamp\":\"2026-05-05T17:59:40.692994Z\"}",
+        "source": "parse_klog!(\"I0505 17:59:40.692994   28133 klog.go:70] hello from klog\")"
+      },
+      "failure": "`value` does not match the `klog` format.",
+      "fallible": true,
+      "name": "parse_klog",
+      "returns": "object",
+      "summary": "Parses the `value` using the klog format used by Kubernetes components."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text containing the message to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses Linux authorization logs usually found under either `/var/log/auth.log` (for Debian-based systems) or `/var/log/secure` (for RedHat-based systems) according to Syslog format.",
+      "example": {
+        "source": "parse_linux_authorization!(\n    s'Mar 23 01:49:58 localhost sshd[1111]: Accepted publickey for eng from 10.1.1.1 port 8888 ssh2: RSA SHA256:foobar'\n)\n"
+      },
+      "failure": "`value` is not a properly formatted Syslog message.",
+      "fallible": true,
+      "name": "parse_linux_authorization",
+      "returns": "object",
+      "summary": "Parses Linux authorization logs usually found under either `/var/log/auth.log` (for Debian-based systems) or `/var/log/secure` (for RedHat-based systems) according to Syslog for…"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in logfmt.",
+      "example": {
+        "result": "{\"zonk\":\"nork\",\"zork\":\"zook\"}",
+        "source": "parse_logfmt!(\"zork=zook zonk=nork\")"
+      },
+      "failure": "`value` is not a properly formatted key-value string",
+      "fallible": true,
+      "name": "parse_logfmt",
+      "returns": "object",
+      "summary": "Parses the `value` in logfmt."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The format to use for parsing the log.",
+          "enum": [
+            "combined",
+            "error",
+            "ingress_upstreaminfo",
+            "main"
+          ],
+          "name": "format",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "%d/%b/%Y:%T %z",
+          "description": "The date/time format to use for encoding the timestamp.",
+          "name": "timestamp_format",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses Nginx access and error log lines. Lines can be in `combined`, `ingress_upstreaminfo`, `main` or `error` format.",
+      "failure": "`value` does not match the specified format.",
+      "fallible": true,
+      "name": "parse_nginx_log",
+      "returns": "object",
+      "summary": "Parses Nginx access and error log lines."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The protocol buffer payload to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The path to the protobuf descriptor set file.",
+          "name": "desc_file",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The name of the message type to use for serializing.",
+          "name": "message_type",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as a protocol buffer payload.",
+      "example": {
+        "result": "{\"name\":\"someone\",\"phones\":[{\"number\":\"123456\"}]}",
+        "source": "parse_proto!(decode_base64!(\"Cgdzb21lb25lIggKBjEyMzQ1Ng==\"), \"tests/data/protobuf/test_protobuf/v1/test_protobuf.desc\", \"test_protobuf.v1.Person\")"
+      },
+      "failure": "`value` is not a valid proto payload.",
+      "fallible": true,
+      "name": "parse_proto",
+      "returns": "object",
+      "summary": "Parses the `value` as a protocol buffer payload."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as a query string.",
+      "example": {
+        "result": "{\"bar\":\"2\",\"foo\":\"1\"}",
+        "source": "parse_query_string(\"foo=1&bar=2\")"
+      },
+      "fallible": false,
+      "name": "parse_query_string",
+      "returns": "object",
+      "summary": "Parses the `value` as a query string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to search.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The regular expression pattern to search against.",
+          "name": "pattern",
+          "required": true,
+          "type": "regex"
+        },
+        {
+          "default": "false",
+          "description": "If true, the index of each group in the regular expression is also captured.",
+          "name": "numeric_groups",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the provided Regex `pattern`.",
+      "example": {
+        "result": "{\"number\":\"first\"}",
+        "source": "parse_regex!(\"first group and second group.\", r'(?P<number>.*?) group')"
+      },
+      "failure": "`value` fails to parse using the provided `pattern`.",
+      "fallible": true,
+      "name": "parse_regex",
+      "returns": "object",
+      "summary": "Parses the `value` using the provided Regex `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to search.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "description": "The regular expression pattern to search against.",
+          "name": "pattern",
+          "required": true,
+          "type": "regex"
+        },
+        {
+          "default": "false",
+          "description": "If `true`, the index of each group in the regular expression is also captured.",
+          "name": "numeric_groups",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` using the provided Regex `pattern`.",
+      "example": {
+        "result": "[{\"0\":\"first group\",\"1\":\"first\",\"number\":\"first\"},{\"0\":\"second group\",\"1\":\"second\",\"number\":\"second\"}]",
+        "source": "parse_regex_all!(\"first group and second group.\", r'(?P<number>\\w+) group', numeric_groups: true)"
+      },
+      "failure": "`value` is not a string.",
+      "fallible": true,
+      "name": "parse_regex_all",
+      "returns": "array",
+      "summary": "Parses the `value` using the provided Regex `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the ruby hash to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as ruby hash.",
+      "example": {
+        "result": "{\"test\":\"value\",\"testNum\":0.2,\"testObj\":{\"testBool\":true,\"testNull\":null}}",
+        "source": "parse_ruby_hash!(s'{ \"test\" => \"value\", \"testNum\" => 0.2, \"testObj\" => { \"testBool\" => true, \"testNull\" => nil } }')"
+      },
+      "failure": "`value` is not a valid ruby hash formatted payload.",
+      "fallible": true,
+      "name": "parse_ruby_hash",
+      "returns": "object",
+      "summary": "Parses the `value` as ruby hash."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text containing the Syslog message to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in Syslog format.",
+      "failure": "`value` is not a properly formatted Syslog message.",
+      "fallible": true,
+      "name": "parse_syslog",
+      "returns": "object",
+      "summary": "Parses the `value` in Syslog format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text of the timestamp.",
+          "name": "value",
+          "required": true,
+          "type": "string | timestamp"
+        },
+        {
+          "description": "The strptime format.",
+          "name": "format",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The TZ database format.",
+          "name": "timezone",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in strptime `format`.",
+      "example": {
+        "result": "\"t'2020-10-10T16:00:00Z'\"",
+        "source": "parse_timestamp!(\"10-Oct-2020 16:00+00:00\", format: \"%v %R %:z\")"
+      },
+      "failure": "`value` fails to parse using the provided `format`.",
+      "fallible": true,
+      "name": "parse_timestamp",
+      "returns": "timestamp",
+      "summary": "Parses the `value` in strptime `format`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to tokenize.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in token format. A token is considered to be one of the following:",
+      "example": {
+        "result": "[\"A\",\"sentence\",\"with \\\\\\\"a\\\\\\\" sentence inside\",\"and\",\"some brackets\"]",
+        "source": "parse_tokens(s'A sentence \"with \\\"a\\\" sentence inside\" and [some brackets]')"
+      },
+      "failure": "`value` is not a properly formatted tokenized string.",
+      "fallible": true,
+      "name": "parse_tokens",
+      "returns": "array",
+      "summary": "Parses the `value` in token format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The text of the URL.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "false",
+          "description": "If true and the port number is not specified in the input URL string (or matches the default port for the scheme), it is populated from well-known ports for the following scheme…",
+          "name": "default_known_ports",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` in URL format.",
+      "example": {
+        "result": "{\"fragment\":\"123\",\"host\":\"example.com\",\"password\":\"bar\",\"path\":\"/foobar\",\"port\":4343,\"query\":{\"hello\":\"world\"},\"scheme\":\"ftp\",\"username\":\"foo\"}",
+        "source": "parse_url!(\"ftp://foo:bar@example.com:4343/foobar?hello=world#123\")"
+      },
+      "failure": "`value` is not a properly formatted URL.",
+      "fallible": true,
+      "name": "parse_url",
+      "returns": "object",
+      "summary": "Parses the `value` in URL format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "fast",
+          "description": "Determines performance and reliability characteristics.",
+          "enum": [
+            "fast",
+            "reliable",
+            "enriched"
+          ],
+          "name": "mode",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the provided `value` as a user agent, which has a loosely defined format.",
+      "example": {
+        "result": "{\"browser\":{\"family\":\"Firefox\",\"version\":\"1.0.1\"},\"device\":{\"category\":\"pc\"},\"os\":{\"family\":\"Linux\",\"version\":null}}",
+        "source": "parse_user_agent(\n    \"Mozilla Firefox 1.0.1 Mozilla/5.0 (X11; U; Linux i686; de-DE; rv:1.7.6) Gecko/20050223 Firefox/1.0.1\"\n)\n"
+      },
+      "fallible": false,
+      "name": "parse_user_agent",
+      "returns": "object",
+      "summary": "Parses the provided `value` as a user agent, which has a loosely defined format."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the XML document to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Remove excess whitespace between XML elements.",
+          "name": "trim",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Include XML tag attributes in the returned object.",
+          "name": "include_attr",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "@",
+          "description": "String prefix to use for XML tag attribute keys.",
+          "name": "attr_prefix",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "text",
+          "description": "Key name to use for expanded text nodes.",
+          "name": "text_key",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "false",
+          "description": "Always return text nodes as `{\"<text_key>\": \"value\"}.`",
+          "name": "always_use_text_key",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Parse \"true\" and \"false\" as boolean.",
+          "name": "parse_bool",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Parse \"null\" as null.",
+          "name": "parse_null",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Parse numbers as integers/floats.",
+          "name": "parse_number",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the `value` as XML.",
+      "failure": "`value` is not a valid XML document.",
+      "fallible": true,
+      "name": "parse_xml",
+      "returns": "object",
+      "summary": "Parses the `value` as XML."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string representation of the YAML to parse.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Parse",
+      "description": "Parses the provided `value` as YAML.",
+      "example": {
+        "result": "{\"key\":\"val\"}",
+        "source": "parse_yaml!(s'key: val')"
+      },
+      "failure": "`value` is not a valid YAML-formatted payload.",
+      "fallible": true,
+      "name": "parse_yaml",
+      "returns": "string | integer | float | boolean | object | array | null",
+      "summary": "Parses the provided `value` as YAML."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to PascalCase.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional hint on the original case type.",
+          "enum": [
+            "kebab-case",
+            "camelCase",
+            "PascalCase",
+            "SCREAMING_SNAKE",
+            "snake_case"
+          ],
+          "name": "original_case",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Takes the `value` string, and turns it into PascalCase. Optionally, you can pass in the existing case of the function, or else we will try to figure out the case automatically.",
+      "example": {
+        "result": "\"InputString\"",
+        "source": "pascalcase(\"input-string\")"
+      },
+      "fallible": false,
+      "name": "pascalcase",
+      "returns": "string",
+      "summary": "Takes the `value` string, and turns it into PascalCase."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The target array.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Array",
+      "description": "Removes the last item from the `value` array.",
+      "example": {
+        "result": "[1,2]",
+        "source": "pop([1, 2, 3])"
+      },
+      "fallible": false,
+      "name": "pop",
+      "returns": "array",
+      "summary": "Removes the last item from the `value` array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The target array.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The item to push.",
+          "name": "item",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Array",
+      "description": "Adds the `item` to the end of the `value` array.",
+      "example": {
+        "result": "[1,2,3]",
+        "source": "push([1, 2], 3)"
+      },
+      "fallible": false,
+      "name": "push",
+      "returns": "array",
+      "summary": "Adds the `item` to the end of the `value` array."
+    },
+    {
+      "arguments": [],
+      "category": "Random",
+      "description": "Returns a random boolean.",
+      "example": {
+        "result": "true",
+        "source": "is_boolean(random_bool())"
+      },
+      "fallible": false,
+      "name": "random_bool",
+      "returns": "boolean",
+      "summary": "Returns a random boolean."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number of bytes to generate.",
+          "name": "length",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "Random",
+      "description": "A cryptographically secure random number generator. Returns a string value containing the number of random bytes requested.",
+      "example": {
+        "result": "\"LNu0BBgUbh7XAlXbjSOomQ==\"",
+        "source": "encode_base64(random_bytes(16))"
+      },
+      "failure": "`length` is negative.",
+      "fallible": true,
+      "name": "random_bytes",
+      "returns": "string",
+      "summary": "A cryptographically secure random number generator."
+    },
+    {
+      "arguments": [
+        {
+          "description": "Minimum value (inclusive).",
+          "name": "min",
+          "required": true,
+          "type": "float"
+        },
+        {
+          "description": "Maximum value (exclusive).",
+          "name": "max",
+          "required": true,
+          "type": "float"
+        }
+      ],
+      "category": "Random",
+      "description": "Returns a random float between [min, max).",
+      "example": {
+        "result": "true",
+        "source": "f = random_float(0.0, 10.0)\nf >= 0 && f < 10\n"
+      },
+      "failure": "`max` is not greater than `min`.",
+      "fallible": true,
+      "name": "random_float",
+      "returns": "float",
+      "summary": "Returns a random float between [min, max)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "Minimum value (inclusive).",
+          "name": "min",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "description": "Maximum value (exclusive).",
+          "name": "max",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "Random",
+      "description": "Returns a random integer between [min, max).",
+      "example": {
+        "result": "true",
+        "source": "i = random_int(0, 10)\ni >= 0 && i < 10\n"
+      },
+      "failure": "`max` is not greater than `min`.",
+      "fallible": true,
+      "name": "random_int",
+      "returns": "integer",
+      "summary": "Returns a random integer between [min, max)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to redact sensitive data from.",
+          "name": "value",
+          "required": true,
+          "type": "string | object | array"
+        },
+        {
+          "description": "List of filters applied to `value`.",
+          "name": "filters",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "Specifies what to replace the redacted strings with.",
+          "name": "redactor",
+          "required": false,
+          "type": "string | object"
+        }
+      ],
+      "category": "String",
+      "description": "Redact sensitive data in `value` such as:",
+      "example": {
+        "result": "\"my id is [REDACTED]\"",
+        "source": "redact(\"my id is 123456\", filters: [r'\\d+'])"
+      },
+      "fallible": false,
+      "name": "redact",
+      "returns": "string | object | array",
+      "summary": "Redact sensitive data in `value` such as:"
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to remove data from.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "description": "An array of path segments to remove the value from.",
+          "name": "path",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "default": "false",
+          "description": "After deletion, if `compact` is `true`, any empty objects or arrays left are also removed.",
+          "name": "compact",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Path",
+      "description": "Dynamically remove the value for a given path.",
+      "example": {
+        "result": "{}",
+        "source": "remove!(value: { \"foo\": \"bar\" }, path: [\"foo\"])"
+      },
+      "failure": "The `path` segment must be a string or an integer.",
+      "fallible": true,
+      "name": "remove",
+      "returns": "object | array",
+      "summary": "Dynamically remove the value for a given path."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The name of the secret to remove.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Event",
+      "description": "Removes a secret from an event.",
+      "example": {
+        "source": "remove_secret(\"datadog_api_key\")"
+      },
+      "fallible": false,
+      "name": "remove_secret",
+      "returns": "null",
+      "summary": "Removes a secret from an event.",
+      "vector": true
+    },
+    {
+      "arguments": [
+        {
+          "description": "The original string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Replace all matches of this pattern.",
+          "name": "pattern",
+          "required": true,
+          "type": "string | regex"
+        },
+        {
+          "description": "The string that the matches are replaced with.",
+          "name": "with",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "-1",
+          "description": "The maximum number of replacements to perform.",
+          "name": "count",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Replaces all matching instances of `pattern` in `value`.",
+      "example": {
+        "result": "\"Apples not Bananas\"",
+        "source": "replace(\"Apples and Bananas\", \"and\", \"not\")"
+      },
+      "fallible": false,
+      "name": "replace",
+      "returns": "string",
+      "summary": "Replaces all matching instances of `pattern` in `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The original string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Replace all matches of this pattern.",
+          "name": "pattern",
+          "required": true,
+          "type": "regex"
+        },
+        {
+          "default": "-1",
+          "description": "The maximum number of replacements to perform.",
+          "name": "count",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Replaces all matching instances of `pattern` using a closure.",
+      "example": {
+        "result": "\"Apples And Bananas\"",
+        "source": "replace_with(\"apples and bananas\", r'\\b(\\w)(\\w*)') -> |match| {\n    upcase!(match.captures[0]) + string!(match.captures[1])\n}\n"
+      },
+      "fallible": false,
+      "name": "replace_with",
+      "returns": "string",
+      "summary": "Replaces all matching instances of `pattern` using a closure."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The IP address (IPv4 or IPv6) to perform the reverse DNS lookup on.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "System",
+      "description": "Performs a reverse DNS lookup on the provided IP address to retrieve the associated hostname.",
+      "example": {
+        "result": "\"localhost\"",
+        "source": "reverse_dns!(\"127.0.0.1\")"
+      },
+      "fallible": false,
+      "name": "reverse_dns",
+      "returns": "string",
+      "summary": "Performs a reverse DNS lookup on the provided IP address to retrieve the associated hostname."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The number to round.",
+          "name": "value",
+          "required": true,
+          "type": "integer | float"
+        },
+        {
+          "default": "0",
+          "description": "The number of decimal places to round to.",
+          "name": "precision",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "Number",
+      "description": "Rounds the `value` to the specified `precision`.",
+      "example": {
+        "result": "4",
+        "source": "round(4.345)"
+      },
+      "fallible": false,
+      "name": "round",
+      "returns": "integer | float",
+      "summary": "Rounds the `value` to the specified `precision`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to SCREAMING_SNAKE case.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional hint on the original case type.",
+          "enum": [
+            "kebab-case",
+            "camelCase",
+            "PascalCase",
+            "SCREAMING_SNAKE",
+            "snake_case"
+          ],
+          "name": "original_case",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Takes the `value` string, and turns it into SCREAMING_SNAKE case. Optionally, you can pass in the existing case of the function, or else we will try to figure out the case automatically.",
+      "example": {
+        "result": "\"INPUT_STRING\"",
+        "source": "screamingsnakecase(\"input-string\")"
+      },
+      "fallible": false,
+      "name": "screamingsnakecase",
+      "returns": "string",
+      "summary": "Takes the `value` string, and turns it into SCREAMING_SNAKE case."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates a Seahash hash of the `value`. **Note**: Due to limitations in the underlying VRL data types, this function converts the unsigned 64-bit integer SeaHash result to a signed 64-bit integer. Results higher than the signed 64-bit integer maximum value wrap around to negative values.",
+      "example": {
+        "result": "5348458858952426000",
+        "source": "seahash(\"foobar\")"
+      },
+      "fallible": false,
+      "name": "seahash",
+      "returns": "integer",
+      "summary": "Calculates a Seahash hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to insert data into.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        },
+        {
+          "description": "An array of path segments to insert the value into.",
+          "name": "path",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The data to be inserted.",
+          "name": "data",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Path",
+      "description": "Dynamically insert data into the path of a given object or array.",
+      "example": {
+        "result": "{\"foo\":\"baz\"}",
+        "source": "set!(value: { \"foo\": \"bar\" }, path: [\"foo\"], data: \"baz\")"
+      },
+      "failure": "The `path` segment must be a string or an integer.",
+      "fallible": true,
+      "name": "set",
+      "returns": "object | array",
+      "summary": "Dynamically insert data into the path of a given object or array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The name of the secret.",
+          "name": "key",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The secret value.",
+          "name": "secret",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Event",
+      "description": "Sets the given secret in the event.",
+      "example": {
+        "source": "set_secret(\"datadog_api_key\", \"secret-value\")"
+      },
+      "fallible": false,
+      "name": "set_secret",
+      "returns": "null",
+      "summary": "Sets the given secret in the event.",
+      "vector": true
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path of the value that is assigned a meaning.",
+          "name": "target",
+          "required": true,
+          "type": "any"
+        },
+        {
+          "description": "The name of the meaning to assign.",
+          "name": "meaning",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Event",
+      "description": "Sets a semantic meaning for an event.",
+      "example": {
+        "source": "set_semantic_meaning(.foo, \"bar\")"
+      },
+      "fallible": false,
+      "name": "set_semantic_meaning",
+      "returns": "null",
+      "summary": "Sets a semantic meaning for an event.",
+      "vector": true
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates a SHA-1 hash of the `value`.",
+      "example": {
+        "result": "\"0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33\"",
+        "source": "sha1(\"foo\")"
+      },
+      "fallible": false,
+      "name": "sha1",
+      "returns": "string",
+      "summary": "Calculates a SHA-1 hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "SHA-512/256",
+          "description": "The variant of the algorithm to use.",
+          "enum": [
+            "SHA-224",
+            "SHA-256",
+            "SHA-384",
+            "SHA-512",
+            "SHA-512/224",
+            "SHA-512/256"
+          ],
+          "name": "variant",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates a SHA-2 hash of the `value`.",
+      "example": {
+        "result": "\"d014c752bc2be868e16330f47e0c316a5967bcbc9c286a457761d7055b9214ce\"",
+        "source": "sha2(\"foobar\")"
+      },
+      "fallible": false,
+      "name": "sha2",
+      "returns": "string",
+      "summary": "Calculates a SHA-2 hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "SHA3-512",
+          "description": "The variant of the algorithm to use.",
+          "enum": [
+            "SHA3-224",
+            "SHA3-256",
+            "SHA3-384",
+            "SHA3-512"
+          ],
+          "name": "variant",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Cryptography",
+      "description": "Calculates a SHA-3 hash of the `value`.",
+      "example": {
+        "result": "\"ff32a30c3af5012ea395827a3e99a13073c3a8d8410a708568ff7e6eb85968fccfebaea039bc21411e9d43fdb9a851b529b9960ffea8679199781b8f45ca85e2\"",
+        "source": "sha3(\"foobar\")"
+      },
+      "fallible": false,
+      "name": "sha3",
+      "returns": "string",
+      "summary": "Calculates a SHA-3 hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The input string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "byte",
+          "description": "Defines how to split the string to calculate entropy, based on occurrences of segments.",
+          "enum": [
+            "byte",
+            "codepoint",
+            "grapheme"
+          ],
+          "name": "segmentation",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Generates Shannon entropy) from given string. It can generate it based on string bytes, codepoints, or graphemes.",
+      "example": {
+        "result": "2.9219",
+        "source": "floor(shannon_entropy(\"vector.dev\"), precision: 4)"
+      },
+      "fallible": false,
+      "name": "shannon_entropy",
+      "returns": "float",
+      "summary": "Generates Shannon entropy) from given string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The original string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Keep all matches of this pattern.",
+          "name": "permitted_characters",
+          "required": true,
+          "type": "regex"
+        },
+        {
+          "default": "",
+          "description": "The string to use to replace single rejected characters.",
+          "name": "replace_single",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "",
+          "description": "The string to use to replace multiple sequential instances of rejected characters.",
+          "name": "replace_repeated",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Keeps only matches of `pattern` in `value`.",
+      "example": {
+        "result": "\"vectordevlower\"",
+        "source": "sieve(\"vector.dev/lowerUPPER\", permitted_characters: r'[a-z]')"
+      },
+      "fallible": false,
+      "name": "sieve",
+      "returns": "string",
+      "summary": "Keeps only matches of `pattern` in `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string or array to slice.",
+          "name": "value",
+          "required": true,
+          "type": "string | array"
+        },
+        {
+          "description": "The inclusive start position.",
+          "name": "start",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "default": "String length",
+          "description": "The exclusive end position.",
+          "name": "end",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Returns a slice of `value` between the `start` and `end` positions.",
+      "example": {
+        "result": "\"califrag\"",
+        "source": "slice!(\"Supercalifragilisticexpialidocious\", start: 5, end: 13)"
+      },
+      "fallible": false,
+      "name": "slice",
+      "returns": "string | array",
+      "summary": "Returns a slice of `value` between the `start` and `end` positions."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to snake_case.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Optional hint on the original case type.",
+          "enum": [
+            "kebab-case",
+            "camelCase",
+            "PascalCase",
+            "SCREAMING_SNAKE",
+            "snake_case"
+          ],
+          "name": "original_case",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "Case boundaries to exclude during conversion.",
+          "enum": [
+            "lower_upper",
+            "upper_lower",
+            "acronym",
+            "lower_digit",
+            "upper_digit",
+            "digit_lower",
+            "digit_upper"
+          ],
+          "name": "excluded_boundaries",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "String",
+      "description": "Takes the `value` string, and turns it into snake_case. Optionally, you can pass in the existing case of the function, or else we will try to figure out the case automatically.",
+      "example": {
+        "result": "\"input_string\"",
+        "source": "snakecase(\"input-string\")"
+      },
+      "fallible": false,
+      "name": "snakecase",
+      "returns": "string",
+      "summary": "Takes the `value` string, and turns it into snake_case."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to split.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The string is split whenever this pattern is matched.",
+          "name": "pattern",
+          "required": true,
+          "type": "string | regex"
+        },
+        {
+          "description": "The maximum number of substrings to return.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "category": "String",
+      "description": "Splits the `value` string using `pattern`.",
+      "example": {
+        "result": "[\"apples\",\"pears\",\"bananas\"]",
+        "source": "split(\"apples and pears and bananas\", \" and \")"
+      },
+      "fallible": false,
+      "name": "split",
+      "returns": "array",
+      "summary": "Splits the `value` string using `pattern`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path to split into components.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Splits the given `path` into its constituent components, returning an array of strings. Each component represents a part of the file system path hierarchy.",
+      "example": {
+        "result": "[\"/\",\"home\",\"user\"]",
+        "source": "split_path(\"/home/user/\")"
+      },
+      "failure": "`value` is not a valid string.",
+      "fallible": true,
+      "name": "split_path",
+      "returns": "array",
+      "summary": "Splits the given `path` into its constituent components, returning an array of strings."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to search.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The substring that the `value` must start with.",
+          "name": "substring",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether the match should be case sensitive.",
+          "name": "case_sensitive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "String",
+      "description": "Determines whether `value` begins with `substring`.",
+      "example": {
+        "result": "true",
+        "source": "starts_with(\"The Needle In The Haystack\", \"The Needle\")"
+      },
+      "fallible": false,
+      "name": "starts_with",
+      "returns": "boolean",
+      "summary": "Determines whether `value` begins with `substring`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a string.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is a string, otherwise returns an error. This enables the type checker to guarantee that the returned value is a string and can be used in any function that expects a string.",
+      "example": {
+        "result": "\"{\\\"field\\\": \\\"value\\\"}\"",
+        "source": ". = { \"message\": \"{\\\"field\\\": \\\"value\\\"}\" }\nstring(.message)\n"
+      },
+      "failure": "`value` is not a string.",
+      "fallible": true,
+      "name": "string",
+      "returns": "string",
+      "summary": "Returns `value` if it is a string, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to strip.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Strips ANSI escape codes from `value`.",
+      "fallible": false,
+      "name": "strip_ansi_escape_codes",
+      "returns": "string",
+      "summary": "Strips ANSI escape codes from `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to trim.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Strips whitespace from the start and end of `value`, where whitespace is defined by the Unicode `White_Space` property.",
+      "example": {
+        "result": "\"A sentence.\"",
+        "source": "strip_whitespace(\"  A sentence.  \")"
+      },
+      "fallible": false,
+      "name": "strip_whitespace",
+      "returns": "string",
+      "summary": "Strips whitespace from the start and end of `value`, where whitespace is defined by the Unicode `White_Space` property."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Returns the number of UTF-8 characters in `value`. This differs from `length` which counts the number of bytes of a string.",
+      "example": {
+        "result": "5",
+        "source": "strlen(\"ñandú\")"
+      },
+      "fallible": false,
+      "name": "strlen",
+      "returns": "integer",
+      "summary": "Returns the number of UTF-8 characters in `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to tag with types.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Adds type information to all (nested) scalar values in the provided `value`.",
+      "example": {
+        "result": "{\"integer\":123}",
+        "source": "tag_types_externally(123)"
+      },
+      "fallible": false,
+      "name": "tag_types_externally",
+      "returns": "object | array | null",
+      "summary": "Adds type information to all (nested) scalar values in the provided `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array of strings to count occurrences for.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Counts the occurrences of each string value in the provided array and returns an object with the counts.",
+      "example": {
+        "result": "{\"bar\":1,\"baz\":1,\"foo\":2}",
+        "source": "tally!([\"foo\", \"bar\", \"foo\", \"baz\"])"
+      },
+      "fallible": false,
+      "name": "tally",
+      "returns": "object",
+      "summary": "Counts the occurrences of each string value in the provided array and returns an object with the counts."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array to search through.",
+          "name": "array",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The value to count occurrences of in the array.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Counts the number of times a specific value appears in the provided array.",
+      "example": {
+        "result": "2",
+        "source": "tally_value([\"foo\", \"bar\", \"foo\", \"baz\"], \"foo\")"
+      },
+      "fallible": false,
+      "name": "tally_value",
+      "returns": "integer",
+      "summary": "Counts the number of times a specific value appears in the provided array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it is a timestamp.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns `value` if it is a timestamp, otherwise returns an error. This enables the type checker to guarantee that the returned value is a timestamp and can be used in any function that expects a timestamp.",
+      "example": {
+        "result": "\"t'2020-10-10T16:00:00Z'\"",
+        "source": "timestamp(t'2020-10-10T16:00:00Z')"
+      },
+      "failure": "`value` is not a timestamp.",
+      "fallible": true,
+      "name": "timestamp",
+      "returns": "timestamp",
+      "summary": "Returns `value` if it is a timestamp, otherwise returns an error."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a Boolean.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Coerce",
+      "description": "Coerces the `value` into a boolean.",
+      "example": {
+        "result": "true",
+        "source": "to_bool!(\"yes\")"
+      },
+      "failure": "`value` is not a supported boolean representation.",
+      "fallible": true,
+      "name": "to_bool",
+      "returns": "boolean",
+      "summary": "Coerces the `value` into a boolean."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object or array to manipulate.",
+          "name": "value",
+          "required": true,
+          "type": "object | array"
+        }
+      ],
+      "category": "Object",
+      "description": "Converts JSON objects or arrays into array of objects.",
+      "example": {
+        "result": "[]",
+        "source": "to_entries({})"
+      },
+      "fallible": false,
+      "name": "to_entries",
+      "returns": "array",
+      "summary": "Converts JSON objects or arrays into array of objects."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a float.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Coerce",
+      "description": "Coerces the `value` into a float.",
+      "example": {
+        "result": "3.145",
+        "source": "to_float!(\"3.145\")"
+      },
+      "failure": "`value` is not a supported float representation.",
+      "fallible": true,
+      "name": "to_float",
+      "returns": "float",
+      "summary": "Coerces the `value` into a float."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to an integer.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Coerce",
+      "description": "Coerces the `value` into an integer.",
+      "example": {
+        "result": "2",
+        "source": "to_int!(\"2\")"
+      },
+      "failure": "`value` is a string but the text is not an integer.",
+      "fallible": true,
+      "name": "to_int",
+      "returns": "integer",
+      "summary": "Coerces the `value` into an integer."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a regex.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Coerce",
+      "description": "Coerces the `value` into a regex.",
+      "example": {
+        "result": "\"r'^foo$'\"",
+        "source": "to_regex!(\"^foo$\")"
+      },
+      "failure": "`value` is not a string.",
+      "fallible": true,
+      "name": "to_regex",
+      "returns": "regex",
+      "summary": "Coerces the `value` into a regex."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to convert to a string.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Coerce",
+      "description": "Coerces the `value` into a string.",
+      "example": {
+        "result": "\"s'true'\"",
+        "source": "to_string(true)"
+      },
+      "failure": "`value` is not an integer, float, boolean, string, timestamp, or null.",
+      "fallible": true,
+      "name": "to_string",
+      "returns": "string",
+      "summary": "Coerces the `value` into a string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The facility code.",
+          "name": "value",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value`, a Syslog facility code, into its corresponding Syslog keyword. For example, `0` into `\"kern\"`, `1` into `\"user\"`, etc.",
+      "example": {
+        "result": "\"auth\"",
+        "source": "to_syslog_facility!(4)"
+      },
+      "failure": "`value` is not a valid Syslog facility code.",
+      "fallible": true,
+      "name": "to_syslog_facility",
+      "returns": "string",
+      "summary": "Converts the `value`, a Syslog facility code, into its corresponding Syslog keyword."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Syslog facility keyword to convert.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value`, a Syslog facility keyword, into a Syslog integer facility code (`0` to `23`).",
+      "example": {
+        "result": "10",
+        "source": "to_syslog_facility_code!(\"authpriv\")"
+      },
+      "failure": "`value` is not a valid Syslog facility keyword.",
+      "fallible": true,
+      "name": "to_syslog_facility_code",
+      "returns": "integer",
+      "summary": "Converts the `value`, a Syslog facility keyword, into a Syslog integer facility code (`0` to `23`)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The severity level.",
+          "name": "value",
+          "required": true,
+          "type": "integer"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value`, a Syslog severity level, into its corresponding keyword, i.e. 0 into `\"emerg\"`, 1 into `\"alert\"`, etc.",
+      "example": {
+        "result": "\"notice\"",
+        "source": "to_syslog_level!(5)"
+      },
+      "failure": "`value` isn't a valid Syslog severity level.",
+      "fallible": true,
+      "name": "to_syslog_level",
+      "returns": "string",
+      "summary": "Converts the `value`, a Syslog severity level, into its corresponding keyword, i.e."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The Syslog level keyword to convert.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value`, a Syslog log level keyword, into a Syslog integer severity level (`0` to `7`).",
+      "example": {
+        "result": "1",
+        "source": "to_syslog_severity!(\"alert\")"
+      },
+      "failure": "`value` is not a valid Syslog level keyword.",
+      "fallible": true,
+      "name": "to_syslog_severity",
+      "returns": "integer",
+      "summary": "Converts the `value`, a Syslog log level keyword, into a Syslog integer severity level (`0` to `7`)."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The timestamp to convert into a Unix timestamp.",
+          "name": "value",
+          "required": true,
+          "type": "timestamp"
+        },
+        {
+          "default": "seconds",
+          "description": "The time unit.",
+          "enum": [
+            "seconds",
+            "milliseconds",
+            "nanoseconds"
+          ],
+          "name": "unit",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Convert",
+      "description": "Converts the `value` timestamp into a Unix timestamp.",
+      "example": {
+        "result": "1609459200",
+        "source": "to_unix_timestamp(t'2021-01-01T00:00:00+00:00')"
+      },
+      "failure": "`value` cannot be represented in nanoseconds.",
+      "fallible": true,
+      "name": "to_unix_timestamp",
+      "returns": "integer",
+      "summary": "Converts the `value` timestamp into a Unix timestamp."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to truncate.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The number of characters to truncate the string after.",
+          "name": "limit",
+          "required": true,
+          "type": "integer"
+        },
+        {
+          "description": "A custom suffix to be appended to truncated strings.",
+          "name": "suffix",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Truncates the `value` string up to the `limit` number of characters.",
+      "example": {
+        "result": "\"A rather lo...\"",
+        "source": "truncate(\"A rather long sentence.\", limit: 11, suffix: \"...\")"
+      },
+      "fallible": false,
+      "name": "truncate",
+      "returns": "string",
+      "summary": "Truncates the `value` string up to the `limit` number of characters."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The expression to get the type definition for.",
+          "name": "value",
+          "required": true,
+          "type": "any"
+        }
+      ],
+      "category": "Type",
+      "description": "Returns the type definition of an expression at runtime.",
+      "example": {
+        "result": "{\"integer\":true}",
+        "source": "type_def(42)"
+      },
+      "fallible": false,
+      "name": "type_def",
+      "returns": "any",
+      "summary": "Returns the type definition of an expression at runtime."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array or object to unflatten.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        },
+        {
+          "default": ".",
+          "description": "The separator to split flattened keys.",
+          "name": "separator",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "default": "true",
+          "description": "Whether to recursively unflatten the object values.",
+          "name": "recursive",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Unflattens the `value` into a nested representation.",
+      "example": {
+        "result": "{\"foo\":{\"bar\":{\"baz\":true,\"qux\":false},\"quux\":42}}",
+        "source": "unflatten({\n    \"foo.bar.baz\": true,\n    \"foo.bar.qux\": false,\n    \"foo.quux\": 42\n})\n"
+      },
+      "fallible": false,
+      "name": "unflatten",
+      "returns": "object",
+      "summary": "Unflattens the `value` into a nested representation."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The array to return unique elements from.",
+          "name": "value",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Returns the unique values for an array.",
+      "example": {
+        "result": "[\"foo\",\"bar\",\"baz\"]",
+        "source": "unique([\"foo\", \"bar\", \"foo\", \"baz\"])"
+      },
+      "fallible": false,
+      "name": "unique",
+      "returns": "array",
+      "summary": "Returns the unique values for an array."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The path of the field to unnest.",
+          "name": "path",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "category": "Object",
+      "description": "Unnest an array field from an object to create an array of objects using that field; keeping all other fields.",
+      "example": {
+        "result": "[{\"hostname\":\"localhost\",\"messages\":\"message 1\"},{\"hostname\":\"localhost\",\"messages\":\"message 2\"}]",
+        "source": ". = {\"hostname\": \"localhost\", \"messages\": [\"message 1\", \"message 2\"]}\n. = unnest(.messages)\n"
+      },
+      "failure": "The field path referred to is not an array.",
+      "fallible": true,
+      "name": "unnest",
+      "returns": "array",
+      "summary": "Unnest an array field from an object to create an array of objects using that field; keeping all other fields."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to convert to uppercase.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "String",
+      "description": "Upcases `value`, where upcase is defined according to the Unicode Derived Core Property Uppercase.",
+      "example": {
+        "result": "\"HELLO, WORLD!\"",
+        "source": "upcase(\"Hello, World!\")"
+      },
+      "fallible": false,
+      "name": "upcase",
+      "returns": "string",
+      "summary": "Upcases `value`, where upcase is defined according to the Unicode Derived Core Property Uppercase."
+    },
+    {
+      "arguments": [
+        {
+          "description": "A string that is a Friendly ID",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "category": "Random",
+      "description": "Convert a Friendly ID (base62 encoding a 128-bit word) to a UUID.",
+      "example": {
+        "result": "\"7f41deed-d5e2-8b5e-7a13-ab4ff93cfad2\"",
+        "source": "uuid_from_friendly_id!(\"3s87yEvnmkiPBMHsj8bwwc\")"
+      },
+      "failure": "`value` is a string but the text uses characters outside of class [0-9A-Za-z].",
+      "fallible": true,
+      "name": "uuid_from_friendly_id",
+      "returns": "string",
+      "summary": "Convert a Friendly ID (base62 encoding a 128-bit word) to a UUID."
+    },
+    {
+      "arguments": [],
+      "category": "Random",
+      "description": "Generates a random UUIDv4) string.",
+      "example": {
+        "result": "\"1d262f4f-199b-458d-879f-05fd0a5f0683\"",
+        "source": "uuid_v4()"
+      },
+      "fallible": false,
+      "name": "uuid_v4",
+      "returns": "string",
+      "summary": "Generates a random UUIDv4) string."
+    },
+    {
+      "arguments": [
+        {
+          "default": "`now()`",
+          "description": "The timestamp used to generate the UUIDv7.",
+          "name": "timestamp",
+          "required": false,
+          "type": "timestamp"
+        }
+      ],
+      "category": "Random",
+      "description": "Generates a random UUIDv7 string.",
+      "example": {
+        "result": "\"0135ddb4-a444-794c-a7a2-088f260104c0\"",
+        "source": "uuid_v7()"
+      },
+      "fallible": false,
+      "name": "uuid_v7",
+      "returns": "string",
+      "summary": "Generates a random UUIDv7 string."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The value to check if it conforms to the JSON schema definition.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The location (path) of the JSON Schema definition.",
+          "name": "schema_definition",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "Unknown formats can be silently ignored by setting this to `true` and validation continues without failing due to those fields.",
+          "name": "ignore_unknown_formats",
+          "required": false,
+          "type": "boolean"
+        }
+      ],
+      "category": "Type",
+      "description": "Check if `value` conforms to a JSON Schema definition. This function validates a JSON payload against a JSON Schema definition. It can be used to ensure that the data structure and types in `value` match the expectations defined in `schema_definition`.",
+      "example": {
+        "result": "true",
+        "source": "validate_json_schema!(s'{ \"productUser\": \"valid@email.com\" }', \"tests/data/jsonschema/validate_json_schema/schema_with_email_format.json\", false)"
+      },
+      "failure": "`value` is not a valid JSON Schema payload.",
+      "fallible": true,
+      "name": "validate_json_schema",
+      "returns": "boolean",
+      "summary": "Check if `value` conforms to a JSON Schema definition."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The object to extract values from.",
+          "name": "value",
+          "required": true,
+          "type": "object"
+        }
+      ],
+      "category": "Enumerate",
+      "description": "Returns the values from the object passed into the function.",
+      "example": {
+        "result": "[\"val1\",\"val2\"]",
+        "source": "values({\"key1\": \"val1\", \"key2\": \"val2\"})"
+      },
+      "fallible": false,
+      "name": "values",
+      "returns": "array",
+      "summary": "Returns the values from the object passed into the function."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The string to calculate the hash for.",
+          "name": "value",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "default": "XXH32",
+          "description": "The xxHash hashing algorithm to use.",
+          "name": "variant",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "category": "Checksum",
+      "description": "Calculates a xxHash hash of the `value`.",
+      "example": {
+        "result": "3792637401",
+        "source": "xxhash(\"foo\")"
+      },
+      "fallible": false,
+      "name": "xxhash",
+      "returns": "string | integer",
+      "summary": "Calculates a xxHash hash of the `value`."
+    },
+    {
+      "arguments": [
+        {
+          "description": "The first array of elements, or the array of input arrays if no other parameter is present.",
+          "name": "array_0",
+          "required": true,
+          "type": "array"
+        },
+        {
+          "description": "The second array of elements.",
+          "name": "array_1",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "category": "Array",
+      "description": "Iterate over several arrays in parallel, producing a new array containing arrays of items from each source. The resulting array will be as long as the shortest input array, with all the remaining elements dropped. This function is modeled from the `zip` function in Python, but similar methods can be found in Ruby and Rust.",
+      "example": {
+        "result": "[[1,4],[2,5],[3,6]]",
+        "source": "zip([1, 2, 3], [4, 5, 6, 7])"
+      },
+      "failure": "`array_0` and `array_1` must be arrays.",
+      "fallible": true,
+      "name": "zip",
+      "returns": "array",
+      "summary": "Iterate over several arrays in parallel, producing a new array containing arrays of items from each source."
+    }
+  ],
+  "source": "vrl 0.35.0 generated docs and Vector 0.58.0 functions",
+  "vector_version": "0.58.0"
+}

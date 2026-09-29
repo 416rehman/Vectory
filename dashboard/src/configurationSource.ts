@@ -26,6 +26,8 @@ export type ConfigurationDiagnostic = {
   to: number;
   severity: "error" | "warning";
   message: string;
+  /** `deferred`: a native reference or pattern a device resolves. */
+  code?: string;
   componentId?: string;
   enrichmentTableId?: string;
 };
@@ -476,10 +478,13 @@ export function diagnoseConfigurationSource(
   }
   visit(config);
   if (deferred)
-    add(
-      "Native references, providers or input patterns must be resolved and validated on the device.",
-      "warning",
-    );
+    diagnostics.push({
+      ...range(text),
+      severity: "warning",
+      code: "deferred",
+      message:
+        "Each device resolves secrets, environment variables, providers and input patterns before applying.",
+    });
   return {
     config,
     diagnostics,
