@@ -18147,37 +18147,12 @@
                 "at": {
                   "type": "string",
                   "format": "date-time"
-                },
-                "version_number": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 9007199254740991
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "configuration_name": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "maxLength": 240
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
                 }
               },
               "required": [
                 "deployment_id",
                 "device_count",
-                "at",
-                "version_number",
-                "configuration_name"
+                "at"
               ],
               "additionalProperties": false
             }
