@@ -1,8 +1,9 @@
-// Platform help and the API appendix are verified as separate experiences.
+// Checks the API reference appendix (Scalar). Unless --api-only is passed, it first
+// runs the public help acceptance in ./browser.mjs. Needs a signed-in storage state.
 process.env.VECTORY_HELP_URL ||=
   process.env.VECTORY_DOCS_URL || "http://127.0.0.1:8080";
 if (!process.argv.includes("--api-only"))
-  await import("../../help-center/tests/browser.mjs");
+  await import("./browser.mjs");
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -64,6 +65,11 @@ try {
   expect(await page.getByText("Generate MCP", { exact: true }).count()).toBe(0);
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
+  const evidenceDirectory = path.resolve(
+    root,
+    process.env.VECTORY_HELP_ARTIFACTS || ".local/help-acceptance",
+  );
+  await fs.mkdir(evidenceDirectory, { recursive: true });
   const evidence = {
     recorded_at: new Date().toISOString(),
     origin,
@@ -76,7 +82,7 @@ try {
     page_errors: [],
   };
   await fs.writeFile(
-    path.join(root, "docs/user/browser-evidence.json"),
+    path.join(evidenceDirectory, "api-reference.json"),
     JSON.stringify(evidence, null, 2) + "\n",
   );
   console.log(

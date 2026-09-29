@@ -1,0 +1,98 @@
+---
+// How Vectory fits together. The Markdown source carries the same diagram as
+// Mermaid for GitHub; the Help center draws this themed, offline SVG instead.
+// Two layouts: side by side on wide screens, stacked on phones.
+const caption =
+  "Browsers reach the dashboard through the TLS proxy. Each agent connects out to the server on port 8443 with mutual TLS. Your events flow from Vector to your destinations, never through Vectory.";
+---
+<figure class="arch not-content">
+  <svg class="arch-wide" viewBox="0 0 760 340" role="img" aria-labelledby="arch-wide-title">
+    <title id="arch-wide-title">How Vectory works. {caption}</title>
+    <defs>
+      <marker id="arch-w-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arch-arrow" d="M0 0 10 5 0 10z" /></marker>
+      <marker id="arch-w-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arch-arrow-accent" d="M0 0 10 5 0 10z" /></marker>
+    </defs>
+    <rect class="arch-box" x="8" y="40" width="100" height="44" />
+    <text class="arch-title" x="58" y="67" text-anchor="middle">Your browser</text>
+    <path class="arch-flow" d="M108 62H192" marker-end="url(#arch-w-arrow)" />
+    <text class="arch-label" x="143" y="54" text-anchor="middle">HTTPS 443</text>
+
+    <rect class="arch-zone" x="180" y="8" width="280" height="324" />
+    <text class="arch-zone-label" x="194" y="28">VECTORY SERVER</text>
+    <rect class="arch-box" x="194" y="40" width="252" height="44" />
+    <text class="arch-title" x="208" y="59">TLS proxy</text>
+    <text class="arch-sub" x="208" y="75">TLS 1.3 · the only public web port</text>
+    <path class="arch-flow" d="M320 84V110" marker-end="url(#arch-w-arrow)" />
+    <rect class="arch-box" x="194" y="112" width="252" height="72" />
+    <text class="arch-title" x="208" y="133">vectory-server</text>
+    <text class="arch-sub" x="208" y="151">Dashboard · API · Help center</text>
+    <text class="arch-sub" x="208" y="168">Agent listener :8443 · SQLite</text>
+    <path class="arch-flow" d="M320 184V248" marker-end="url(#arch-w-arrow)" />
+    <text class="arch-label" x="328" y="221">internal network only</text>
+    <rect class="arch-box" x="194" y="250" width="252" height="52" />
+    <text class="arch-title" x="208" y="271">Validator</text>
+    <text class="arch-sub" x="208" y="289">Sandboxed Vector 0.58 · no internet</text>
+
+    <path class="arch-flow arch-flow-accent" d="M570 148H448" marker-end="url(#arch-w-accent)" />
+    <text class="arch-label arch-label-accent" x="508" y="138" text-anchor="middle">outbound 8443</text>
+    <text class="arch-label arch-label-accent" x="508" y="166" text-anchor="middle">mutual TLS</text>
+
+    <rect class="arch-zone" x="556" y="96" width="196" height="176" />
+    <text class="arch-zone-label" x="570" y="116">EACH DEVICE</text>
+    <rect class="arch-box arch-box-accent" x="570" y="126" width="168" height="44" />
+    <text class="arch-title" x="654" y="153" text-anchor="middle">vectory agent</text>
+    <path class="arch-flow" d="M654 170V202" marker-end="url(#arch-w-arrow)" />
+    <text class="arch-label" x="662" y="190">starts · verifies</text>
+    <rect class="arch-box" x="570" y="204" width="168" height="44" />
+    <text class="arch-title" x="654" y="231" text-anchor="middle">Vector 0.58</text>
+    <path class="arch-flow" d="M654 248V290" marker-end="url(#arch-w-arrow)" />
+    <text class="arch-label" x="662" y="284">your events</text>
+    <rect class="arch-box arch-box-soft" x="570" y="292" width="168" height="40" />
+    <text class="arch-title" x="654" y="317" text-anchor="middle">Your destinations</text>
+  </svg>
+
+  <svg class="arch-narrow" viewBox="0 0 340 596" role="img" aria-labelledby="arch-narrow-title">
+    <title id="arch-narrow-title">How Vectory works. {caption}</title>
+    <defs>
+      <marker id="arch-n-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arch-arrow" d="M0 0 10 5 0 10z" /></marker>
+      <marker id="arch-n-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arch-arrow-accent" d="M0 0 10 5 0 10z" /></marker>
+    </defs>
+    <rect class="arch-box" x="90" y="8" width="160" height="40" />
+    <text class="arch-title" x="170" y="33" text-anchor="middle">Your browser</text>
+    <path class="arch-flow" d="M170 48V108" marker-end="url(#arch-n-arrow)" />
+    <text class="arch-label" x="178" y="70">HTTPS 443</text>
+
+    <rect class="arch-zone" x="10" y="80" width="320" height="236" />
+    <text class="arch-zone-label" x="24" y="100">VECTORY SERVER</text>
+    <rect class="arch-box" x="24" y="110" width="292" height="44" />
+    <text class="arch-title" x="38" y="129">TLS proxy</text>
+    <text class="arch-sub" x="38" y="145">TLS 1.3 · the only public web port</text>
+    <path class="arch-flow" d="M170 154V168" marker-end="url(#arch-n-arrow)" />
+    <rect class="arch-box" x="24" y="170" width="292" height="66" />
+    <text class="arch-title" x="38" y="190">vectory-server</text>
+    <text class="arch-sub" x="38" y="207">Dashboard · API · Help center</text>
+    <text class="arch-sub" x="38" y="224">Agent listener :8443 · SQLite</text>
+    <path class="arch-flow" d="M110 236V250" marker-end="url(#arch-n-arrow)" />
+    <rect class="arch-box" x="24" y="252" width="200" height="52" />
+    <text class="arch-title" x="38" y="273">Validator</text>
+    <text class="arch-sub" x="38" y="291">Sandboxed Vector · no internet</text>
+
+    <path class="arch-flow arch-flow-accent" d="M280 384V238" marker-end="url(#arch-n-accent)" />
+    <text class="arch-label arch-label-accent" x="270" y="334" text-anchor="end">outbound 8443</text>
+    <text class="arch-label arch-label-accent" x="270" y="349" text-anchor="end">mutual TLS</text>
+
+    <rect class="arch-zone" x="10" y="356" width="320" height="152" />
+    <text class="arch-zone-label" x="24" y="376">EACH DEVICE</text>
+    <rect class="arch-box arch-box-accent" x="24" y="386" width="292" height="40" />
+    <text class="arch-title" x="38" y="411">vectory agent</text>
+    <path class="arch-flow" d="M110 426V454" marker-end="url(#arch-n-arrow)" />
+    <text class="arch-label" x="118" y="445">starts · verifies · rolls back</text>
+    <rect class="arch-box" x="24" y="456" width="292" height="40" />
+    <text class="arch-title" x="38" y="481">Vector 0.58</text>
+    <path class="arch-flow" d="M170 496V546" marker-end="url(#arch-n-arrow)" />
+    <text class="arch-label" x="178" y="526">your events</text>
+    <rect class="arch-box arch-box-soft" x="90" y="548" width="160" height="40" />
+    <text class="arch-title" x="170" y="573" text-anchor="middle">Your destinations</text>
+  </svg>
+  <figcaption>{caption}</figcaption>
+</figure>

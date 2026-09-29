@@ -35,10 +35,16 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "vectory-help-ci-"));
 await fs.chmod(temporary, 0o700);
 const data = path.join(temporary, "data");
 const storage = path.join(data, "browser-auth.json");
+// VECTORY_HELP_CI_PORT pins the port, for example to stay inside a port range
+// shared with other local runs; otherwise the system picks a free one.
 const reservation = net.createServer();
 await new Promise((resolve, reject) => {
   reservation.once("error", reject);
-  reservation.listen(0, "127.0.0.1", resolve);
+  reservation.listen(
+    Number(process.env.VECTORY_HELP_CI_PORT) || 0,
+    "127.0.0.1",
+    resolve,
+  );
 });
 const port = reservation.address().port;
 await new Promise((resolve, reject) =>

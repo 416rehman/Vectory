@@ -1,0 +1,24 @@
+<!-- Old section links keep working after a section moves or is renamed.
+     legacy-anchors.json maps "page" -> { "old-section": "new-page#new-section" }.
+     The build's link check rejects entries whose target does not exist. -->
+<script>
+  import legacy from "../../legacy-anchors.json";
+
+  const map: Record<string, Record<string, string>> = legacy;
+  const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+  function follow() {
+    const id = decodeURIComponent(location.hash.slice(1));
+    if (!id || document.getElementById(id)) return;
+    const page = location.pathname.match(/^\/help\/([a-z][a-z-]*)\/$/)?.[1] || "index";
+    const target = map[page]?.[id];
+    if (!target) return;
+    const [slug, section = ""] = target.split("#");
+    const url = new URL(`/help/${slug === "index" ? "" : slug + "/"}`, location.origin);
+    const pipeline = new URL(location.href).searchParams.get("pipeline");
+    if (pipeline && uuid.test(pipeline)) url.searchParams.set("pipeline", pipeline);
+    url.hash = section;
+    location.replace(url.href);
+  }
+  follow();
+  addEventListener("hashchange", follow);
+</script>

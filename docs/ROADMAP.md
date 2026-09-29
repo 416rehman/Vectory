@@ -1,5 +1,35 @@
-# Public roadmap
+# Roadmap
 
-Complete the product contract's native and operational release gates before a production label. Independent adversarial network tests, explicit credential/signing-key and old-backup recovery, same-host reproducible unsigned archives, narrow device-local secret references and short 100/1,000/10,000-identity HTTP/2 measurements now have implementation or test evidence in ACCEPTANCE.md.
+Where Vectory is heading. Order reflects priority, not promised dates. To discuss an item, open an issue.
 
-Remaining priorities are native service/reboot/upgrade and earliest-OS tests across declared targets; privileged account/ACL verification; actual container build/start and hostile-validation isolation; independent-builder reproducibility, package signing and an approved distribution namespace; complete operational rotation/disaster-recovery drills; dedicated-host sustained load with real agents/artifact rollouts; and longer outage/physical-fault exercises. A separate Vector execution principal, broader native process telemetry and macOS helper-orphan behavior after forced termination remain hardening work. Track these concrete gates rather than treating a roadmap item or prepared workflow as delivered evidence.
+## Now: 0.1 developer preview
+
+The full loop works against real Vector 0.58.0 agents: build, publish, canary, apply and roll back. See [What's new](user/whats-new.md).
+
+## Next
+
+- **Published images and packages.** Pull-and-run server images, and agent packages for apt, rpm, Homebrew and MSI, so trying Vectory takes one `docker compose up`.
+- **Signed releases.** Signed checksums for every download, verified by the server before it offers an agent.
+- **API tokens.** Scoped, revocable tokens for automation, instead of session cookies.
+- **Guided adoption.** `vectory adopt` hands a running Vector to the agent with a plan, validation and automatic rollback.
+- **Container and Kubernetes devices.** An agent image that manages Vector in the same container, and a Helm chart.
+- **Recipes.** Validated starting points for common pipelines, such as syslog to Loki or files to object storage.
+
+## Later
+
+- Single sign-on with OIDC.
+- Live throughput on the pipeline canvas.
+- Canary gates that also watch data-plane health, such as error rates.
+- Configuration drift and version reports across the fleet.
+
+## Before 1.0
+
+These gates must pass before Vectory calls itself production-ready:
+
+- Service, reboot and upgrade tests on every supported operating system, including the oldest supported versions.
+- Privileged account and access-control checks on each platform.
+- Container build and start, and validator isolation, tested on a clean host.
+- Reproducible builds from independent builders, signed packages and an approved distribution namespace.
+- Key rotation and disaster-recovery drills.
+- Sustained load with real agents on dedicated hosts, and outage and fault exercises.
+- Hardening: a separate account for Vector processes, process-level telemetry, and macOS helper cleanup after forced termination.

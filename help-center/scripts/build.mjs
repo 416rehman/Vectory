@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { build } from "astro";
 import { parse, serialize } from "parse5";
-import { prepare, helpRoot, repoRoot } from "./prepare.mjs";
+import { prepare, helpRoot, repoRoot, version } from "./prepare.mjs";
 import { checkLinks } from "./check-links.mjs";
 
 const prepared = await prepare();
@@ -65,7 +65,7 @@ for (const file of (await files(output)).filter((file) =>
 }
 await fs.writeFile(
   path.join(output, "help-manifest.json"),
-  JSON.stringify({ version: "0.1.0-dev", vector: "0.58.0", pages, markdown: prepared.markdown }, null, 2) +
+  JSON.stringify({ version: version.vectory, vector: version.vector, pages, markdown: prepared.markdown }, null, 2) +
     "\n",
 );
 await checkLinks(
@@ -73,6 +73,10 @@ await checkLinks(
   pages.map((page) => path.join(output, page)),
   path.join(repoRoot, "dashboard/src"),
   prepared.markdown,
+  {
+    legacy: JSON.parse(await fs.readFile(path.join(helpRoot, "legacy-anchors.json"), "utf8")),
+    texts: ["/help/llms.txt"],
+  },
 );
 const destination = path.resolve(repoRoot, "dashboard/dist/help");
 if (path.dirname(destination) !== path.resolve(repoRoot, "dashboard/dist"))

@@ -184,6 +184,39 @@ h3,
 .help-nav-braces {
   --help-nav-icon: url("../assets/icons/braces.svg");
 }
+.help-nav-compass {
+  --help-nav-icon: url("../assets/icons/compass.svg");
+}
+.help-nav-zap {
+  --help-nav-icon: url("../assets/icons/zap.svg");
+}
+.help-nav-plug {
+  --help-nav-icon: url("../assets/icons/plug.svg");
+}
+.help-nav-cpu {
+  --help-nav-icon: url("../assets/icons/cpu.svg");
+}
+.help-nav-settings-2 {
+  --help-nav-icon: url("../assets/icons/settings-2.svg");
+}
+.help-nav-square-terminal {
+  --help-nav-icon: url("../assets/icons/square-terminal.svg");
+}
+.help-nav-sliders-horizontal {
+  --help-nav-icon: url("../assets/icons/sliders-horizontal.svg");
+}
+.help-nav-hammer {
+  --help-nav-icon: url("../assets/icons/hammer.svg");
+}
+.help-nav-network {
+  --help-nav-icon: url("../assets/icons/network.svg");
+}
+.help-nav-sparkles {
+  --help-nav-icon: url("../assets/icons/sparkles.svg");
+}
+.help-nav-refresh-cw {
+  --help-nav-icon: url("../assets/icons/refresh-cw.svg");
+}
 .sidebar-content a.help-nav-link:hover {
   background: var(--sl-color-gray-6);
 }
@@ -438,6 +471,248 @@ vectory-page-actions {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+/* Asides: one calm card per caveat, readable in both themes. */
+.sl-markdown-content .starlight-aside {
+  border-inline-start-width: 3px;
+  border-radius: 0 6px 6px 0;
+  padding: 0.85rem 1rem;
+}
+.sl-markdown-content .starlight-aside__title {
+  font-size: 0.9rem;
+  letter-spacing: 0;
+}
+.sl-markdown-content .starlight-aside__content :is(p, li) {
+  font-size: 0.95rem;
+}
+/* Tabs and steps. */
+.sl-markdown-content starlight-tabs [role="tab"] {
+  font-size: 0.9rem;
+  padding-inline: 1rem;
+}
+.sl-markdown-content .sl-steps > li + li {
+  margin-top: 0.4rem;
+}
+/* Architecture diagram: inline SVG themed with Starlight's variables. */
+.arch {
+  margin: 1.75rem 0 1.5rem;
+}
+.arch svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--sl-font);
+}
+.arch-narrow {
+  display: none !important;
+  max-width: 26rem;
+  margin: 0 auto;
+}
+.arch-zone {
+  fill: none;
+  stroke: var(--sl-color-gray-4);
+  stroke-dasharray: 5 5;
+  rx: 12;
+}
+.arch-zone-label {
+  fill: var(--sl-color-gray-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.arch-box {
+  fill: var(--sl-color-black);
+  stroke: var(--sl-color-gray-4);
+  rx: 8;
+}
+.arch-box-accent {
+  stroke: var(--sl-color-accent);
+  stroke-width: 1.5;
+}
+.arch-box-soft {
+  fill: var(--sl-color-gray-6);
+}
+.arch-title {
+  fill: var(--sl-color-white);
+  font-size: 13px;
+  font-weight: 600;
+}
+.arch-sub,
+.arch-label {
+  fill: var(--sl-color-gray-2);
+  font-size: 11px;
+}
+.arch-label-accent {
+  fill: var(--sl-color-accent-high);
+  font-weight: 600;
+}
+.arch-flow {
+  fill: none;
+  stroke: var(--sl-color-gray-3);
+  stroke-width: 1.5;
+}
+.arch-flow-accent {
+  stroke: var(--sl-color-accent);
+  stroke-width: 2;
+}
+.arch-arrow {
+  fill: var(--sl-color-gray-3);
+}
+.arch-arrow-accent {
+  fill: var(--sl-color-accent);
+}
+.arch figcaption,
+.apply-states figcaption {
+  margin-top: 0.75rem;
+  color: var(--sl-color-gray-2);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+@media (max-width: 40rem) {
+  .arch-wide {
+    display: none !important;
+  }
+  .arch-narrow {
+    display: block !important;
+  }
+}
+/* Rollout states: a left-to-right flow, then exactly one outcome. */
+.apply-states {
+  margin: 1.5rem 0;
+}
+.apply-steps,
+.apply-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.apply-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: var(--sl-color-white);
+}
+.apply-steps li::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--sl-color-gray-3);
+}
+.apply-steps li + li::before {
+  width: 1.4rem;
+  height: 0;
+  border-radius: 0;
+  border: 0;
+  border-top: 1.5px solid var(--sl-color-gray-4);
+}
+.apply-outcomes {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+.apply-outcomes li {
+  display: grid;
+  grid-template-columns: 1rem 1fr;
+  column-gap: 0.45rem;
+  align-items: baseline;
+  align-content: start;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--sl-color-hairline);
+  border-inline-start: 3px solid var(--apply-border);
+  border-radius: 0 8px 8px 0;
+  background: var(--sl-color-gray-6);
+  font-size: 0.85rem;
+}
+.apply-outcomes strong {
+  color: var(--sl-color-white);
+}
+.apply-note {
+  grid-column: 2;
+  color: var(--sl-color-gray-2);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.apply-icon {
+  font-weight: 700;
+  color: var(--apply-fg);
+}
+.apply-ok {
+  --apply-fg: var(--sl-color-green-high);
+  --apply-border: var(--sl-color-green);
+}
+.apply-error {
+  --apply-fg: var(--sl-color-red-high);
+  --apply-border: var(--sl-color-red);
+}
+.apply-warning {
+  --apply-fg: var(--sl-color-orange-high);
+  --apply-border: var(--sl-color-orange);
+}
+/* Keep flags and paths in a table's first column on one line; wide tables
+   scroll inside the article instead. */
+.sl-markdown-content td:first-child code {
+  white-space: nowrap;
+}
+/* Stacked tables: on narrow screens, a table with three or more columns shows
+   one block per row, each value under its column's name; a two-column table
+   does the same, without names, instead of scrolling sideways. The script in
+   Footer.astro adds the class, the labels and explicit table roles. */
+@media (max-width: 40rem) {
+  .sl-markdown-content table.help-stacked-table,
+  .sl-markdown-content table.help-stacked-table :is(tbody, tr, td) {
+    display: block;
+  }
+  .sl-markdown-content table.help-stacked-table {
+    overflow: visible;
+  }
+  .sl-markdown-content table.help-stacked-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .sl-markdown-content table.help-stacked-table tr {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+  }
+  .sl-markdown-content table.help-stacked-table tr:first-child {
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+  .sl-markdown-content table.help-stacked-table td {
+    padding: 0;
+    border: 0;
+  }
+  .sl-markdown-content table.help-stacked-table td:first-child {
+    color: var(--sl-color-white);
+    font-weight: 600;
+  }
+  .sl-markdown-content table.help-stacked-table td:first-child code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .sl-markdown-content table.help-stacked-table td + td {
+    margin-top: 0.25rem;
+  }
+  .sl-markdown-content table.help-stacked-table:not([data-columns="2"]) td + td {
+    margin-top: 0.5rem;
+  }
+  .sl-markdown-content
+    table.help-stacked-table:not([data-columns="2"])
+    td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+  }
+}
 .help-footer {
   margin-top: 3rem;
 }
@@ -451,6 +726,13 @@ vectory-page-actions {
 }
 .help-footer p span {
   padding: 0 0.45rem;
+}
+.help-footer a {
+  color: inherit;
+  text-underline-offset: 3px;
+}
+.help-footer a:hover {
+  color: var(--sl-color-accent-high);
 }
 @media (max-width: 50rem) {
   :root {
