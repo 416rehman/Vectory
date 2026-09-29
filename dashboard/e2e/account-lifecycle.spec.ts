@@ -4,13 +4,20 @@ import {
   type APIRequestContext,
   type Browser,
   type BrowserContext,
+  type Locator,
   type Page,
+  type Request,
+  type Response,
 } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import crypto from "node:crypto";
 
-// Passwords, reset codes and MFA secrets must never enter traces or screenshots.
+// Passwords, reset links and MFA secrets must never enter traces or screenshots.
 test.use({ trace: "off", screenshot: "off" });
+
+// Every step here signs in, changes a password or issues a link, and each of
+// those verifies an Argon2 hash in a development build of the server.
+const afterPassword = { timeout: 20_000 };
 
 type Account = {
   id: string;
@@ -72,6 +79,12 @@ async function fixture(
     return page;
   }
   const administrator = await open(admin);
+  await expect(
+    administrator.getByRole("heading", {
+      name: "People & security",
+      exact: true,
+    }),
+  ).toBeVisible(afterPassword);
   return {
     admin,
     administrator,
@@ -116,6 +129,16 @@ async function fixture(
   };
 }
 
+const signInHeading = (page: Page) =>
+  page.getByRole("heading", { name: /^Sign in to /, level: 1 });
+const accountButton = (page: Page) =>
+  page.getByRole("button", { name: "Your account", exact: true });
+const loginResponse = (page: Page) =>
+  page.waitForResponse(
+    (r) => r.url().endsWith("/api/v1/login") && r.request().method() === "POST",
+  );
+
+/** The full-page sign-in, for a browser with no session. */
 async function login(
   page: Page,
   account: Account,
@@ -124,37 +147,57 @@ async function login(
 ) {
   await page.getByLabel("Email address", { exact: true }).fill(account.email);
   await page.getByLabel("Password", { exact: true }).fill(value);
-  const response = page.waitForResponse(
-    (r) => r.url().endsWith("/api/v1/login") && r.request().method() === "POST",
-  );
+  const response = loginResponse(page);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   expect((await response).status()).toBe(expected);
-  if (expected === 200)
-    await expect(
-      page.getByRole("button", { name: "Your account", exact: true }),
-    ).toBeVisible();
-  else
-    await expect(
-      page.getByRole("heading", { name: "Sign in", exact: true }),
-    ).toBeVisible();
+  if (expected === 200) await expect(accountButton(page)).toBeVisible();
+  else {
+    await expect(signInHeading(page)).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(
+      "That email and password don't match.",
+    );
+  }
 }
 
-async function revokedBanner(page: Page) {
-  // Cause a normal authenticated application request in an already open victim
-  // tab. A raw request probe alone would not exercise the UI's session event.
-  await page.getByRole("button", { name: "Devices", exact: true }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "Your session ended." }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Sign in again", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
-  ).toBeVisible();
+/**
+ * Cause a normal authenticated request in an already open tab. A raw request
+ * probe alone would not exercise the app's session event: the workspace stays
+ * mounted and a dialog explains why the sign-in ended.
+ */
+async function sessionEnded(page: Page, title: string) {
+  const navigation = page.getByRole("navigation", { name: "Main navigation" });
+  // Move to a page other than the current one, so the visit reads from the server.
+  for (const name of ["Devices", "Pipelines", "Overview"]) {
+    const link = navigation.getByRole("link", { name, exact: true });
+    if ((await link.getAttribute("aria-current")) === "page") continue;
+    await link.click();
+    break;
+  }
+  const dialog = page.getByRole("dialog", { name: title, exact: true });
+  await expect(dialog).toBeVisible(afterPassword);
+  return dialog;
+}
+
+/** Sign in again over the workspace, as the same person. */
+async function signInAgain(
+  dialog: Locator,
+  value: string,
+  expected = 200,
+): Promise<void> {
+  await dialog.getByLabel("Password", { exact: true }).fill(value);
+  const response = loginResponse(dialog.page());
+  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+  expect((await response).status()).toBe(expected);
+  if (expected === 200) await expect(dialog).not.toBeVisible(afterPassword);
+  else {
+    await expect(dialog).toContainText("That password didn't work.");
+    await expect(dialog).toBeVisible();
+  }
 }
 
 async function accessibleMobile(page: Page) {
+  // Scan the settled page, not a dialog that is still fading in.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 375, height: 812 });
   const width = await page.evaluate(() => ({
     viewport: innerWidth,
@@ -171,24 +214,50 @@ async function accessibleMobile(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1000 });
 }
 
-async function selectPerson(page: Page, account: Account) {
-  await page
-    .getByRole("textbox", { name: "Find a person", exact: true })
-    .fill(account.email);
+async function personRow(page: Page, account: Account) {
+  // The search box appears once the workspace has more than five people.
+  await expect(
+    page.getByRole("row").filter({ hasText: "@" }).first(),
+  ).toBeVisible(afterPassword);
+  const search = page.getByRole("textbox", {
+    name: "Find a person",
+    exact: true,
+  });
+  if (await search.count()) await search.fill(account.email);
   const row = page.getByRole("row").filter({ hasText: account.email });
   await expect(row).toBeVisible();
   return row;
 }
 
-async function issueReset(page: Page, admin: Account, target: Account) {
-  const row = await selectPerson(page, target);
-  await row.getByRole("button", { name: /^Reset password for / }).click();
-  const dialog = page.getByRole("dialog", {
-    name: "Create a password reset code",
-    exact: true,
-  });
+const editAccess = (row: Locator) =>
+  row.getByRole("button", { name: /^Edit access for / });
+const moreActions = (row: Locator) =>
+  row.getByRole("button", { name: /^More actions for / });
+
+const roleButton = (dialog: Locator) =>
+  dialog.getByRole("button", { name: "Role", exact: true });
+async function chooseRole(dialog: Locator, label: string) {
+  await roleButton(dialog).click();
   await dialog
-    .getByLabel("Your current password", { exact: true })
+    .page()
+    .getByRole("menuitemradio", { name: new RegExp(`^${label}\\b`) })
+    .click();
+}
+
+/**
+ * Issue a password reset link through the People page and return it. The link
+ * is the only place its single-use code is shown, and it works for 15 minutes.
+ */
+async function issueResetLink(page: Page, admin: Account, target: Account) {
+  const row = await personRow(page, target);
+  await moreActions(row).click();
+  await page
+    .getByRole("menuitem", { name: "Reset password", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: /^Reset .+'s password$/ });
+  await expect(dialog).toContainText("It works for 15 minutes");
+  await dialog
+    .getByLabel("Your password", { exact: true })
     .fill(admin.password);
   const response = page.waitForResponse(
     (r) =>
@@ -196,40 +265,41 @@ async function issueReset(page: Page, admin: Account, target: Account) {
       r.request().method() === "POST",
   );
   await dialog
-    .getByRole("button", { name: "Create reset code", exact: true })
+    .getByRole("button", { name: "Create reset link", exact: true })
     .click();
   const issued = await response;
   expect(issued.status()).toBe(200);
   const result = await issued.json();
-  const codeDialog = page.getByRole("dialog", { name: /^Password reset for / });
-  const code = (await codeDialog
-    .getByLabel("Password reset code", { exact: true })
-    .textContent())!.trim();
-  expect(/^[0-9a-f]{64}$/.test(code)).toBeTruthy();
-  expect(code === result.code).toBeTruthy();
+  expect(result.purpose).toBe("reset");
+  expect(/^[0-9a-f]{64}$/.test(result.code)).toBeTruthy();
   const remaining = Date.parse(result.expires_at) - Date.now();
   expect(remaining).toBeGreaterThan(14 * 60 * 1000);
   expect(remaining).toBeLessThanOrEqual(15 * 60 * 1000);
-  await codeDialog
-    .getByRole("button", { name: "I've shared the code", exact: true })
-    .click();
-  await expect(codeDialog).not.toBeVisible();
-  return code;
+  const shown = page.getByRole("dialog", { name: /^Reset link for / });
+  const link = (await shown
+    .locator('code[aria-label="reset link"]')
+    .textContent())!.trim();
+  // The code travels in the fragment, so it never reaches a server log.
+  expect(new URL(link).hash).toBe(`#/reset?code=${result.code}`);
+  await shown.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(shown).not.toBeVisible();
+  return link;
 }
 
-async function resetPublic(
+/** Open a reset link in a fresh page load, as its recipient would. */
+async function openLink(page: Page, link: string) {
+  await page.goto("about:blank");
+  await page.goto(link);
+}
+
+async function setNewPassword(
   page: Page,
-  code: string,
   next: string,
   expected = 200,
-) {
-  await page
-    .getByRole("button", { name: "Reset password", exact: true })
-    .click();
+): Promise<void> {
   await expect(
     page.getByRole("heading", { name: "Reset your password", exact: true }),
-  ).toBeVisible();
-  await page.getByLabel("Password reset code", { exact: true }).fill(code);
+  ).toBeVisible(afterPassword);
   await page.getByLabel("New password", { exact: true }).fill(next);
   await page.getByLabel("Confirm new password", { exact: true }).fill(next);
   const response = page.waitForResponse(
@@ -238,24 +308,24 @@ async function resetPublic(
       r.request().method() === "POST",
   );
   await page
-    .getByRole("button", { name: "Set new password", exact: true })
+    .getByRole("button", { name: "Save new password", exact: true })
     .click();
   expect((await response).status()).toBe(expected);
   if (expected === 200) {
     await expect(
-      page.getByRole("heading", { name: "Sign in", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("status").filter({ hasText: "Password reset." }),
+      page.getByRole("heading", { name: "Password updated", exact: true }),
     ).toBeVisible();
   } else {
-    await expect(page.getByRole("alert")).toContainText(
-      "invalid, expired or already used",
-    );
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "invalid, expired or already used" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Reset your password", exact: true }),
     ).toBeVisible();
   }
+  // A reset link proves control of the account; it never signs anyone in.
   expect((await page.request.get("/api/v1/session")).status()).toBe(401);
 }
 
@@ -284,7 +354,7 @@ test("same-browser password rotation refreshes other tabs without losing draft i
   browser,
   baseURL,
 }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(240_000);
   const f = await fixture(seed.request, browser, baseURL!);
   try {
     const account = await f.account("editor");
@@ -311,22 +381,22 @@ test("same-browser password rotation refreshes other tabs without losing draft i
     await draft.goto(`/#/configurations/${document.id}`);
     await expect(
       draft.locator('.react-flow__node[data-id="sample"]'),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
     await draft.locator('.react-flow__node[data-id="sample"]').click();
     const inspector = draft.locator(".editor-inspector");
     const rate = inspector.getByLabel("One in every", { exact: true });
+    const unapplied = draft.locator(
+      ".pipeline-save-status[data-save-state='unapplied']:visible",
+    );
     let navigations = 0;
     draft.on("framenavigated", (frame) => {
       if (frame === draft.mainFrame()) navigations++;
     });
+    const saveDraft = draft.getByRole("button", { name: "Save", exact: true });
 
     for (const [index, mode] of ["notification", "focus fallback"].entries()) {
       await rate.fill("-");
-      await expect(
-        draft.locator(
-          ".pipeline-save-status[data-save-state='unapplied']:visible",
-        ),
-      ).toContainText("Unapplied field changes");
+      await expect(unapplied).toContainText("Unapplied field changes");
       if (mode === "focus fallback") {
         // Simulate a missed/unavailable cross-tab signal. A later real focus
         // must refresh session state without unloading this pending editor.
@@ -348,7 +418,7 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       });
       const next = password();
       await dialog
-        .getByLabel("Your current password", { exact: true })
+        .getByLabel("Current password", { exact: true })
         .fill(account.password);
       await dialog.getByLabel("New password", { exact: true }).fill(next);
       await dialog
@@ -362,7 +432,7 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       await dialog
         .getByRole("button", { name: "Change password", exact: true })
         .click();
-      await expect(dialog).not.toBeVisible();
+      await expect(dialog).not.toBeVisible(afterPassword);
       account.password = next;
       if (mode === "focus fallback") {
         await draft.bringToFront();
@@ -373,11 +443,7 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       expect((await refreshed).status(), mode).toBe(200);
       await draft.bringToFront();
       await expect(rate).toHaveValue("-");
-      await expect(
-        draft.locator(
-          ".pipeline-save-status[data-save-state='unapplied']:visible",
-        ),
-      ).toContainText("Unapplied field changes");
+      await expect(unapplied).toContainText("Unapplied field changes");
       expect(navigations, mode).toBe(0);
       const stored = await draft.request
         .get(`/api/v1/configurations/${document.id}`)
@@ -385,7 +451,7 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       expect(stored.config.transforms.sample.rate).toBe(10 + index);
 
       const attempts: number[] = [];
-      const observe = (response: import("@playwright/test").Response) => {
+      const observe = (response: Response) => {
         if (
           response.url().endsWith(`/configurations/${document.id}/draft`) &&
           response.request().method() === "PUT"
@@ -400,13 +466,12 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       );
       await rate.fill(String(11 + index));
       await rate.blur();
-      await draft
-        .getByRole("button", { name: "Save draft", exact: true })
-        .click();
+      await saveDraft.click();
       expect((await saved).status(), mode).toBe(200);
       await expect(
         draft.locator(".pipeline-save-status[data-save-state='saved']:visible"),
       ).toBeVisible();
+      // One deliberate save reached the server once, with the rotated token.
       expect(attempts, mode).toEqual([200]);
       draft.off("response", observe);
       const applied = await draft.request
@@ -416,7 +481,8 @@ test("same-browser password rotation refreshes other tabs without losing draft i
     }
 
     // A different account signing in through this browser must not silently
-    // adopt another editor's pending work or replace the user shown in that tab.
+    // adopt another editor's pending work. The workspace stays as it was and a
+    // dialog asks for the original account's password.
     const other = await f.account("editor");
     await expect(rate).toBeVisible();
     await rate.fill("13");
@@ -438,27 +504,35 @@ test("same-browser password rotation refreshes other tabs without losing draft i
     const recheckedResponse = await rechecked;
     expect(recheckedResponse.status()).toBe(200);
     expect((await recheckedResponse.json()).user.id).toBe(other.id);
-    await expect(
-      draft.getByRole("alert").filter({ hasText: "Your session ended." }),
-    ).toBeVisible({ timeout: 8_000 });
+    const ended = draft.getByRole("dialog", {
+      name: "Your session ended",
+      exact: true,
+    });
+    await expect(ended).toBeVisible({ timeout: 10_000 });
+    await expect(ended).toContainText(
+      `This browser is now signed in as ${other.email} in another tab.`,
+    );
+    await expect(ended).toContainText(
+      "Your unsaved work on this page is still here.",
+    );
     await expect(rate).toHaveValue("13");
-    const attemptedSaves: string[] = [];
-    const observeAttempt = (request: import("@playwright/test").Request) => {
+
+    // While the session belongs to someone else the editor keeps the typed
+    // text but offers no Save, and nothing is sent, not even by the shortcut.
+    await expect(draft.locator("button.editor-save-button")).toHaveCount(0);
+    const sent: string[] = [];
+    const observeAttempt = (request: Request) => {
       if (
         request.url().endsWith(`/configurations/${document.id}/draft`) &&
         request.method() === "PUT"
       )
-        attemptedSaves.push(request.url());
+        sent.push(request.url());
     };
     draft.on("request", observeAttempt);
-    // The editor preserves its local field text but removes Save draft when
-    // the session belongs to a different account.
-    await expect(
-      draft.getByRole("button", { name: "Save draft", exact: true }),
-    ).toHaveCount(0);
+    await draft.keyboard.press("Control+s");
     // Give any focus-triggered automatic work a turn to issue a mutation.
-    await draft.waitForTimeout(250);
-    expect(attemptedSaves).toEqual([]);
+    await draft.waitForTimeout(500);
+    expect(sent).toEqual([]);
     draft.off("request", observeAttempt);
     await expect(rate).toHaveValue("13");
     expect(navigations).toBe(0);
@@ -466,6 +540,39 @@ test("same-browser password rotation refreshes other tabs without losing draft i
       .get(`/api/v1/configurations/${document.id}`)
       .then((response) => response.json());
     expect(unchanged.config.transforms.sample.rate).toBe(12);
+
+    // Signing in again as the original account resumes the same work: the
+    // typed value survives, the tab never reloads, and a deliberate save now
+    // reaches the server exactly once.
+    await signInAgain(ended, account.password);
+    expect((await session(draft.request)).user.id).toBe(
+      (await session(owner.request)).user.id,
+    );
+    await expect(rate).toHaveValue("13");
+    expect(navigations).toBe(0);
+    const resumed: number[] = [];
+    draft.on("response", (response) => {
+      if (
+        response.url().endsWith(`/configurations/${document.id}/draft`) &&
+        response.request().method() === "PUT"
+      )
+        resumed.push(response.status());
+    });
+    const finalSave = draft.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/configurations/${document.id}/draft`) &&
+        response.request().method() === "PUT",
+    );
+    await saveDraft.click();
+    expect((await finalSave).status()).toBe(200);
+    await expect(
+      draft.locator(".pipeline-save-status[data-save-state='saved']:visible"),
+    ).toBeVisible();
+    expect(resumed).toEqual([200]);
+    const final = await draft.request
+      .get(`/api/v1/configurations/${document.id}`)
+      .then((response) => response.json());
+    expect(final.config.transforms.sample.rate).toBe(13);
   } finally {
     await f.close();
   }
@@ -476,11 +583,15 @@ test("viewer password change and session revocation preserve the current browser
   browser,
   baseURL,
 }) => {
+  test.setTimeout(240_000);
   const f = await fixture(seed.request, browser, baseURL!);
   try {
     const account = await f.account();
     const owner = await f.open(account);
     const victim = await f.open(account);
+    await expect(
+      owner.getByRole("heading", { name: "People & security", exact: true }),
+    ).toBeVisible(afterPassword);
     await expect(
       owner.getByRole("button", { name: "Add person", exact: true }),
     ).toHaveCount(0);
@@ -494,7 +605,7 @@ test("viewer password change and session revocation preserve the current browser
     await accessibleMobile(owner);
     const next = password();
     await dialog
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Current password", { exact: true })
       .fill(password());
     await dialog.getByLabel("New password", { exact: true }).fill(next);
     await dialog.getByLabel("Confirm new password", { exact: true }).fill(next);
@@ -507,38 +618,69 @@ test("viewer password change and session revocation preserve the current browser
       .getByRole("button", { name: "Change password", exact: true })
       .click();
     expect((await rejected).status()).toBe(403);
-    await expect(dialog.getByRole("alert")).toContainText(
-      "Current password is incorrect",
+    await expect(dialog).toContainText(
+      "Your current password didn't match.",
+      afterPassword,
     );
+    // A wrong password is a rejection, not a session ending.
     await expect(
-      owner.getByText("Your session ended. Sign in again to continue.", {
-        exact: true,
-      }),
+      owner.getByRole("dialog", { name: /^Your (session|password|access)/ }),
     ).toHaveCount(0);
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     await dialog
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Current password", { exact: true })
       .fill(account.password);
     // The rejected request clears all secret inputs, including the proposed
     // password, so the retry must deliberately enter the same new value.
+    await expect(
+      dialog.getByLabel("New password", { exact: true }),
+    ).toHaveValue("");
     await dialog.getByLabel("New password", { exact: true }).fill(next);
     await dialog.getByLabel("Confirm new password", { exact: true }).fill(next);
     await dialog
       .getByRole("button", { name: "Change password", exact: true })
       .click();
-    await expect(dialog).not.toBeVisible();
+    await expect(dialog).not.toBeVisible(afterPassword);
     await expect(
       owner.getByRole("status").filter({ hasText: "Password changed." }),
     ).toBeVisible();
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
-    await revokedBanner(victim);
-    await login(victim, account, account.password, 401);
-    await login(victim, account, next);
-    account.password = next;
 
-    // The owner now needs its rotated CSRF token for a second real mutation.
-    await victim.goto("/#/users");
+    // The other tab explains why, keeps the page, and recovers with the new
+    // password only.
+    const changed = await sessionEnded(victim, "Your password was changed");
+    await expect(changed).toContainText(
+      "Your unsaved work on this page is still here.",
+    );
+    await signInAgain(changed, account.password, 401);
+    await signInAgain(changed, next);
+    account.password = next;
+    await expect(victim).toHaveURL(/#\/devices$/);
+    expect((await victim.request.get("/api/v1/session")).status()).toBe(200);
+
+    // The sessions list shows both browsers; signing one out needs no password.
+    await owner.reload();
+    const sessions = owner.getByRole("list", { name: "Your sessions" });
+    await expect(
+      sessions.getByText("This browser", { exact: true }),
+    ).toBeVisible(afterPassword);
+    const signOutOne = sessions.getByRole("button", { name: /^Sign out / });
+    await expect(signOutOne).toHaveCount(1);
+    await signOutOne.click();
+    await expect(
+      owner.getByRole("status").filter({ hasText: /^Signed out / }),
+    ).toBeVisible();
+    expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
+    expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
+    await signInAgain(
+      await sessionEnded(victim, "You were signed out from another browser"),
+      account.password,
+    );
+
+    // Signing out every other session asks for the password and leaves this
+    // browser signed in. The owner reads the list again to see the new session.
+    await owner.reload();
     await owner
       .getByRole("button", { name: "Sign out other sessions", exact: true })
       .click();
@@ -546,46 +688,71 @@ test("viewer password change and session revocation preserve the current browser
       name: "Sign out other sessions",
       exact: true,
     });
-    await revoke
-      .getByLabel("Your current password", { exact: true })
-      .fill(next);
+    await revoke.getByLabel("Current password", { exact: true }).fill(next);
     await revoke
       .getByRole("button", { name: "Sign out other sessions", exact: true })
       .click();
-    await expect(revoke).not.toBeVisible();
+    await expect(revoke).not.toBeVisible(afterPassword);
+    await expect(
+      owner
+        .getByRole("status")
+        .filter({ hasText: "Signed out of every other browser." }),
+    ).toBeVisible();
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
-    await revokedBanner(victim);
-    await login(victim, account);
+    await signInAgain(
+      await sessionEnded(victim, "You were signed out from another browser"),
+      account.password,
+    );
+    expect((await victim.request.get("/api/v1/session")).status()).toBe(200);
   } finally {
     await f.close();
   }
 });
 
-test("administrator access changes use current revisions and public password reset codes work once", async ({
+test("administrator access changes use current revisions and public password reset links work once", async ({
   page: seed,
   browser,
   baseURL,
 }) => {
+  test.setTimeout(300_000);
   const f = await fixture(seed.request, browser, baseURL!);
   try {
     const target = await f.account();
     const victim = await f.open(target);
     const admin = f.administrator;
     await admin.reload();
-    const row = await selectPerson(admin, target);
-    await row.getByRole("button", { name: /^Edit access for / }).click();
+    const row = await personRow(admin, target);
+    await editAccess(row).click();
     const edit = admin.getByRole("dialog", {
       name: "Edit workspace access",
       exact: true,
     });
+    await expect(edit).toBeVisible();
+
+    // Hold the page's own refresh of the people list at what it showed when
+    // the dialog opened, so the save below is the first to meet the new
+    // revision. The hold ends when that save is sent.
+    const before = await admin.request
+      .get("/api/v1/users")
+      .then((r) => r.json());
+    let holding = true;
+    await admin.route("**/api/v1/users", async (route) => {
+      if (holding && route.request().method() === "GET")
+        await route.fulfill({ json: before });
+      else await route.continue();
+    });
+    admin.on("request", (request) => {
+      if (
+        request.method() === "PUT" &&
+        request.url().endsWith(`/users/${target.id}`)
+      )
+        holding = false;
+    });
 
     // Another administrator's name edit must not be silently overwritten.
     const active = await session(admin.request);
-    const people = await admin.request
-      .get("/api/v1/users")
-      .then((r) => r.json());
-    const current = people.find(
+    const current = before.find(
       (person: { id: string }) => person.id === target.id,
     );
     const concurrent = await admin.request.put(`/api/v1/users/${target.id}`, {
@@ -598,93 +765,111 @@ test("administrator access changes use current revisions and public password res
     });
     expect(concurrent.status()).toBe(200);
     await edit
-      .getByLabel("Full name", { exact: true })
+      .getByLabel("Name", { exact: true })
       .fill(`Renamed ${target.name}`);
     await edit
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Your password", { exact: true })
       .fill(f.admin.password);
+    const stale = admin.waitForResponse(
+      (r) =>
+        r.request().method() === "PUT" &&
+        r.url().endsWith(`/users/${target.id}`),
+    );
     await edit
-      .getByRole("button", { name: "Save access", exact: true })
+      .getByRole("button", { name: "Save changes", exact: true })
       .click();
-    // A stale-revision response cannot prove that a sent access request did
-    // not apply. Resolve that exact request before trying the newer revision.
-    const review = admin.getByRole("dialog", {
-      name: "Access change needs review",
-      exact: true,
-    });
-    await expect(review).toBeVisible();
-    await review
-      .getByRole("button", { name: "Check request status", exact: true })
+    // The server refuses the older revision, so the rename never applied.
+    const refused = await stale;
+    expect(refused.status()).toBe(409);
+    expect((await refused.json()).error.code).toBe("STALE_REVISION");
+    await expect(edit.getByRole("alert")).toContainText(
+      "Someone else changed this account just now.",
+      afterPassword,
+    );
+    const stored = await admin.request
+      .get("/api/v1/users")
+      .then((r) => r.json());
+    expect(
+      stored.find((person: { id: string }) => person.id === target.id).name,
+    ).toBe(`Updated ${target.name}`);
+    // The dialog notices the newer revision and offers it; saving waits for it.
+    await expect(edit).toContainText("account changed while you were editing.");
+    await expect(
+      edit.getByRole("button", { name: "Save changes", exact: true }),
+    ).toBeDisabled();
+    await edit
+      .getByRole("button", { name: "Load latest", exact: true })
       .click();
-    await expect(review).toContainText("No committed result is visible yet");
-    await review
-      .getByRole("button", { name: "Cancel this request", exact: true })
-      .click();
-    await expect(review).toContainText("This request cannot apply now");
-    await review
-      .getByRole("button", { name: "Finish review", exact: true })
-      .click();
-    await expect(review).not.toBeVisible();
-    await row.getByRole("button", { name: /^Edit access for / }).click();
-    await expect(edit.getByLabel("Full name", { exact: true })).toHaveValue(
+    await expect(edit.getByLabel("Name", { exact: true })).toHaveValue(
       `Updated ${target.name}`,
     );
     const renamed = `Renamed ${target.name}`;
-    await edit.getByLabel("Full name", { exact: true }).fill(renamed);
-    await edit.getByRole("button", { name: "Role", exact: true }).click();
-    await admin
-      .getByRole("menuitemradio", { name: "Editor", exact: true })
-      .click();
+    await edit.getByLabel("Name", { exact: true }).fill(renamed);
+    await chooseRole(edit, "Editor");
+    await expect(edit).toContainText("Change the role from Viewer to Editor");
+    await expect(edit).toContainText("out of every browser");
     await edit
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Your password", { exact: true })
       .fill(f.admin.password);
     await edit
-      .getByRole("button", { name: "Save access", exact: true })
+      .getByRole("button", { name: "Save changes", exact: true })
       .click();
-    await expect(edit).not.toBeVisible();
+    await expect(edit).not.toBeVisible(afterPassword);
     await expect(row).toContainText("Editor");
+    await expect(row).toContainText(renamed);
     target.name = renamed;
-    await revokedBanner(victim);
-    await login(victim, target);
+
+    // The signed-in tab of the person whose access changed says so and
+    // recovers with the same password.
+    const changed = await sessionEnded(victim, "Your access changed");
+    await signInAgain(changed, target.password);
     await victim.goto("/#/users");
-    await row.getByRole("button", { name: /^Edit access for / }).click();
+
+    // Turning off sign-in ends their sessions and refuses their password.
+    await editAccess(row).click();
+    await edit.getByLabel("Sign-in", { exact: true }).selectOption("disabled");
+    await expect(edit).toContainText("Turn off sign-in");
     await edit
-      .getByLabel("Workspace access", { exact: true })
-      .selectOption("disabled");
-    await edit
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Your password", { exact: true })
       .fill(f.admin.password);
     await edit
-      .getByRole("button", { name: "Save access", exact: true })
+      .getByRole("button", { name: "Save changes", exact: true })
       .click();
-    await expect(edit).not.toBeVisible();
+    await expect(edit).not.toBeVisible(afterPassword);
     await expect(row.getByText("Disabled", { exact: true })).toBeVisible();
-    await expect(
-      row.getByRole("button", { name: /^Reset password for / }),
-    ).toHaveCount(0);
-    await revokedBanner(victim);
-    await login(victim, target, target.password, 401);
-    await row.getByRole("button", { name: /^Edit access for / }).click();
+    // A disabled account has no link to hand out.
+    await expect(moreActions(row)).toHaveCount(0);
+    const disabled = await sessionEnded(victim, "Your access changed");
+    await signInAgain(disabled, target.password, 401);
+
+    // Turning it back on lets them in again.
+    await editAccess(row).click();
+    await edit.getByLabel("Sign-in", { exact: true }).selectOption("active");
     await edit
-      .getByLabel("Workspace access", { exact: true })
-      .selectOption("active");
-    await edit
-      .getByLabel("Your current password", { exact: true })
+      .getByLabel("Your password", { exact: true })
       .fill(f.admin.password);
     await edit
-      .getByRole("button", { name: "Save access", exact: true })
+      .getByRole("button", { name: "Save changes", exact: true })
       .click();
-    await expect(edit).not.toBeVisible();
+    await expect(edit).not.toBeVisible(afterPassword);
     await expect(row.getByText("Active", { exact: true })).toBeVisible();
-    await login(victim, target);
-    const code = await issueReset(admin, f.admin, target);
-    // Issuance alone changes neither the password nor an existing session.
+    await signInAgain(disabled, target.password);
+
+    // A reset link changes nothing until its recipient uses it, once.
+    const link = await issueResetLink(admin, f.admin, target);
+    await victim.goto("/#/users");
+    await expect(
+      victim.getByRole("heading", { name: "People & security", exact: true }),
+    ).toBeVisible(afterPassword);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(200);
     const publicPage = await f.open();
     const next = password();
-    await resetPublic(publicPage, code, next);
+    await openLink(publicPage, link);
+    await setNewPassword(publicPage, next);
+    // Using it signs the person out everywhere.
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
-    await resetPublic(publicPage, code, password(), 401);
+    await openLink(publicPage, link);
+    await setNewPassword(publicPage, password(), 401);
     await publicPage
       .getByRole("button", { name: "Back to sign in", exact: true })
       .click();
@@ -700,6 +885,7 @@ test("administrator password reset keeps MFA required and does not authenticate 
   browser,
   baseURL,
 }) => {
+  test.setTimeout(240_000);
   const f = await fixture(seed.request, browser, baseURL!);
   try {
     const target = await f.account();
@@ -730,16 +916,30 @@ test("administrator password reset keeps MFA required and does not authenticate 
       401,
     );
     await f.administrator.reload();
-    const code = await issueReset(f.administrator, f.admin, target);
-    await publicPage
-      .getByRole("button", { name: "Reset password", exact: true })
+    // The person's row says two-factor is on, and the reset says it stays on.
+    const row = await personRow(f.administrator, target);
+    await expect(row).toContainText("On");
+    await moreActions(row).click();
+    await expect(
+      f.administrator.getByRole("menuitem", {
+        name: "Reset two-factor",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await f.administrator.keyboard.press("Escape");
+    await moreActions(row).click();
+    await f.administrator
+      .getByRole("menuitem", { name: "Reset password", exact: true })
       .click();
+    await expect(
+      f.administrator.getByRole("dialog", { name: /^Reset .+'s password$/ }),
+    ).toContainText("Two-factor stays on.");
+    await f.administrator.keyboard.press("Escape");
+    const link = await issueResetLink(f.administrator, f.admin, target);
+    await openLink(publicPage, link);
     await accessibleMobile(publicPage);
-    await publicPage
-      .getByRole("button", { name: "Back to sign in", exact: true })
-      .click();
     const next = password();
-    await resetPublic(publicPage, code, next);
+    await setNewPassword(publicPage, next);
     const invalidated = await publicPage.request.post("/api/v1/login/mfa", {
       data: {
         challenge_token: oldChallenge.challenge_token,
@@ -748,12 +948,12 @@ test("administrator password reset keeps MFA required and does not authenticate 
     });
     expect(invalidated.status()).toBe(401);
     expect((await invalidated.json()).error.code).toBe("MFA_CHALLENGE_EXPIRED");
+    await publicPage
+      .getByRole("button", { name: "Sign in", exact: true })
+      .click();
     await login(publicPage, target, target.password, 401);
     await publicPage.getByLabel("Password", { exact: true }).fill(next);
-    const challengeResponse = publicPage.waitForResponse(
-      (r) =>
-        r.url().endsWith("/api/v1/login") && r.request().method() === "POST",
-    );
+    const challengeResponse = loginResponse(publicPage);
     await publicPage
       .getByRole("button", { name: "Sign in", exact: true })
       .click();
@@ -765,7 +965,7 @@ test("administrator password reset keeps MFA required and does not authenticate 
     expect(challenge).not.toHaveProperty("csrf_token");
     await expect(
       publicPage.getByRole("heading", {
-        name: "Verify your identity",
+        name: "Two-factor authentication",
         exact: true,
       }),
     ).toBeVisible();
@@ -780,7 +980,7 @@ test("administrator password reset keeps MFA required and does not authenticate 
     );
     await accessibleMobile(publicPage);
     await publicPage
-      .getByRole("button", { name: "Use a recovery code instead", exact: true })
+      .getByRole("button", { name: "Use a recovery code", exact: true })
       .click();
     await publicPage
       .getByLabel("Recovery code", { exact: true })
@@ -791,7 +991,7 @@ test("administrator password reset keeps MFA required and does not authenticate 
         r.request().method() === "POST",
     );
     await publicPage
-      .getByRole("button", { name: "Verify and sign in", exact: true })
+      .getByRole("button", { name: "Verify", exact: true })
       .click();
     const verified = await verifiedResponse;
     expect(verified.status()).toBe(200);
@@ -799,9 +999,7 @@ test("administrator password reset keeps MFA required and does not authenticate 
       "challenge_token",
       "recovery_code",
     ]);
-    await expect(
-      publicPage.getByRole("button", { name: "Your account", exact: true }),
-    ).toBeVisible();
+    await expect(accountButton(publicPage)).toBeVisible();
     expect(
       (await publicPage.request.get("/api/v1/mfa").then((r) => r.json()))
         .enabled,
