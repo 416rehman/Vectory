@@ -204,13 +204,19 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
         let log = log_for(logs, id);
         if kind == Some("sink") {
             if let Some(errors) = errors {
+                // Recovery needs evidence. A stuck sink backs off and stops
+                // counting errors, and Vector's exporter drops series that
+                // haven't changed for a minute, so its buffer gauge vanishes:
+                // neither silence nor a full buffer is recovery. Only a
+                // buffer seen low, or events actually sent, is.
+                let sending = c["events_per_second"]
+                    .as_f64()
+                    .is_some_and(|rate| rate > 0.0);
                 let verdict = if errors >= SINK_ERRORS_PER_MINUTE {
                     Verdict::Bad
-                } else if fill.is_none_or(|f| f < BUFFER_CLEAR) {
+                } else if fill.map_or(sending, |f| f < BUFFER_CLEAR) {
                     Verdict::Good
                 } else {
-                    // A stuck sink backs off and stops counting errors while
-                    // its buffer stays full; that is not recovery.
                     Verdict::Hold
                 };
                 let described = if type_name.is_empty() {
@@ -676,6 +682,37 @@ mod tests {
         assert_eq!(verdict(&found, SINK_ERRORS), Verdict::Hold);
         assert_eq!(verdict(&found, BUFFER), Verdict::Bad);
         assert_eq!(verdict(&found, STALLED), Verdict::Bad);
+    }
+
+    #[test]
+    fn a_sink_that_stopped_reporting_is_not_recovered_without_evidence() {
+        // Vector's exporter drops series that haven't changed for a minute,
+        // so a stuck sink loses its buffer gauge and its error counter. That
+        // silence is not recovery: only an observed low buffer or events
+        // actually sent are.
+        let silent = json!({"id":"out","kind":"sink","type":"http","errors_per_minute":0.0,"dropped_per_minute":0.0});
+        let sample = json!({"events_per_second":5.0,"events_out_per_second":0.0,"components":[silent.clone()]});
+        assert_eq!(
+            verdict(&assess(&sample, &Map::new(), &[]), SINK_ERRORS),
+            Verdict::Hold
+        );
+        let mut sending = silent.clone();
+        sending["events_per_second"] = json!(2.5);
+        let sample =
+            json!({"events_per_second":5.0,"events_out_per_second":2.5,"components":[sending]});
+        assert_eq!(
+            verdict(&assess(&sample, &Map::new(), &[]), SINK_ERRORS),
+            Verdict::Good
+        );
+        // A known, high buffer stays a hold even while events trickle out.
+        let mut full = silent;
+        full["events_per_second"] = json!(0.1);
+        full["buffer_utilization"] = json!(0.9);
+        let sample = json!({"components":[full]});
+        assert_eq!(
+            verdict(&assess(&sample, &Map::new(), &[]), SINK_ERRORS),
+            Verdict::Hold
+        );
     }
 
     #[test]
