@@ -31,6 +31,11 @@ const server = await createServer({
   plugins: [
     {
       name: "synthetic-enrollment-connection",
+      // `proxy: {}` merges into vite.config.ts's /api proxy instead of
+      // replacing it; drop it so no request can leave the fixture.
+      config(config) {
+        delete config.server.proxy;
+      },
       resolveId(id) {
         if (id === "virtual:enrollment-connection-fixture") return virtual;
       },
