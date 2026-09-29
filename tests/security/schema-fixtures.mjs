@@ -302,10 +302,12 @@ const report = {
     "The three expected upstream schema inconsistencies are recorded explicitly; accepting the schema does not imply complete native validation.",
   ],
 };
-await fs.writeFile(
-  path.join(root, "docs/evidence/schema-fixtures.json"),
-  JSON.stringify(report, null, 2) + "\n",
+const output = path.resolve(
+  process.env.VECTORY_SCHEMA_FIXTURES_EVIDENCE ||
+    path.join(root, "docs/evidence/schema-fixtures.json"),
 );
+await fs.mkdir(path.dirname(output), { recursive: true });
+await fs.writeFile(output, JSON.stringify(report, null, 2) + "\n");
 console.log(
   JSON.stringify({
     schema_probes: results.length,

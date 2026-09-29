@@ -98,6 +98,7 @@ const device = {
 };
 const results = [],
   accessibility = [],
+  scrolling = [],
   calls = [],
   errors = [],
   unexpected = [];
@@ -390,11 +391,12 @@ try {
                     : "Component metrics table",
                 exact: true,
               });
-              // A region is a keyboard stop only while it scrolls sideways; one
-              // that fits has nothing to scroll and no tab stop.
+              // Only a region that actually scrolls sideways is a keyboard
+              // stop; one that fits has nothing to scroll and no tab stop.
               const scrolls = await region.evaluate(
                 (node) => node.scrollWidth > node.clientWidth + 1,
               );
+              scrolling.push({ view, width, scrolls });
               if (scrolls) {
                 await expect(region).toHaveAttribute("tabindex", "0");
                 await region.focus();
@@ -416,6 +418,8 @@ try {
       }
     },
   );
+  // The keyboard path was exercised, not only the absence of a tab stop.
+  expect(scrolling.some((entry) => entry.scrolls)).toBe(true);
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   const hashes = {};
@@ -438,6 +442,7 @@ try {
           "Actual account and telemetry components with synthetic local fixtures; no real accounts or device mutation",
         results,
         accessibility,
+        scrolling,
         calls,
         errors,
         unexpected,

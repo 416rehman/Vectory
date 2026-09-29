@@ -28,6 +28,13 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 - **Metrics endpoint:** `vectory configure-metrics` and `--clear-metrics-url` were added. Earlier builds could only set a URL with `install --metrics-url`.
 - **Replaced Vector binaries** can be approved with `vectory re-adopt --expected-sha256`. Earlier builds had no approval path.
 
+- **Restricted mode matches VRL calls, not substrings.** A metric named `http_requests_total`, a filter on `"http_request"` or a step called `http_requests` no longer needs Full Vector mode. The agent, the server and the dashboard decide from one list, and it now includes the functions that read a file (`validate_json_schema`, `parse_proto`, `encode_proto`).
+- **`remap.file` is refused in restricted mode** like `files`, and an HTTP route's `path` is no longer judged as a file path. A refusal never suggests `/` as a file root.
+- **Delivery health no longer fails an assignment.** A device that stops delivering pauses a persistent assignment (reason "data plane") instead of failing it, so the assignment keeps following its group and resumes when you do.
+- **Tests Vector refuses to run are failures.** A misspelled test setting, an unknown step or a test with no expected output shows Vector's reason, and the tests it did not run are marked **Not run**, instead of "0 of 0 tests passed".
+- **The documentation page's recovery screen** shows **Reload page** at once for a signed-out visitor; it used to appear after five seconds.
+- **The installer's dry run** plans for the directory you chose with `--install-dir`.
+
 ### Documentation
 
 - The Help center was reorganized around tasks: a quickstart, installing the server, connecting a device and deploying a first pipeline come first, followed by a security model and references for the agent CLI, server configuration, `vectory-admin` and ports.

@@ -440,8 +440,9 @@ async function axe(label) {
 async function blankPoint() {
   return page.locator(".react-flow").evaluate((element) => {
     const r = element.getBoundingClientRect();
+    // On a phone an open menu spans the width; the strips at the edges stay canvas.
     for (const dy of [0.75, 0.65, 0.55, 0.35, 0.25, 0.85])
-      for (const dx of [0.72, 0.84, 0.55, 0.4, 0.2]) {
+      for (const dx of [0.72, 0.84, 0.55, 0.4, 0.2, 0.008, 0.99]) {
         const x = r.x + r.width * dx,
           y = r.y + r.height * dy;
         if (

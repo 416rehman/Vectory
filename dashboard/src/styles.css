@@ -380,7 +380,10 @@ details[open] > summary {
 .app-loading {
   min-height: 100dvh;
 }
-.app-loading .button {
+/* Only the loading screen's own Retry button waits five seconds. The public
+   documentation page also sits in .app-loading, and its recovery page must
+   show Reload page at once. */
+.app-loading > .button {
   animation: reveal-late var(--dur-base) var(--ease) 5s both;
 }
 @keyframes reveal-late {

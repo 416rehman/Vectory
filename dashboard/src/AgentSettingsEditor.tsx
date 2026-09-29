@@ -6,7 +6,7 @@ import {
   type SavedPolicyListItem,
 } from "./api";
 import { Button, ErrorBox, Field, Modal } from "./ui";
-import { devicesText, policySummary } from "./deploymentReview";
+import { devicesText, policySummary } from "./deploymentReviewModel";
 import "./agent-settings.css";
 
 /**

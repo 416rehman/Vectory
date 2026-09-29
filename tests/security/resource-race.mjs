@@ -91,7 +91,9 @@ try {
   assert.equal(await page.evaluate(() => window.fixture.pending.length), 7);
   assert.deepEqual(errors, []);
   const evidence = {timestamp:new Date().toISOString(),passed:true,scope:'Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data',checks:['initial load','newest same-path response wins over delayed error','path change hides prior data','late old-path response cannot overwrite new resource','null path resets data and stops polling','unmount invalidates pending work and disables saved reload/poll']};
-  await fs.writeFile(path.join(root, 'docs/evidence/resource-race.json'), JSON.stringify(evidence,null,2)+'\n');
+  const file = path.resolve(process.env.VECTORY_RESOURCE_RACE_EVIDENCE || path.join(root, 'docs/evidence/resource-race.json'));
+  await fs.mkdir(path.dirname(file), {recursive:true});
+  await fs.writeFile(file, JSON.stringify(evidence,null,2)+'\n');
   console.log(JSON.stringify(evidence,null,2));
 } finally {
   await browser?.close();

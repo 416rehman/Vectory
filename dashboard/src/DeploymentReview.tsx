@@ -12,7 +12,7 @@ import {
   type ConflictRow,
   type ReleaseErrors,
   type ReleaseSettings,
-} from "./deploymentReview";
+} from "./deploymentReviewModel";
 import "./deployment-rollout.css";
 import "./target-dialog.css";
 

@@ -1,5 +1,5 @@
 import type { GroupMembershipPreview, GroupMembershipState } from "./api";
-import { assignmentName, policySummary } from "./deploymentReview";
+import { assignmentName, policySummary } from "./deploymentReviewModel";
 
 type Part = GroupMembershipPreview["devices"][number]["configuration"];
 
