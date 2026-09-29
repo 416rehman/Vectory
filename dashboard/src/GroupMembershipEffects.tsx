@@ -7,7 +7,11 @@ import {
   type GroupMembershipPreview,
 } from "./api";
 import { Spinner } from "./ui";
-import { membershipSentence } from "./groupMembership";
+import {
+  membershipSentence,
+  previewBusy,
+  previewWithRetries,
+} from "./groupMembership";
 
 /**
  * What saving this membership edit would change on each added or removed
@@ -37,24 +41,33 @@ export default function GroupMembershipEffects({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const result = await withRequestDeadline(
-          (signal) =>
-            api<GroupMembershipPreview>("/groups/membership-preview", {
-              method: "POST",
-              body: JSON.stringify({
-                group_id: group.id,
-                device_ids: ids,
-                revision: group.revision,
-              }),
-              signal,
-            }),
-          30000,
+        // A busy server is asked again a second later, quietly: the
+        // spinner stays until it answers or stays busy a few times.
+        const result = await previewWithRetries(
+          () =>
+            withRequestDeadline(
+              (signal) =>
+                api<GroupMembershipPreview>("/groups/membership-preview", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    group_id: group.id,
+                    device_ids: ids,
+                    revision: group.revision,
+                  }),
+                  signal,
+                }),
+              30000,
+              controller.signal,
+            ),
           controller.signal,
         );
         if (!controller.signal.aborted && result.group_id === group.id)
           setPreview(result);
       } catch (e) {
-        if (!controller.signal.aborted) setError((e as Error).message);
+        if (!controller.signal.aborted)
+          setError(
+            previewBusy(e) ? "the server is busy" : (e as Error).message,
+          );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
