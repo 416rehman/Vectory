@@ -104,6 +104,7 @@ fn saved_settings_query(single: bool) -> String {
         "WITH {APPLIED} SELECT json_object('id',p.id,'name',json_extract(p.data,'$.name'),'policy',json_extract(p.data,'$.policy'),'created_at',json_extract(p.data,'$.created_at'),\
          'updated_at',json_extract(p.data,'$.updated_at'),'revision',COALESCE(json_extract(p.data,'$.revision'),0),\
          'applied_device_count',(SELECT count(*) FROM applied a WHERE {APPLIED_MATCH}),\
+         'outdated_device_count',(SELECT count(*) FROM applied a WHERE a.policy_id=p.id AND NOT (a.heartbeat IS json_extract(p.data,'$.policy.heartbeat_seconds') AND a.paused IS json_extract(p.data,'$.policy.sync_paused') AND a.telemetry IS json_extract(p.data,'$.policy.telemetry_enabled'))),\
          'applied_devices',json(COALESCE((SELECT json_group_array(json_object('id',x.device_id,'name',x.device_name)) FROM (SELECT a.device_id,a.device_name FROM applied a WHERE {APPLIED_MATCH} ORDER BY a.device_name COLLATE NOCASE,a.device_id LIMIT 20) x),'[]'))) \
          FROM records p WHERE p.kind='policy'{} ORDER BY p.created_at DESC,p.id",
         if single { " AND p.id=?" } else { "" }

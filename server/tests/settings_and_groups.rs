@@ -212,6 +212,10 @@ async fn saved_settings_report_where_they_are_applied_and_edits_use_revisions() 
     let (status, detail) = call(&f, "GET", &format!("/api/v1/policies/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["name"], "Fast check-ins");
+    // Devices still follow the template, now with earlier values.
+    assert_eq!(detail["applied_device_count"], 2);
+    assert_eq!(detail["outdated_device_count"], 2);
+    assert_eq!(saved["outdated_device_count"], 0);
     // The existing receipt shape still recovers keyed creation.
     let (status, _) = call(&f, "GET", &format!("/api/v1/policies/{}", db::id()), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

@@ -481,3 +481,83 @@ async fn a_new_version_prefills_the_values_each_device_already_uses() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn a_retry_resends_the_same_device_artifact_under_the_new_generation() {
+    let f = fixture(1).await;
+    let device = &f.devices[0];
+    let config = json!({"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"],"buffer":{"max_events":500}}}});
+    let variables =
+        json!([{"name":"max_events","path":"/sinks/out/buffer/max_events","type":"integer"}]);
+    let version = db::id();
+    let artifact = format!("{config}\n");
+    {
+        let mut conn = f.state.pool.acquire().await.unwrap();
+        db::insert(&mut conn,"version",&json!({"id":version,"configuration_id":f.pipeline,"number":1,"config":config,"variables":variables,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    }
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let mut create = request(std::slice::from_ref(device), &version, 100, false);
+    create["variable_bindings"] = json!({"defaults":{"max_events":700},"devices":{}});
+    rollout::create(&mut tx, &create, "operator").await.unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.apply_state','failed') WHERE id=?")
+        .bind(device)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let artifact_for = |generation: i64| {
+        let pool = f.state.pool.clone();
+        let device = device.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT sha256 FROM desired_artifacts WHERE device_id=? AND generation=?",
+            )
+            .bind(device)
+            .bind(generation)
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let first = artifact_for(1).await.expect("released artifact");
+
+    let (status, body) = post(
+        &f,
+        &format!("/api/v1/devices/{device}/retry"),
+        json!({"expected_version_id":version,"expected_generation":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["desired_generation"], 2);
+    // The agent's next check-in finds the same rendered artifact, not a gap.
+    assert_eq!(artifact_for(2).await.as_deref(), Some(first.as_str()));
+
+    // An earlier server's retry raised the generation without the artifact.
+    sqlx::query("UPDATE devices SET desired_generation=3 WHERE id=?")
+        .bind(device)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assert!(artifact_for(3).await.is_none());
+    // The next release still records the exact prior artifact, and repairs it.
+    let next = db::id();
+    {
+        let mut conn = f.state.pool.acquire().await.unwrap();
+        db::insert(&mut conn,"version",&json!({"id":next,"configuration_id":f.pipeline,"number":2,"config":config,"variables":variables,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+    }
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let mut create = request(std::slice::from_ref(device), &next, 200, false);
+    create["variable_bindings"] = json!({"defaults":{"max_events":900},"devices":{}});
+    let created = rollout::create(&mut tx, &create, "operator").await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(artifact_for(3).await.as_deref(), Some(first.as_str()));
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT previous_artifact_sha256 FROM deployment_targets WHERE deployment_id=? AND device_id=?",
+    )
+    .bind(created["id"].as_str().unwrap())
+    .bind(device)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(previous.as_deref(), Some(first.as_str()));
+}
