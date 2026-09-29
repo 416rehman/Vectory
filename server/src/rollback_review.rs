@@ -153,7 +153,7 @@ pub(crate) async fn preview(db: &mut SqliteConnection, source: &str) -> Result<V
         ));
     }
     if unknown_previous {
-        blockers.push(blocker("PRIOR_VERSION_UNKNOWN","At least one eligible identity has no recorded prior version. Review those devices individually before creating a deployment."));
+        blockers.push(blocker("PRIOR_VERSION_UNKNOWN","These devices ran their local config before this deployment, so there is no earlier version to roll back to. Remove this assignment to stop managing them; they keep the config they run now."));
     }
     if invalid_prior_association {
         blockers.push(blocker("PRIOR_ARTIFACT_MISMATCH","The recorded prior artifact no longer matches its target and generation. Preserve history and create a separately reviewed deployment."));

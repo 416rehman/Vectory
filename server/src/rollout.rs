@@ -71,20 +71,105 @@ async fn select_impl(
     }
     Ok(selected)
 }
+/// Seconds an agent may currently take between check-ins. Until it acknowledges
+/// the current policy it may still use the interval it had before, so the larger
+/// of the two decides whether it is late. Never trust a shortened interval early.
+pub(crate) fn check_in_seconds(policy: &Value, data: &Value, policy_generation: i64) -> i64 {
+    let current = policy["heartbeat_seconds"]
+        .as_i64()
+        .unwrap_or(60)
+        .clamp(10, 3600);
+    let acknowledged = data["policy_generation"]
+        .as_i64()
+        .is_some_and(|reported| reported >= policy_generation);
+    if acknowledged {
+        current
+    } else {
+        current.max(
+            data["heartbeat_floor_seconds"]
+                .as_i64()
+                .unwrap_or(60)
+                .clamp(10, 3600),
+        )
+    }
+}
+/// A device is late after three missed check-ins. A device that has never
+/// checked in is not late: it is waiting for its first check-in.
+pub(crate) fn checked_in_recently(last_seen: Option<&str>, interval: i64) -> bool {
+    last_seen
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| {
+            let age = Utc::now().signed_duration_since(at).num_seconds();
+            age <= interval * 3
+        })
+}
+// Display metadata for every assignment and version that the device list
+// references, read in two statements instead of one lookup per device.
+async fn projection_metadata(
+    db: &mut SqliteConnection,
+) -> Result<(
+    std::collections::HashMap<String, Value>,
+    std::collections::HashMap<String, Value>,
+)> {
+    let assignments: Vec<(String, String)> = sqlx::query_as(
+        "SELECT r.id,json_object('priority',json_extract(r.data,'$.priority'),'target_mode',json_extract(r.data,'$.target_mode'),'status',json_extract(r.data,'$.status'),\
+         'name',CASE WHEN json_type(r.data,'$.name')='text' THEN substr(json_extract(r.data,'$.name'),1,120) END,\
+         'version_id',CASE WHEN json_type(r.data,'$.version_id')='text' THEN json_extract(r.data,'$.version_id') END,\
+         'policy_id',CASE WHEN json_type(r.data,'$.policy_id')='text' THEN json_extract(r.data,'$.policy_id') END,\
+         'policy_name',(SELECT substr(json_extract(p.data,'$.name'),1,120) FROM records p WHERE p.kind='policy' AND p.id=json_extract(r.data,'$.policy_id')),\
+         'created_at',r.created_at,\
+         'created_by_name',(SELECT substr(u.name,1,120) FROM users u WHERE u.id=COALESCE(json_extract(r.data,'$.created_by'),(SELECT json_extract(a.data,'$.actor') FROM records a WHERE a.kind='audit' AND json_extract(a.data,'$.target')=r.id AND json_extract(a.data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1))))\
+         FROM records r WHERE r.kind='deployment' AND r.id IN (SELECT assignment_id FROM devices WHERE assignment_id IS NOT NULL UNION SELECT policy_assignment_id FROM devices WHERE policy_assignment_id IS NOT NULL)",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let versions: Vec<(String, String)> = sqlx::query_as(
+        "SELECT v.id,json_object('sha256',json_extract(v.data,'$.sha256'),'uses_local_secrets',json(CASE WHEN json_extract(v.data,'$.uses_local_secrets')=1 THEN 'true' ELSE 'false' END),\
+         'number',CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END,\
+         'configuration_id',json_extract(v.data,'$.configuration_id'),\
+         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END)\
+         FROM records v LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')\
+         WHERE v.kind='version' AND v.id IN (SELECT desired_version_id FROM devices WHERE desired_version_id IS NOT NULL UNION SELECT json_extract(data,'$.verified_configuration_attempt.version_id') FROM devices WHERE json_type(data,'$.verified_configuration_attempt.version_id')='text')",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let parse = |rows: Vec<(String, String)>| {
+        rows.into_iter()
+            .map(|(id, value)| Ok((id, db::parse(&value)?)))
+            .collect::<Result<std::collections::HashMap<_, _>>>()
+    };
+    Ok((parse(assignments)?, parse(versions)?))
+}
+fn version_label(versions: &std::collections::HashMap<String, Value>, id: &str) -> Value {
+    let version = versions.get(id);
+    json!({"id":id,"number":version.map(|v| v["number"].clone()),"configuration_id":version.map(|v| v["configuration_id"].clone()),"configuration_name":version.map(|v| v["configuration_name"].clone())})
+}
 pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
     let rows = sqlx::query("SELECT * FROM devices ORDER BY name")
         .fetch_all(&mut *db)
         .await?;
+    let (assignments, versions) = projection_metadata(db).await?;
     let mut out = Vec::new();
-    let mut version_evidence = std::collections::HashMap::<String, (String, bool)>::new();
     for row in rows {
         let mut d = db::parse(row.get("data"))?;
+        // The last verified candidate is what the host runs, even after a
+        // later failure restored it or the assignment was removed.
+        let running = d["verified_configuration_attempt"].clone();
+        d["running_version"] = match running["version_id"].as_str() {
+            Some(id) => {
+                let mut label = version_label(&versions, id);
+                label["generation"] = running["generation"].clone();
+                label
+            }
+            None => Value::Null,
+        };
         d.as_object_mut()
             .unwrap()
             .remove("verified_configuration_attempt");
         d.as_object_mut()
             .unwrap()
             .remove("terminal_configuration_attempt");
+        d.as_object_mut().unwrap().remove("heartbeat_floor_seconds");
         d["retry_preconditions"] = json!(true);
         if d["configuration_mode"] != "full" {
             d["configuration_mode"] = json!("restricted");
@@ -107,22 +192,26 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
             d["apply_state"] = json!("desired");
         }
         let policy = db::parse(row.get("policy"))?;
+        let interval = check_in_seconds(&policy, &d, row.get("policy_generation"));
         d["effective_policy"] = policy.clone();
         d["sync_paused"] = policy["sync_paused"].clone();
+        d["check_in_seconds"] = json!(interval);
+        d["desired_version"] = match d["desired_version_id"].as_str() {
+            Some(id) => version_label(&versions, id),
+            None => Value::Null,
+        };
         let revoked: bool = row.get("revoked");
         let mut verified_current = false;
         if d["apply_state"] == "verified_applied"
             && d["reported_generation"] == d["desired_generation"]
         {
-            if let Some(version) = d["desired_version_id"].as_str() {
-                if !version_evidence.contains_key(version) {
-                    if let Some(metadata)=sqlx::query("SELECT json_extract(data,'$.sha256') AS sha256,json_extract(data,'$.uses_local_secrets') AS uses_local_secrets FROM records WHERE kind='version' AND id=?").bind(version).fetch_optional(&mut *db).await?{
-                        version_evidence.insert(version.to_owned(),(metadata.get("sha256"),metadata.get::<Option<bool>,_>("uses_local_secrets").unwrap_or(false)));
-                    }
-                }
-                if let Some((sha, uses_local_secrets)) = version_evidence.get(version) {
+            if let Some(metadata) = d["desired_version_id"]
+                .as_str()
+                .and_then(|version| versions.get(version))
+            {
+                if let Some(sha) = metadata["sha256"].as_str() {
                     let expected_sha = d["desired_artifact_sha256"].as_str().unwrap_or(sha);
-                    verified_current = if *uses_local_secrets {
+                    verified_current = if metadata["uses_local_secrets"] == true {
                         d["applied_template_sha256"].as_str() == Some(expected_sha)
                             && d["actual_sha256"].as_str().is_some_and(|actual| {
                                 actual.len() == 64
@@ -135,15 +224,12 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
                 }
             }
         }
-        let online = d["last_seen"]
-            .as_str()
-            .and_then(|x| DateTime::parse_from_rfc3339(x).ok())
-            .is_some_and(|at| {
-                Utc::now().signed_duration_since(at).num_seconds()
-                    <= policy["heartbeat_seconds"].as_i64().unwrap_or(60) * 3
-            });
+        let never_seen = d["last_seen"].as_str().is_none();
+        let online = checked_in_recently(d["last_seen"].as_str(), interval);
         d["status"] = json!(if revoked {
             "revoked"
+        } else if never_seen {
+            "awaiting_first_check_in"
         } else if !online {
             "offline"
         } else if policy["sync_paused"] == true || d["local_paused"] == true {
@@ -166,8 +252,15 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         ] {
             d.as_object_mut().unwrap().remove(field);
             if let Some(assignment) = row.get::<Option<String>, _>(column) {
-                if let Ok(a) = db::record(db, "deployment", &assignment).await {
-                    d[field] = json!({"id":assignment,"priority":a["priority"],"reason":format!("{} assignment; current resolved {}",text(&a,"target_mode"),kind(&a))});
+                if let Some(a) = assignments.get(&assignment) {
+                    let resource = if a["version_id"].is_string() {
+                        "configuration"
+                    } else {
+                        "policy"
+                    };
+                    d[field] = json!({"id":assignment,"priority":a["priority"],"reason":format!("{} assignment; current resolved {resource}",text(a,"target_mode")),
+                        "name":a["name"],"target_mode":a["target_mode"],"status":a["status"],"policy_id":a["policy_id"],"policy_name":a["policy_name"],
+                        "created_at":a["created_at"],"created_by_name":a["created_by_name"]});
                 }
             }
         }
@@ -436,45 +529,187 @@ pub(crate) async fn candidate_targets(
             .collect())
     }
 }
+/// One candidate assignment and the devices it currently selects.
+pub(crate) struct Candidate {
+    pub deployment: Value,
+    pub devices: BTreeSet<String>,
+}
+/// A proposed state evaluated without writing: an additional candidate, an
+/// assignment ignored entirely, and (assignment, device) pairs that a reviewed
+/// replacement will have retired once it releases those devices.
+#[derive(Default)]
+pub(crate) struct Proposal<'a> {
+    pub extra: Option<&'a Value>,
+    pub ignored: Option<&'a str>,
+    pub retired: BTreeSet<(String, String)>,
+}
+fn replaced_ids(d: &Value) -> Vec<&str> {
+    d["replaces"]
+        .as_array()
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+/// Every current candidate with its selected devices. A deployment that replaces
+/// another assignment defers to it on each device until it releases that device;
+/// the release retires the replaced assignment there (see `retire_replaced`).
+/// Neither assignment is ever chosen by identity or creation order.
+pub(crate) async fn candidates(
+    db: &mut SqliteConnection,
+    proposal: &Proposal<'_>,
+) -> Result<Vec<Candidate>> {
+    let mut deployments = db::records(db, "deployment").await?;
+    deployments.retain(|d| Some(text(d, "id")) != proposal.ignored);
+    if let Some(x) = proposal.extra {
+        deployments.retain(|d| d["id"] != x["id"]);
+        deployments.push(x.clone());
+    }
+    let mut out = Vec::new();
+    for d in deployments.into_iter().filter(candidate_status) {
+        let mut devices = if proposal.extra.is_some_and(|e| e["id"] == d["id"]) {
+            select(db, &d["selector"]).await?
+        } else {
+            candidate_targets(db, &d).await?
+        };
+        if !proposal.retired.is_empty() {
+            let id = text(&d, "id").to_owned();
+            devices.retain(|device| !proposal.retired.contains(&(id.clone(), device.clone())));
+        }
+        out.push(Candidate {
+            deployment: d,
+            devices,
+        });
+    }
+    let deferring: Vec<usize> = out
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            !replaced_ids(&c.deployment).is_empty()
+                && proposal.extra.is_none_or(|e| e["id"] != c.deployment["id"])
+        })
+        .map(|(index, _)| index)
+        .collect();
+    for index in deferring {
+        let unreleased: BTreeSet<String> = sqlx::query_scalar(
+            "SELECT device_id FROM deployment_targets WHERE deployment_id=? AND generation=0 AND state<>'removed'",
+        )
+        .bind(text(&out[index].deployment, "id"))
+        .fetch_all(&mut *db)
+        .await?
+        .into_iter()
+        .collect();
+        let replaced: Vec<String> = replaced_ids(&out[index].deployment)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let covered: BTreeSet<String> = out
+            .iter()
+            .filter(|c| replaced.iter().any(|id| c.deployment["id"] == id.as_str()))
+            .flat_map(|c| c.devices.iter().cloned())
+            .collect();
+        out[index]
+            .devices
+            .retain(|device| !(unreleased.contains(device) && covered.contains(device)));
+    }
+    Ok(out)
+}
+async fn cached_identity(
+    db: &mut SqliteConnection,
+    cache: &mut std::collections::HashMap<(usize, String), String>,
+    candidates: &[Candidate],
+    index: usize,
+    device: &str,
+) -> Result<String> {
+    let key = (index, device.to_owned());
+    if let Some(identity) = cache.get(&key) {
+        return Ok(identity.clone());
+    }
+    let value = identity(db, &candidates[index].deployment, device).await?;
+    cache.insert(key, value.clone());
+    Ok(value)
+}
+/// Equal-priority candidates for the same device and resource must deliver the
+/// same payload. Rendering a payload identity is costly, so it is computed only
+/// for (device, resource, priority) collisions.
+pub(crate) async fn conflicts_among(
+    db: &mut SqliteConnection,
+    candidates: &[Candidate],
+) -> Result<Vec<Value>> {
+    let mut first: BTreeMap<(String, &str, i64), usize> = BTreeMap::new();
+    let mut cache = std::collections::HashMap::new();
+    let mut conflicts = Vec::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let d = &candidate.deployment;
+        let resource = kind(d);
+        let priority = d["priority"].as_i64().unwrap_or(0);
+        for device in &candidate.devices {
+            let key = (device.clone(), resource, priority);
+            let Some(&other) = first.get(&key) else {
+                first.insert(key, index);
+                continue;
+            };
+            let theirs = cached_identity(db, &mut cache, candidates, other, device).await?;
+            let ours = cached_identity(db, &mut cache, candidates, index, device).await?;
+            if theirs != ours {
+                conflicts.push(json!({"device_id":device,"assignment_ids":[text(&candidates[other].deployment,"id"),text(d,"id")],"priority":d["priority"],"resource":resource}));
+            }
+        }
+    }
+    Ok(conflicts)
+}
+/// Highest explicit priority wins. Equal priorities are either identical
+/// payloads (so the lower ID is only a stable representative) or conflicts.
+pub(crate) fn winners_among<'a>(
+    candidates: impl IntoIterator<Item = &'a Candidate>,
+    scope: Option<&BTreeSet<String>>,
+) -> BTreeMap<(String, String), Value> {
+    let mut winners: BTreeMap<(String, String), &Value> = BTreeMap::new();
+    for candidate in candidates {
+        let d = &candidate.deployment;
+        for device in &candidate.devices {
+            if scope.is_some_and(|ids| !ids.contains(device)) {
+                continue;
+            }
+            let key = (device.clone(), kind(d).to_owned());
+            let replace = winners.get(&key).is_none_or(|old| {
+                d["priority"].as_i64() > old["priority"].as_i64()
+                    || (d["priority"] == old["priority"] && text(d, "id") < text(old, "id"))
+            });
+            if replace {
+                winners.insert(key, d);
+            }
+        }
+    }
+    winners
+        .into_iter()
+        .map(|(key, d)| (key, d.clone()))
+        .collect()
+}
 pub async fn conflicts(db: &mut SqliteConnection, extra: Option<&Value>) -> Result<Vec<Value>> {
-    conflicts_excluding(db, extra, None).await
+    let set = candidates(
+        db,
+        &Proposal {
+            extra,
+            ..Default::default()
+        },
+    )
+    .await?;
+    conflicts_among(db, &set).await
 }
 async fn conflicts_excluding(
     db: &mut SqliteConnection,
     extra: Option<&Value>,
     excluded: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let mut deployments = db::records(db, "deployment").await?;
-    deployments.retain(|d| Some(text(d, "id")) != excluded);
-    if let Some(x) = extra {
-        deployments.retain(|d| d["id"] != x["id"]);
-        deployments.push(x.clone());
-    }
-    let mut entries: BTreeMap<(String, String, i64), (String, String)> = BTreeMap::new();
-    let mut conflicts = Vec::new();
-    for d in deployments.iter().filter(|v| candidate_status(v)) {
-        let selected = if extra.is_some_and(|e| e["id"] == d["id"]) {
-            select(db, &d["selector"]).await?
-        } else {
-            candidate_targets(db, d).await?
-        };
-        for device in selected {
-            let key = (
-                device.clone(),
-                kind(d).to_owned(),
-                d["priority"].as_i64().unwrap_or(0),
-            );
-            let payload_identity = identity(db, d, &device).await?;
-            if let Some((payload, other)) = entries.get(&key) {
-                if payload != &payload_identity {
-                    conflicts.push(json!({"device_id":device,"assignment_ids":[other,text(d,"id")],"priority":d["priority"],"resource":kind(d)}))
-                }
-            } else {
-                entries.insert(key, (payload_identity, text(d, "id").into()));
-            }
-        }
-    }
-    Ok(conflicts)
+    let set = candidates(
+        db,
+        &Proposal {
+            extra,
+            ignored: excluded,
+            ..Default::default()
+        },
+    )
+    .await?;
+    conflicts_among(db, &set).await
 }
 pub fn validate_request(v: &Value) -> Result<()> {
     validate_request_inner(v, false)
@@ -495,13 +730,47 @@ fn validate_request_inner(v: &Value, trusted_rollback: bool) -> Result<()> {
         "scheduled_at",
         "rollout",
         "variable_bindings",
+        "replaces",
+        "policy_id",
     ];
     if object.keys().any(|key| {
-        !allowed.contains(&key.as_str()) && !(trusted_rollback && key == "rollback_artifacts")
+        !allowed.contains(&key.as_str())
+            && !(trusted_rollback && ["rollback_artifacts", "rollback_of"].contains(&key.as_str()))
     }) {
         return Err(ApiError::invalid("Unknown deployment request field"));
     }
     crate::deployment_requests::request_id(v)?;
+    if let Some(replaces) = v.get("replaces") {
+        let list = replaces
+            .as_array()
+            .filter(|list| list.len() <= 100)
+            .ok_or_else(|| ApiError::invalid("replaces must list at most 100 assignment IDs"))?;
+        let mut seen = BTreeSet::new();
+        for id in list {
+            let id = id
+                .as_str()
+                .ok_or_else(|| ApiError::invalid("replaces must contain assignment IDs"))?;
+            let parsed = uuid::Uuid::parse_str(id)
+                .map_err(|_| ApiError::invalid("replaces must contain assignment IDs"))?;
+            if parsed.hyphenated().to_string() != id || !seen.insert(id) {
+                return Err(ApiError::invalid(
+                    "replaces must contain distinct lowercase assignment IDs",
+                ));
+            }
+        }
+    }
+    if let Some(policy_id) = v.get("policy_id") {
+        if !v["policy"].is_object()
+            || policy_id
+                .as_str()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                .is_none()
+        {
+            return Err(ApiError::invalid(
+                "policy_id identifies the saved agent settings of a policy deployment",
+            ));
+        }
+    }
     if !v["name"].is_null()
         && v["name"]
             .as_str()
@@ -640,57 +909,392 @@ async fn preview_inner(
         .into_iter()
         .filter(|d| selected.contains(text(d, "id")))
         .collect::<Vec<_>>();
+    let plan = replacement_plan(db, v, &selected).await?;
+    let retired: BTreeSet<(String, String)> = plan
+        .iter()
+        .flat_map(|r| {
+            r.devices
+                .iter()
+                .map(|device| (text(&r.deployment, "id").to_owned(), device.clone()))
+        })
+        .collect();
+    if let Some(policy_id) = v["policy_id"].as_str() {
+        let saved = db::record(db, "policy", policy_id)
+            .await
+            .map_err(|_| ApiError::invalid("These saved agent settings are no longer available"))?;
+        if saved["policy"] != v["policy"] {
+            return Err(ApiError::conflict(
+                "These saved agent settings changed. Review the current settings before applying them.",
+            ));
+        }
+    }
     let mut candidate = v.clone();
     candidate["id"] = json!("preview");
     candidate["status"] = json!("active");
-    let issues = conflicts(db, Some(&candidate)).await?;
+    // Review the state after the replacements take effect on every device.
+    let mut set = candidates(
+        db,
+        &Proposal {
+            extra: Some(&candidate),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let before = winners_among(
+        set.iter().filter(|c| c.deployment["id"] != "preview"),
+        Some(&selected),
+    );
+    for c in &mut set {
+        let id = text(&c.deployment, "id").to_owned();
+        c.devices
+            .retain(|device| !retired.contains(&(id.clone(), device.clone())));
+    }
+    let issues = conflicts_among(db, &set).await?;
+    let after = winners_among(
+        set.iter().filter(|c| c.deployment["id"] != "preview"),
+        Some(&selected),
+    );
     let mut blockers = creation_blockers(db, v, &selected, None).await?;
     blockers.extend(compatibility);
-    let winners = assignment_winners(db).await?;
     let resource = kind(v);
-    let outcomes = selected.iter().map(|device| {
+    let mut described = std::collections::HashMap::new();
+    let requested_configuration = match v["version_id"].as_str() {
+        Some(version) => db::record(db, "version", version).await?["configuration_id"].clone(),
+        None => Value::Null,
+    };
+    let requested_sha: BTreeMap<&str, &str> = artifact_previews
+        .iter()
+        .filter_map(|a| Some((a["device_id"].as_str()?, a["sha256"].as_str()?)))
+        .collect();
+    let mut outcomes = Vec::with_capacity(selected.len());
+    let mut suggestions: BTreeMap<String, (Value, Vec<String>)> = BTreeMap::new();
+    let mut winning_priority: Option<i64> = None;
+    for device in &selected {
+        let key = (device.clone(), resource.to_owned());
         let mut result = json!({"device_id":device,"resource":resource,"outcome":"requested"});
-        if issues.iter().any(|issue| text(issue,"device_id") == device && text(issue,"resource") == resource) {
-            result["outcome"] = json!("conflict");
-        } else if let Some(winner) = winners.get(&(device.clone(),resource.to_owned())) {
-            if winner["priority"].as_i64() > v["priority"].as_i64() {
-                result["outcome"] = json!("higher_priority");
-                result["assignment"] = json!({"id":winner["id"],"priority":winner["priority"],"reason":format!("{} {} assignment has higher priority; rollout admission may still be pending",text(winner,"target_mode"),resource)});
+        if let Some(winner) = before.get(&key) {
+            result["winner"] = describe(db, &mut described, winner).await?;
+            let replaced = retired.contains(&(text(winner, "id").to_owned(), device.clone()));
+            let same_lineage = if resource == "policy" {
+                winner["policy"] != v["policy"]
+            } else if !requested_configuration.is_null()
+                && result["winner"]["configuration_id"] == requested_configuration
+            {
+                let theirs = identity(db, winner, device).await?;
+                requested_sha
+                    .get(device.as_str())
+                    .is_none_or(|sha| theirs != format!("{}:{sha}", text(v, "version_id")))
+            } else {
+                false
+            };
+            if !replaced && same_lineage {
+                suggestions
+                    .entry(text(winner, "id").to_owned())
+                    .or_insert_with(|| (winner.clone(), Vec::new()))
+                    .1
+                    .push(device.clone());
             }
         }
-        result
-    }).collect::<Vec<_>>();
-    let mut warnings = Vec::new();
-    if !artifact_previews.is_empty() && v["variable_bindings"].is_object() {
-        warnings.push("Target-specific rendered artifacts pass structural checks here; each device must validate its own complete Vector configuration before activation".into());
-    }
-    if fleet.is_empty() {
-        warnings.push("No devices selected".to_owned())
-    }
-    if text(v, "target_mode") == "snapshot" {
-        warnings.push("Targets are frozen when this deployment is created".into())
-    }
-    if fleet.iter().any(|d| text(d, "status") == "offline") {
-        warnings.push(
-            "Offline devices remain pending until they reconnect and verify activation".into(),
-        )
-    }
-    if v["version_id"].is_string()
-        && fleet
+        if let Some(r) = plan.iter().find(|r| r.devices.contains(device)) {
+            result["replaces"] = describe(db, &mut described, &r.deployment).await?;
+        }
+        let blocking = after
+            .get(&key)
+            .filter(|w| w["priority"].as_i64() >= v["priority"].as_i64());
+        if issues
             .iter()
-            .any(|d| text(d, "vector_version") != crate::validation::VECTOR_VERSION)
-    {
+            .any(|issue| text(issue, "device_id") == device && text(issue, "resource") == resource)
+        {
+            result["outcome"] = json!("conflict");
+        } else if let Some(winner) =
+            blocking.filter(|w| w["priority"].as_i64() > v["priority"].as_i64())
+        {
+            result["outcome"] = json!("higher_priority");
+            result["assignment"] = json!({"id":winner["id"],"priority":winner["priority"],"reason":format!("{} {} assignment has higher priority; rollout admission may still be pending",text(winner,"target_mode"),resource)});
+        } else if result.get("replaces").is_some() {
+            result["outcome"] = json!("replace");
+        }
+        if matches!(text(&result, "outcome"), "conflict" | "higher_priority") {
+            if let Some(winner) = blocking {
+                let needed = winner["priority"].as_i64().unwrap_or(0).saturating_add(1);
+                winning_priority = Some(winning_priority.map_or(needed, |p| p.max(needed)));
+            }
+        }
+        outcomes.push(result);
+    }
+    let mut conflicts_described = Vec::with_capacity(issues.len());
+    for mut issue in issues {
+        let mut existing = Vec::new();
+        for id in issue["assignment_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|id| *id != "preview")
+        {
+            if let Ok(d) = db::record(db, "deployment", id).await {
+                existing.push(describe(db, &mut described, &d).await?);
+            }
+        }
+        issue["assignments"] = json!(existing);
+        conflicts_described.push(issue);
+    }
+    let mut replacements = Vec::with_capacity(plan.len());
+    for r in &plan {
+        replacements.push(json!({"assignment":describe(db,&mut described,&r.deployment).await?,"device_ids":r.devices,"retires_assignment":r.retires_assignment}));
+    }
+    let mut suggested_replaces = Vec::with_capacity(suggestions.len());
+    let mut suggested_priority: Option<i64> = None;
+    for (winner, devices) in suggestions.into_values() {
+        let priority = winner["priority"].as_i64().unwrap_or(0);
+        suggested_priority = Some(suggested_priority.map_or(priority, |p| p.max(priority)));
+        suggested_replaces.push(
+            json!({"assignment":describe(db,&mut described,&winner).await?,"device_ids":devices}),
+        );
+    }
+    let paused: Vec<&Value> = if resource == "configuration" {
+        fleet
+            .iter()
+            .filter(|d| d["sync_paused"] == true || d["local_paused"] == true)
+            .map(|d| &d["id"])
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut warnings = Vec::new();
+    if fleet.is_empty() {
+        warnings.push("No devices selected.".to_owned())
+    }
+    if !artifact_previews.is_empty() && v["variable_bindings"].is_object() {
+        warnings.push(
+            "Each device validates its own rendered configuration before it applies it.".into(),
+        );
+    }
+    let offline = fleet
+        .iter()
+        .filter(|d| ["offline", "awaiting_first_check_in"].contains(&text(d, "status")))
+        .count();
+    if offline > 0 {
         warnings.push(format!(
-            "Incompatible devices cannot be released: Vector {} required",
-            crate::validation::VECTOR_VERSION
-        ))
+            "{offline} {} not checking in. {} after {} reconnect.",
+            if offline == 1 {
+                "device is"
+            } else {
+                "devices are"
+            },
+            if offline == 1 {
+                "It applies the change"
+            } else {
+                "They apply the change"
+            },
+            if offline == 1 { "it" } else { "they" },
+        ));
+    }
+    if !paused.is_empty() {
+        warnings.push(format!(
+            "{} {} sync paused. This change waits until sync resumes.",
+            paused.len(),
+            if paused.len() == 1 {
+                "device has"
+            } else {
+                "devices have"
+            },
+        ));
     }
     if v["scheduled_at"].is_string() {
-        warnings.push("Priority outcomes reflect current assignments; assignments may change before scheduled activation".into());
+        warnings.push("Priorities are checked again when the schedule starts.".into());
     }
     Ok(
-        json!({"devices":fleet,"conflicts":issues,"warnings":warnings,"outcomes":outcomes,"artifact_previews":artifact_previews,"create_idempotency":true,"request_correlation":true,"blockers":blockers}),
+        json!({"devices":fleet,"conflicts":conflicts_described,"warnings":warnings,"outcomes":outcomes,"artifact_previews":artifact_previews,"create_idempotency":true,"request_correlation":true,"blockers":blockers,
+            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused}),
     )
+}
+/// Display metadata for an assignment: names and numbers, never selectors,
+/// targets, variable values or artifacts.
+pub(crate) async fn describe(
+    db: &mut SqliteConnection,
+    cache: &mut std::collections::HashMap<String, Value>,
+    d: &Value,
+) -> Result<Value> {
+    let id = text(d, "id").to_owned();
+    if let Some(described) = cache.get(&id) {
+        return Ok(described.clone());
+    }
+    let mut out = json!({"id":id,"name":d["name"].as_str().map(|name| name.chars().take(120).collect::<String>()),"resource":kind(d),"priority":d["priority"],"target_mode":d["target_mode"],"status":d["status"],"created_at":d["created_at"],
+        "version_id":null,"version_number":null,"configuration_id":null,"configuration_name":null,"policy":null,"policy_id":null,"policy_name":null});
+    if let Some(version) = d["version_id"].as_str() {
+        out["version_id"] = json!(version);
+        if let Some(row) = sqlx::query("SELECT CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number,json_extract(v.data,'$.configuration_id') AS configuration_id,CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END AS name FROM records v LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id') WHERE v.kind='version' AND v.id=?").bind(version).fetch_optional(&mut *db).await? {
+            out["version_number"] = json!(row.get::<Option<i64>, _>("number"));
+            out["configuration_id"] = json!(row.get::<Option<String>, _>("configuration_id"));
+            out["configuration_name"] = json!(row.get::<Option<String>, _>("name"));
+        }
+    } else {
+        out["policy"] = d["policy"].clone();
+        if let Some(policy) = d["policy_id"].as_str() {
+            out["policy_id"] = json!(policy);
+            out["policy_name"] = json!(sqlx::query_scalar::<_, Option<String>>("SELECT substr(json_extract(data,'$.name'),1,120) FROM records WHERE kind='policy' AND id=?").bind(policy).fetch_optional(&mut *db).await?.flatten());
+        }
+    }
+    cache.insert(id, out.clone());
+    Ok(out)
+}
+/// An explicit, reviewed replacement of existing assignments on these devices.
+pub(crate) struct Replacement {
+    pub deployment: Value,
+    pub devices: BTreeSet<String>,
+    /// Whether nothing remains for the replaced assignment to deliver afterwards.
+    pub retires_assignment: bool,
+}
+fn replacement_changed() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::CONFLICT,
+        "REPLACEMENT_CHANGED",
+        "An assignment you chose to replace changed or no longer applies to these devices. Review the deployment again.",
+    )
+}
+// A persistent replacement that follows every group and device of the old
+// persistent assignment also takes over its future members.
+fn covers(new: &Value, old: &Value, selected: &BTreeSet<String>) -> bool {
+    let ids = |v: &Value, key: &str| -> BTreeSet<String> {
+        v["selector"][key]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    new["target_mode"] == "persistent"
+        && new["scheduled_at"].is_null()
+        && ids(old, "group_ids").is_subset(&ids(new, "group_ids"))
+        && ids(old, "device_ids")
+            .difference(&ids(old, "exclude_ids"))
+            .all(|device| selected.contains(device))
+}
+async fn replacement_plan(
+    db: &mut SqliteConnection,
+    v: &Value,
+    selected: &BTreeSet<String>,
+) -> Result<Vec<Replacement>> {
+    let mut plan = Vec::new();
+    for id in replaced_ids(v) {
+        let old = match db::record(db, "deployment", id).await {
+            Ok(old) => old,
+            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {
+                return Err(replacement_changed());
+            }
+            Err(error) => return Err(error),
+        };
+        if kind(&old) != kind(v) {
+            return Err(ApiError::invalid(
+                "A replacement must be the same kind of assignment: pipeline or agent settings",
+            ));
+        }
+        if !candidate_status(&old) {
+            return Err(replacement_changed());
+        }
+        let members = candidate_targets(db, &old).await?;
+        let devices: BTreeSet<String> = members.intersection(selected).cloned().collect();
+        if devices.is_empty() {
+            return Err(replacement_changed());
+        }
+        let retires_assignment = members.is_subset(&devices)
+            && (old["target_mode"] != "persistent"
+                || ["cancelled", "failed"].contains(&text(&old, "status"))
+                || covers(v, &old, selected));
+        plan.push(Replacement {
+            deployment: old,
+            devices,
+            retires_assignment,
+        });
+    }
+    Ok(plan)
+}
+/// Once a replacing deployment releases devices, the assignments it replaces stop
+/// selecting them. Retained rows keep their history; a persistent assignment also
+/// excludes them so later membership changes cannot bring the old one back.
+async fn retire_replaced(db: &mut SqliteConnection, d: &Value, released: &[String]) -> Result<()> {
+    if released.is_empty() {
+        return Ok(());
+    }
+    let selected = candidate_targets(db, d).await?;
+    for id in replaced_ids(d) {
+        let Ok(mut old) = db::record(db, "deployment", id).await else {
+            continue;
+        };
+        if !candidate_status(&old) {
+            continue;
+        }
+        let members = candidate_targets(db, &old).await?;
+        let taken: Vec<&String> = released
+            .iter()
+            .filter(|device| members.contains(*device))
+            .collect();
+        if taken.is_empty() {
+            continue;
+        }
+        if old["target_mode"] == "persistent" {
+            let mut excluded: BTreeSet<String> = old["selector"]["exclude_ids"]
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            excluded.extend(taken.iter().map(|device| (*device).clone()));
+            old["selector"]["exclude_ids"] = json!(excluded);
+        }
+        for device in &taken {
+            sqlx::query("UPDATE deployment_targets SET state='removed' WHERE deployment_id=? AND device_id=? AND state<>'removed'")
+                .bind(id)
+                .bind(device)
+                .execute(&mut *db)
+                .await?;
+        }
+        let mut entries = old["replaced_by"].as_array().cloned().unwrap_or_default();
+        match entries
+            .iter_mut()
+            .find(|entry| entry["deployment_id"] == d["id"])
+        {
+            Some(entry) => {
+                entry["device_count"] =
+                    json!(entry["device_count"].as_u64().unwrap_or(0) + taken.len() as u64);
+                entry["at"] = json!(db::now());
+            }
+            None => entries
+                .push(json!({"deployment_id":d["id"],"device_count":taken.len(),"at":db::now()})),
+        }
+        old["replaced_by"] = json!(entries);
+        let remaining = candidate_targets(db, &old).await?;
+        if remaining.is_empty()
+            && (old["target_mode"] != "persistent"
+                || ["cancelled", "failed"].contains(&text(&old, "status"))
+                || covers(d, &old, &selected))
+        {
+            // Nothing is left for it to deliver. Retire the binding without
+            // rewriting how its own rollout ended.
+            old["status_before_removal"] = old["status"].clone();
+            old["status"] = json!("unassigned");
+            old["removed_at"] = json!(db::now());
+            crate::canary_gate::clear(&mut old);
+        }
+        db::update(db, "deployment", &old).await?;
+        db::audit(
+            db,
+            d["created_by"].as_str().unwrap_or("scheduler"),
+            "deployment.replace",
+            id,
+            "success",
+        )
+        .await?;
+    }
+    Ok(())
 }
 pub async fn create(db: &mut SqliteConnection, v: &Value, actor: &str) -> Result<Value> {
     create_inner(db, v, actor, false).await
@@ -738,6 +1342,7 @@ async fn create_inner(
     let mut d = v.clone();
     d["id"] = json!(db::id());
     d["created_at"] = json!(db::now());
+    d["created_by"] = json!(actor);
     d["status"] = json!(if v["scheduled_at"].is_string() {
         "scheduled"
     } else {
@@ -854,7 +1459,10 @@ pub async fn reconcile_membership(db: &mut SqliteConnection) -> Result<()> {
             "Group membership creates conflicting equal-priority assignments",
         ));
     }
-    for mut d in db::records(db, "deployment").await? {
+    // Releasing one assignment can retire another it replaces, so read each
+    // record fresh instead of trusting a snapshot taken before the loop.
+    for id in deployment_ids(db).await? {
+        let mut d = db::record(db, "deployment", &id).await?;
         if text(&d, "target_mode") != "persistent"
             || !["active", "paused", "completed"].contains(&text(&d, "status"))
         {
@@ -891,27 +1499,8 @@ pub(crate) async fn assignment_winners_for(
     db: &mut SqliteConnection,
     scope: Option<&BTreeSet<String>>,
 ) -> Result<BTreeMap<(String, String), Value>> {
-    let mut winners: BTreeMap<(String, String), Value> = BTreeMap::new();
-    for d in db::records(db, "deployment")
-        .await?
-        .into_iter()
-        .filter(candidate_status)
-    {
-        for device in candidate_targets(db, &d).await? {
-            if scope.is_some_and(|ids| !ids.contains(&device)) {
-                continue;
-            }
-            let key = (device, kind(&d).into());
-            let replace = winners.get(&key).is_none_or(|old| {
-                d["priority"].as_i64() > old["priority"].as_i64()
-                    || (d["priority"] == old["priority"] && text(&d, "id") < text(old, "id"))
-            });
-            if replace {
-                winners.insert(key, d.clone());
-            }
-        }
-    }
-    Ok(winners)
+    let set = candidates(db, &Proposal::default()).await?;
+    Ok(winners_among(&set, scope))
 }
 pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
     if !conflicts(db, None).await?.is_empty() {
@@ -1031,7 +1620,13 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                     } else {
                         1
                     };
-                    sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+?,policy_assignment_id=? WHERE id=?").bind(w["policy"].to_string()).bind(inc).bind(text(w,"id")).bind(&device).execute(&mut *db).await?;
+                    // Until the agent acknowledges, it may check in at its old interval.
+                    let floor = check_in_seconds(
+                        &old,
+                        &db::parse(row.get("data"))?,
+                        row.get("policy_generation"),
+                    );
+                    sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+?,policy_assignment_id=?,data=CASE WHEN ?=1 THEN json_set(data,'$.heartbeat_floor_seconds',?) ELSE data END WHERE id=?").bind(w["policy"].to_string()).bind(inc).bind(text(w,"id")).bind(inc).bind(floor).bind(&device).execute(&mut *db).await?;
                     let generation: i64 =
                         sqlx::query_scalar("SELECT policy_generation FROM devices WHERE id=?")
                             .bind(&device)
@@ -1052,7 +1647,12 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                     {
                         crate::canary_gate::invalidate_resource(db, &device, true).await?;
                     }
-                    sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+1,policy_assignment_id=NULL WHERE id=?").bind(db::default_policy().to_string()).bind(&device).execute(&mut *db).await?;
+                    let floor = check_in_seconds(
+                        &old,
+                        &db::parse(row.get("data"))?,
+                        row.get("policy_generation"),
+                    );
+                    sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+1,policy_assignment_id=NULL,data=json_set(data,'$.heartbeat_floor_seconds',?) WHERE id=?").bind(db::default_policy().to_string()).bind(floor).bind(&device).execute(&mut *db).await?;
                 }
             }
         }
@@ -1083,6 +1683,8 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         .count();
     if failures as u64 > d["rollout"]["failure_threshold"].as_u64().unwrap_or(0) {
         d["status"] = json!("failed");
+        d["failed_at"] = json!(db::now());
+        d["failure_reason"] = json!("threshold");
         db::update(db, "deployment", d).await?;
         db::audit(db, "scheduler", "deployment.gate", text(d, "id"), "failed").await?;
         return Ok(());
@@ -1095,38 +1697,40 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
     };
     let all_verified = if let Some(proof) = &proof {
         proof.all_verified()
+    } else if released
+        .iter()
+        .any(|target| target["state"] != "verified_applied")
+    {
+        false
     } else {
         // All-at-once completion remains a historical receipt, without a
         // continuous observation interval or subsequent wave to authorize.
-        let mut verified = true;
-        for target in &released {
-            if target["state"] != "verified_applied" {
-                verified = false;
-                break;
+        // One read covers every released device instead of one per target.
+        let released_ids = released
+            .iter()
+            .map(|target| text(target, "device_id"))
+            .collect::<BTreeSet<_>>();
+        let rows = sqlx::query("SELECT t.device_id,d.id AS existing,d.revoked,d.policy,d.policy_generation,json_object('last_seen',json_extract(d.data,'$.last_seen'),'policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')) AS evidence FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? AND t.generation>0")
+            .bind(text(d, "id"))
+            .fetch_all(&mut *db)
+            .await?;
+        let mut fresh = BTreeSet::new();
+        for row in rows {
+            let device: String = row.get("device_id");
+            if !released_ids.contains(device.as_str())
+                || row.get::<Option<String>, _>("existing").is_none()
+                || row.get::<Option<bool>, _>("revoked").unwrap_or(true)
+            {
+                continue;
             }
-            let row = sqlx::query("SELECT data,policy,revoked FROM devices WHERE id=?")
-                .bind(text(target, "device_id"))
-                .fetch_optional(&mut *db)
-                .await?;
-            let Some(row) = row else {
-                verified = false;
-                break;
-            };
-            let device = db::parse(row.get("data"))?;
-            let policy = db::parse(row.get("policy"))?;
-            let fresh = device["last_seen"]
-                .as_str()
-                .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
-                .is_some_and(|at| {
-                    Utc::now().signed_duration_since(at).num_seconds()
-                        <= policy["heartbeat_seconds"].as_i64().unwrap_or(60) * 3
-                });
-            if row.get::<bool, _>("revoked") || !fresh {
-                verified = false;
-                break;
+            let evidence = db::parse(row.get("evidence"))?;
+            let policy = db::parse(&row.get::<String, _>("policy"))?;
+            let interval = check_in_seconds(&policy, &evidence, row.get("policy_generation"));
+            if checked_in_recently(evidence["last_seen"].as_str(), interval) {
+                fresh.insert(device);
             }
         }
-        verified
+        released_ids.iter().all(|device| fresh.contains(*device))
     };
     if is_canary && !released.is_empty() {
         let proof = proof.as_ref().unwrap();
@@ -1154,6 +1758,7 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
     }
     if pending.is_empty() && all_verified {
         d["status"] = json!("completed");
+        d["completed_at"] = json!(db::now());
         db::update(db, "deployment", d).await?;
         return Ok(());
     }
@@ -1203,6 +1808,8 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
                 .await?;
         }
         d["status"] = json!("failed");
+        d["failed_at"] = json!(db::now());
+        d["failure_reason"] = json!("incompatible");
         db::audit(
             db,
             "scheduler",
@@ -1229,15 +1836,25 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
             )
             .await?;
         }
+        let released: Vec<String> = wave.iter().map(|(device, _)| device.clone()).collect();
+        retire_replaced(db, d, &released).await?;
     }
     d["observation_started_at"] = Value::Null;
     db::update(db, "deployment", d).await?;
     Ok(())
 }
+async fn deployment_ids(db: &mut SqliteConnection) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM records WHERE kind='deployment' ORDER BY created_at DESC,id",
+    )
+    .fetch_all(db)
+    .await?)
+}
 pub async fn tick(s: &State) -> Result<()> {
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
-    for mut d in db::records(&mut tx, "deployment").await? {
+    for id in deployment_ids(&mut tx).await? {
+        let mut d = db::record(&mut tx, "deployment", &id).await?;
         if d["status"] == "scheduled" {
             let at = DateTime::parse_from_rfc3339(text(&d, "scheduled_at"))
                 .map_err(|_| ApiError::invalid("Invalid stored schedule"))?;
@@ -1388,6 +2005,7 @@ pub async fn action(
                 ));
             }
             d["status"] = json!("cancelled");
+            d["cancelled_at"] = json!(db::now());
         }
         "pause" => {
             if d["status"] != "active" {
@@ -1439,6 +2057,9 @@ pub async fn action(
                     "Only an activated assignment can be removed",
                 ));
             }
+            // Keep how the rollout itself ended; removal is an assignment change.
+            d["status_before_removal"] = d["status"].clone();
+            d["removed_at"] = json!(db::now());
             d["status"] = json!("unassigned");
         }
         "rollback" => {
@@ -1575,14 +2196,24 @@ pub(crate) async fn execute_rollback(
             blocker["reason"].as_str().unwrap_or("Rollback is blocked"),
         ));
     }
+    // The source stops releasing (or loses its binding at the ceiling), but its
+    // history keeps how the rollout itself ended and links to the rollback.
+    d["status_before_rollback"] = d["status"].clone();
+    if at_ceiling {
+        d["status_before_removal"] = d["status"].clone();
+        d["removed_at"] = json!(db::now());
+    }
     d["status"] = json!(if at_ceiling {
         "unassigned"
     } else {
         "cancelled"
     });
     db::update(db, "deployment", &d).await?;
-    let v = json!({"version_id":previous,"selector":{"device_ids":devices,"group_ids":[],"exclude_ids":[]},"priority":rollback_priority,"target_mode":"snapshot","rollout":{"kind":"all","canary_size":1,"batch_size":10,"observation_seconds":0,"failure_threshold":0},"rollback_artifacts":rollback_artifacts});
+    let v = json!({"version_id":previous,"selector":{"device_ids":devices,"group_ids":[],"exclude_ids":[]},"priority":rollback_priority,"target_mode":"snapshot","rollout":{"kind":"all","canary_size":1,"batch_size":10,"observation_seconds":0,"failure_threshold":0},"rollback_artifacts":rollback_artifacts,"rollback_of":d["id"]});
     let result = create_inner(db, &v, actor, true).await?;
+    d["rolled_back_by"] = result["id"].clone();
+    d["rolled_back_at"] = json!(db::now());
+    db::update(db, "deployment", &d).await?;
     db::audit(db, actor, "deployment.rollback", text(&d, "id"), "success").await?;
     Ok(result)
 }
