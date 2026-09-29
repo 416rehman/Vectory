@@ -727,7 +727,12 @@ try {
       await noOverflow();
       await page.setViewportSize({ width: 375, height: 812 });
       await noOverflow();
-      expect(requests.filter((r) => r.method !== "GET")).toEqual([]);
+      // Validation is a read-only POST the editor sends on its own.
+      expect(
+        requests.filter(
+          (r) => r.method !== "GET" && !r.path.endsWith("/validate"),
+        ),
+      ).toEqual([]);
     },
   );
   await check(
@@ -774,7 +779,11 @@ try {
       expect(
         await page.locator('a[href^="javascript:"],a[href^="data:"]').count(),
       ).toBe(0);
-      expect(requests.filter((r) => r.method !== "GET")).toEqual([]);
+      expect(
+        requests.filter(
+          (r) => r.method !== "GET" && !r.path.endsWith("/validate"),
+        ),
+      ).toEqual([]);
       await noOverflow();
     },
   );
