@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type HTMLAttributes,
@@ -11,13 +12,16 @@ import {
   ArrowUp,
   ArrowUpDown,
   Check,
+  ChevronRight,
   Filter,
   Search,
   X,
 } from "lucide-react";
-import { Pagination, Spinner } from "./ui";
+import { Pagination, Skeleton, useMediaQuery } from "./ui";
 import {
+  clampPage,
   matchesTableFilter,
+  nextSort,
   sortTableRows,
   type TableSort,
   type TableValue,
@@ -25,8 +29,14 @@ import {
 import "./data-table.css";
 
 export type { TableSort, TableValue } from "./dataTableModel";
+export type TableFilterOption = {
+  value: string;
+  label: string;
+  /** Rows this option keeps; zero-count options stay selectable but quiet. */
+  count?: number;
+};
 export type TableFilter = {
-  options?: { value: string; label: string }[];
+  options?: TableFilterOption[];
   placeholder?: string;
   allLabel?: string;
   emptyValue?: string;
@@ -45,6 +55,10 @@ export type TableColumn<T> = {
   value?: (row: T) => TableValue;
   sortValue?: (row: T) => TableValue;
   sortable?: boolean;
+  /** First sort direction; use "desc" for times so newest comes first. */
+  defaultDirection?: "asc" | "desc";
+  /** Fixed column width, so loading and loaded layouts line up. */
+  width?: number | string;
   className?: string;
   headerClassName?: string;
   filter?: TableFilter;
@@ -54,7 +68,22 @@ type TablePagination = {
   size: number;
   onPage: (page: number) => void;
   total?: number;
+  /** Offer a page-size choice. */
+  sizeOptions?: number[];
+  onSize?: (size: number) => void;
+  /** Keep controls visible when everything fits on one page. */
+  alwaysShow?: boolean;
+  noun?: string;
 };
+export type MobileCard = {
+  title: ReactNode;
+  href?: string | null;
+  status?: ReactNode;
+  meta?: ReactNode[];
+  leading?: ReactNode;
+};
+const interactiveSelector =
+  "a, button, input, select, textarea, label, summary, [role='button'], [role='menuitem'], [role='checkbox'], [data-row-ignore]";
 
 function ColumnFilter({
   label,
@@ -93,7 +122,7 @@ function ColumnFilter({
           aria-label={`Filter ${label}${active ? " (active)" : ""}`}
           title={`Filter ${label}`}
         >
-          <Filter size={14} aria-hidden="true" />
+          <Filter size={13} aria-hidden="true" />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -178,6 +207,7 @@ function ColumnFilter({
                     {
                       value: filter.emptyValue ?? "",
                       label: filter.allLabel || "All values",
+                      count: undefined,
                     },
                     ...options,
                   ].map((option) => (
@@ -187,6 +217,7 @@ function ColumnFilter({
                       role="radio"
                       aria-checked={value === option.value}
                       data-value={option.value}
+                      data-empty={option.count === 0 || undefined}
                       tabIndex={
                         value === option.value ||
                         (option.value === (filter.emptyValue ?? "") &&
@@ -200,6 +231,12 @@ function ColumnFilter({
                       }}
                     >
                       <span>{option.label}</span>
+                      {option.count !== undefined && " "}
+                      {option.count !== undefined && (
+                        <span className="data-table-filter-count">
+                          {option.count.toLocaleString()}
+                        </span>
+                      )}
                       {value === option.value && (
                         <Check size={15} aria-hidden="true" />
                       )}
@@ -237,6 +274,17 @@ function ColumnFilter({
   );
 }
 
+/** Wraps a table (and its pagination) in the one shared card container. */
+export function TableCard({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <div className={`table-card ${className}`.trim()}>{children}</div>;
+}
+
 export function DataTable<T>({
   data,
   columns,
@@ -251,10 +299,13 @@ export function DataTable<T>({
   manualSorting = false,
   pagination,
   onRowClick,
+  rowHref,
   rowClassName,
   rowAttributes,
   variant = "default",
   scrollClassName = "",
+  mobileCard,
+  skeletonRows = 5,
 }: {
   data: T[];
   columns: TableColumn<T>[];
@@ -268,7 +319,10 @@ export function DataTable<T>({
   onSortChange?: (sort: TableSort | null) => void;
   manualSorting?: boolean;
   pagination?: TablePagination;
-  onRowClick?: (row: T, event: React.MouseEvent<HTMLTableRowElement>) => void;
+  /** Rows (and mobile cards) run this when clicked outside their own controls. */
+  onRowClick?: (row: T, event: React.MouseEvent<HTMLElement>) => void;
+  /** Rows open this route when clicked outside their own controls. */
+  rowHref?: (row: T) => string | null | undefined;
   rowClassName?: string | ((row: T) => string);
   rowAttributes?: (
     row: T,
@@ -276,9 +330,16 @@ export function DataTable<T>({
   ) => HTMLAttributes<HTMLTableRowElement> & Record<string, unknown>;
   variant?: "default" | "code";
   scrollClassName?: string;
+  /** Below 640px, render rows as a stacked list with this mapping. */
+  mobileCard?: (row: T) => MobileCard;
+  skeletonRows?: number;
 }) {
   const [localSort, setLocalSort] = useState<TableSort | null>(defaultSort);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [overflow, setOverflow] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  const narrow = useMediaQuery("(max-width: 639px)");
+  const cards = !!mobileCard && narrow && variant === "default";
   const sort = controlledSort === undefined ? localSort : controlledSort;
   const filterValue = (column: TableColumn<T>) =>
     column.filter?.value ??
@@ -306,15 +367,13 @@ export function DataTable<T>({
   const page = pagination
     ? pagination.total !== undefined
       ? pagination.page
-      : Math.min(
-          pagination.page,
-          Math.max(1, Math.ceil(count / pagination.size)),
-        )
+      : clampPage(pagination.page, count, pagination.size)
     : 1;
   const rows =
     pagination && pagination.total === undefined
       ? ordered.slice((page - 1) * pagination.size, page * pagination.size)
       : ordered;
+  const skeleton = loading && rows.length === 0;
   useEffect(() => {
     if (
       pagination &&
@@ -324,29 +383,156 @@ export function DataTable<T>({
     )
       pagination.onPage(page);
   }, [page, pagination, loading]);
+  // Only a region that actually scrolls sideways is a keyboard stop.
+  useLayoutEffect(() => {
+    const node = scroller.current;
+    if (!node) return;
+    const measure = () => setOverflow(node.scrollWidth > node.clientWidth + 1);
+    measure();
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(node);
+    if (node.firstElementChild) observer?.observe(node.firstElementChild);
+    return () => observer?.disconnect();
+  }, [cards, rows.length, columns.length]);
   function changeSort(column: TableColumn<T>) {
-    const next: TableSort = {
-      column: column.id,
-      direction:
-        sort?.column === column.id && sort.direction === "asc" ? "desc" : "asc",
-    };
+    const next = nextSort(sort, column.id, column.defaultDirection);
     if (controlledSort === undefined) setLocalSort(next);
     onSortChange?.(next);
     if (pagination && pagination.page !== 1) pagination.onPage(1);
   }
+  const interactive = !!(onRowClick || rowHref);
+  function rowClick(row: T, event: React.MouseEvent<HTMLTableRowElement>) {
+    if ((event.target as Element).closest(interactiveSelector)) return;
+    if (window.getSelection()?.toString()) return;
+    if (onRowClick) return onRowClick(row, event);
+    const href = rowHref?.(row);
+    if (!href) return;
+    if (event.metaKey || event.ctrlKey) window.open(href, "_blank", "noopener");
+    else window.location.hash = href.replace(/^#/, "");
+  }
+  const showPagination =
+    !!pagination &&
+    !skeleton &&
+    (pagination.alwaysShow || count > pagination.size || page > 1);
+  const loadingStatus = loading && (
+    <span className="sr-only" role="status">
+      Loading…
+    </span>
+  );
+  if (cards)
+    return (
+      <>
+        {loadingStatus}
+        <ul
+          className="data-list"
+          aria-label={label}
+          aria-busy={loading || undefined}
+        >
+          {skeleton ? (
+            Array.from({ length: Math.min(skeletonRows, 4) }, (_, index) => (
+              <li key={index} className="data-list-item" aria-hidden="true">
+                <div className="data-list-main">
+                  <Skeleton width="45%" height={13} />
+                  <Skeleton width="70%" height={11} />
+                </div>
+                <Skeleton width={64} height={20} radius={999} />
+              </li>
+            ))
+          ) : rows.length ? (
+            rows.map((row, index) => {
+              const card = mobileCard!(row);
+              return (
+                <li
+                  key={rowKey(row, index)}
+                  className="data-list-item"
+                  data-interactive={card.href || onRowClick ? "" : undefined}
+                  onClick={(event) => {
+                    if ((event.target as Element).closest(interactiveSelector))
+                      return;
+                    if (onRowClick) return onRowClick(row, event);
+                    if (card.href)
+                      window.location.hash = card.href.replace(/^#/, "");
+                  }}
+                >
+                  {card.leading}
+                  <div className="data-list-main">
+                    <div className="data-list-title">
+                      {card.href ? (
+                        <a href={card.href}>{card.title}</a>
+                      ) : (
+                        card.title
+                      )}
+                    </div>
+                    {card.meta && card.meta.length > 0 && (
+                      <div className="data-list-meta">
+                        {card.meta.filter(Boolean).map((item, metaIndex) => (
+                          <span key={metaIndex}>{item}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {card.status && (
+                    <div className="data-list-status">{card.status}</div>
+                  )}
+                  {(card.href || onRowClick) && (
+                    <ChevronRight
+                      className="data-list-chevron"
+                      size={16}
+                      aria-hidden="true"
+                    />
+                  )}
+                </li>
+              );
+            })
+          ) : (
+            <li className="data-list-empty">{empty}</li>
+          )}
+        </ul>
+        {showPagination && (
+          <Pagination
+            count={count}
+            page={page}
+            size={pagination!.size}
+            onPage={pagination!.onPage}
+            sizeOptions={pagination!.sizeOptions}
+            onSize={pagination!.onSize}
+            noun={pagination!.noun}
+          />
+        )}
+      </>
+    );
   return (
     <>
+      {loadingStatus}
       <div
+        ref={scroller}
         className={`${variant === "code" ? "data-table-code-scroll" : "data-table-scroll"} ${scrollClassName}`}
         role="region"
         aria-label={variant === "code" ? label : `${label} table`}
-        tabIndex={0}
+        tabIndex={overflow ? 0 : undefined}
+        data-overflow={overflow || undefined}
       >
         <table
           className={`${variant === "code" ? "data-table-code" : "data-table"} ${className}`}
           aria-label={label}
           aria-busy={loading || undefined}
+          data-interactive={interactive || undefined}
         >
+          {columns.some((column) => column.width !== undefined) && (
+            <colgroup>
+              {columns.map((column) => (
+                <col
+                  key={column.id}
+                  style={
+                    column.width !== undefined
+                      ? { width: column.width }
+                      : undefined
+                  }
+                />
+              ))}
+            </colgroup>
+          )}
           <thead>
             <tr>
               {columns.map((column) => {
@@ -365,6 +551,14 @@ export function DataTable<T>({
                     : direction === "desc"
                       ? ArrowDown
                       : ArrowUpDown;
+                const firstDirection = column.defaultDirection ?? "asc";
+                const nextDirection = direction
+                  ? direction === "asc"
+                    ? "descending"
+                    : "ascending"
+                  : firstDirection === "asc"
+                    ? "ascending"
+                    : "descending";
                 return (
                   <th
                     key={column.id}
@@ -387,10 +581,10 @@ export function DataTable<T>({
                           className="data-table-sort"
                           onClick={() => changeSort(column)}
                           aria-label={`Sort by ${name}${direction ? `, currently ${direction === "asc" ? "ascending" : "descending"}` : ""}`}
-                          title={`Sort ${direction === "asc" ? "descending" : "ascending"}`}
+                          title={`Sort ${nextDirection}`}
                         >
                           <span>{column.header}</span>
-                          <SortIcon size={14} aria-hidden="true" />
+                          <SortIcon size={13} aria-hidden="true" />
                         </button>
                       ) : (
                         column.header
@@ -420,36 +614,72 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={columns.length} className="data-table-empty">
-                  <span role="status">
-                    <Spinner />
-                    Loading…
-                  </span>
-                </td>
-              </tr>
-            ) : rows.length ? (
-              rows.map((row, index) => (
+            {skeleton ? (
+              Array.from({ length: skeletonRows }, (_, index) => (
                 <tr
-                  key={rowKey(row, index)}
-                  {...rowAttributes?.(row, index)}
-                  className={
-                    typeof rowClassName === "function"
-                      ? rowClassName(row)
-                      : rowClassName
-                  }
-                  onClick={
-                    onRowClick ? (event) => onRowClick(row, event) : undefined
-                  }
+                  key={`skeleton-${index}`}
+                  className="data-table-skeleton"
+                  aria-hidden="true"
                 >
-                  {columns.map((column) => (
+                  {columns.map((column, columnIndex) => (
                     <td key={column.id} className={column.className}>
-                      {column.cell(row)}
+                      <Skeleton
+                        width={
+                          columnIndex === 0
+                            ? `${62 - (index % 3) * 9}%`
+                            : `${48 + ((index + columnIndex) % 3) * 12}%`
+                        }
+                        height={12}
+                      />
                     </td>
                   ))}
                 </tr>
               ))
+            ) : rows.length ? (
+              rows.map((row, index) => {
+                const extra = rowAttributes?.(row, index);
+                return (
+                  <tr
+                    key={rowKey(row, index)}
+                    {...extra}
+                    className={
+                      [
+                        typeof rowClassName === "function"
+                          ? rowClassName(row)
+                          : rowClassName,
+                        extra?.className,
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                    data-interactive={interactive || undefined}
+                    onClick={
+                      interactive
+                        ? (event) => {
+                            (
+                              extra?.onClick as
+                                | ((
+                                    event: React.MouseEvent<HTMLTableRowElement>,
+                                  ) => void)
+                                | undefined
+                            )?.(event);
+                            rowClick(row, event);
+                          }
+                        : (extra?.onClick as
+                            | ((
+                                event: React.MouseEvent<HTMLTableRowElement>,
+                              ) => void)
+                            | undefined)
+                    }
+                  >
+                    {columns.map((column) => (
+                      <td key={column.id} className={column.className}>
+                        {column.cell(row)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan={columns.length} className="data-table-empty">
@@ -460,12 +690,15 @@ export function DataTable<T>({
           </tbody>
         </table>
       </div>
-      {pagination && (
+      {showPagination && (
         <Pagination
           count={count}
           page={page}
-          size={pagination.size}
-          onPage={pagination.onPage}
+          size={pagination!.size}
+          onPage={pagination!.onPage}
+          sizeOptions={pagination!.sizeOptions}
+          onSize={pagination!.onSize}
+          noun={pagination!.noun}
         />
       )}
     </>

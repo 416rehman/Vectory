@@ -3,32 +3,13 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  Activity,
-  CalendarClock,
-  ChevronLeft,
-  ChevronRight,
-  CircleAlert,
-  ExternalLink,
-  Home,
-  Layers,
-  Menu,
-  Rocket,
-  ScrollText,
-  Search,
-  Server,
-  Settings,
-  SlidersHorizontal,
-  UsersRound,
-  Workflow,
-  X,
-} from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import {
   api,
-  can,
   getCSRFVersion,
   getSessionEpoch,
   invalidateSession,
@@ -38,13 +19,25 @@ import {
   withRequestDeadline,
   type User,
 } from "./api";
+import { roleAllows } from "./roleAccess";
 import { isMissingSession } from "./authRequests";
-import { Button, ErrorBox, IconButton, Modal, Spinner } from "./ui";
+import { Button, ShellContext, Spinner } from "./ui";
 import { helpHref } from "./DocLink";
-import TabLabel from "./TabLabel";
 import AccountMenu from "./AccountMenu";
-import PageFinder from "./PageFinder";
+import CommandPalette from "./CommandPalette";
 import DeploymentRecoveryCenter from "./DeploymentRecovery";
+import {
+  initialsFor,
+  KeyboardShortcuts,
+  MobileHeader,
+  NotFound,
+  PageSkeleton,
+  PermissionNeeded,
+  Sidebar,
+  useGlobalShortcuts,
+} from "./Shell";
+import { knownPages, routeTitle, sectionOf, shellInfo } from "./navigation";
+import { notifyToast, toast, ToastViewport } from "./toast";
 import { useAppearance } from "./appearance";
 import PageBoundary from "./PageBoundary";
 import { loadPage } from "./pageLoading";
@@ -54,38 +47,17 @@ const Documentation = lazy(() => loadPage(() => import("./Documentation")));
 import { Devices, Groups, Overview } from "./Fleet";
 import { Policies, Settings as InstanceSettings } from "./Control";
 import { Enrollment } from "./Enrollment";
+import Auth from "./AuthScreen";
+import SessionRenewal from "./SessionRenewal";
+import PermissionNote from "./PermissionNote";
 import Deployments, { type DeploymentQuery } from "./Deployments";
 import { readDeploymentQuery } from "./deploymentRouting";
 import AuditLog from "./AuditLog";
 import { readAuditQuery, type AuditQuery } from "./auditModel";
 import Issues from "./Issues";
 import { UsersSecurity } from "./UsersSecurity";
-import Auth from "./AuthScreen";
-import SessionRenewal from "./SessionRenewal";
-import PermissionNote from "./PermissionNote";
 import type { PipelineLibraryQuery } from "./PipelineLibrary";
 import { readPipelineDestination } from "./pipelineDestination";
-const primary = [
-  { id: "overview", name: "Overview", icon: Home },
-  { id: "configurations", name: "Pipelines", icon: Workflow },
-  { id: "devices", name: "Devices", icon: Server },
-  { id: "deployments", name: "Activity", icon: Activity },
-];
-const devicePages = [
-  { id: "devices", name: "Devices", icon: Server },
-  { id: "groups", name: "Groups", icon: Layers },
-  { id: "policies", name: "Agent settings", icon: SlidersHorizontal },
-];
-const activityPages = [
-  { id: "deployments", name: "Deployments", icon: Rocket },
-  { id: "schedules", name: "Scheduled", icon: CalendarClock },
-  { id: "issues", name: "Issues", icon: CircleAlert },
-  { id: "audit", name: "Audit log", icon: ScrollText },
-];
-const settingsPages = [
-  { id: "settings", name: "General", icon: Settings },
-  { id: "users", name: "People & security", icon: UsersRound },
-];
 export function Brand({ small = false }: { small?: boolean }) {
   return (
     <span className={`brand ${small ? "small" : ""}`}>
@@ -111,10 +83,9 @@ export default function App() {
     [connectionError, setConnectionError] = useState(""),
     [checking, setChecking] = useState(true),
     [route, setRoute] = useState(location.hash.slice(2) || "overview"),
-    [toast, setToast] = useState(""),
     [sidebar, setSidebar] = useState(false),
     [commandOpen, setCommandOpen] = useState(false),
-    [commandRequest, setCommandRequest] = useState(0),
+    [shortcutsOpen, setShortcutsOpen] = useState(false),
     [accountOpen, setAccountOpen] = useState(false);
   const [appearance, setAppearance] = useAppearance();
   const accountOpenRef = useRef(accountOpen);
@@ -135,10 +106,12 @@ export default function App() {
   const navigationRef = useRef<HTMLElement>(null);
   const navigationToggle = useRef<HTMLButtonElement>(null);
   const shellModalReturnFocus = useRef<HTMLElement | null>(null);
-  function openShellModal(kind: "search", opener?: HTMLElement) {
-    if (!commandOpen) {
+  function openShellModal(kind: "search" | "shortcuts", opener?: HTMLElement) {
+    if (!commandOpen && !shortcutsOpen) {
       shellModalReturnFocus.current = mobileNavigation
-        ? navigationToggle.current
+        ? opener?.closest(".mobile-header")
+          ? opener
+          : navigationToggle.current
         : opener ||
           (accountOpen
             ? navigationRef.current?.querySelector<HTMLButtonElement>(
@@ -152,7 +125,7 @@ export default function App() {
     setSidebar(false);
     setAccountOpen(false);
     setCommandOpen(kind === "search");
-    setCommandRequest((request) => request + 1);
+    setShortcutsOpen(kind === "shortcuts");
   }
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -172,17 +145,22 @@ export default function App() {
       setSidebar(false);
       setAccountOpen(false);
       setCommandOpen(false);
+      setShortcutsOpen(false);
+      toast.clear();
     }
   }, [user]);
   useEffect(() => {
     if (!user || !mobileNavigation || !sidebar) return;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const frame = requestAnimationFrame(() =>
+    // The header avatar opens the drawer with the account menu already open;
+    // moving focus to the close button then would dismiss that menu.
+    const frame = requestAnimationFrame(() => {
+      if (accountOpenRef.current) return;
       navigationRef.current
         ?.querySelector<HTMLButtonElement>(".sidebar-close")
-        ?.focus({ preventScroll: true }),
-    );
+        ?.focus({ preventScroll: true });
+    });
     const containFocus = (event: KeyboardEvent) => {
       if (accountOpenRef.current || event.defaultPrevented) return;
       if (event.key === "Escape") {
@@ -348,7 +326,9 @@ export default function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [user?.id]);
-  const notify = useCallback((message: string) => setToast(message), []);
+  const notify = useCallback((message: string) => {
+    notifyToast(message);
+  }, []);
   const initialization = useRef<AbortController | null>(null);
   const initialize = useCallback(async () => {
     initialization.current?.abort();
@@ -439,24 +419,6 @@ export default function App() {
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, [route]);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(""), 5000);
-    return () => clearTimeout(timer);
-  }, [toast]);
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
-        e.preventDefault();
-        if (commandOpen) setCommandOpen(false);
-        else openShellModal("search");
-      }
-      if (e.key === "Escape" && !accountOpenRef.current && !e.defaultPrevented)
-        setSidebar(false);
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [commandOpen, accountOpen, mobileNavigation]);
   const navigate = useCallback((path: string) => {
     if (path.startsWith("docs/")) {
       window.open(helpHref(path.slice(5)), "_blank", "noopener,noreferrer");
@@ -464,6 +426,7 @@ export default function App() {
       location.hash = "/" + path;
     }
     setCommandOpen(false);
+    setShortcutsOpen(false);
     setSidebar(false);
     setAccountOpen(false);
   }, []);
@@ -492,6 +455,12 @@ export default function App() {
   const editorPage = page === "configurations" && !!id;
   const sidebarCollapsed = collapsedPreference ?? editorPage;
   const mobileMenuOpen = mobileNavigation && sidebar;
+  const resolvedTheme =
+    appearance === "auto"
+      ? document.documentElement.dataset.theme === "dark"
+        ? "dark"
+        : "light"
+      : appearance;
   function toggleSidebarWidth() {
     const next = !sidebarCollapsed;
     setCollapsedPreference(next);
@@ -501,30 +470,34 @@ export default function App() {
       /* The current choice still works when browser storage is unavailable. */
     }
   }
+  useGlobalShortcuts({
+    enabled: !!user,
+    onPalette: () => {
+      if (commandOpen) setCommandOpen(false);
+      else openShellModal("search");
+    },
+    onShortcuts: () => openShellModal("shortcuts"),
+    onToggleSidebar: () => {
+      if (!mobileNavigation) toggleSidebarWidth();
+    },
+    navigate,
+  });
+  useEffect(() => {
+    // Pages name themselves through PageHeader; this covers the first paint.
+    if (user && !checking) document.title = routeTitle(page);
+    else document.title = "Vectory";
+  }, [page, user?.id, checking]);
+  const shell = useMemo(() => shellInfo(page, id), [page, id]);
   if (page === "docs" && !user) {
     return (
-      <div className="public-docs">
-        <header>
-          <a href="#/overview" aria-label="Vectory sign in">
-            <Brand />
-          </a>
-          <Button onClick={() => navigate("overview")}>Sign in</Button>
-        </header>
-        <main className="page-content">
-          <PageBoundary resetKey={`public:${route}`}>
-            <Suspense
-              fallback={
-                <div className="loading">
-                  <Spinner />
-                  Loading documentation
-                </div>
-              }
-            >
-              <Documentation topic={id} navigate={navigate} />
-            </Suspense>
-          </PageBoundary>
-        </main>
-      </div>
+      <main className="app-loading">
+        <Brand />
+        <PageBoundary resetKey={`public:${route}`}>
+          <Suspense fallback={<Spinner />}>
+            <Documentation topic={id} navigate={navigate} />
+          </Suspense>
+        </PageBoundary>
+      </main>
     );
   }
   if (checking)
@@ -560,331 +533,263 @@ export default function App() {
         retry={() => void initialize()}
       />
     );
-  const section = [...devicePages.map((p) => p.id), "enrollment"].includes(page)
-    ? "devices"
-    : activityPages.some((p) => p.id === page)
-      ? "deployments"
-      : settingsPages.some((p) => p.id === page)
-        ? "settings"
-        : page;
-  const tabs =
-    section === "devices" && !id && page !== "enrollment"
-      ? devicePages
-      : section === "deployments"
-        ? activityPages
-        : section === "settings"
-          ? settingsPages
-          : [];
+  const section = sectionOf(page);
+  const known = knownPages.has(page);
   return (
-    <div
-      className={`app-shell ${sidebar ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${editorPage ? "editor-shell" : ""}`}
-    >
-      <a
-        className="skip-link"
-        href="#main-content"
-        tabIndex={mobileMenuOpen ? -1 : undefined}
-        onClick={(e) => {
-          e.preventDefault();
-          document.getElementById("main-content")?.focus();
-        }}
+    <ShellContext.Provider value={shell}>
+      <div
+        className={`app-shell ${sidebar ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${editorPage ? "editor-shell" : ""}`}
       >
-        Skip to main content
-      </a>
-      {mobileMenuOpen && (
-        <button
-          className="sidebar-scrim"
-          aria-label="Close navigation"
-          tabIndex={-1}
-          onClick={() => setSidebar(false)}
-        />
-      )}
-      <aside
-        id="main-navigation"
-        ref={navigationRef}
-        className="sidebar"
-        role={mobileMenuOpen ? "dialog" : undefined}
-        aria-modal={mobileMenuOpen && !accountOpen ? true : undefined}
-        aria-label="Navigation"
-      >
-        <div className="sidebar-heading">
+        <a
+          className="skip-link"
+          href="#main-content"
+          tabIndex={mobileMenuOpen ? -1 : undefined}
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("main-content")?.focus();
+          }}
+        >
+          Skip to main content
+        </a>
+        {mobileMenuOpen && (
           <button
-            className="brand-link"
-            onClick={() => navigate("overview")}
-            aria-label="Vectory overview"
-          >
-            <Brand />
-          </button>
-          <IconButton
-            className="sidebar-close"
-            icon={X}
-            label="Close navigation"
+            className="sidebar-scrim"
+            aria-label="Close navigation"
+            tabIndex={-1}
             onClick={() => setSidebar(false)}
           />
-        </div>
-        <IconButton
-          className="sidebar-collapse"
-          icon={sidebarCollapsed ? ChevronRight : ChevronLeft}
-          label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!sidebarCollapsed}
-          aria-controls="main-navigation"
-          onClick={toggleSidebarWidth}
-        />
-        <button
-          className="sidebar-search"
-          aria-label="Find a page"
-          title="Find a page (Ctrl K)"
-          onClick={(event) => openShellModal("search", event.currentTarget)}
-        >
-          <Search size={16} />
-          <span>Find a page</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-        <nav aria-label="Main navigation">
-          {primary.map((item) => (
-            <button
-              key={item.id}
-              aria-current={section === item.id ? "page" : undefined}
-              className={section === item.id ? "active" : ""}
-              onClick={() => navigate(item.id)}
-              aria-label={item.name}
-              title={item.name}
-            >
-              <item.icon size={18} strokeWidth={1.7} />
-              <span className="nav-label">{item.name}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <AccountMenu
-            key={user.id}
-            user={user}
-            open={accountOpen}
-            onOpenChange={setAccountOpen}
-            theme={appearance}
-            onThemeChange={setAppearance}
-            onNavigate={navigate}
-            onBeforeSignOut={beforeSignOut}
-            onSignedOut={finishSignOut}
-            onReload={reloadSignIn}
-            mobile={mobileNavigation}
-            currentPage={page}
-          />
-        </div>
-      </aside>
-      <div className="app-main" inert={mobileMenuOpen}>
-        {sessionEnded && (
-          <SessionRenewal
-            user={user}
-            onRenewed={(next) => {
-              setSessionEnded(false);
-              setUser(next);
-            }}
-            onSignInAgain={() => {
-              setCSRF("");
-              setUser(null);
-              setAccountOpen(false);
-            }}
-          />
         )}
-        <header className="mobile-header">
-          <button
-            ref={navigationToggle}
-            className="icon-button"
-            aria-label="Toggle navigation"
-            title="Toggle navigation"
-            aria-expanded={mobileMenuOpen}
-            aria-controls="main-navigation"
-            onClick={() => setSidebar((v) => !v)}
-          >
-            <Menu size={17} />
-          </button>
-          <Brand small />
-        </header>
-        {tabs.length > 0 && (
-          <nav
-            className="section-tabs"
-            aria-label={
-              section === "devices"
-                ? "Device sections"
-                : section === "deployments"
-                  ? "Activity sections"
-                  : "Settings sections"
-            }
-          >
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                aria-current={page === tab.id ? "page" : undefined}
-                className={page === tab.id ? "active" : ""}
-                onClick={() => navigate(tab.id)}
-              >
-                <TabLabel icon={tab.icon}>{tab.name}</TabLabel>
-              </button>
-            ))}
-          </nav>
-        )}
-        <DeploymentRecoveryCenter key={user.id} user={user} notify={notify} />
-        <main
-          key={
-            page === "deployments" || page === "schedules" || page === "audit"
-              ? page
-              : routePath
+        <Sidebar
+          brand={<Brand />}
+          section={section}
+          collapsed={sidebarCollapsed}
+          mobile={mobileNavigation}
+          mobileOpen={mobileMenuOpen}
+          navigationRef={navigationRef}
+          onSearch={(opener) => openShellModal("search", opener)}
+          onToggleCollapsed={toggleSidebarWidth}
+          onClose={() => setSidebar(false)}
+          accountMenu={
+            <AccountMenu
+              key={user.id}
+              user={user}
+              open={accountOpen}
+              onOpenChange={setAccountOpen}
+              theme={appearance}
+              onThemeChange={setAppearance}
+              onNavigate={navigate}
+              onBeforeSignOut={beforeSignOut}
+              onSignedOut={finishSignOut}
+              onReload={reloadSignIn}
+              onShowShortcuts={() => openShellModal("shortcuts")}
+              mobile={mobileNavigation}
+              currentPage={page}
+            />
           }
-          id="main-content"
-          tabIndex={-1}
-          className={`page-content ${page === "configurations" && id ? "editor-content" : ""}`}
-        >
-          <PageBoundary resetKey={`${user.id}:${user.role}:${route}`}>
-            <Suspense
-              fallback={
-                <div className="loading">
-                  <Spinner />
-                  Loading page…
-                </div>
-              }
-            >
-              {page === "docs" ? (
-                <Documentation topic={id} navigate={navigate} />
-              ) : page === "overview" ? (
-                <Overview user={user} navigate={navigate} />
-              ) : page === "devices" ? (
-                <Devices
-                  user={user}
-                  notify={notify}
-                  navigate={navigate}
-                  deviceId={id}
-                />
-              ) : page === "groups" ? (
-                <Groups user={user} notify={notify} />
-              ) : page === "configurations" ? (
-                id ? (
-                  <Editor
-                    initialDeviceId={selectedDeviceId}
-                    destination={pipelineDestination}
-                    key={`${user.id}:${user.role}:${id}`}
-                    id={id}
+        />
+        <div className="app-main" inert={mobileMenuOpen}>
+          {/* The session prompt has one mount point, above the page. */}
+          {sessionEnded && (
+            <SessionRenewal
+              user={user}
+              onRenewed={(next) => {
+                setSessionEnded(false);
+                setUser(next);
+              }}
+              onSignInAgain={() => {
+                setCSRF("");
+                setUser(null);
+                setAccountOpen(false);
+              }}
+            />
+          )}
+          <MobileHeader
+            title={routeTitle(page).split(" · ")[0]}
+            expanded={mobileMenuOpen}
+            toggleRef={navigationToggle}
+            initials={initialsFor(user)}
+            onToggle={() => setSidebar((v) => !v)}
+            onSearch={(opener) => openShellModal("search", opener)}
+            onAccount={() => {
+              setSidebar(true);
+              setAccountOpen(true);
+            }}
+          />
+          <DeploymentRecoveryCenter key={user.id} user={user} notify={notify} />
+          <main
+            key={
+              page === "deployments" || page === "schedules" || page === "audit"
+                ? page
+                : routePath
+            }
+            id="main-content"
+            tabIndex={-1}
+            className={`page-content ${page === "configurations" && id ? "editor-content" : ""}`}
+          >
+            <PageBoundary resetKey={`${user.id}:${user.role}:${route}`}>
+              <Suspense
+                fallback={
+                  <PageSkeleton
+                    title={routeTitle(page).split(" · ")[0]}
+                    editor={editorPage}
+                  />
+                }
+              >
+                {page === "docs" ? (
+                  <Documentation topic={id} navigate={navigate} />
+                ) : page === "overview" ? (
+                  <Overview user={user} navigate={navigate} />
+                ) : page === "devices" ? (
+                  <Devices
                     user={user}
                     notify={notify}
                     navigate={navigate}
+                    deviceId={id}
                   />
-                ) : (
-                  <Configurations
-                    key={`${user.id}:${user.role}`}
-                    initialDeviceId={selectedDeviceId}
-                    destination={pipelineDestination}
+                ) : page === "groups" ? (
+                  <Groups user={user} notify={notify} />
+                ) : page === "configurations" ? (
+                  id ? (
+                    <Editor
+                      initialDeviceId={selectedDeviceId}
+                      destination={pipelineDestination}
+                      key={`${user.id}:${user.role}:${id}`}
+                      id={id}
+                      user={user}
+                      notify={notify}
+                      navigate={navigate}
+                    />
+                  ) : (
+                    <Configurations
+                      key={`${user.id}:${user.role}`}
+                      initialDeviceId={selectedDeviceId}
+                      destination={pipelineDestination}
+                      initialQuery={
+                        libraryView?.userId === user.id
+                          ? libraryView.query
+                          : undefined
+                      }
+                      onQueryChange={rememberLibraryView}
+                      user={user}
+                      notify={notify}
+                      navigate={navigate}
+                    />
+                  )
+                ) : page === "deployments" || page === "schedules" ? (
+                  <Deployments
+                    key={page}
+                    selectedDeploymentId={id || null}
+                    routeKey={route}
+                    routeQuery={
+                      readDeploymentQuery(route.split("?")[1] || "") ??
+                      (deploymentViews?.userId === user.id
+                        ? deploymentViews[page]
+                        : undefined)
+                    }
                     initialQuery={
-                      libraryView?.userId === user.id
-                        ? libraryView.query
+                      deploymentViews?.userId === user.id
+                        ? deploymentViews[page]
                         : undefined
                     }
-                    onQueryChange={rememberLibraryView}
+                    onQueryChange={
+                      page === "schedules"
+                        ? rememberSchedules
+                        : rememberDeployments
+                    }
                     user={user}
+                    scheduled={page === "schedules"}
                     notify={notify}
                     navigate={navigate}
                   />
-                )
-              ) : page === "deployments" || page === "schedules" ? (
-                <Deployments
-                  key={page}
-                  selectedDeploymentId={id || null}
-                  routeKey={route}
-                  routeQuery={
-                    readDeploymentQuery(route.split("?")[1] || "") ??
-                    (deploymentViews?.userId === user.id
-                      ? deploymentViews[page]
-                      : undefined)
-                  }
-                  initialQuery={
-                    deploymentViews?.userId === user.id
-                      ? deploymentViews[page]
-                      : undefined
-                  }
-                  onQueryChange={
-                    page === "schedules"
-                      ? rememberSchedules
-                      : rememberDeployments
-                  }
-                  user={user}
-                  scheduled={page === "schedules"}
-                  notify={notify}
-                  navigate={navigate}
-                />
-              ) : page === "policies" ? (
-                <Policies user={user} notify={notify} />
-              ) : page === "enrollment" && can(user, "operate") ? (
-                <Enrollment user={user} notify={notify} navigate={navigate} />
-              ) : page === "enrollment" &&
-                !["operator", "admin"].includes(user.role) ? (
-                <PermissionNote
-                  user={user}
-                  needs="operate"
-                  title="Add device"
-                  action="Adding devices"
-                />
-              ) : page === "issues" ? (
-                <Issues
-                  user={user}
-                  notify={notify}
-                  navigate={navigate}
-                  deviceId={selectedDeviceId}
-                />
-              ) : page === "audit" ? (
-                <AuditLog
-                  selectedAuditId={id || null}
-                  routeKey={route}
-                  routeQuery={
-                    readAuditQuery(route.split("?")[1] || "") ??
-                    (auditView?.userId === user.id
-                      ? auditView.query
-                      : undefined)
-                  }
-                  initialQuery={
-                    auditView?.userId === user.id ? auditView.query : undefined
-                  }
-                  initialDeviceId={selectedDeviceId}
-                  onQueryChange={rememberAudit}
-                  navigate={navigate}
-                />
-              ) : page === "users" ? (
-                <UsersSecurity
-                  user={user}
-                  notify={notify}
-                  onUserChanged={setUser}
-                  onSignIn={finishSignOut}
-                  onReload={reloadSignIn}
-                />
-              ) : page === "settings" ? (
-                <InstanceSettings />
-              ) : (
-                <ErrorBox message="This page is unavailable for your account." />
-              )}
-            </Suspense>
-          </PageBoundary>
-        </main>
-      </div>
-      {toast && (
-        <div role="status" className="toast">
-          <span>{toast}</span>
-          <IconButton
-            icon={X}
-            label="Dismiss notification"
-            onClick={() => setToast("")}
-          />
+                ) : page === "policies" ? (
+                  <Policies user={user} notify={notify} />
+                ) : page === "enrollment" ? (
+                  roleAllows(user, "operate") ? (
+                    <Enrollment
+                      user={user}
+                      notify={notify}
+                      navigate={navigate}
+                    />
+                  ) : (
+                    <PermissionNote
+                      user={user}
+                      needs="operate"
+                      title="Add device"
+                      action="Adding devices"
+                    />
+                  )
+                ) : page === "issues" ? (
+                  <Issues
+                    user={user}
+                    notify={notify}
+                    navigate={navigate}
+                    deviceId={selectedDeviceId}
+                  />
+                ) : page === "audit" ? (
+                  <AuditLog
+                    selectedAuditId={id || null}
+                    routeKey={route}
+                    routeQuery={
+                      readAuditQuery(route.split("?")[1] || "") ??
+                      (auditView?.userId === user.id
+                        ? auditView.query
+                        : undefined)
+                    }
+                    initialQuery={
+                      auditView?.userId === user.id
+                        ? auditView.query
+                        : undefined
+                    }
+                    initialDeviceId={selectedDeviceId}
+                    onQueryChange={rememberAudit}
+                    navigate={navigate}
+                  />
+                ) : page === "users" ? (
+                  <UsersSecurity
+                    user={user}
+                    notify={notify}
+                    onUserChanged={setUser}
+                    onSignIn={finishSignOut}
+                    onReload={reloadSignIn}
+                  />
+                ) : page === "settings" ? (
+                  <InstanceSettings />
+                ) : known ? (
+                  <PermissionNeeded
+                    title={routeTitle(page).split(" · ")[0]}
+                    task="This page"
+                    role="Administrator"
+                    user={user}
+                  />
+                ) : (
+                  <NotFound onSearch={() => openShellModal("search")} />
+                )}
+              </Suspense>
+            </PageBoundary>
+          </main>
         </div>
-      )}
-      <Modal
-        open={commandOpen}
-        returnFocusRef={shellModalReturnFocus}
-        onClose={() => setCommandOpen(false)}
-        title="Find a page"
-      >
-        <PageFinder
-          key={commandRequest}
+        <ToastViewport />
+        <CommandPalette
+          open={commandOpen}
+          onOpenChange={setCommandOpen}
+          returnFocusRef={shellModalReturnFocus}
           user={user}
           currentPage={page}
           navigate={navigate}
+          theme={resolvedTheme}
+          onToggleTheme={() =>
+            setAppearance(resolvedTheme === "dark" ? "light" : "dark")
+          }
+          onShowShortcuts={() => openShellModal("shortcuts")}
+          sidebarCollapsed={mobileNavigation ? undefined : sidebarCollapsed}
+          onToggleSidebar={mobileNavigation ? undefined : toggleSidebarWidth}
         />
-      </Modal>
-    </div>
+        <KeyboardShortcuts
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
+          returnFocusRef={shellModalReturnFocus}
+        />
+      </div>
+    </ShellContext.Provider>
   );
 }

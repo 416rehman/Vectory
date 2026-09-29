@@ -904,3 +904,53 @@ async fn activity_links_use_existing_typed_identity_and_immutable_pipeline_paren
             .all(|v| v["target_exists"].is_boolean())
     );
 }
+
+#[tokio::test]
+async fn scope_separates_sign_in_activity_from_changes() {
+    let (_temp, s, app, admin) = fixture().await;
+    let mut tx = s.pool.begin().await.unwrap();
+    for (n, (action, outcome)) in [
+        ("login", "denied"),
+        ("login.mfa", "success"),
+        ("logout", "success"),
+        ("user.create", "success"),
+        ("configuration.publish", "success"),
+        ("device.apply_state", "verified_applied"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        db::insert(
+            &mut tx,
+            "audit",
+            &json!({"id":format!("40000000-0000-4000-8000-{n:012}"),"actor":admin.id,"action":action,"target":admin.id,"outcome":outcome,"created_at":"2026-09-26T12:00:00Z"}),
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let total = |query: &str| format!("/api/v1/audit/history?{query}");
+    assert_eq!(get(&app, &total(""), &admin).await["total"], 6);
+    // Changes hide sign-in and sign-out activity only.
+    assert_eq!(get(&app, &total("scope=changes"), &admin).await["total"], 3);
+    assert_eq!(
+        get(&app, &total("scope=security"), &admin).await["total"],
+        4
+    );
+    assert_eq!(
+        get(&app, &total("scope=changes&family=user"), &admin).await["total"],
+        1
+    );
+    let security = get(&app, &total("scope=security"), &admin).await;
+    assert!(
+        security["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["action"] != "configuration.publish")
+    );
+    for query in ["scope=everything", "scope=changes&scope=security"] {
+        let (status, _) = call(&app, "GET", &total(query), Value::Null, Some(&admin), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+}

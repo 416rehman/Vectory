@@ -360,6 +360,18 @@ async function load({
         })),
       });
     }
+    // The device page also shows telemetry, open issues and recent activity.
+    if (method === "GET") {
+      const telemetry = path.match(/^\/devices\/([^/]+)\/telemetry$/);
+      if (telemetry) return reply({ device_id: telemetry[1], samples: [] });
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
+    }
     unexpected.push(`${method} ${path}`);
     return reply(
       {

@@ -2769,6 +2769,17 @@
             "description": "Exact stored target or stable typed target identity; no current group membership inference."
           },
           {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "changes",
+                "security"
+              ],
+              "description": "changes hides sign-in and sign-out activity (login, login.*, logout); security shows only sign-in, account, user, MFA, bootstrap and signing-key events. Omitted means every event."
+            }
+          },
+          {
             "name": "from",
             "in": "query",
             "schema": {
@@ -13223,6 +13234,13 @@
             "type": "string",
             "maxLength": 256
           },
+          "scope": {
+            "enum": [
+              "changes",
+              "security"
+            ],
+            "description": "changes hides sign-in and sign-out activity (login, login.*, logout); security shows only sign-in, account, user, MFA, bootstrap and signing-key events. Omitted means every event."
+          },
           "from": {
             "type": "string",
             "format": "date-time"
@@ -15125,6 +15143,95 @@
             "items": {
               "$ref": "#/components/schemas/Activity"
             }
+          },
+          "devices_managed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Non-revoked devices with a desired version."
+          },
+          "devices_on_desired": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Managed devices verified on their desired version (status verified)."
+          },
+          "versions_total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Published pipeline versions."
+          },
+          "versions": {
+            "type": "object",
+            "description": "Pipeline name and number for each desired version referenced by a device.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "number",
+                "configuration_id",
+                "configuration_name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "rollouts": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "$ref": "#/components/schemas/OverviewRollout"
+            },
+            "description": "Active and paused rollouts (newest first), then scheduled ones starting within 24 hours (soonest first)."
+          },
+          "attention": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttentionGroup"
+            },
+            "description": "Devices needing an operator, grouped by cause and ordered by severity."
+          },
+          "fleet_activity": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/FleetActivity"
+            },
+            "description": "Recent fleet-changing events; sign-in, account and signing-key events are excluded."
+          },
+          "security_events_hidden": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Security events skipped within the scanned window (at most 300 recent events)."
           }
         },
         "required": [
@@ -15134,9 +15241,421 @@
           "deployments_active",
           "issues_open",
           "devices",
-          "recent_activity"
+          "recent_activity",
+          "devices_managed",
+          "devices_on_desired",
+          "versions_total",
+          "versions",
+          "rollouts",
+          "attention",
+          "fleet_activity",
+          "security_events_hidden"
         ],
         "additionalProperties": true
+      },
+      "OverviewRollout": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "active",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed",
+              "missed",
+              "unassigned"
+            ]
+          },
+          "scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollout_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canary_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "batch_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state_counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "configuration_id",
+          "configuration_name",
+          "version_id",
+          "version_number",
+          "policy",
+          "status",
+          "scheduled_at",
+          "created_at",
+          "priority",
+          "rollout_kind",
+          "canary_size",
+          "batch_size",
+          "target_count",
+          "state_counts"
+        ],
+        "additionalProperties": true
+      },
+      "AttentionGroup": {
+        "type": "object",
+        "properties": {
+          "cause": {
+            "enum": [
+              "failed",
+              "check_required",
+              "stuck",
+              "offline",
+              "paused",
+              "unmanaged"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "danger",
+              "warning",
+              "neutral"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "device_ids": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string"
+            }
+          },
+          "device_names": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            }
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "Most common sanitized failure summary reported for failed groups."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requested": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Paused groups only: pauses not yet acknowledged by the agent."
+          },
+          "local": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Paused groups only: pauses set on the host."
+          }
+        },
+        "required": [
+          "cause",
+          "severity",
+          "count",
+          "device_ids",
+          "device_names",
+          "version_id",
+          "version_number",
+          "configuration_id",
+          "configuration_name",
+          "state",
+          "since",
+          "reason"
+        ],
+        "additionalProperties": true
+      },
+      "FleetActivity": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Activity"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "repeat": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Consecutive per-device events collapsed into this row."
+              },
+              "first_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "device_names": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "version_number": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deployment": {
+                "type": "object",
+                "properties": {
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "version_number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policy": {
+                    "type": "boolean"
+                  },
+                  "rollout_kind": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "priority": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "target_count": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "configuration_name",
+                  "version_number",
+                  "policy",
+                  "rollout_kind",
+                  "priority",
+                  "target_count"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          }
+        ]
       },
       "Revision": {
         "type": "object",
@@ -16836,6 +17355,63 @@
               }
             ]
           },
+          "desired_version": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 240
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "number",
+                  "configuration_id",
+                  "configuration_name"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -16893,63 +17469,6 @@
             "minimum": 10,
             "maximum": 3600,
             "description": "Current check-in interval; until the agent acknowledges a policy change, the longer of the old and new interval."
-          },
-          "desired_version": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "number": {
-                    "anyOf": [
-                      {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 9007199254740991
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "configuration_id": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "format": "uuid"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "configuration_name": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 240
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "id",
-                  "number",
-                  "configuration_id",
-                  "configuration_name"
-                ],
-                "additionalProperties": true
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "running_version": {
             "anyOf": [
