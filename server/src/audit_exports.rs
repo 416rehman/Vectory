@@ -347,7 +347,7 @@ async fn build(s: &State, h: &HeaderMap, filters: &audit::Filters, id: &str) -> 
         &mut whole,
     )?;
     loop {
-        auth::authorize(s, h, &[], false).await?;
+        let reader = auth::authorize(s, h, &[], false).await?;
         let rows = audit::rows(
             &mut tx,
             filters,
@@ -362,6 +362,7 @@ async fn build(s: &State, h: &HeaderMap, filters: &audit::Filters, id: &str) -> 
             break;
         }
         for (event, next) in rows {
+            let event = audit::for_reader(event, &reader);
             let line = encode_line(&json!({"type":"audit","event":event}));
             append(&mut file, &line, &mut bytes, &mut whole)?;
             events.update(&line);

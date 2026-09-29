@@ -15,7 +15,7 @@ use crate::{
 use axum::{
     Extension, Json,
     body::{Body, Bytes},
-    extract::{Path, RawQuery, State as AppState},
+    extract::{Path, Query, RawQuery, State as AppState, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
@@ -451,8 +451,12 @@ fn downloads_disabled() -> ApiError {
         "Agent downloads are turned off on this server. Install the agent from your own package source, then run vectory setup.",
     )
 }
+/// Download and installer caps count IPv6 clients per /64, like every throttle.
 fn peer_key(peer: Option<std::net::IpAddr>) -> String {
-    peer.map_or_else(|| "unknown".into(), |ip| ip.to_string())
+    peer.map_or_else(
+        || "unknown".into(),
+        |ip| crate::throttle_group(&ip.to_string()),
+    )
 }
 
 /// `GET /agent/v1/downloads/{os}/{arch}` on the agent listener. Anyone who can
@@ -1032,6 +1036,11 @@ pub async fn details(AppState(s): AppState<State>, h: HeaderMap, uri: Uri) -> Re
     })))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityQuery {
+    since: Option<String>,
+}
 /// `GET /api/v1/agent-install/activity?since=RFC3339`: recent enrollment
 /// attempts, successful or refused, with their recorded reasons. Devices are
 /// only ever told "refused"; this is where an administrator sees why.
@@ -1039,28 +1048,20 @@ pub async fn activity(
     AppState(s): AppState<State>,
     h: HeaderMap,
     RawQuery(raw): RawQuery,
+    parsed: std::result::Result<Query<ActivityQuery>, QueryRejection>,
 ) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
+    // Enrollment attempts carry client addresses: for the people who add devices.
+    auth::authorize(&s, &h, &["operator"], false).await?;
+    let input = crate::deployment_history::query(raw.as_deref(), parsed)?;
     let now = chrono::Utc::now();
     let floor = now - chrono::Duration::hours(24);
-    let mut since = floor;
-    for pair in raw
-        .as_deref()
-        .unwrap_or("")
-        .split('&')
-        .filter(|p| !p.is_empty())
-    {
-        match pair.split_once('=') {
-            Some(("since", value)) => {
-                let value = value.replace("%3A", ":").replace("%3a", ":");
-                since = chrono::DateTime::parse_from_rfc3339(&value)
-                    .map_err(|_| ApiError::invalid("since must be an RFC3339 timestamp"))?
-                    .with_timezone(&chrono::Utc)
-                    .max(floor);
-            }
-            _ => return Err(ApiError::invalid("Only since is supported")),
-        }
-    }
+    let since = match input.since.as_deref() {
+        Some(value) => chrono::DateTime::parse_from_rfc3339(value)
+            .map_err(|_| ApiError::invalid("since must be an RFC3339 timestamp"))?
+            .with_timezone(&chrono::Utc)
+            .max(floor),
+        None => floor,
+    };
     // Newest first, in recorded order within the same second.
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT r.data FROM audit_sequence s JOIN records r ON r.kind='audit' AND r.id=s.audit_id WHERE s.created_at>=? AND json_extract(r.data,'$.action')='device.enroll' ORDER BY s.created_at DESC,s.sequence DESC LIMIT 50",
@@ -1226,6 +1227,18 @@ mod tests {
             host_of("https://vectory.example.com"),
             "vectory.example.com"
         );
+    }
+
+    #[test]
+    fn download_caps_count_ipv6_clients_per_64() {
+        let ip = |text: &str| Some(text.parse().unwrap());
+        let group = peer_key(ip("2001:db8:1:2::1"));
+        assert_eq!(group, "2001:db8:1:2::/64");
+        assert_eq!(peer_key(ip("2001:db8:1:2:ffff:ffff:ffff:9")), group);
+        assert_ne!(peer_key(ip("2001:db8:1:3::1")), group);
+        assert_eq!(peer_key(ip("192.0.2.9")), "192.0.2.9");
+        assert_eq!(peer_key(ip("::ffff:192.0.2.9")), "192.0.2.9");
+        assert_eq!(peer_key(None), "unknown");
     }
 
     #[test]

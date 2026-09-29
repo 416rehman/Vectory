@@ -1035,3 +1035,38 @@ async fn issue_sort_is_global_bounded_and_retains_strict_query_validation() {
         assert_eq!(body["error"]["code"], "INVALID_INPUT");
     }
 }
+
+#[tokio::test]
+async fn issue_groups_list_each_groups_newest_fifty_members_in_one_page() {
+    let (_temp, s, app, admin) = fixture().await;
+    let device = device_record(&s, 1, "edge-01", false).await;
+    // 60 apply failures on no version and three data_dir failures on v1.
+    for n in 0..63u64 {
+        let mut item = issue(n, &device);
+        item["last_seen"] = json!(format!("2026-01-02T00:{:02}:00Z", n % 60));
+        if n >= 60 {
+            item["code"] = json!("DATA_DIR_MISSING");
+            item["desired_version_id"] = json!("20000000-0000-4000-8000-000000000001");
+            item["last_seen"] = json!(format!("2026-01-03T00:00:0{}Z", n - 60));
+        }
+        insert(&s, "issue", &item).await;
+    }
+    let page = get(&app, "/api/v1/issues/groups?page_size=5", &admin).await;
+    assert_eq!(page["total"], 2);
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items[0]["code"], "DATA_DIR_MISSING");
+    assert_eq!(items[0]["issue_count"], 3);
+    assert_eq!(items[0]["devices"].as_array().unwrap().len(), 3);
+    assert_eq!(items[0]["devices"][0]["id"], db::hash("issue-62"));
+    assert_eq!(items[1]["code"], "APPLY_FAILED");
+    assert_eq!(items[1]["issue_count"], 60);
+    let members = items[1]["devices"].as_array().unwrap();
+    assert_eq!(members.len(), 50);
+    assert_eq!(members[0]["id"], db::hash("issue-59"));
+    assert!(members.iter().all(|m| m["code"] == "APPLY_FAILED"));
+    let second = get(&app, "/api/v1/issues/groups?page_size=1&page=2", &admin).await;
+    assert_eq!(second["items"][0]["code"], "APPLY_FAILED");
+    assert_eq!(second["items"][0]["devices"].as_array().unwrap().len(), 50);
+    let searched = get(&app, "/api/v1/issues/groups?search=edge-01", &admin).await;
+    assert_eq!(searched["total"], 2);
+}

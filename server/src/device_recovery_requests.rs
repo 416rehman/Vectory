@@ -103,8 +103,7 @@ pub async fn post(
     } else {
         crate::token_requests::parse(&body)?
     };
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], true).await?;
     let result = create(&mut tx, &id, &v, api::text(&actor, "id")).await?;
     tx.commit().await?;
@@ -200,8 +199,7 @@ pub async fn lookup(
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let id = source_id(&id)?;
     let key = crate::deployment_requests::parse_id(&key)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], false).await?;
     let result = match entry(&mut tx, api::text(&actor, "id"), &key, &id).await? {
         None => json!({"request_id":key,"request_correlation":true,"device_id":id,"found":false}),
@@ -225,8 +223,7 @@ pub async fn cancel(
     }
     let id = source_id(&id)?;
     let key = crate::deployment_requests::parse_id(&key)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["admin"], true).await?;
     let actor = api::text(&actor, "id");
     let prior = entry(&mut tx, actor, &key, &id).await?;

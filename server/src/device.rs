@@ -129,17 +129,33 @@ pub async fn enroll(
     crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    s.limit("enrollment".into(), 60, std::time::Duration::from_secs(60))?;
+    // One client (an IPv6 /64 counts as one) gets the budget the whole server
+    // used to share, so a noisy host cannot block `vectory setup` fleet-wide.
+    let client = peer.map_or_else(
+        || "unknown".into(),
+        |ip| crate::throttle_group(&ip.to_string()),
+    );
+    let minute = std::time::Duration::from_secs(60);
+    s.limit("enrollment".into(), 600, minute)?;
+    s.limit(format!("enrollment:{client}"), 60, minute)?;
     let mut details = attempt_details(&v, peer);
     let (reason, token_id, error) = match enroll_inner(&s, &v, &details).await {
         Ok(response) => return Ok(response),
         Err(Refusal::Refused { reason, token_id }) => (reason, token_id, ApiError::enrollment()),
         Err(Refusal::Error(error)) => ("INTERNAL", None, error),
     };
+    // Refusals that carry no real token are junk or a repeated typo: record
+    // the first per client and reason each minute. The audit log is
+    // append-only, so repeats must not grow it without bound.
+    if matches!(reason, "TOKEN_UNKNOWN" | "MALFORMED")
+        && s.limit(format!("enrollment-audit:{client}:{reason}"), 1, minute)
+            .is_err()
+    {
+        return Err(error);
+    }
     details["reason_code"] = json!(reason);
     details["token_id"] = json!(token_id);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     db::insert(
         &mut tx,
         "audit",
@@ -215,8 +231,7 @@ async fn enroll_inner(
     }
     let csr = db::string(v, "csr_pem", 16384).map_err(|_| malformed())?;
     let key_hash = crate::crypto::Keys::csr_key_hash(csr).map_err(|_| malformed())?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let row = sqlx::query("SELECT id,data FROM enrollment_tokens WHERE verifier=?")
         .bind(db::hash(token))
         .fetch_optional(&mut *tx)
@@ -350,7 +365,7 @@ pub async fn renew(
         std::time::Duration::from_secs(86400),
     )?;
     let issued = s.keys.issue(&id, db::string(&v, "csr_pem", 16384)?)?;
-    let mut tx = s.pool.begin().await?;
+    let mut tx = db::begin_write(&s.pool).await?;
     let overlap =
         (Utc::now() + Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     sqlx::query(
@@ -564,7 +579,7 @@ pub async fn heartbeat(
         Some(list) => Some(log_summary(list)?),
         None => None,
     };
-    let mut tx = s.pool.begin().await?;
+    let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)
         .fetch_one(&mut *tx)

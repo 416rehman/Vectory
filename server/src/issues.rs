@@ -232,7 +232,13 @@ fn title_sql() -> String {
 const JOINS: &str = " LEFT JOIN devices d ON d.id=json_extract(i.data,'$.device_id') LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(i.data,'$.desired_version_id') LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')";
 
 fn projection(q: &mut QueryBuilder<'_, Sqlite>) {
-    q.push("SELECT json_object(\
+    q.push("SELECT ");
+    issue_object(q);
+    q.push(" FROM records i").push(JOINS);
+}
+/// The allowlisted Issue projection of `records i` joined with `JOINS`.
+fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
+    q.push("json_object(\
         'id',i.id,'device_id',CASE WHEN json_type(i.data,'$.device_id')='text' THEN substr(json_extract(i.data,'$.device_id'),1,128) ELSE '' END,\
         'device_name',substr(d.name,1,256),'device_revoked',CASE WHEN d.id IS NULL THEN NULL ELSE json(CASE WHEN d.revoked=1 THEN 'true' ELSE 'false' END) END,\
         'code',").push(CODE).push(",\
@@ -255,7 +261,7 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>) {
         'acknowledged_by',CASE WHEN json_type(i.data,'$.acknowledged_by')='text' THEN substr(json_extract(i.data,'$.acknowledged_by'),1,128) ELSE NULL END,\
         'acknowledged_by_name',CASE WHEN json_type(i.data,'$.acknowledged_by_name')='text' THEN substr(json_extract(i.data,'$.acknowledged_by_name'),1,120) ELSE NULL END,\
         'acknowledgement_reason',CASE WHEN json_type(i.data,'$.acknowledgement_reason')='text' THEN substr(json_extract(i.data,'$.acknowledgement_reason'),1,1000) ELSE NULL END,\
-        'disposition',").push(DISPOSITION).push(") FROM records i").push(JOINS);
+        'disposition',").push(DISPOSITION).push(")");
 }
 /// Render the plain-language title and reason from the code and the
 /// diagnostics, which are revalidated so imported records cannot inject
@@ -405,7 +411,10 @@ pub async fn groups(
     }
     let mut tx = s.pool.begin().await?;
     let mut total = QueryBuilder::new("SELECT count(*) FROM (SELECT 1 FROM records i");
-    total.push(JOINS);
+    // Group keys read only the issue; search is the one filter that joins.
+    if !search.is_empty() {
+        total.push(JOINS);
+    }
     filter(&mut total, state, None, search);
     total
         .push(" GROUP BY ")
@@ -436,26 +445,57 @@ pub async fn groups(
         .push(" OFFSET ")
         .push_bind(offset);
     let keys = keys.build().fetch_all(&mut *tx).await?;
+    // Up to 50 most recent member issues for every group on the page, in one
+    // read: each group key is a (version, code) pair from the page above.
+    let mut members: std::collections::BTreeMap<(String, String), Vec<String>> =
+        std::collections::BTreeMap::new();
+    if !keys.is_empty() {
+        use sqlx::Row;
+        let mut q = QueryBuilder::new("SELECT version,code,issue FROM (SELECT ");
+        q.push(VERSION)
+            .push(" AS version,")
+            .push(CODE)
+            .push(" AS code,");
+        issue_object(&mut q);
+        q.push(" AS issue,ROW_NUMBER() OVER (PARTITION BY ")
+            .push(VERSION)
+            .push(",")
+            .push(CODE)
+            .push(" ORDER BY ")
+            .push(order())
+            .push(") AS n FROM records i")
+            .push(JOINS);
+        filter(&mut q, state, None, search);
+        q.push(" AND (")
+            .push(VERSION)
+            .push(",")
+            .push(CODE)
+            .push(") IN (VALUES ");
+        let mut pairs = q.separated(",");
+        for key in &keys {
+            pairs
+                .push("(")
+                .push_bind_unseparated(key.get::<String, _>("version"))
+                .push_unseparated(",")
+                .push_bind_unseparated(key.get::<String, _>("code"))
+                .push_unseparated(")");
+        }
+        q.push(")) WHERE n<=50 ORDER BY version,code,n");
+        for row in q.build().fetch_all(&mut *tx).await? {
+            members
+                .entry((row.get("version"), row.get("code")))
+                .or_default()
+                .push(row.get("issue"));
+        }
+    }
     let mut items = Vec::with_capacity(keys.len());
     for key in keys {
         use sqlx::Row;
         let version: String = key.get("version");
         let code: String = key.get("code");
-        let mut q = QueryBuilder::new("");
-        projection(&mut q);
-        filter(&mut q, state, None, search);
-        q.push(" AND ")
-            .push(VERSION)
-            .push("=")
-            .push_bind(version.clone())
-            .push(" AND ")
-            .push(CODE)
-            .push("=")
-            .push_bind(code.clone())
-            .push(" ORDER BY ")
-            .push(order())
-            .push(" LIMIT 50");
-        let rows: Vec<String> = q.build_query_scalar().fetch_all(&mut *tx).await?;
+        let rows = members
+            .remove(&(version.clone(), code.clone()))
+            .unwrap_or_default();
         let devices = rendered(&rows)?;
         let first = devices.first().cloned().unwrap_or(Value::Null);
         let mut deployments: Vec<&str> = devices
@@ -536,8 +576,7 @@ async fn command(
             "Provide a current positive revision; a note is at most 1000 characters and required to reopen",
         ));
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let mut issue = db::record(&mut tx, "issue", &id).await?;
     if revision(&issue) != input.revision {

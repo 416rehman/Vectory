@@ -245,6 +245,47 @@ async fn library_metadata_tracks_edits_archive_versions_and_malformed_draft_sect
     );
     let original = save(&app, &actor, &original, base()).await;
     let version = command(&app, &actor, &original, "publish", json!({})).await;
+    // Assignment says where a version is headed; running says what hosts run.
+    // A device assigned v2 whose last verified candidate is v1 runs v1.
+    let mut draft = base();
+    draft["transforms"] = json!({"t":{"type":"remap","inputs":["sample"],"source":".a = 1"}});
+    draft["sinks"]["out"]["inputs"] = json!(["t"]);
+    let current = save(&app, &actor, &original, draft).await;
+    let second = command(&app, &actor, &current, "publish", json!({})).await;
+    assert_eq!(second["number"], 2, "{second}");
+    for (n, desired, running) in [
+        (1, &second, Some(&version)),
+        (2, &second, Some(&version)),
+        (3, &second, Some(&second)),
+        (4, &second, None),
+    ] {
+        let data = json!({"id":format!("00000000-0000-4000-8000-00000000000{n}"),"name":format!("host-{n}"),
+            "verified_configuration_attempt":running.map(|v| json!({"version_id":v["id"],"generation":1}))});
+        sqlx::query("INSERT INTO devices(id,name,data,desired_version_id) VALUES(?,?,?,?)")
+            .bind(data["id"].as_str().unwrap())
+            .bind(data["name"].as_str().unwrap())
+            .bind(data.to_string())
+            .bind(desired["id"].as_str().unwrap())
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
+    let (_, page) = call(
+        &app,
+        "GET",
+        "/api/v1/configurations/library",
+        Value::Null,
+        Some(&actor),
+    )
+    .await;
+    let item = &page["items"][0];
+    assert_eq!(item["latest_version"]["number"], 2);
+    assert_eq!(item["assigned_devices"], 4);
+    assert_eq!(
+        item["running_versions"],
+        json!([{"id":second["id"],"number":2,"devices":1},{"id":version["id"],"number":1,"devices":2}])
+    );
+    let original = current;
     let archived = command(&app, &actor, &original, "archive", json!({})).await;
     let (_, page) = call(
         &app,
@@ -264,7 +305,7 @@ async fn library_metadata_tracks_edits_archive_versions_and_malformed_draft_sect
     )
     .await;
     assert_eq!(page["items"][0]["revision"], archived["revision"]);
-    assert_eq!(page["items"][0]["latest_version"]["id"], version["id"]);
+    assert_eq!(page["items"][0]["latest_version"]["id"], second["id"]);
     let mut other = archived.clone();
     other["id"] = json!(db::id());
     db::insert(

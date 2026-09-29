@@ -60,7 +60,7 @@ pub async fn authorize(s: &State, h: &HeaderMap, roles: &[&str], mutation: bool)
     let mut conn = s.pool.acquire().await?;
     let user = authorize_in(&mut conn, h, roles, mutation).await?;
     if let Ok(token) = session_token(h) {
-        touch_session(&mut conn, &db::hash(token)).await;
+        touch_session(s, &mut conn, &db::hash(token)).await;
     }
     Ok(user)
 }
@@ -100,8 +100,10 @@ pub(crate) async fn authorize_in(
     Ok(user)
 }
 /// Best effort: refresh a session's coarse last-active time. A read first keeps
-/// ordinary requests from taking SQLite's write lock.
-async fn touch_session(conn: &mut SqliteConnection, verifier: &str) {
+/// ordinary requests from taking SQLite's write lock. The write happens only
+/// when the writer lock is free: every other write holds it, and last-active
+/// is not worth making a heartbeat, deploy or scheduler tick wait or fail.
+async fn touch_session(s: &crate::App, conn: &mut SqliteConnection, verifier: &str) {
     let now = Utc::now();
     let stale =
         (now - Duration::seconds(LAST_SEEN_SECONDS)).to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -112,7 +114,10 @@ async fn touch_session(conn: &mut SqliteConnection, verifier: &str) {
             .await
             .ok()
             .flatten();
-    if last.is_some_and(|last| last < stale) {
+    if !last.is_some_and(|last| last < stale) {
+        return;
+    }
+    if let Ok(_guard) = s.writer.try_lock() {
         let _ = sqlx::query("UPDATE session_details SET last_seen_at=? WHERE verifier=?")
             .bind(now.to_rfc3339_opts(SecondsFormat::Secs, true))
             .bind(verifier)
@@ -513,8 +518,7 @@ pub async fn bootstrap(
     check_new_password(password, &[&email, &name])?;
     let hash = password_hash(password.to_owned()).await?;
     let client = s.client_key(&h, peer);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
         .fetch_one(&mut *tx)
         .await?;
@@ -551,6 +555,54 @@ pub async fn bootstrap(
 /// clients that have not signed in to it before, within their windows.
 const ACCOUNT_CLIENT_FAILURES: u32 = 10;
 const ACCOUNT_FAILURES: u32 = 100;
+const CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const ACCOUNT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// How long a client that signed in stays exempt from the account-wide budget.
+const KNOWN_CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// Sign-in failure keys for one attempt. Every key uses the client's throttle
+/// group, so one IPv6 host cannot multiply its budget across its /64.
+struct SignInKeys {
+    account_client: String,
+    account: String,
+    known_client: String,
+}
+impl SignInKeys {
+    fn new(email: &str, group: &str) -> Self {
+        Self {
+            account_client: format!("login-fail:{email}:{group}"),
+            account: format!("login-fail:{email}"),
+            known_client: format!("login-known:{email}:{group}"),
+        }
+    }
+    /// Refuse when the budget is spent; otherwise reserve one failure before
+    /// the password is checked, so parallel attempts cannot all pass the check.
+    /// A client that recently signed in to this account keeps working while
+    /// someone elsewhere fails against it; others share the account budget.
+    fn reserve(&self, s: &crate::App) -> std::result::Result<(), u64> {
+        let mut ledger = s.sign_in_failures();
+        let blocked = ledger
+            .blocked(&self.account_client, ACCOUNT_CLIENT_FAILURES)
+            .or_else(|| {
+                (!ledger.seen(&self.known_client))
+                    .then(|| ledger.blocked(&self.account, ACCOUNT_FAILURES))
+                    .flatten()
+            });
+        if let Some(wait) = blocked {
+            return Err(wait);
+        }
+        ledger.add(&self.account_client, CLIENT_WINDOW);
+        ledger.add(&self.account, ACCOUNT_WINDOW);
+        Ok(())
+    }
+    /// The password was right: return the reservation, clear this client's
+    /// failures and remember it as a client of this account.
+    fn succeeded(&self, s: &crate::App) {
+        let mut ledger = s.sign_in_failures();
+        ledger.remove(&self.account_client);
+        ledger.refund(&self.account);
+        ledger.add(&self.known_client, KNOWN_CLIENT_WINDOW);
+    }
+}
 /// Sign-in audit with the matched account (never the attempted email) and the
 /// client address. Credentials and factors never enter audit records.
 async fn audit_signin(
@@ -568,14 +620,17 @@ async fn audit_signin(
     .await
 }
 /// Record a throttled account at most once per window for each client.
-async fn audit_throttled(s: &State, email: &str, client: &str) {
-    let key = format!("login-throttle-audit:{email}:{client}");
-    if s.seen(&key) {
-        return;
+async fn audit_throttled(s: &State, email: &str, client: &str, group: &str) {
+    let key = format!("login-throttle-audit:{email}:{group}");
+    {
+        let mut ledger = s.sign_in_failures();
+        if ledger.seen(&key) {
+            return;
+        }
+        ledger.add(&key, CLIENT_WINDOW);
     }
-    s.record_failure(key, std::time::Duration::from_secs(15 * 60));
     let _guard = s.writer.lock().await;
-    let Ok(mut tx) = s.pool.begin().await else {
+    let Ok(mut tx) = db::begin_write(&s.pool).await else {
         return;
     };
     let target: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE email=?")
@@ -620,42 +675,31 @@ pub async fn login(
     // only failures count toward an account's lockout, so signing in
     // successfully never locks anyone out.
     let client = s.client_key(&h, peer);
+    let group = crate::throttle_group(&client);
     s.limit(
         "login-global".into(),
         600,
         std::time::Duration::from_secs(60),
     )?;
     s.limit(
-        format!("login-client:{client}"),
+        format!("login-client:{group}"),
         60,
         std::time::Duration::from_secs(60),
     )?;
     let email = user_email(&v)?;
-    let account_client = format!("login-fail:{email}:{client}");
-    let account = format!("login-fail:{email}");
-    let known_client = format!("login-known:{email}:{client}");
-    // A client that recently signed in to this account keeps working while
-    // someone elsewhere fails against it; others share the account-wide budget.
-    let blocked = s
-        .failures_block(&account_client, ACCOUNT_CLIENT_FAILURES)
-        .or_else(|| {
-            (!s.seen(&known_client))
-                .then(|| s.failures_block(&account, ACCOUNT_FAILURES))
-                .flatten()
-        });
-    if let Some(wait) = blocked {
-        audit_throttled(&s, &email, &client).await;
+    let password = db::string(&v, "password", 256)?.to_owned();
+    let keys = SignInKeys::new(&email, &group);
+    if let Err(wait) = keys.reserve(&s) {
+        audit_throttled(&s, &email, &client, &group).await;
         return Err(signin_throttled(wait));
     }
-    let password = db::string(&v, "password", 256)?.to_owned();
     let row = sqlx::query("SELECT * FROM users WHERE email=?")
         .bind(&email)
         .fetch_optional(&s.pool)
         .await?;
     let stored = row.as_ref().map(|r| r.get::<String, _>("password_hash"));
     let valid = verify_password(password, stored.clone()).await;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let fresh = sqlx::query("SELECT * FROM users WHERE email=? AND enabled=1")
         .bind(&email)
         .fetch_optional(&mut *tx)
@@ -664,8 +708,6 @@ pub async fn login(
         .as_ref()
         .is_some_and(|r| Some(r.get::<String, _>("password_hash")) == stored);
     if !valid || !unchanged {
-        s.record_failure(account_client, std::time::Duration::from_secs(15 * 60));
-        s.record_failure(account, std::time::Duration::from_secs(60 * 60));
         let reason = if row.is_none() {
             "unknown_account"
         } else if !valid {
@@ -689,11 +731,7 @@ pub async fn login(
         tx.commit().await?;
         return Err(ApiError::unauthorized());
     }
-    s.clear_limit(&account_client);
-    s.record_failure(
-        known_client,
-        std::time::Duration::from_secs(30 * 24 * 60 * 60),
-    );
+    keys.succeeded(&s);
     let fresh = fresh.unwrap();
     let user = public_user(&fresh);
     // Reveal MFA only after the password and live account have been verified.
@@ -847,7 +885,7 @@ pub async fn session(AppState(s): AppState<State>, h: HeaderMap) -> Response {
     match current.await {
         Ok(value) => {
             if let (Ok(token), Ok(mut conn)) = (session_token(&h), s.pool.acquire().await) {
-                touch_session(&mut conn, &db::hash(token)).await;
+                touch_session(&s, &mut conn, &db::hash(token)).await;
             }
             Json(value).into_response()
         }
@@ -860,8 +898,7 @@ pub async fn logout(
     h: HeaderMap,
 ) -> Result<(HeaderMap, Json<Value>)> {
     authorize(&s, &h, &[], true).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let user = authorize_in(&mut tx, &h, &[], true).await?;
     crate::login_challenges::clear(&mut tx, user["id"].as_str().unwrap()).await?;
     end_session(&mut tx, &db::hash(session_token(&h)?), ending::SIGNED_OUT).await?;
@@ -924,8 +961,7 @@ pub async fn revoke_session(
     if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(ApiError::missing());
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let user = authorize_in(&mut tx, &h, &[], true).await?;
     let user_id = user["id"].as_str().unwrap();
     let current = db::hash(session_token(&h)?);
@@ -1010,8 +1046,7 @@ pub async fn create_user(
         return Err(ApiError::invalid("Invalid role"));
     }
     let hash = password_hash(password.to_owned()).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = authorize_in(&mut tx, &h, &["admin"], true).await?;
     let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
         .bind(&email)
