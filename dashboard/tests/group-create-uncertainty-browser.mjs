@@ -1,4 +1,5 @@
-// Expected workflow-limit observation; actual App, synthetic group transport.
+// Regression check: a group create whose response is lost never becomes a second
+// group by itself. Actual App, synthetic group transport.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import { createHash } from "node:crypto";
@@ -17,6 +18,8 @@ await mkdir(output, { recursive: true });
 const sourceFiles = [
   "dashboard/src/App.tsx",
   "dashboard/src/GroupEditor.tsx",
+  "dashboard/src/GroupRecovery.tsx",
+  "dashboard/src/groupRequests.ts",
   "dashboard/src/group-editor.css",
   "dashboard/src/deploymentRouting.ts",
   "dashboard/src/api.ts",
@@ -24,7 +27,7 @@ const sourceFiles = [
   "dashboard/src/DataTable.tsx",
   "server/src/api.rs",
   "server/src/groups.rs",
-  "dashboard/tests/group-create-uncertainty-observation.mjs",
+  "dashboard/tests/group-create-uncertainty-browser.mjs",
 ];
 const hashes = async () =>
   Object.fromEntries(
@@ -69,7 +72,7 @@ const server = await createServer({
           res.end(
             await vite.transformIndexHtml(
               req.url,
-              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic group-create uncertainty observation</title></head><body><div id="root"></div><script type="module">import "virtual:group-create-uncertainty";</script></body></html>',
+              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic group-create uncertainty check</title></head><body><div id="root"></div><script type="module">import "virtual:group-create-uncertainty";</script></body></html>',
             ),
           );
         });
@@ -128,14 +131,44 @@ await context.route("**/*", async (route) => {
     return route.fulfill({ json: [] });
   if (method === "GET" && path === "/groups")
     return route.fulfill({ json: groups });
+  // The server remembers each create request by its key: a lookup by that key
+  // says whether it was ever committed.
+  if (method === "GET" && path === "/groups/requests")
+    return route.fulfill({
+      json: {
+        items: groups.map((group) => ({
+          request_id: group.request_id,
+          group_id: group.id,
+          group_name: group.name,
+          created_at: group.created_at,
+        })),
+        total: groups.length,
+        page: 1,
+        page_size: 12,
+      },
+    });
+  if (method === "GET" && path.startsWith("/groups/requests/")) {
+    const requestId = path.split("/").pop();
+    const saved = groups.find((group) => group.request_id === requestId);
+    return route.fulfill({
+      json: saved
+        ? { request_id: requestId, found: true, group: saved }
+        : { request_id: requestId, found: false },
+    });
+  }
   if (method === "POST" && path === "/groups") {
-    const saved = {
-      ...request.postDataJSON(),
+    const body = request.postDataJSON();
+    // The same key with the same payload returns the group already created.
+    const existing = groups.find(
+      (group) => group.request_id === body.request_id,
+    );
+    const saved = existing || {
+      ...body,
       id: id(100 + groups.length),
       revision: 1,
       created_at: "2026-09-27T12:00:00Z",
     };
-    groups.push(saved);
+    if (!existing) groups.push(saved);
     if (loseResponse) {
       loseResponse = false;
       return route.abort("failed");
@@ -153,7 +186,11 @@ page.setDefaultTimeout(7000);
 page.on("pageerror", (e) => errors.push(e.message));
 const name = "Synthetic uncertain group";
 const writes = () => requests.filter((r) => r.method !== "GET");
-let observed = false,
+const create = () =>
+  page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create group", exact: true });
+let passed = false,
   failure = null,
   storage = null;
 try {
@@ -166,19 +203,15 @@ try {
     .first()
     .click();
   await page.getByRole("textbox", { name: "Group name" }).fill(name);
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Create group", exact: true })
-    .click();
+  await create().click();
+  // The create was committed and its answer lost: the form says so and can't
+  // be sent again.
   await expect(
     page.getByRole("region", { name: "Review group changes" }),
   ).toContainText("Save could not be confirmed");
-  await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Create group", exact: true }),
-  ).toBeDisabled();
+  await expect(create()).toBeDisabled();
   expect(writes()).toHaveLength(1);
+  expect(writes()[0].body.request_id).toMatch(/^[0-9a-f-]{36}$/);
   expect(groups).toHaveLength(1);
   await page.screenshot({ path: resolve(output, "uncertain-create.png") });
   storage = await page.evaluate(() => ({
@@ -189,44 +222,57 @@ try {
       k.includes("group"),
     ),
   }));
+  // The browser keeps a reminder of the unconfirmed request.
+  expect(storage.local_group_keys.length).toBeGreaterThan(0);
   await page
-    .getByRole("button", { name: "Close and refresh groups", exact: true })
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .last()
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+  const reminder = page
+    .getByRole("status")
+    .filter({ hasText: "1 group request needs confirmation." });
+  await expect(reminder).toBeVisible();
   expect(writes()).toHaveLength(1);
+  // The reminder survives a reload.
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Groups", exact: true }),
   ).toBeVisible();
+  await expect(reminder).toBeVisible();
   await expect(
     page.getByText("Save could not be confirmed", { exact: true }),
   ).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "Create group", exact: true })
-    .first()
-    .click();
-  await page.getByRole("textbox", { name: "Group name" }).fill(name);
+  // Creating another group is blocked until the saved request is reviewed: a
+  // lost answer never becomes a second group by itself.
   await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Create group", exact: true }),
-  ).toBeEnabled();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Create group", exact: true })
-    .click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name, exact: true })).toHaveCount(2);
-  expect(writes()).toHaveLength(2);
-  expect(writes()[0].body).toEqual(writes()[1].body);
-  expect(writes()[0].body).not.toHaveProperty("request_id");
-  expect(groups[0].id).not.toBe(groups[1].id);
-  expect(errors).toEqual([]);
+    page.getByRole("button", { name: "Create group", exact: true }).first(),
+  ).toBeDisabled();
   await page.screenshot({
-    path: resolve(output, "duplicate-after-explicit-new-create.png"),
+    path: resolve(output, "second-create-blocked.png"),
   });
-  observed = true;
+  expect(writes()).toHaveLength(1);
+  expect(groups).toHaveLength(1);
+  // Reviewing the request reads its status and finds the group the server made.
+  await page
+    .getByRole("button", { name: "Review group requests", exact: true })
+    .click();
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await expect(
+    page.getByRole("heading", { name: "Group confirmed" }),
+  ).toBeVisible();
+  await page.screenshot({ path: resolve(output, "confirmed.png") });
+  expect(
+    requests.filter((r) => r.path.startsWith("/groups/requests/")).length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(writes()).toHaveLength(1);
+  expect(groups).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(reminder).toHaveCount(0);
+  expect(errors).toEqual([]);
+  passed = true;
 } catch (e) {
   failure = e.message;
 } finally {
@@ -236,10 +282,9 @@ try {
   const current = await hashes();
   const report = {
     recorded_at: new Date().toISOString(),
-    observation_reproduced: observed,
-    correctness_test_count: 0,
+    passed,
     scope:
-      "Separate expected workflow-limit observation on actual App/Groups/GroupEditor with synthetic intercepted HTTP. A committed fixture response is lost. Open-form duplicate submission is correctly blocked. A deliberate close/refresh/reload/new-create with the same payload can create another UUID; no automatic retry is claimed. Backend duplicate behavior is source-reviewed separately, not established by the synthetic transport.",
+      "Regression check on actual App/Groups/GroupEditor with synthetic intercepted HTTP. A committed create's response is lost. The form blocks a second submission, the browser keeps a reminder of the unconfirmed request across a reload, another create is blocked until that request is reviewed, and reviewing it reads its status and finds the one group the server made, so no second group is created. Backend idempotency is covered by the server tests, not established by this synthetic transport.",
     error: failure,
     requests,
     created_groups: groups,
@@ -251,19 +296,18 @@ try {
     ),
     screenshots: [
       "uncertain-create.png",
-      "duplicate-after-explicit-new-create.png",
+      "second-create-blocked.png",
+      "confirmed.png",
     ],
-    source_boundary:
-      "server/src/api.rs group create path allocates a fresh UUID and inserts/audits without deployment request registry; names are display metadata, not operation identity.",
   };
   await writeFile(
     resolve(output, "report.json"),
     JSON.stringify(report, null, 2) + "\n",
   );
   console.log(
-    observed
-      ? "OBSERVATION reproduced (not acceptance)"
-      : "OBSERVATION failed: " + failure,
+    passed
+      ? "PASS a lost group-create answer never creates a second group by itself"
+      : "FAIL " + failure,
   );
-  if (!observed) process.exitCode = 1;
+  if (!passed) process.exitCode = 1;
 }

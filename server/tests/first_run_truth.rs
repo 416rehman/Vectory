@@ -1,4 +1,4 @@
-//! First-run truth (R16): what keeps an agent running, whether Vector runs,
+//! First-run truth: what keeps an agent running, whether Vector runs,
 //! a first version that couldn't start, and delivery health measured from
 //! Vector's log when a device reports no metrics.
 use axum::{

@@ -2,11 +2,11 @@
 
 > **Historical record, committed on 2026-09-28 in `c88758e`.** The evidence files it names were not committed; see that commit ("Generated evidence JSON and screenshots from local review runs are not committed"). They are named below in backticks instead of linked, so you can see what each passage claimed. Current evidence: the CI workflow `checks` for the commit under test (its steps run `tests/security/schema-fixtures.mjs` and `tests/security/schema-review.mjs`) and `docs/internal/REQUIREMENTS.md`.
 
-Reviewed against the pinned Vector **0.58.0** configuration schema and the user's supplied reference URLs. This is an executed coverage inventory and representative compatibility review, not a claim that every configuration or integration has run successfully.
+Reviewed against the pinned Vector **0.58.0** configuration schema and the official Vector reference URLs. This is an executed coverage inventory and representative compatibility review, not a claim that every configuration or integration has run successfully.
 
 ## Reference coverage
 
-[`reference-urls.json`](../../vector-catalog/reference-urls.json) preserves the 139 supplied URLs and 138 normalized unique URLs. The bounded four-request audit retrieved all 138 official pages successfully. The list includes the configuration overview, all requested component pages, global options, pipeline components, TLS, API configuration, tests, event schema, template syntax, and secrets. It covers 126 distinct component pages. All 126 occur in the pinned 128-entry catalog; the two additional entries are deprecated aliases, `sources/http` and `sinks/greptimedb`.
+[`reference-urls.json`](../../vector-catalog/reference-urls.json) preserves the 139 listed URLs and 138 normalized unique URLs. The bounded four-request audit retrieved all 138 official pages successfully. The list includes the configuration overview, all component pages, global options, pipeline components, TLS, API configuration, tests, event schema, template syntax, and secrets. It covers 126 distinct component pages. All 126 occur in the pinned 128-entry catalog; the two additional entries are deprecated aliases, `sources/http` and `sinks/greptimedb`.
 
 The pinned schema contains 493 definitions and 6,145 schema nodes. All 128 component schemas compile with AJV's draft-2019 implementation. Formats are intentionally not treated as proof of native Vector semantics. The audit records platform metadata and native-versus-projected provenance for each component, and URL status, title, content hash and retrieval time for every page. Raw HTML is cached under ignored `.local/vector-reference-cache`.
 

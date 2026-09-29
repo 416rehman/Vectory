@@ -255,7 +255,7 @@ import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
 import { refusal, type Notify } from "./toast";
 
 const edgeTypes = { pipeline: PipelineEdge };
-// React Flow (MIT) permits hiding its attribution badge; the brief asks for it.
+// React Flow (MIT) permits hiding its attribution badge; the canvas hides it.
 const FLOW_PRO_OPTIONS = { hideAttribution: true };
 // Canvas options keep one identity: React Flow copies changed props into its
 // store, which re-runs every node and edge subscription.

@@ -991,6 +991,22 @@ jobs:
         run: node tests/group-create-recovery-browser.mjs
         env:
           VECTORY_GROUP_CREATE_RECOVERY_OUTPUT: artifacts/browsers/group-create-recovery
+      - name: Check a lost group create answer never makes a second group
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-create-uncertainty-browser.mjs
+        env:
+          VECTORY_GROUP_CREATE_UNCERTAINTY_OUTPUT: artifacts/browsers/group-create-uncertainty
+      - name: Check a lost agent settings create reply never makes a second record
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-settings-create-uncertainty-browser.mjs
+        env:
+          VECTORY_AGENT_SETTINGS_CREATE_UNCERTAINTY_OUTPUT: artifacts/browsers/agent-settings-create-uncertainty
+      - name: Check a stale group edit is refused and overwrites nothing
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-stale-review-browser.mjs
       - name: Check closing the inspector keeps the canvas
         timeout-minutes: 10
         if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
