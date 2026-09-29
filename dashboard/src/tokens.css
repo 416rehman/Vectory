@@ -1,0 +1,249 @@
+/*
+ * Vectory design tokens.
+ *
+ * The one place for raw colour, type, space, radius, size, elevation, motion
+ * and layering values. Components use the semantic names below; each name has
+ * a light and a dark value. Text, status and control pairs are validated
+ * against the surfaces they sit on (WCAG 4.5:1 for text, 3:1 for control
+ * boundaries and data marks) in both themes.
+ */
+:root {
+  color-scheme: light;
+
+  /* Surfaces: warm paper page, white working surfaces. */
+  --bg: #f5f3ef;
+  --bg-subtle: #efede8;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f8f7f4;
+  --surface-hover: #f5f4f0;
+  --surface-selected: #eceefd;
+  --overlay: rgb(28 25 23 / 0.38);
+
+  /* Borders. Inputs keep a 3:1 boundary against every surface. */
+  --border: #e5e2dc;
+  --border-strong: #d6d1c9;
+  --border-input: #8b867e;
+
+  /* Text. */
+  --text: #232227;
+  --text-muted: #66645e;
+  --text-subtle: #716e67;
+  --text-inverse: #ffffff;
+
+  /* Accent: cobalt marks selection, focus and links. */
+  --accent: #4055dc;
+  --accent-hover: #3446ba;
+  --accent-text: #3446ba;
+  --accent-soft: #eceefd;
+  --accent-border: #cdd3f7;
+  --focus: #4055dc;
+  --focus-ring: 0 0 0 3px rgb(64 85 220 / 0.2);
+
+  /* Action: charcoal primary buttons. */
+  --action: #2f2d2d;
+  --action-hover: #45423f;
+  --action-active: #1f1e1e;
+  --action-text: #ffffff;
+  --danger-solid: #b4262d;
+  --danger-solid-hover: #9b1f25;
+
+  /* Status: text / tinted background / border, one set per tone. */
+  --success-text: #1d6a42;
+  --success-bg: #e8f4ed;
+  --success-border: #c3e1ce;
+  --warning-text: #7a4d05;
+  --warning-bg: #fcf1d9;
+  --warning-border: #efd6a0;
+  --danger-text: #a3262b;
+  --danger-bg: #fdecec;
+  --danger-border: #f3c7c7;
+  --info-text: #3446ba;
+  --info-bg: #eceefd;
+  --info-border: #cdd3f7;
+  --neutral-text: #5c5a54;
+  --neutral-bg: #efede9;
+  --neutral-border: #dcd8d1;
+
+  /* Status marks: dots, bars and chart segments (>= 3:1 on surface). */
+  --mark-success: #2e8a57;
+  --mark-info: #4a63e0;
+  --mark-warning: #b07a08;
+  --mark-serious: #c2602a;
+  --mark-danger: #cc3a40;
+  --mark-paused: #857f77;
+  --mark-empty: #d6d1c9;
+  --chart-grid: #ebe8e2;
+  --chart-axis: #d6d1c9;
+
+  /* Elevation. */
+  --shadow-xs: 0 1px 1px rgb(41 37 34 / 0.04);
+  --shadow-sm: 0 1px 2px rgb(41 37 34 / 0.06), 0 1px 1px rgb(41 37 34 / 0.03);
+  --shadow-md: 0 8px 24px rgb(41 37 34 / 0.09), 0 2px 6px rgb(41 37 34 / 0.05);
+  --shadow-lg:
+    0 24px 64px rgb(41 37 34 / 0.16), 0 4px 12px rgb(41 37 34 / 0.06);
+
+  /* Type: Instrument Sans for everything, one mono stack for code and IDs. */
+  --font-sans:
+    "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --leading-xs: 16px;
+  --leading-sm: 16px;
+  --leading-base: 20px;
+  --leading-md: 20px;
+  --leading-lg: 24px;
+  --leading-xl: 28px;
+  --leading-2xl: 32px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-display: 650;
+  --tracking-tight: -0.4px;
+
+  /* Space: a 4px grid. */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radius. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+
+  /* Sizes. Controls in one row share a height token. */
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 36px;
+  --row-compact: 40px;
+  --row: 48px;
+  --sidebar-width: 232px;
+  --sidebar-collapsed: 64px;
+  --content-max: 1440px;
+  --content-narrow: 960px;
+  --context-bar: 24px;
+
+  /* Motion. Reduced-motion preferences shorten every transition. */
+  --dur-fast: 120ms;
+  --dur-base: 160ms;
+  --dur-slow: 240ms;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Layers. Floating menus sit above dialogs so a picker inside one works. */
+  --z-sticky: 10;
+  --z-sidebar: 30;
+  --z-overlay: 50;
+  --z-modal: 60;
+  --z-popover: 70;
+  --z-toast: 80;
+  --z-tooltip: 85;
+  --z-skip: 90;
+
+  /* Legacy names: existing stylesheets keep working and follow the theme. */
+  --ink: var(--text);
+  --muted: var(--text-muted);
+  --line: var(--border);
+  --line-strong: var(--border-strong);
+  --surface-soft: #efede9;
+  --accent-ink: var(--accent-text);
+  --action-ink: var(--action-text);
+  --blue: var(--accent);
+  --green: var(--success-text);
+  --danger: var(--danger-text);
+  --rail: var(--bg-subtle);
+  --rail-ink: var(--text);
+  --rail-muted: var(--text-muted);
+  --shadow: var(--shadow-md);
+  --radius: var(--radius-md);
+  --mono: var(--font-mono);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #1b1a1e;
+  --bg-subtle: #161518;
+  --surface: #242227;
+  --surface-raised: #2b292f;
+  --surface-sunken: #201e23;
+  --surface-hover: #2a282d;
+  --surface-selected: #2a2c48;
+  --overlay: rgb(0 0 0 / 0.62);
+
+  --border: #37343b;
+  --border-strong: #48444d;
+  --border-input: #7d7880;
+
+  --text: #f2efeb;
+  --text-muted: #b8b3ae;
+  --text-subtle: #958f98;
+  --text-inverse: #232227;
+
+  --accent: #a5afff;
+  --accent-hover: #b8c0ff;
+  --accent-text: #b6beff;
+  --accent-soft: #2a2c48;
+  --accent-border: #3d4170;
+  --focus: #a5afff;
+  --focus-ring: 0 0 0 3px rgb(165 175 255 / 0.28);
+
+  --action: #eeece8;
+  --action-hover: #ffffff;
+  --action-active: #dcd9d4;
+  --action-text: #232227;
+  --danger-solid: #c8373d;
+  --danger-solid-hover: #b02f35;
+
+  --success-text: #8fd1a8;
+  --success-bg: #1c3226;
+  --success-border: #2c4d39;
+  --warning-text: #efcd88;
+  --warning-bg: #3a2f19;
+  --warning-border: #5a4a26;
+  --danger-text: #f5a5a5;
+  --danger-bg: #3d2224;
+  --danger-border: #5e3336;
+  --info-text: #b6beff;
+  --info-bg: #2a2c48;
+  --info-border: #3d4170;
+  --neutral-text: #c9c4bf;
+  --neutral-bg: #343137;
+  --neutral-border: #4a464d;
+
+  --mark-success: #5cc48a;
+  --mark-info: #8d99ff;
+  --mark-warning: #e2b24a;
+  --mark-serious: #e8925a;
+  --mark-danger: #f07b7b;
+  --mark-paused: #9a95a0;
+  --mark-empty: #4a464d;
+  --chart-grid: #312e35;
+  --chart-axis: #48444d;
+
+  --shadow-xs: 0 1px 1px rgb(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.36);
+  --shadow-md: 0 10px 28px rgb(0 0 0 / 0.42), 0 2px 6px rgb(0 0 0 / 0.28);
+  --shadow-lg: 0 28px 72px rgb(0 0 0 / 0.6), 0 4px 14px rgb(0 0 0 / 0.36);
+
+  --surface-soft: #302d33;
+}
