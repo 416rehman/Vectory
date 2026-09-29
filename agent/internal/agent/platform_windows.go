@@ -40,6 +40,34 @@ func protect(path string, dir bool) error {
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, u.User.Sid, nil, acl, nil)
 }
 
+// Private-file checks that failed, for privateFileProblem.
+var (
+	errPrivateFileLinks  = errors.New("private file must be a regular file without links")
+	errPrivateFileAlias  = errors.New("private file traverses an alias or reparse point")
+	errPrivateFileOwner  = errors.New("secret owner is not trusted")
+	errPrivateFileShared = errors.New("secret grants access to another principal")
+)
+
+// privateFileProblem says which check made openPrivateFile refuse path, and
+// how to fix it.
+func privateFileProblem(path string, openErr error) (problem, fix string) {
+	switch {
+	case errors.Is(openErr, windows.ERROR_FILE_NOT_FOUND), errors.Is(openErr, windows.ERROR_PATH_NOT_FOUND):
+		return "doesn't exist", ""
+	case errors.Is(openErr, windows.ERROR_ACCESS_DENIED):
+		return "can't be read by this account", "Run the command from an elevated PowerShell."
+	case errors.Is(openErr, windows.ERROR_SHARING_VIOLATION):
+		return "is open in another program", "Close it, then run the command again."
+	case errors.Is(openErr, errPrivateFileLinks):
+		return "isn't a regular file with a single name", "Save the token in a new file."
+	case errors.Is(openErr, errPrivateFileAlias):
+		return "is reached through a link or alias", "Pass the file's real path."
+	case errors.Is(openErr, errPrivateFileOwner):
+		return "belongs to another account", "Save the token in a new file from an elevated PowerShell."
+	}
+	return "is readable by other accounts", "Allow only Administrators and SYSTEM to read it (Properties > Security), then run the command again."
+}
+
 // Inspect the opened object, never an independently looked-up pathname. Denying
 // write/delete sharing pins both bytes and the name for the bounded read.
 func openPrivateFile(path string) (*os.File, error) {
@@ -62,7 +90,7 @@ func openPrivateFile(path string) (*os.File, error) {
 		return fail(err)
 	}
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 || info.NumberOfLinks != 1 {
-		return fail(errors.New("private file must be a regular file without links"))
+		return fail(errPrivateFileLinks)
 	}
 	buf := make([]uint16, 32768)
 	n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
@@ -71,7 +99,7 @@ func openPrivateFile(path string) (*os.File, error) {
 	}
 	resolved := strings.TrimPrefix(windows.UTF16ToString(buf[:n]), `\\?\`)
 	if !strings.EqualFold(filepath.Clean(resolved), path) {
-		return fail(errors.New("private file traverses an alias or reparse point"))
+		return fail(errPrivateFileAlias)
 	}
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil || sd == nil {
@@ -95,7 +123,7 @@ func checkPrivateDescriptor(sd *windows.SECURITY_DESCRIPTOR) error {
 	allowed := map[string]bool{user.User.Sid.String(): true, "S-1-5-18": true, "S-1-5-32-544": true}
 	owner, _, err := sd.Owner()
 	if err != nil || owner == nil || !allowed[owner.String()] {
-		return errors.New("secret owner is not trusted")
+		return errPrivateFileOwner
 	}
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil {
@@ -114,7 +142,7 @@ func checkPrivateDescriptor(sd *windows.SECURITY_DESCRIPTOR) error {
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if !allowed[sid.String()] && ace.Mask != 0 {
-			return errors.New("secret grants access to another principal")
+			return errPrivateFileShared
 		}
 	}
 	return nil

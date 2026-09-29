@@ -27,18 +27,29 @@ type EnrollmentOptions struct {
 // necessarily private: its DACL must be checked on the opened handle. Local
 // path validation also excludes Windows alternate data stream syntax.
 func OpenEnrollmentTokenFile(path string) (*os.File, error) {
-	const refused = "token file must be private, regular, single-linked and owned by this account or administrator at a safe absolute local path"
 	if err := adoptionLocalPath(path); err != nil {
-		return nil, errors.New(refused)
+		return nil, tokenFileRefusal(path, "isn't a plain path on a local disk", "")
 	}
 	if err := SafePath(path); err != nil {
-		return nil, errors.New(refused)
+		return nil, tokenFileRefusal(path, "is reached through a symbolic link", "Pass the real file's path.")
 	}
 	f, err := openPrivateFile(path)
 	if err != nil {
-		return nil, errors.New(refused)
+		problem, fix := privateFileProblem(path, err)
+		return nil, tokenFileRefusal(path, problem, fix)
 	}
 	return f, nil
+}
+
+// tokenFileRefusal names the check a token file failed and how to fix it.
+// The file must be private, regular, single-linked, and owned by this account
+// or an administrator.
+func tokenFileRefusal(path, problem, fix string) error {
+	message := "Token file " + path + " " + problem + "."
+	if fix != "" {
+		message += " " + fix
+	}
+	return errors.New(message)
 }
 
 type enrollmentPending struct {

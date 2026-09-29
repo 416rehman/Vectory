@@ -222,7 +222,7 @@ func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 		t.Fatalf("stop took %s: %v", time.Since(started), err)
 	}
 	var local strings.Builder
-	if err = WriteVectorLog(ctx, e.Dir, 2000, false, true, &local); err != nil || !strings.Contains(local.String(), "Vector has reloaded.") || !strings.Contains(local.String(), "vector validate rejected the configuration") {
+	if err = WriteVectorLog(ctx, e.Dir, 2000, false, LogRaw, &local); err != nil || !strings.Contains(local.String(), "Vector has reloaded.") || !strings.Contains(local.String(), "vector validate rejected the configuration") {
 		t.Fatalf("local Vector log incomplete: %v", err)
 	}
 }

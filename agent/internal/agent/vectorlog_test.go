@@ -3,9 +3,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +129,43 @@ func TestReloadVerdictCannotBeForgedByPipelineLogs(t *testing.T) {
 	}
 }
 
+// logs --json prints one JSON object per line, like run --json: Vector's own
+// records unchanged, and the agent's notes and anything else with the same
+// keys, so every line parses.
+func TestVectorLogJSONLinesAllParse(t *testing.T) {
+	dir := t.TempDir()
+	l := newVectorLog(dir)
+	l.now = func() time.Time { return time.Date(2026, 9, 29, 15, 4, 5, 0, time.UTC) }
+	record := logLine("WARN", "Retrying.", "web", "timed out")
+	fmt.Fprintln(l, record)
+	l.note("vector validate rejected the configuration", []byte("x data_dir \"/var/lib/vector/\" does not exist\n"))
+	_, _ = l.Write(append([]byte(`{"level":"INFO","message":"`+strings.Repeat("x", vectorLogMaxLine)), '\n'))
+	l.close()
+	var out bytes.Buffer
+	if err := WriteVectorLog(context.Background(), dir, 100, false, LogJSON, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	var records []map[string]string
+	for _, line := range lines {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			t.Fatalf("not a JSON line: %q", line)
+		}
+		values := map[string]string{}
+		for key, value := range fields {
+			values[key], _ = value.(string)
+		}
+		records = append(records, values)
+	}
+	note := map[string]string{"timestamp": "2026-09-29T15:04:05Z", "target": "vectory", "message": "vector validate rejected the configuration"}
+	output := map[string]string{"timestamp": "2026-09-29T15:04:05Z", "target": "vectory", "message": `x data_dir "/var/lib/vector/" does not exist`}
+	if len(lines) != 4 || lines[0] != record || !reflect.DeepEqual(records[1], note) || !reflect.DeepEqual(records[2], output) ||
+		!strings.HasSuffix(records[3]["message"], "…[truncated]") || records[3]["target"] != "" {
+		t.Fatalf("JSON lines:\n%s", out.String())
+	}
+}
+
 // A reload whose configuration doesn't even load ends with this record
 // instead of "Reload was not successful." (recorded from Vector 0.58); it is a
 // failed reload as well, so the agent doesn't wait out its startup timeout.
@@ -212,7 +251,7 @@ func TestVectorLogFileRotatesAndCLIReads(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if err := WriteVectorLog(context.Background(), dir, 5, false, false, &out); err != nil {
+	if err := WriteVectorLog(context.Background(), dir, 5, false, LogText, &out); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -220,7 +259,7 @@ func TestVectorLogFileRotatesAndCLIReads(t *testing.T) {
 		t.Fatalf("formatted tail:\n%s", out.String())
 	}
 	out.Reset()
-	if err := WriteVectorLog(context.Background(), dir, 1000, false, true, &out); err != nil {
+	if err := WriteVectorLog(context.Background(), dir, 1000, false, LogRaw, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(out.String(), `"message":"Retrying`) < 10 || !strings.Contains(out.String(), `"message":"Retrying 79."`) {
@@ -235,13 +274,13 @@ func TestVectorLogFileRotatesAndCLIReads(t *testing.T) {
 		fmt.Fprintln(appendLog, logLine("ERROR", "Followed line.", "web", ""))
 		appendLog.close()
 	}()
-	if err := WriteVectorLog(ctx, dir, 1, true, false, followed); err != nil {
+	if err := WriteVectorLog(ctx, dir, 1, true, LogText, followed); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(followed.String(), "Followed line.") {
 		t.Fatalf("follow missed a new line: %q", followed.String())
 	}
-	if err := WriteVectorLog(context.Background(), t.TempDir(), 5, false, false, &out); err == nil || !strings.Contains(err.Error(), "no Vector log yet") {
+	if err := WriteVectorLog(context.Background(), t.TempDir(), 5, false, LogText, &out); err == nil || !strings.Contains(err.Error(), "no Vector log yet") {
 		t.Fatalf("missing log error = %v", err)
 	}
 }

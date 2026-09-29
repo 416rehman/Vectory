@@ -29,7 +29,7 @@ func TestPublicTokenFileIsRefusedBeforeStateAccess(t *testing.T) {
 		{"setup", "--state-dir", state, "--server", "https://example.invalid", "--name", "edge-01", "--service", "none", "--token-file", path},
 	} {
 		code, stdout, stderr := invoke(args...)
-		if code != 1 || !strings.Contains(stderr, "token file must be private") {
+		if code != 1 || !strings.Contains(stderr, "is readable by other accounts (mode 0644). Fix it: chmod 600 "+path) {
 			t.Fatalf("%s: public token file passed input preflight: exit=%d stdout=%q stderr=%q", args[0], code, stdout, stderr)
 		}
 		if strings.Contains(stderr, "install the agent first") {

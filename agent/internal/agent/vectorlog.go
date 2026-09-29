@@ -391,10 +391,49 @@ func boundedToken(value string, max int) string {
 
 // ---- `vectory logs` ----
 
-// WriteVectorLog prints the last lines of the local Vector log and, with
-// follow, streams new lines until ctx ends. It reads files only; it never
-// needs the agent lock, so it works while the service runs.
-func WriteVectorLog(ctx context.Context, dir string, lines int, follow, raw bool, w io.Writer) error {
+// Output formats of WriteVectorLog.
+const (
+	LogText = "text" // for people
+	LogRaw  = "raw"  // the file's lines unchanged
+	LogJSON = "json" // one JSON object per line
+)
+
+var agentNote = regexp.MustCompile(`^\[vectory (\S+)\] (.*)$`)
+
+// logJSON renders the log file as JSON lines. Vector's records stay as they
+// are; the agent's notes ("[vectory <time>] title", then indented output)
+// and anything else become objects with the same keys, so every line parses.
+func logJSON() func(string) string {
+	var noted string
+	return func(line string) string {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+			return trimmed
+		}
+		record := struct {
+			Timestamp string `json:"timestamp,omitempty"`
+			Target    string `json:"target,omitempty"`
+			Message   string `json:"message"`
+		}{Message: line}
+		switch m := agentNote.FindStringSubmatch(line); {
+		case m != nil:
+			noted = m[1]
+			record.Timestamp, record.Target, record.Message = m[1], "vectory", m[2]
+		case strings.HasPrefix(line, "  "):
+			record.Timestamp, record.Target, record.Message = noted, "vectory", strings.TrimPrefix(line, "  ")
+		}
+		encoded, _ := json.Marshal(record)
+		return string(encoded)
+	}
+}
+
+// WriteVectorLog prints the last lines of the local Vector log in format and,
+// with follow, streams new lines until ctx ends. It reads files only; it
+// never needs the agent lock, so it works while the service runs.
+func WriteVectorLog(ctx context.Context, dir string, lines int, follow bool, format string, w io.Writer) error {
+	render := func(line string) string { return formatLogLine(line, format == LogRaw) }
+	if format == LogJSON {
+		render = logJSON()
+	}
 	if err := adoptionLocalPath(dir); err != nil {
 		return err
 	}
@@ -413,7 +452,7 @@ func WriteVectorLog(ctx context.Context, dir string, lines int, follow, raw bool
 		}
 	}
 	for _, line := range tail {
-		fmt.Fprintln(w, formatLogLine(line, raw))
+		fmt.Fprintln(w, render(line))
 	}
 	if !follow {
 		return nil
@@ -453,7 +492,7 @@ func WriteVectorLog(ctx context.Context, dir string, lines int, follow, raw bool
 					break // an incomplete final line is read on the next tick
 				}
 				offset += int64(len(line))
-				fmt.Fprintln(w, formatLogLine(strings.TrimRight(line, "\r\n"), raw))
+				fmt.Fprintln(w, render(strings.TrimRight(line, "\r\n")))
 			}
 		}
 		f.Close()
