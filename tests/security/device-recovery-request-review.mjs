@@ -5,13 +5,19 @@ import {resolve,dirname,relative} from 'node:path';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),dashboard=resolve(root,'dashboard'),require=createRequire(resolve(dashboard,'package.json'));
-const {createServer}=await import(pathToFileURL(require.resolve('vite'))),{chromium,expect}=require('@playwright/test'),AxeBuilder=require('@axe-core/playwright').default;
+const {createServer}=await import(pathToFileURL(require.resolve('vite'))),{chromium,expect:strictExpect}=require('@playwright/test'),AxeBuilder=require('@axe-core/playwright').default;
+// Patience only: the dev server transforms modules on demand, so a slow runner can need more
+// than expect's 5 s default to paint a page. What each assertion checks is unchanged.
+const expect=strictExpect.configure({timeout:15000});
 const output=resolve(root,process.env.VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT||'.local/device-recovery-request-after');await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-recovery-request-review';
-const server=await createServer({root:dashboard,configFile:resolve(dashboard,'vite.config.ts'),cacheDir:resolve(output,'vite-cache'),server:{host:'127.0.0.1',port:0,strictPort:false,proxy:{},hmr:false},plugins:[{
+const server=await createServer({root:dashboard,configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port:0,strictPort:false,proxy:{},hmr:false},plugins:[{
  name:'device-recovery-review',resolveId(id){if(id==='virtual:device-recovery-request-review')return virtual;},load(id){if(id===virtual)return "import React from 'react';import{createRoot}from'react-dom/client';import App from '/src/App.tsx';import '/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement(App));";},
  configureServer(vite){vite.middlewares.use(async(req,res,next)=>{if(req.url!=='/__device-recovery-request-review')return next();res.setHeader('Content-Type','text/html');res.end(await vite.transformIndexHtml(req.url,'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic device recovery</title></head><body><div id="root"></div><script type="module">import "virtual:device-recovery-request-review";</script></body></html>'));});}
 }]});await server.listen();const origin=`http://127.0.0.1:${server.httpServer.address().port}`,browser=await chromium.launch();
+// The first load transforms the app's modules and bundles its dependencies, which can outlast an
+// action timeout on a cold cache; do it once here so each fixture measures only its own work.
+const warm=await browser.newPage();await warm.goto(`${origin}/__device-recovery-request-review`,{timeout:120000});await warm.close();
 const id=n=>`953039af-6186-44a6-a1df-${String(n).padStart(12,'0')}`;
 const user=(n=1,role='admin')=>({id:id(n),name:'Synthetic reviewer',email:`reviewer${n}@example.test`,role,enabled:true,revision:1});
 const device={id:id(10),name:'synthetic-recovery-host',os:'linux',arch:'amd64',agent_version:'synthetic',vector_version:'0.58.0',configuration_mode:'restricted',created_at:'2026-09-27T12:00:00Z',last_seen:null,status:'offline',apply_state:'unmanaged',desired_generation:0,reported_generation:0,desired_version_id:null,labels:{},sync_paused:false,local_paused:false,pause_acknowledged:false,effective_policy:{heartbeat_seconds:60,sync_paused:false,telemetry_enabled:false}};
