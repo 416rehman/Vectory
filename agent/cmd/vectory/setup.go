@@ -19,10 +19,12 @@ var setupCommand = command{
 	about: `Checks this host, adopts Vector, enrolls with your server, registers the
 service and waits for the first check-in. Nothing on the host changes until
 every check has passed and you've entered the token. Safe to run again: it
-resumes where it stopped. Restricted mode is the default; full mode only
-when you pass --mode full.`,
+resumes where it stopped, and restarts a running service on this build.
+Restricted mode is the default; full mode only when you pass --mode full.`,
 	examples: []string{
-		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh | sudo sh -s -- --create-user",
+		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh",
+		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
+		"sudo sh vectory-install.sh --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 1F3C...9AB0 --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --token-file /run/secrets/vectory-token --service none",
 		"sudo vectory setup --server https://vectory.example.com:8443 --dry-run",

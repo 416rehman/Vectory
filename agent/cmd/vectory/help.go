@@ -149,7 +149,9 @@ func printGeneralHelp(w io.Writer) {
 	}
 	fmt.Fprintln(w, "\nOther\n  help [command]      Show help for a command\n  version             Print the agent version")
 	fmt.Fprintln(w, "\nExamples")
-	fmt.Fprintln(w, "  curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh | sudo sh")
+	fmt.Fprintln(w, "  curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh")
+	fmt.Fprintln(w, "  echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -")
+	fmt.Fprintln(w, "  sudo sh vectory-install.sh")
 	fmt.Fprintln(w, "  sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <from Add device>")
 	fmt.Fprintln(w, "  sudo vectory status")
 	fmt.Fprintln(w, "\nRun 'vectory help <command>' for details. Exit codes: 0 ok, 1 failed, 2 usage error.")

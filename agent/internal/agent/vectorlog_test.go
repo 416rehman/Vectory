@@ -164,6 +164,21 @@ func TestLogSummaryRedactsASecretAcrossTheLengthBound(t *testing.T) {
 	}
 }
 
+// Vector's "Log level is enabled." record repeats the level key with a
+// quoted value; people see the level without quotes.
+func TestFormattedLogLevelsAreUnquoted(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "vector", "reload.run.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		formatted := formatLogLine(line, false)
+		if strings.Contains(formatted, `"INFO"`) || strings.Contains(formatted, `"ERROR"`) || strings.Contains(formatted, `"WARN"`) {
+			t.Fatalf("quoted level: %s", formatted)
+		}
+	}
+}
+
 func TestVectorLogFileRotatesAndCLIReads(t *testing.T) {
 	dir := t.TempDir()
 	previous := vectorLogMaxBytes
