@@ -63,6 +63,7 @@ import {
   MessageSquareText,
   Activity,
   Radio,
+  ClipboardCopy,
 } from "lucide-react";
 import {
   api,
@@ -182,6 +183,8 @@ import {
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
 import { upstreamOf } from "./sampleUpstream";
+import { copySteps, pasteSteps, stepsText } from "./canvasClipboard";
+import CanvasFind from "./CanvasFind";
 import {
   edgeRate,
   formatRate,
@@ -457,6 +460,7 @@ export default function Editor({
       useState('{\n  "type": ""\n}'),
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
     [live, setLive] = useState(readLiveSetting),
+    [findOpen, setFindOpen] = useState(false),
     [telemetry, setTelemetry] = useState<{
       data: PipelineTelemetry | null;
       error: string;
@@ -1995,6 +1999,112 @@ export default function Editor({
         ?.focus({ preventScroll: true }),
     );
   }
+  // Steps a toolbar action or shortcut applies to: the canvas selection, or
+  // the step whose properties are open.
+  const multiSelected = nodes
+    .filter((node) => node.selected && !node.data.enrichmentTable)
+    .map((node) => node.id);
+  function selectionIds() {
+    return multiSelected.length ? multiSelected : selected ? [selected] : [];
+  }
+  function copySelection(clipboard?: DataTransfer | null) {
+    const ids = selectionIds();
+    if (!ids.length) return false;
+    const text = stepsText(copySteps(config, ids));
+    if (clipboard) clipboard.setData("text/plain", text);
+    else void navigator.clipboard?.writeText(text).catch(() => {});
+    notify(
+      `Copied ${ids.length === 1 ? `${ids[0]}` : `${ids.length} steps`} as Vector YAML.`,
+    );
+    return true;
+  }
+  /** Add steps from Vector configuration text, placed in free space. */
+  function pasteText(text: string, keepPositions = true) {
+    if (!editable || busy || !guardInspectorDrafts()) return;
+    try {
+      const pasted = pasteSteps(config, text);
+      const graph = toGraph(pasted.config, { nodes, edges });
+      const originals = new Map(nodes.map((node) => [node.id, node]));
+      const placed: typeof nodes = [...nodes];
+      const bounds = graphRef.current?.getBoundingClientRect();
+      const origin = flow.current?.screenToFlowPosition({
+        x: (bounds?.left ?? 0) + (bounds?.width ?? 800) / 3,
+        y: (bounds?.top ?? 0) + (bounds?.height ?? 600) / 3,
+      }) ?? { x: 80, y: 80 };
+      const column = { sources: 0, transforms: 1, sinks: 2 } as const;
+      const positions = new Map<string, { x: number; y: number }>();
+      for (const [from, to] of pasted.ids) {
+        const original = originals.get(from);
+        const kind = pasted.kinds.get(to) || "transforms";
+        const spot = freePosition(
+          placed,
+          original && keepPositions
+            ? { x: original.position.x + 60, y: original.position.y + 60 }
+            : {
+                x: origin.x + column[kind] * PIPELINE_NODE_COLUMN_GAP,
+                y: origin.y,
+              },
+        );
+        positions.set(to, spot);
+        placed.push({
+          id: to,
+          position: spot,
+          data: { kind, component: pasted.config[kind][to] },
+        });
+      }
+      graph.nodes = graph.nodes.map((node) =>
+        positions.has(node.id)
+          ? { ...node, position: positions.get(node.id)!, selected: true }
+          : { ...node, selected: false },
+      );
+      setAutoArrange(false);
+      replace(pasted.config, graph);
+      setSelected(null);
+      notify(
+        pasted.ids.size === 1
+          ? `Pasted ${[...pasted.ids.values()][0]}.`
+          : `Pasted ${pasted.ids.size} steps.`,
+      );
+    } catch (failure) {
+      notify((failure as Error).message);
+    }
+  }
+  function duplicateSelection() {
+    const ids = selectionIds();
+    if (ids.length === 1) duplicate(ids[0]);
+    else if (ids.length) pasteText(stepsText(copySteps(config, ids)));
+  }
+  function clearSelection() {
+    setNodes((previous) =>
+      previous.map((node) =>
+        node.selected ? { ...node, selected: false } : node,
+      ),
+    );
+  }
+  function findStep(stepId: string) {
+    const node = nodes.find((item) => item.id === stepId);
+    setFindOpen(false);
+    if (!node) return;
+    selectStep(stepId);
+    flow.current?.setCenter(
+      node.position.x + PIPELINE_NODE_WIDTH / 2,
+      node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
+      {
+        zoom: Math.max(flow.current.getZoom(), 0.85),
+        duration: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches
+          ? 0
+          : 220,
+      },
+    );
+    requestAnimationFrame(() =>
+      graphRef.current
+        ?.querySelector<HTMLElement>(
+          `.react-flow__node[data-id="${CSS.escape(stepId)}"]`,
+        )
+        ?.focus({ preventScroll: true }),
+    );
+  }
   function changeNodes(changes: NodeChange[]) {
     graphFromEdit.current = false;
     if (!editable) {
@@ -2502,6 +2612,82 @@ export default function Editor({
     // Capture phase: panels that stop key propagation still save.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+  // Canvas clipboard and find. They apply while the canvas (or nothing in
+  // particular) has focus; text fields and code editors keep their own.
+  const canvasShortcuts = useRef({
+    active: false,
+    copy: (_clipboard: DataTransfer | null): boolean => false,
+    paste: (_text: string) => {},
+    find: () => {},
+  });
+  canvasShortcuts.current = {
+    active:
+      view === "canvas" &&
+      !historyOpen &&
+      !publishOpen &&
+      !globalsOpen &&
+      !detailsOpen &&
+      !discardOpen &&
+      !deployVersion &&
+      !pipelineAction &&
+      !importCandidate &&
+      saveNote === null,
+    copy: copySelection,
+    paste: pasteText,
+    find: () => setFindOpen(true),
+  };
+  useEffect(() => {
+    const onCanvas = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return false;
+      if (
+        target.closest(
+          '.cm-editor, input, textarea, select, [contenteditable="true"], [role="dialog"]',
+        )
+      )
+        return false;
+      return (
+        target === document.body ||
+        !!graphRef.current?.contains(target) ||
+        target.closest(".editor-workspace") !== null
+      );
+    };
+    const onCopy = (event: ClipboardEvent) => {
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      if (window.getSelection()?.toString()) return;
+      if (shortcut.copy(event.clipboardData)) event.preventDefault();
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text?.trim()) return;
+      event.preventDefault();
+      shortcut.paste(text);
+    };
+    const onFind = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "f" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      const shortcut = canvasShortcuts.current;
+      if (!shortcut.active || !onCanvas(event)) return;
+      event.preventDefault();
+      shortcut.find();
+    };
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("paste", onPaste);
+    window.addEventListener("keydown", onFind);
+    return () => {
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("paste", onPaste);
+      window.removeEventListener("keydown", onFind);
+    };
   }, []);
   // Unsaved edits live in this browser until saved or discarded. While an
   // earlier copy awaits Restore or Discard it is not overwritten.
@@ -4486,6 +4672,56 @@ export default function Editor({
                         <Blocks size={18} aria-hidden="true" />
                         <span>Add component</span>
                       </button>
+                    </Panel>
+                  )}
+                  {multiSelected.length > 1 && !connectionGesture && (
+                    <Panel
+                      position="top-center"
+                      className="editor-selection-toolbar"
+                    >
+                      <div role="toolbar" aria-label="Selected steps">
+                        <strong>{multiSelected.length} steps selected</strong>
+                        {editable && (
+                          <button type="button" onClick={duplicateSelection}>
+                            <Copy size={14} aria-hidden="true" />
+                            Duplicate
+                          </button>
+                        )}
+                        <button type="button" onClick={() => copySelection()}>
+                          <ClipboardCopy size={14} aria-hidden="true" />
+                          Copy YAML
+                        </button>
+                        {editable && (
+                          <button
+                            type="button"
+                            data-danger
+                            onClick={() => remove(multiSelected)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label="Clear selection"
+                          title="Clear selection"
+                          onClick={clearSelection}
+                        >
+                          <X size={14} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </Panel>
+                  )}
+                  {findOpen && (
+                    <Panel position="top-center" className="editor-find-panel">
+                      <CanvasFind
+                        nodes={nodes}
+                        onFind={findStep}
+                        onClose={() => {
+                          setFindOpen(false);
+                          graphRef.current?.focus();
+                        }}
+                      />
                     </Panel>
                   )}
                   {liveAvailable && !connectionGesture && (
