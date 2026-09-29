@@ -99,61 +99,236 @@ pub(crate) fn checked_in_recently(last_seen: Option<&str>, interval: i64) -> boo
             age <= interval * 3
         })
 }
-// Display metadata for every assignment and version that the device list
-// references, read in two statements instead of one lookup per device.
+type Metadata = std::collections::HashMap<String, Value>;
+const ASSIGNMENT_METADATA: &str = "SELECT r.id,json_object('priority',json_extract(r.data,'$.priority'),'target_mode',json_extract(r.data,'$.target_mode'),'status',json_extract(r.data,'$.status'),\
+     'name',CASE WHEN json_type(r.data,'$.name')='text' THEN substr(json_extract(r.data,'$.name'),1,120) END,\
+     'version_id',CASE WHEN json_type(r.data,'$.version_id')='text' THEN json_extract(r.data,'$.version_id') END,\
+     'policy_id',CASE WHEN json_type(r.data,'$.policy_id')='text' THEN json_extract(r.data,'$.policy_id') END,\
+     'policy_name',(SELECT substr(json_extract(p.data,'$.name'),1,120) FROM records p WHERE p.kind='policy' AND p.id=json_extract(r.data,'$.policy_id')),\
+     'created_at',r.created_at,\
+     'created_by_name',(SELECT substr(u.name,1,120) FROM users u WHERE u.id=COALESCE(json_extract(r.data,'$.created_by'),(SELECT json_extract(a.data,'$.actor') FROM records a WHERE a.kind='audit' AND json_extract(a.data,'$.target')=r.id AND json_extract(a.data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1))))\
+     FROM records r WHERE r.kind='deployment' AND r.id IN (SELECT value FROM json_each(?))";
+const VERSION_METADATA: &str = "SELECT v.id,json_object('sha256',json_extract(v.data,'$.sha256'),'uses_local_secrets',json(CASE WHEN json_extract(v.data,'$.uses_local_secrets')=1 THEN 'true' ELSE 'false' END),\
+     'number',CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END,\
+     'configuration_id',json_extract(v.data,'$.configuration_id'),\
+     'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END)\
+     FROM records v LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')\
+     WHERE v.kind='version' AND v.id IN (SELECT value FROM json_each(?))";
+async fn metadata(db: &mut SqliteConnection, sql: &str, ids: BTreeSet<&str>) -> Result<Metadata> {
+    if ids.is_empty() {
+        return Ok(Metadata::new());
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(sql)
+        .bind(json!(ids).to_string())
+        .fetch_all(&mut *db)
+        .await?;
+    rows.into_iter()
+        .map(|(id, value)| Ok((id, db::parse(&value)?)))
+        .collect()
+}
+// Display metadata for every assignment and version these devices reference,
+// read in two statements instead of one lookup per device.
 async fn projection_metadata(
     db: &mut SqliteConnection,
-) -> Result<(
-    std::collections::HashMap<String, Value>,
-    std::collections::HashMap<String, Value>,
-)> {
-    let assignments: Vec<(String, String)> = sqlx::query_as(
-        "SELECT r.id,json_object('priority',json_extract(r.data,'$.priority'),'target_mode',json_extract(r.data,'$.target_mode'),'status',json_extract(r.data,'$.status'),\
-         'name',CASE WHEN json_type(r.data,'$.name')='text' THEN substr(json_extract(r.data,'$.name'),1,120) END,\
-         'version_id',CASE WHEN json_type(r.data,'$.version_id')='text' THEN json_extract(r.data,'$.version_id') END,\
-         'policy_id',CASE WHEN json_type(r.data,'$.policy_id')='text' THEN json_extract(r.data,'$.policy_id') END,\
-         'policy_name',(SELECT substr(json_extract(p.data,'$.name'),1,120) FROM records p WHERE p.kind='policy' AND p.id=json_extract(r.data,'$.policy_id')),\
-         'created_at',r.created_at,\
-         'created_by_name',(SELECT substr(u.name,1,120) FROM users u WHERE u.id=COALESCE(json_extract(r.data,'$.created_by'),(SELECT json_extract(a.data,'$.actor') FROM records a WHERE a.kind='audit' AND json_extract(a.data,'$.target')=r.id AND json_extract(a.data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1))))\
-         FROM records r WHERE r.kind='deployment' AND r.id IN (SELECT assignment_id FROM devices WHERE assignment_id IS NOT NULL UNION SELECT policy_assignment_id FROM devices WHERE policy_assignment_id IS NOT NULL)",
-    )
-    .fetch_all(&mut *db)
-    .await?;
-    let versions: Vec<(String, String)> = sqlx::query_as(
-        "SELECT v.id,json_object('sha256',json_extract(v.data,'$.sha256'),'uses_local_secrets',json(CASE WHEN json_extract(v.data,'$.uses_local_secrets')=1 THEN 'true' ELSE 'false' END),\
-         'number',CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END,\
-         'configuration_id',json_extract(v.data,'$.configuration_id'),\
-         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END)\
-         FROM records v LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')\
-         WHERE v.kind='version' AND v.id IN (SELECT desired_version_id FROM devices WHERE desired_version_id IS NOT NULL UNION SELECT json_extract(data,'$.verified_configuration_attempt.version_id') FROM devices WHERE json_type(data,'$.verified_configuration_attempt.version_id')='text')",
-    )
-    .fetch_all(&mut *db)
-    .await?;
-    let parse = |rows: Vec<(String, String)>| {
-        rows.into_iter()
-            .map(|(id, value)| Ok((id, db::parse(&value)?)))
-            .collect::<Result<std::collections::HashMap<_, _>>>()
-    };
-    Ok((parse(assignments)?, parse(versions)?))
+    devices: &[Stored],
+) -> Result<(Metadata, Metadata)> {
+    let assignments = devices
+        .iter()
+        .flat_map(|d| {
+            [
+                d.assignment_id.as_deref(),
+                d.policy_assignment_id.as_deref(),
+            ]
+        })
+        .flatten()
+        .collect();
+    let versions = devices
+        .iter()
+        .flat_map(|d| {
+            [
+                d.desired_version_id.as_deref(),
+                d.data["verified_configuration_attempt"]["version_id"].as_str(),
+            ]
+        })
+        .flatten()
+        .collect();
+    Ok((
+        metadata(db, ASSIGNMENT_METADATA, assignments).await?,
+        metadata(db, VERSION_METADATA, versions).await?,
+    ))
 }
-fn version_label(versions: &std::collections::HashMap<String, Value>, id: &str) -> Value {
+fn version_label(versions: &Metadata, id: &str) -> Value {
     let version = versions.get(id);
     json!({"id":id,"number":version.map(|v| v["number"].clone()),"configuration_id":version.map(|v| v["configuration_id"].clone()),"configuration_name":version.map(|v| v["configuration_name"].clone())})
 }
-pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
-    let rows = sqlx::query("SELECT * FROM devices ORDER BY name")
+/// A device's stored row, as the projections read it.
+struct Stored {
+    data: Value,
+    revoked: bool,
+    desired_version_id: Option<String>,
+    desired_generation: i64,
+    policy: String,
+    policy_generation: i64,
+    assignment_id: Option<String>,
+    policy_assignment_id: Option<String>,
+}
+/// The device columns a projection reads, then `data` and the rest of the
+/// statement.
+macro_rules! stored_sql {
+    ($data:expr, $rest:literal) => {
+        concat!(
+            "SELECT revoked,desired_version_id,desired_generation,policy,policy_generation,assignment_id,policy_assignment_id,",
+            $data,
+            " FROM devices",
+            $rest
+        )
+    };
+}
+/// What a list row never shows stays in SQLite: most of a reporting device's
+/// row (see `list_row`).
+macro_rules! light_data {
+    () => {
+        "json_remove(data,'$.vector_log_summary','$.host_runtime','$.telemetry.components') AS data"
+    };
+}
+async fn stored(db: &mut SqliteConnection, sql: &str, bind: Option<String>) -> Result<Vec<Stored>> {
+    let mut query = sqlx::query(sql);
+    if let Some(bind) = bind {
+        query = query.bind(bind);
+    }
+    query
         .fetch_all(&mut *db)
-        .await?;
-    let (assignments, versions) = projection_metadata(db).await?;
-    let mut out = Vec::new();
-    for row in rows {
-        let mut d = db::parse(row.get("data"))?;
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(Stored {
+                data: db::parse(row.get("data"))?,
+                revoked: row.get("revoked"),
+                desired_version_id: row.get("desired_version_id"),
+                desired_generation: row.get("desired_generation"),
+                policy: row.get("policy"),
+                policy_generation: row.get("policy_generation"),
+                assignment_id: row.get("assignment_id"),
+                policy_assignment_id: row.get("policy_assignment_id"),
+            })
+        })
+        .collect()
+}
+async fn project_all(
+    db: &mut SqliteConnection,
+    rows: Vec<Stored>,
+) -> Result<Vec<(Value, Option<String>)>> {
+    let (assignments, versions) = projection_metadata(db, &rows).await?;
+    rows.into_iter()
+        .map(|row| project(row, &assignments, &versions))
+        .collect()
+}
+/// Every device as the device page shows it, in list order.
+pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
+    let rows = stored(db, stored_sql!("data", " ORDER BY name"), None).await?;
+    Ok(project_all(db, rows)
+        .await?
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect())
+}
+/// One device as the device page shows it. Only its own row and the metadata
+/// it references are read, whatever the size of the fleet.
+pub async fn device(db: &mut SqliteConnection, id: &str) -> Result<Option<Value>> {
+    let rows = stored(db, stored_sql!("data", " WHERE id=?"), Some(id.to_owned())).await?;
+    Ok(project_all(db, rows)
+        .await?
+        .into_iter()
+        .next()
+        .map(|(device, _)| device))
+}
+/// The given devices as the device page shows them, in list order.
+pub(crate) async fn devices_by_id(
+    db: &mut SqliteConnection,
+    ids: &BTreeSet<String>,
+) -> Result<Vec<Value>> {
+    let rows = stored(
+        db,
+        stored_sql!(
+            "data",
+            " WHERE id IN (SELECT value FROM json_each(?)) ORDER BY name"
+        ),
+        Some(json!(ids).to_string()),
+    )
+    .await?;
+    Ok(project_all(db, rows)
+        .await?
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect())
+}
+/// A device as lists show it, and the version it verifiably runs right now
+/// (`telemetry::running_version`), which the row itself doesn't carry.
+pub(crate) struct Listed {
+    pub row: Value,
+    pub running: Option<String>,
+}
+/// List rows of every device, or of the given ones, in list order.
+pub(crate) async fn listed(
+    db: &mut SqliteConnection,
+    ids: Option<&[String]>,
+) -> Result<Vec<Listed>> {
+    let rows = match ids {
+        None => stored(db, stored_sql!(light_data!(), " ORDER BY name"), None).await?,
+        Some(ids) => {
+            stored(
+                db,
+                stored_sql!(
+                    light_data!(),
+                    " WHERE id IN (SELECT value FROM json_each(?)) ORDER BY name"
+                ),
+                Some(json!(ids).to_string()),
+            )
+            .await?
+        }
+    };
+    Ok(project_all(db, rows)
+        .await?
+        .into_iter()
+        .map(|(device, running)| Listed {
+            row: list_row(device),
+            running,
+        })
+        .collect())
+}
+/// `GET /devices`: every device as lists show it.
+pub async fn list_devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
+    Ok(listed(db, None)
+        .await?
+        .into_iter()
+        .map(|listed| listed.row)
+        .collect())
+}
+/// One stored device projected for the API, and the version it verifiably
+/// runs right now.
+fn project(
+    stored: Stored,
+    assignments: &Metadata,
+    versions: &Metadata,
+) -> Result<(Value, Option<String>)> {
+    let Stored {
+        data: mut d,
+        revoked,
+        desired_version_id,
+        desired_generation,
+        policy,
+        policy_generation,
+        assignment_id,
+        policy_assignment_id,
+    } = stored;
+    let running_now = crate::telemetry::running_version(&d).map(str::to_owned);
+    {
         // The last verified candidate is what the host runs, even after a
         // later failure restored it or the assignment was removed.
         let running = d["verified_configuration_attempt"].clone();
         d["running_version"] = match running["version_id"].as_str() {
             Some(id) => {
-                let mut label = version_label(&versions, id);
+                let mut label = version_label(versions, id);
                 label["generation"] = running["generation"].clone();
                 label
             }
@@ -170,8 +345,8 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         if d["configuration_mode"] != "full" {
             d["configuration_mode"] = json!("restricted");
         }
-        d["desired_generation"] = json!(row.get::<i64, _>("desired_generation"));
-        d["desired_version_id"] = json!(row.get::<Option<String>, _>("desired_version_id"));
+        d["desired_generation"] = json!(desired_generation);
+        d["desired_version_id"] = json!(desired_version_id);
         let attempt_matches = d["configuration_attempt"].is_object()
             && d["configuration_attempt"]["generation"] == d["desired_generation"]
             && d["configuration_attempt"]["version_id"] == d["desired_version_id"];
@@ -187,16 +362,15 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
             }
             d["apply_state"] = json!("desired");
         }
-        let policy = db::parse(row.get("policy"))?;
-        let interval = check_in_seconds(&policy, &d, row.get("policy_generation"));
+        let policy = db::parse(&policy)?;
+        let interval = check_in_seconds(&policy, &d, policy_generation);
         d["effective_policy"] = policy.clone();
         d["sync_paused"] = policy["sync_paused"].clone();
         d["check_in_seconds"] = json!(interval);
         d["desired_version"] = match d["desired_version_id"].as_str() {
-            Some(id) => version_label(&versions, id),
+            Some(id) => version_label(versions, id),
             None => Value::Null,
         };
-        let revoked: bool = row.get("revoked");
         let mut verified_current = false;
         if d["apply_state"] == "verified_applied"
             && d["reported_generation"] == d["desired_generation"]
@@ -243,11 +417,11 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         });
         // Assignment metadata comes from the control plane, never device-reported data.
         for (field, column) in [
-            ("assignment", "assignment_id"),
-            ("policy_assignment", "policy_assignment_id"),
+            ("assignment", assignment_id),
+            ("policy_assignment", policy_assignment_id),
         ] {
             d.as_object_mut().unwrap().remove(field);
-            if let Some(assignment) = row.get::<Option<String>, _>(column) {
+            if let Some(assignment) = column {
                 if let Some(a) = assignments.get(&assignment) {
                     let resource = if a["version_id"].is_string() {
                         "configuration"
@@ -269,9 +443,8 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
                 .map_or(0, Vec::len);
             summary.insert("issue_count".into(), json!(open));
         }
-        out.push(d);
     }
-    Ok(out)
+    Ok((d, running_now))
 }
 /// A device as lists show it (`GET /devices`, the Overview's `devices`): the
 /// full projection without what only the device page reads, which is most
@@ -999,11 +1172,7 @@ async fn preview_inner(
         Vec::new()
     };
     let compatibility = compatibility_blockers(db, v, &selected).await?;
-    let fleet = devices(db)
-        .await?
-        .into_iter()
-        .filter(|d| selected.contains(text(d, "id")))
-        .collect::<Vec<_>>();
+    let fleet = devices_by_id(db, &selected).await?;
     let plan = replacement_plan(db, v, &selected).await?;
     let retired: BTreeSet<(String, String)> = plan
         .iter()

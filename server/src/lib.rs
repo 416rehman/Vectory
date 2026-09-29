@@ -17,6 +17,7 @@ pub mod device;
 pub mod device_recovery_requests;
 pub mod device_revocation;
 pub mod error;
+pub mod fleet;
 pub mod group_requests;
 pub mod groups;
 pub mod install;
@@ -107,6 +108,8 @@ pub struct App {
     pub release_hashes: std::sync::Mutex<HashMap<String, (u64, std::time::SystemTime, String)>>,
     /// Notification sends in flight and the notifier's schedule.
     pub notifier: notifier::Runtime,
+    /// The fleet projection inventory, group members and the Overview share.
+    pub fleet: fleet::Cache,
 }
 pub type State = Arc<App>;
 /// Tracked rate-limit keys per limiter partition. A full partition evicts
@@ -196,6 +199,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         sign_in_failures: ledger::Ledger::with_capacity(SIGN_IN_FAILURE_KEYS).into(),
         release_hashes: Default::default(),
         notifier: Default::default(),
+        fleet: Default::default(),
         agent_request_slots: tokio::sync::Semaphore::new(128),
         validation_slots: tokio::sync::Semaphore::new(2),
         instance_lock,

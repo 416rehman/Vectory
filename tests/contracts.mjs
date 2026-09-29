@@ -11,10 +11,16 @@ const schema = JSON.parse(
 const ajv = new Ajv({ strict: false, allErrors: true });
 formats(ajv);
 ajv.addSchema(schema);
+// Defaults read the local preview; the variables point it at another instance.
 const credentials = JSON.parse(
-  await fs.readFile(path.join(root, ".local/preview/credentials.json"), "utf8"),
+  await fs.readFile(
+    process.env.VECTORY_CONTRACT_CREDENTIALS ||
+      path.join(root, ".local/preview/credentials.json"),
+    "utf8",
+  ),
 );
-const base = "http://127.0.0.1:8080/api/v1";
+const base =
+  process.env.VECTORY_CONTRACT_BASE || "http://127.0.0.1:8080/api/v1";
 const login = await fetch(base + "/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -120,8 +126,39 @@ try {
   }
   for (const d of await get("/devices"))
     validate("TelemetryHistory", await get(`/devices/${d.id}/telemetry`));
+  // Fleet-scale reads.
+  for (const query of ["", "?slim=1"]) {
+    const overview = await get(`/overview${query}`);
+    validate("Overview", overview);
+    if (query && "devices" in overview)
+      throw Error("/overview?slim=1: devices must be left out");
+  }
+  for (const query of [
+    "",
+    "?page_size=100&sort=status",
+    "?status=applied&sort=events_in",
+    "?view=no_telemetry&dir=desc",
+    "?status=revoked",
+    "?q=a",
+  ]) {
+    const page = await get(`/devices/inventory${query}`);
+    validate("DeviceInventoryPage", page);
+    for (const device of page.items)
+      validate("Device", await get(`/devices/${device.id}?include=groups`));
+  }
+  validate("DeviceInventoryIds", await get("/devices/inventory/ids"));
+  for (const group of await get("/groups?slim=1")) {
+    validate("GroupSummary", group);
+    validate(
+      "GroupMemberPage",
+      await get(`/groups/${group.id}/members?page_size=100`),
+    );
+  }
+  for (const group of await get("/groups?include=members"))
+    validate("Group", group);
   await fs.writeFile(
-    path.join(root, "docs/evidence/contract-tests.json"),
+    process.env.VECTORY_CONTRACT_EVIDENCE ||
+      path.join(root, "docs/evidence/contract-tests.json"),
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),

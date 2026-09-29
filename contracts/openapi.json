@@ -1175,14 +1175,38 @@
     },
     "/api/v1/groups": {
       "get": {
-        "summary": "List groups",
+        "summary": "List groups, each with member_count. slim=1 leaves device_ids out; include=members asks for them explicitly. Other parameters are ignored, as before.",
         "operationId": "get__api_v1_groups",
         "security": [
           {
             "sessionCookie": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "slim",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "1",
+                "0",
+                "true",
+                "false"
+              ]
+            },
+            "description": "1 or true: rows without device_ids (GroupSummary)."
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "members"
+              ]
+            },
+            "description": "Keep device_ids; cannot combine with slim=1."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",
@@ -1191,7 +1215,14 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Group"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Group"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GroupSummary"
+                      }
+                    ]
                   }
                 }
               }
@@ -1917,7 +1948,7 @@
     },
     "/api/v1/devices/{id}": {
       "get": {
-        "summary": "Read Device",
+        "summary": "Read one device, projected on its own",
         "operationId": "get__api_v1_devices__id_",
         "security": [
           {
@@ -1932,6 +1963,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "groups"
+              ]
+            },
+            "description": "groups: add the groups the device belongs to."
           }
         ],
         "responses": {
@@ -2233,14 +2274,28 @@
     },
     "/api/v1/overview": {
       "get": {
-        "summary": "Read overview",
+        "summary": "Fleet numbers, rollouts and recent changes. slim=1 leaves out the device list and takes the fleet numbers from a projection at most 2 seconds old that any change through the dashboard API replaces.",
         "operationId": "get__api_v1_overview",
         "security": [
           {
             "sessionCookie": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "slim",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "1",
+                "0",
+                "true",
+                "false"
+              ]
+            },
+            "description": "1 or true: no devices list."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",
@@ -9644,6 +9699,498 @@
         ]
       }
     },
+    "/api/v1/devices/inventory": {
+      "get": {
+        "summary": "One page of devices as lists show them, filtered, sorted and counted on the server. Any authenticated role. Unknown, repeated or malformed parameters return 400; an empty filter value is no filter.",
+        "operationId": "get__api_v1_devices_inventory",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": ""
+            },
+            "description": "Trimmed literal substring of the device name, OS, architecture, pipeline label, Vector and agent versions and group names, joined with spaces. ASCII case-insensitive; other characters, % and _ included, match exactly. At most 100 characters."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "applied",
+                "degraded",
+                "updating",
+                "check",
+                "failed",
+                "offline",
+                "paused",
+                "unmanaged",
+                "revoked"
+              ]
+            },
+            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked."
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "failing",
+                "not_on_desired",
+                "offline",
+                "paused",
+                "no_telemetry"
+              ]
+            },
+            "description": "failing: failed, rolled back, conflict, verification unknown or not delivering. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes."
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices in this group; an unknown group matches none."
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "description": "The exact Vector version the device reports."
+          },
+          {
+            "name": "desired_version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices assigned this pipeline version."
+          },
+          {
+            "name": "running_version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices verifiably running this pipeline version (see OverviewRunning)."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "name",
+                "status",
+                "last_seen",
+                "pipeline",
+                "version",
+                "events_in"
+              ],
+              "default": "name"
+            },
+            "description": "Global order before pagination. name: natural and case-insensitive (edge-2 before edge-10). status: failed, degraded, check, offline, updating, paused, unmanaged, applied, revoked. pipeline: the desired version label. version: the Vector version. events_in: from a sample at most 3 minutes old. Missing values sort last in both directions; ties fall back to name, then device ID."
+          },
+          {
+            "name": "dir",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "description": "Defaults to desc for last_seen and events_in, otherwise asc."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceInventoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Devices"
+        ]
+      }
+    },
+    "/api/v1/devices/inventory/ids": {
+      "get": {
+        "summary": "The IDs of the devices the same filters match, in the same order, for select all matching: at most 10,000. Any authenticated role. Takes no paging.",
+        "operationId": "get__api_v1_devices_inventory_ids",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": ""
+            },
+            "description": "Trimmed literal substring of the device name, OS, architecture, pipeline label, Vector and agent versions and group names, joined with spaces. ASCII case-insensitive; other characters, % and _ included, match exactly. At most 100 characters."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "applied",
+                "degraded",
+                "updating",
+                "check",
+                "failed",
+                "offline",
+                "paused",
+                "unmanaged",
+                "revoked"
+              ]
+            },
+            "description": "The status bucket (see DeviceInventoryCounts). Revoked devices are listed only with status=revoked."
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "failing",
+                "not_on_desired",
+                "offline",
+                "paused",
+                "no_telemetry"
+              ]
+            },
+            "description": "failing: failed, rolled back, conflict, verification unknown or not delivering. not_on_desired: assigned a version the agent has not verified (an offline or paused device that last verified it counts as on it). offline: offline or never connected. paused: sync paused on the server or the host. no_telemetry: no sample in the last 3 minutes."
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices in this group; an unknown group matches none."
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "description": "The exact Vector version the device reports."
+          },
+          {
+            "name": "desired_version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices assigned this pipeline version."
+          },
+          {
+            "name": "running_version",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Devices verifiably running this pipeline version (see OverviewRunning)."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "name",
+                "status",
+                "last_seen",
+                "pipeline",
+                "version",
+                "events_in"
+              ],
+              "default": "name"
+            },
+            "description": "Global order before pagination. name: natural and case-insensitive (edge-2 before edge-10). status: failed, degraded, check, offline, updating, paused, unmanaged, applied, revoked. pipeline: the desired version label. version: the Vector version. events_in: from a sample at most 3 minutes old. Missing values sort last in both directions; ties fall back to name, then device ID."
+          },
+          {
+            "name": "dir",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "description": "Defaults to desc for last_seen and events_in, otherwise asc."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceInventoryIds"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Devices"
+        ]
+      }
+    },
+    "/api/v1/groups/{id}/members": {
+      "get": {
+        "summary": "One page of a group's members by name (natural order, then ID), each with the state its badge shows. Membership is read fresh. Any authenticated role.",
+        "operationId": "get__api_v1_groups__id__members",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": ""
+            },
+            "description": "Same literal search as the inventory, over the device's own fields only (not group names)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupMemberPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Groups"
+        ]
+      }
+    },
     "/api/v1/users/requests/{request_id}": {
       "get": {
         "summary": "Admin reads own exact user-creation status; an absent request may still be in flight",
@@ -16264,7 +16811,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DeviceListItem"
-            }
+            },
+            "description": "Every device as GET /api/v1/devices lists it. Omitted with slim=1."
           },
           "recent_activity": {
             "type": "array",
@@ -16366,6 +16914,42 @@
             "type": "integer",
             "minimum": 0,
             "description": "Security events skipped within the scanned window (at most 300 recent events)."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/OverviewCounts"
+          },
+          "attention_devices": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/OverviewAttentionDevice"
+            },
+            "description": "Devices that need a person, most urgent first."
+          },
+          "attention_devices_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "busiest": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "$ref": "#/components/schemas/OverviewBusyDevice"
+            },
+            "description": "Live devices by fresh events in per second, busiest first."
+          },
+          "running": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/OverviewRunning"
+            },
+            "description": "What runs where, most devices first, then by pipeline name."
+          },
+          "running_total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pipeline versions live devices run."
           }
         },
         "required": [
@@ -16374,7 +16958,6 @@
           "configurations_total",
           "deployments_active",
           "issues_open",
-          "devices",
           "recent_activity",
           "devices_managed",
           "devices_on_desired",
@@ -16528,6 +17111,11 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          "degraded": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Devices that applied this version but are not delivering it: verified_applied targets with an open data-plane issue measured on it. The rollout lanes count them as failed; state_counts keeps their recorded state."
           }
         },
         "required": [
@@ -18869,6 +19457,28 @@
               }
             ],
             "description": "Last verified managed version on the host, which keeps running after a failed update or a removed assignment. Null means no managed version was ever verified (the host runs its adopted local config)."
+          },
+          "groups": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/GroupRef"
+                }
+              }
+            },
+            "required": [
+              "total",
+              "items"
+            ],
+            "additionalProperties": false,
+            "description": "Only with include=groups: the groups this device belongs to, by name (at most 100), and how many."
           }
         },
         "required": [
@@ -19483,6 +20093,11 @@
               ],
               "additionalProperties": false
             }
+          },
+          "degraded": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Devices that applied this version but are not delivering it: verified_applied targets with an open data-plane issue measured on it. The rollout lanes count them as failed; state_counts keeps their recorded state."
           }
         },
         "required": [
@@ -20596,6 +21211,11 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of device_ids; group lists (GET /api/v1/groups) only."
           }
         },
         "required": [
@@ -26311,6 +26931,899 @@
         ],
         "additionalProperties": false,
         "description": "Read-only simulation of a membership edit with the real resolver, rolled back afterwards. pending names a winning assignment that has not released the device yet."
+      },
+      "GroupRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "DeviceInventoryCounts": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "object",
+            "properties": {
+              "applied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "degraded": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "updating": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "check": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offline": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "paused": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unmanaged": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "revoked": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "applied",
+              "degraded",
+              "updating",
+              "check",
+              "failed",
+              "offline",
+              "paused",
+              "unmanaged",
+              "revoked"
+            ],
+            "additionalProperties": false
+          },
+          "views": {
+            "type": "object",
+            "properties": {
+              "failing": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "not_on_desired": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offline": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "paused": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "no_telemetry": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "failing",
+              "not_on_desired",
+              "offline",
+              "paused",
+              "no_telemetry"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "status",
+          "views"
+        ],
+        "additionalProperties": false,
+        "description": "Devices matching q, group, version, desired_version and running_version (every filter but status and view), by status and by view, so each chip can show what picking it would list. status buckets are the Devices page's: applied (verified), degraded (applied but not delivering), updating (applying), check (verification_unknown), failed (failed, rolled_back, conflict), offline (offline, awaiting_first_check_in), paused (paused, pause_requested), unmanaged; a state added later counts as updating. Views never count revoked devices."
+      },
+      "DeviceInventoryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/DeviceListItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DeviceInventoryCounts"
+          },
+          "device_groups": {
+            "type": "object",
+            "propertyNames": {
+              "format": "uuid"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "items": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "$ref": "#/components/schemas/GroupRef"
+                  }
+                }
+              },
+              "required": [
+                "total",
+                "items"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Each row's groups by name (at most 10) and how many there are, keyed by device ID."
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "counts",
+          "device_groups"
+        ],
+        "additionalProperties": false,
+        "description": "One page of devices exactly as GET /api/v1/devices lists them. Filtering, order and counts come from a fleet projection at most 2 seconds old that any change through the dashboard API replaces; the rows are read when the page is."
+      },
+      "DeviceInventoryIds": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 10,000 devices match; ids holds the first 10,000 in order."
+          }
+        },
+        "required": [
+          "ids",
+          "total",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
+      "GroupMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a member the fleet projection does not know (status unavailable)."
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The state the device's badge shows: its status, degraded while applied but not delivering, pause_requested until the agent acknowledges a pause, or unavailable."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "GroupMemberPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/GroupMember"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "additionalProperties": false
+      },
+      "GroupSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "revision",
+          "member_count"
+        ],
+        "additionalProperties": true,
+        "not": {
+          "required": [
+            "device_ids"
+          ]
+        },
+        "description": "A group list row with slim=1: the Group without device_ids."
+      },
+      "OverviewCounts": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Non-revoked devices."
+          },
+          "health": {
+            "type": "object",
+            "properties": {
+              "applied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "degraded": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "updating": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "check": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offline": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "paused": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unmanaged": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "applied",
+              "degraded",
+              "updating",
+              "check",
+              "failed",
+              "offline",
+              "paused",
+              "unmanaged"
+            ],
+            "additionalProperties": false
+          },
+          "connection": {
+            "type": "object",
+            "properties": {
+              "online": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offline": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "never": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "online",
+              "offline",
+              "never"
+            ],
+            "additionalProperties": false,
+            "description": "never: enrolled but never checked in."
+          },
+          "checked_in": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "waiting_device": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first device by name that never checked in."
+          },
+          "telemetry": {
+            "type": "object",
+            "properties": {
+              "eligible": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reporting": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stale": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "disabled": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "events_in_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "events_in_devices": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "events_out_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "events_out_devices": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "errors": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errors_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "newest_sample_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "eligible",
+              "reporting",
+              "stale",
+              "disabled",
+              "events_in_per_second",
+              "events_in_devices",
+              "events_out_per_second",
+              "events_out_devices",
+              "errors",
+              "errors_per_minute",
+              "newest_sample_at"
+            ],
+            "additionalProperties": false,
+            "description": "From each non-revoked device's latest sample when it is at most 3 minutes old (reporting); stale samples are older. A total no fresh device reported is null, never zero. errors sums counters since each Vector started. disabled counts devices without a fresh sample whose settings turn metrics off."
+          }
+        },
+        "required": [
+          "total",
+          "health",
+          "connection",
+          "checked_in",
+          "waiting_device",
+          "telemetry"
+        ],
+        "additionalProperties": false,
+        "description": "What the dashboard used to derive from every device: devices by health bucket (see DeviceInventoryCounts), by connection, and fleet throughput."
+      },
+      "OverviewAttentionDevice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "cause": {
+            "enum": [
+              "degraded",
+              "failed",
+              "rolled_back",
+              "check_required",
+              "offline"
+            ],
+            "description": "Most urgent first: not delivering, failed, rolled back, check required, offline."
+          },
+          "status": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "degraded: the open issue's measured reason. failed and rolled_back: the sanitized failure summary."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "component_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "degraded: when the issue opened; offline: the last check-in."
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "cause",
+          "status",
+          "reason",
+          "title",
+          "fix",
+          "code",
+          "component_id",
+          "since",
+          "version_id",
+          "version_number",
+          "configuration_id",
+          "configuration_name"
+        ],
+        "additionalProperties": false
+      },
+      "OverviewBusyDevice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "events_in_per_second": {
+            "type": "number",
+            "minimum": 0
+          },
+          "events_out_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "events_in_per_second",
+          "events_out_per_second"
+        ],
+        "additionalProperties": false
+      },
+      "OverviewCanary": {
+        "type": "object",
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phase": {
+            "enum": [
+              "observing",
+              "measuring",
+              "waiting"
+            ],
+            "description": "observing: every released device verified and the observation window runs. measuring: a released device's delivery is still being measured. waiting: released devices are still verifying."
+          },
+          "device_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Devices the rollout released."
+          },
+          "device_names": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "deployment_id",
+          "phase",
+          "device_count",
+          "device_names"
+        ],
+        "additionalProperties": false
+      },
+      "OverviewRunning": {
+        "type": "object",
+        "properties": {
+          "configuration_id": {
+            "type": "string"
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "devices_reporting": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Of those, devices with a sample at most 3 minutes old."
+          },
+          "groups": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "device_count": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "device_count"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The groups holding most of these devices, and how many of them each holds."
+          },
+          "more_groups": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events_in_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events_out_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "running",
+              "canary",
+              "not_delivering"
+            ]
+          },
+          "not_delivering": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Devices applied on this version with an open delivery issue."
+          },
+          "canary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverviewCanary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest active canary rollout of this version."
+          }
+        },
+        "required": [
+          "configuration_id",
+          "configuration_name",
+          "version_id",
+          "version",
+          "device_count",
+          "devices_reporting",
+          "groups",
+          "more_groups",
+          "events_in_per_second",
+          "events_out_per_second",
+          "state",
+          "not_delivering",
+          "canary"
+        ],
+        "additionalProperties": false,
+        "description": "One pipeline version that live devices verifiably run as they last reported it (the last verified version whose digest still matches the managed file), not what is desired. Rates sum fresh samples (at most 3 minutes old); null when none reported. state: not_delivering when a device is, else canary during an active canary rollout, else running."
       },
       "NotificationRules": {
         "type": "object",
