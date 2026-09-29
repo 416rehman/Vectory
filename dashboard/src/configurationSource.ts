@@ -114,6 +114,17 @@ export function detectConfigurationFormat(
   throw new Error("Choose a .yaml, .yml, .json or .toml configuration file.");
 }
 
+/** The format of pasted text: JSON objects, TOML tables and keys, else YAML. */
+export function guessConfigurationFormat(text: string): ConfigurationFormat {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) return "json";
+  const tomlLike =
+    /^\s*\[{1,2}[A-Za-z0-9_."-]+\]{1,2}\s*$/m.test(text) ||
+    /^\s*[A-Za-z0-9_."-]+\s*=/m.test(text);
+  const yamlLike = /^\s*[A-Za-z0-9_"'-]+:(\s|$)/m.test(text);
+  return tomlLike && !yamlLike ? "toml" : "yaml";
+}
+
 /** Parse without coercing non-JSON values, dropping unknown keys, or rounding integers. */
 export function parseSource(
   text: string,

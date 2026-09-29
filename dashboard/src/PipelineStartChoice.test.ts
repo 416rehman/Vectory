@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { guessConfigurationFormat, readStartText } from "./PipelineStartChoice";
+import { guessConfigurationFormat } from "./configurationSource";
+import { readStartText } from "./PipelineStartChoice";
 
 describe("pasted Vector configurations", () => {
   it("recognizes the format from the text", () => {

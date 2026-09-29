@@ -6,6 +6,7 @@ import {
   assertValidPipelineSource,
   ConfigurationSourceError,
   detectConfigurationFormat,
+  guessConfigurationFormat,
   MAX_CONFIGURATION_BYTES,
   type ConfigurationFormat,
 } from "./configurationSource";
@@ -23,17 +24,6 @@ const count = (config: Config) =>
   ["sources", "transforms", "sinks"]
     .map((section) => Object.keys(config[section] || {}).length)
     .reduce((total, value) => total + value, 0);
-
-/** The format of pasted text: JSON objects, TOML tables and keys, else YAML. */
-export function guessConfigurationFormat(text: string): ConfigurationFormat {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{")) return "json";
-  const tomlLike =
-    /^\s*\[{1,2}[A-Za-z0-9_."-]+\]{1,2}\s*$/m.test(text) ||
-    /^\s*[A-Za-z0-9_."-]+\s*=/m.test(text);
-  const yamlLike = /^\s*[A-Za-z0-9_"'-]+:(\s|$)/m.test(text);
-  return tomlLike && !yamlLike ? "toml" : "yaml";
-}
 
 /** "Line 4:3: message" for the first problem, so a parse error is findable. */
 export function sourceErrorMessage(text: string, error: unknown) {
