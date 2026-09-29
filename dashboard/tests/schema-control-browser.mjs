@@ -5,8 +5,11 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
+import net from 'node:net';
 const dashboard=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const server=await createServer({root:dashboard,cacheDir:resolve(dashboard,'../.local/schema-controls-cache'),configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port:5193,strictPort:true,hmr:false}});
+// Any free port: parallel runs never collide.
+const reservation=net.createServer();await new Promise(done=>reservation.listen(0,'127.0.0.1',done));const port=reservation.address().port;await new Promise(done=>reservation.close(done));
+const server=await createServer({root:dashboard,cacheDir:resolve(dashboard,'../.local/schema-controls-cache'),configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port,strictPort:true,hmr:false}});
 await server.listen();
 const browser=await chromium.launch(),context=await browser.newContext({viewport:{width:1000,height:1000}}),page=await context.newPage();
 page.setDefaultTimeout(6000);const errors=[],results=[];page.on('pageerror',error=>errors.push(error.message));
@@ -27,7 +30,7 @@ async function fieldAction(label){
 async function reveal(field){for(let i=0;i<12 && !await field.isVisible();i++){const closed=await field.locator('xpath=ancestor::details[not(@open)]').all();let opened=false;for(const details of closed){const summary=details.locator(':scope > summary');if(await summary.isVisible()){await summary.click();opened=true;break;}}if(!opened)break;}return field;}
 async function test(name,run){if(process.env.VECTORY_SCHEMA_TEST_FILTER && !name.includes(process.env.VECTORY_SCHEMA_TEST_FILTER))return;try{await run();results.push({name,passed:true});console.log('PASS',name);}catch(error){results.push({name,passed:false,error:error.message});console.error('FAIL',name,error.message);console.error((await page.locator('body').innerText()).slice(0,12000));await page.screenshot({path:resolve(dashboard,'../.local/schema-control-failure.png'),fullPage:true});throw error;}}
 try {
- await page.goto('http://127.0.0.1:5193/tests/schema-controls.html',{timeout:30000});await page.waitForFunction(()=>window.ready);
+ await page.goto(`http://127.0.0.1:${port}/tests/schema-controls.html`,{timeout:30000});await page.waitForFunction(()=>window.ready);
  await test('numeric drafts enforce bounds without saving partial text',async()=>{
   await fixture({name:'batch_limit',schema:{type:'integer',minimum:1,maximum:100},value:20});const input=page.getByLabel('Batch limit',{exact:true});await input.fill('-');expect(await stored()).toBe(20);await expect(input).toHaveAttribute('aria-invalid','true');await input.fill('101');expect(await stored()).toBe(20);await input.fill('34');expect(await stored()).toBe(34);await expect(page.getByLabel('Pending edits')).toHaveText('0');
  });

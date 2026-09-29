@@ -5,8 +5,14 @@ import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -19,7 +25,7 @@ const server = await createServer({
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5202,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -203,7 +209,7 @@ async function fixture({ mfa = true } = {}) {
       500,
     );
   });
-  await page.goto("http://127.0.0.1:5202/__staged-login#/users");
+  await page.goto(`http://127.0.0.1:${port}/__staged-login#/users`);
   await expect(
     page.getByRole("heading", { name: /^Sign in to / }),
   ).toBeVisible();
