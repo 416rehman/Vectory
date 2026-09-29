@@ -48,6 +48,7 @@ func defineSetup(c *cli) func() int {
 	tokenFile := c.String("token-file", "", "PATH", "Read the enrollment token from a private file")
 	tokenStdin := c.Bool("token-stdin", "Read the enrollment token from standard input")
 	dashboard := c.HiddenString("dashboard-url", "dashboard address for the device link (set by the installer)")
+	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
@@ -81,6 +82,13 @@ func defineSetup(c *cli) func() int {
 		}
 		if *vector != "" {
 			options.VectorBinary = *vector
+		}
+		if *agentPath != "" {
+			resolved, ok := c.resolvePath("agent-path", *agentPath)
+			if !ok {
+				return exitUsage
+			}
+			options.AgentPath = resolved
 		}
 		if c.supplied("ca-file") {
 			value := *ca

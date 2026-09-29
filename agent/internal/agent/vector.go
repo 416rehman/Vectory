@@ -118,8 +118,15 @@ func vectorConfigArgs(command string, paths []string, full bool, options ...stri
 }
 func (d *VectorDriver) checkBinary() error {
 	h, e := FileDigest(d.Settings.VectorBinary)
-	if e != nil || h != d.Settings.VectorBinarySHA256 {
-		return errors.New("adopted Vector binary changed or is inaccessible; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	switch {
+	case os.IsNotExist(e):
+		return errors.New("the adopted Vector binary " + d.Settings.VectorBinary + " is missing; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	case os.IsPermission(e):
+		return errors.New("the agent's account can't read the adopted Vector binary " + d.Settings.VectorBinary + "; make it and its folders readable for the service account, or install Vector system-wide and use re-adopt")
+	case e != nil:
+		return errors.New("the agent can't use the adopted Vector binary " + d.Settings.VectorBinary + " (" + e.Error() + "); restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	case h != d.Settings.VectorBinarySHA256:
+		return errors.New("adopted Vector binary changed; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
 	}
 	return nil
 }
@@ -307,13 +314,16 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 		if err != nil {
 			return errors.New("cannot securely read the managed configuration")
 		}
-		content, _, err := runtimeOverlay(d.Settings, d.Dir, data)
+		content, host, err := runtimeOverlay(d.Settings, d.Dir, data)
 		if err != nil {
 			return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
 		}
 		overlay = hostRuntimePath(d.Dir)
 		if err = writeRuntimeOverlay(overlay, content); err != nil {
 			return errors.New("cannot write the host runtime settings")
+		}
+		if err = rememberHostDataDir(d.Dir, host); err != nil {
+			return errors.New("cannot record the device's Vector data directory")
 		}
 	}
 	if d.canReload() {

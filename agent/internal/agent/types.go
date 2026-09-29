@@ -193,7 +193,17 @@ type State struct {
 	FailedEffectiveSHA256   string                `json:"failed_effective_sha256,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 	ServerFeatures          []string              `json:"server_features,omitempty"`
+	// Agent is the build of the agent process that last saved this state.
+	// Setup compares it with the installed file to restart an outdated service.
+	Agent *AgentBuild `json:"agent,omitempty"`
 }
+
+// AgentBuild identifies an agent executable.
+type AgentBuild struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+}
+
 type Journal struct {
 	Stage                string                `json:"stage"`
 	Generation           uint64                `json:"generation"`

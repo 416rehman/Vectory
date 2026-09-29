@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -20,3 +21,9 @@ func binaryMode() os.FileMode { return 0755 }
 
 // ownerSuffix is omitted on Windows, where access is governed by ACLs.
 func ownerSuffix(info os.FileInfo) string { return "" }
+
+// accountAccessProblem is empty on Windows: the virtual service account can
+// run programs from Program Files, and ACLs there are the operator's choice.
+func accountAccessProblem(ctx context.Context, account, path string, read bool, args ...string) string {
+	return ""
+}

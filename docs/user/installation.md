@@ -84,11 +84,11 @@ Use the [manual steps](#install-manually) in an elevated PowerShell.
 The installer and `vectory setup` then:
 
 <!-- steps -->
-1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory`.
+1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
 2. Find Vector 0.58.0 and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in restricted mode, unless you asked for full mode.
 4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
-5. Register the agent as a service, start it and wait for its first check-in.
+5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one.
 
 The token is never part of the URL or the installer script. The installer contains only public values: your server's address, its certificate fingerprint and the agents' checksums.
 

@@ -595,6 +595,24 @@ func (e *Engine) renewForced(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(e.Dir, "renewal-key.pem"))
 	return nil
 }
+
+// runningAgentBuild identifies this process's executable. It is read at
+// startup, before an upgrade can replace the file.
+func runningAgentBuild() *AgentBuild {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	digest, err := FileDigest(exe)
+	if err != nil {
+		return nil
+	}
+	return &AgentBuild{Version: Version, SHA256: digest}
+}
+
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
 	unlock, err := Lock(dir)
 	if err != nil {
@@ -631,6 +649,7 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 	} else if err = e.StartExisting(ctx); err != nil {
 		report(err.Error())
 	}
+	e.State.Agent = runningAgentBuild()
 	failures := 0
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
