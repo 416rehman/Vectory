@@ -45,8 +45,25 @@ esac
 
 mkdir -p "$preview"
 chmod 700 "$preview"
-if [[ ! -f "$root/.local/pki/server.pem" ]]; then
+# dev-pki creates the folder with a fresh CA and refuses one that exists. A
+# partial or expiring set is never replaced here: devices may pin its CA.
+pki="$root/.local/pki"
+if [[ ! -e "$pki" ]]; then
   (cd "$root" && go run packaging/dev-pki/main.go --out .local/pki --hosts localhost,127.0.0.1,::1)
+else
+  problem=""
+  for file in ca.pem server.pem server-key.pem; do
+    [[ -f "$pki/$file" ]] || problem+="${problem:+, }$file is missing"
+  done
+  if [[ -z "$problem" ]] && command -v openssl >/dev/null && ! openssl x509 -checkend 3600 -noout -in "$pki/server.pem" >/dev/null 2>&1; then
+    problem="server.pem expires within the hour or has expired (dev-pki certificates last 7 days)"
+  fi
+  if [[ -n "$problem" ]]; then
+    echo "The development PKI in $pki can't be used: $problem." >&2
+    echo "Move it aside and start again to create a new CA and certificate: mv '$pki' '$pki.old'" >&2
+    echo "Devices enrolled against the old CA then need enrolling again." >&2
+    exit 1
+  fi
 fi
 # The agent listener presents its CA after the server certificate (a full
 # chain), so Add device can offer a CA pin that devices check.

@@ -309,6 +309,7 @@ async function load({
     bodyHolds: [],
     abortedBodies: 0,
     holds: [],
+    sessionEnded: false,
   };
   const current = state;
   context = await browser.newContext({
@@ -363,6 +364,17 @@ async function load({
     if (method === "GET") {
       if (path === "/status")
         return reply({ initialized: true, version: "synthetic" });
+      // An ended session answers 401, so the shell cannot adopt it again.
+      if (path === "/session" && current.sessionEnded)
+        return reply(
+          {
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Synthetic session ended",
+            },
+          },
+          401,
+        );
       if (path === "/session")
         return reply({
           user: {
@@ -578,6 +590,14 @@ const review = () =>
   page.getByRole("dialog", { name: "Remove assignment", exact: true });
 const removed = () =>
   page.getByRole("dialog", { name: "Assignment removed", exact: true });
+// The shell's one re-sign-in dialog. It covers the page, which stays mounted,
+// so the page's own dialogs are inspected after a person dismisses it.
+const sessionDialog = () =>
+  page.getByRole("dialog", { name: "Your session ended", exact: true });
+const signedOut = () =>
+  page
+    .getByRole("status")
+    .filter({ hasText: "You're signed out. Your work is still here." });
 async function openReview({ ready = true } = {}) {
   // Remove assignment lives in the header's Stop rollout / Roll back or
   // remove menu; alone, it is a plain button.
@@ -997,6 +1017,10 @@ try {
             "Your session ended",
           );
           state.holds.shift()();
+          await sessionDialog()
+            .getByRole("button", { name: "Close dialog", exact: true })
+            .click();
+          await expect(sessionDialog()).toHaveCount(0);
           await expect(review()).toContainText(
             /session.*ended|no longer have permission/i,
           );
@@ -1022,12 +1046,9 @@ try {
           await page
             .getByRole("button", { name: "Refresh now", exact: true })
             .click();
-          await expect(
-            page
-              .getByRole("alert")
-              .filter({ hasText: /session.*ended/i })
-              .first(),
-          ).toBeVisible();
+          // The shell reports the ended session once; the page sends nothing.
+          await expect(signedOut()).toBeVisible();
+          await page.waitForTimeout(1000);
           expect(requests.length).toBe(requestsBefore);
           expect(state.commits).toHaveLength(stage === "commit" ? 1 : 0);
           observations.push({
@@ -1041,14 +1062,22 @@ try {
         state.previewMode = "heldBody";
         await openReview({ ready: false });
         await expect.poll(() => state.bodyHolds.length).toBe(1);
+        const previewsBefore = state.previews.length;
+        // End the session on the server too; otherwise the shell's check
+        // finds it still valid and resumes, as it should.
+        state.sessionEnded = true;
         await page.evaluate(() =>
           window.dispatchEvent(new Event("vectory:session-ended")),
         );
+        await expect.poll(() => state.abortedBodies).toBeGreaterThan(0);
+        await sessionDialog()
+          .getByRole("button", { name: "Close dialog", exact: true })
+          .click();
         await expect(review()).toContainText(
           /session.*ended|no longer have permission/i,
         );
-        await expect.poll(() => state.abortedBodies).toBeGreaterThan(0);
         await expect(confirm()).toHaveCount(0);
+        expect(state.previews).toHaveLength(previewsBefore);
         expect(state.commits).toHaveLength(0);
         while (state.bodyHolds.length) state.bodyHolds.shift()();
       },
@@ -1079,8 +1108,9 @@ try {
         await expect(page.locator(".session-renewal")).toContainText(
           "Your session ended",
         );
+        // The same editor element, read directly: the session dialog covers it.
         expect(await original.evaluate((el) => el.isConnected)).toBe(true);
-        expect(await code.innerText()).toBe(pending);
+        expect(await original.innerText()).toBe(pending);
         let allowDiscard = false;
         const prompts = [];
         page.on("dialog", async (dialog) => {
@@ -1088,17 +1118,18 @@ try {
           if (allowDiscard) await dialog.accept();
           else await dialog.dismiss();
         });
-        await page
-          .getByRole("button", { name: "Sign in again", exact: true })
-          .click();
+        const someoneElse = () =>
+          sessionDialog().getByRole("button", {
+            name: "Sign in as someone else",
+            exact: true,
+          });
+        await someoneElse().click();
         expect(prompts.length).toBeGreaterThan(0);
         expect(await original.evaluate((el) => el.isConnected)).toBe(true);
-        expect(await code.innerText()).toBe(pending);
+        expect(await original.innerText()).toBe(pending);
         expect(requests.filter((x) => x.method === "PUT")).toEqual([]);
         allowDiscard = true;
-        await page
-          .getByRole("button", { name: "Sign in again", exact: true })
-          .click();
+        await someoneElse().click();
         await expect(
           page.getByRole("textbox", { name: "Email address", exact: true }),
         ).toBeVisible();

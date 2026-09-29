@@ -61,7 +61,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-You should see `server`, `proxy` and `validator` running, with `server` reported as healthy. If not, read the logs:
+You should see `server`, `proxy` and `validator` running, with `server` and `validator` reported as healthy. Compose starts the server only after the validator's health check passes, so the first start can take a few seconds longer. If a service is not running or healthy, read the logs:
 
 ```sh
 docker compose logs --tail 100 server proxy validator

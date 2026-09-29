@@ -6,11 +6,20 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import http from "node:http";
 import { existsSync, readdirSync } from "node:fs";
+// The clean-install workflow against a running preview (scripts/preview.sh):
+// first administrator (on a fresh instance), agent download from the release
+// listing with its SHA-256, install, enroll, publish, assign, apply, drift,
+// pause, metrics and a device-local secret. VECTORY_AGENT_BIN skips the
+// download; VECTORY_NATIVE_WORKFLOW_OUTPUT picks the report folder.
 const root = path.resolve(import.meta.dirname, ".."),
   local = process.env.VECTORY_PREVIEW_DIR || path.join(root, ".local/preview"),
   windows = process.platform === "win32",
   webPort = process.env.VECTORY_PREVIEW_WEB_PORT || "8080",
-  agentPort = process.env.VECTORY_PREVIEW_AGENT_PORT || "8443";
+  agentPort = process.env.VECTORY_PREVIEW_AGENT_PORT || "8443",
+  output = path.resolve(
+    root,
+    process.env.VECTORY_NATIVE_WORKFLOW_OUTPUT || "docs/evidence",
+  );
 const priorRun = await fs
   .readFile(path.join(local, "native-run.json"), "utf8")
   .then(JSON.parse)
@@ -32,13 +41,46 @@ if (priorRun) {
     );
 }
 const base = `http://127.0.0.1:${webPort}/api/v1`;
-const credentials = JSON.parse(
-  await fs.readFile(path.join(local, "credentials.json"), "utf8"),
-);
+const credentialsPath = path.join(local, "credentials.json");
+let credentials = await fs
+  .readFile(credentialsPath, "utf8")
+  .then(JSON.parse)
+  .catch((e) => {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  });
+// A fresh instance gets its first administrator from the preview's one-time
+// bootstrap secret, as an operator's first visit does.
+const bootstrapped = !(await fetch(`${base}/status`).then((r) => r.json()))
+  .initialized;
+if (bootstrapped) {
+  credentials ??= {
+    name: "Native workflow operator",
+    email: "native-workflow@vectory.local",
+    password: crypto.randomBytes(24).toString("base64url"),
+  };
+  await fs.writeFile(credentialsPath, JSON.stringify(credentials, null, 2), {
+    mode: 0o600,
+  });
+  const bootstrap_secret = (
+    await fs.readFile(path.join(local, "bootstrap.secret"), "utf8")
+  ).trim();
+  const setup = await fetch(`${base}/bootstrap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...credentials, bootstrap_secret }),
+  });
+  if (!setup.ok) throw Error(`First administrator setup failed: HTTP ${setup.status}`);
+  console.log("PASS first administrator created with the one-time bootstrap secret.");
+} else if (!credentials)
+  throw Error(`This preview is set up but ${credentialsPath} is missing. Use a fresh VECTORY_PREVIEW_DIR.`);
 const login = await fetch(`${base}/login`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(credentials),
+  body: JSON.stringify({
+    email: credentials.email,
+    password: credentials.password,
+  }),
 });
 if (!login.ok) throw Error(`Login failed ${login.status}`);
 const session = await login.json(),
@@ -104,9 +146,45 @@ function officialVector() {
     throw Error("Place the verified official Vector 0.58.0 build under .local/tools or set VECTORY_VECTOR_BIN");
   return found;
 }
-const binary =
-    process.env.VECTORY_AGENT_BIN ||
-    path.join(root, windows ? "agent/vectory.exe" : "agent/vectory"),
+// The agent this host would install: its build from the server's release
+// listing, downloaded as a signed-in user and checked against the listed
+// SHA-256 and size before it is run.
+async function downloadAgent() {
+  const os = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform],
+    arch = { x64: "amd64", arm64: "arm64" }[process.arch];
+  const release = (await api("/releases")).find(
+    (r) => r.os === os && r.arch === arch,
+  );
+  if (!release)
+    throw Error(
+      `The server lists no agent build for ${os}/${arch}. Build one with python3 packaging/build-release.py, or set VECTORY_AGENT_BIN.`,
+    );
+  const response = await fetch(`http://127.0.0.1:${webPort}${release.url}`, {
+    headers: { Cookie: cookie },
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!response.ok) throw Error(`Agent download failed: HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer()),
+    digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (digest !== release.sha256 || bytes.length !== release.size)
+    throw Error(
+      `${release.name} does not match the release listing: got SHA-256 ${digest} and ${bytes.length} bytes, listed ${release.sha256} and ${release.size} bytes.`,
+    );
+  const file = path.join(agentRoot, "bin", windows ? "vectory.exe" : "vectory");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, bytes, { mode: 0o755 });
+  console.log(
+    `PASS downloaded ${release.name} (${release.source} build, version ${release.version}) from the release listing; SHA-256 ${digest} matches.`,
+  );
+  return {
+    file,
+    source: { kind: "release listing", name: release.name, version: release.version, sha256: digest, size: bytes.length, origin: release.source },
+  };
+}
+const agent = process.env.VECTORY_AGENT_BIN
+    ? { file: path.resolve(process.env.VECTORY_AGENT_BIN), source: { kind: "VECTORY_AGENT_BIN" } }
+    : await downloadAgent(),
+  binary = agent.file,
   vector = officialVector();
 const binaryDigest = crypto
   .createHash("sha256")
@@ -470,8 +548,9 @@ try {
       d.actual_sha256 === version.sha256,
   );
   await new Promise((resolve) => receiver.close(resolve));
+  await fs.mkdir(output, { recursive: true });
   await fs.writeFile(
-    path.join(root, "docs/evidence/native-secret-telemetry.json"),
+    path.join(output, "native-secret-telemetry.json"),
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),
@@ -492,9 +571,8 @@ try {
       2,
     ),
   );
-  await fs.mkdir(path.join(root, "docs/evidence"), { recursive: true });
   await fs.writeFile(
-    path.join(root, "docs/evidence/native-workflow.json"),
+    path.join(output, "native-workflow.json"),
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),
@@ -502,8 +580,14 @@ try {
         arch: process.arch,
         vector: "0.58.0",
         agent_binary_sha256: binaryDigest,
+        agent_source: agent.source,
+        first_administrator_bootstrapped: bootstrapped,
         result: "passed",
         checks: [
+          ...(bootstrapped ? ["first administrator from the one-time bootstrap secret"] : []),
+          ...(agent.source.kind === "release listing"
+            ? ["agent downloaded from the server's release listing, SHA-256 and size verified"]
+            : []),
           "native install and explicit adoption",
           "verified TLS/CSR enrollment",
           "dashboard control-plane CRUD and immutable publish",
