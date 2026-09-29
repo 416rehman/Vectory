@@ -413,7 +413,7 @@ pub async fn list(
     h: HeaderMap,
     Path(collection): Path<String>,
 ) -> Result<Json<Value>> {
-    auth::authorize(
+    let reader = auth::authorize(
         &s,
         &h,
         if collection == "tokens" {
@@ -432,7 +432,13 @@ pub async fn list(
         "groups" => json!(crate::groups::list(&mut conn).await?),
         "policies" => json!(db::records(&mut conn, "policy").await?),
         "issues" => json!(crate::issues::legacy(&mut conn).await?),
-        "audit" => json!(audit_view(&mut conn).await?),
+        "audit" => json!(
+            audit_view(&mut conn)
+                .await?
+                .into_iter()
+                .map(|event| crate::audit::for_reader(event, &reader))
+                .collect::<Vec<_>>()
+        ),
         "tokens" => {
             let rows = sqlx::query("SELECT data FROM enrollment_tokens ORDER BY id")
                 .fetch_all(&mut *conn)

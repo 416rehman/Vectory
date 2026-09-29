@@ -2905,7 +2905,7 @@
     },
     "/api/v1/audit/{id}": {
       "get": {
-        "summary": "Read safe action-specific audit detail; current exact-ID names are not historical name snapshots",
+        "summary": "Read safe action-specific audit detail; current exact-ID names are not historical name snapshots. Viewers never receive details.client_address",
         "operationId": "get__api_v1_audit__id_",
         "security": [
           {
@@ -8621,7 +8621,7 @@
     },
     "/api/v1/agent-install/activity": {
       "get": {
-        "summary": "Recent enrollment attempts, newest first (at most 50 within 24 hours), with the reason recorded for each refusal. Devices are only told ENROLLMENT_FAILED",
+        "summary": "Recent enrollment attempts, newest first (at most 50 within 24 hours), with the reason recorded for each refusal. Devices are only told ENROLLMENT_FAILED. Operator or Admin",
         "operationId": "get__api_v1_agent_install_activity",
         "security": [
           {
@@ -13378,7 +13378,8 @@
             "type": "object",
             "properties": {
               "code": {
-                "type": "string"
+                "type": "string",
+                "description": "Stable machine-readable code. Common: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, STALE_REVISION, INVALID_INPUT, RATE_LIMITED, SIGNIN_THROTTLED, CAPACITY_BUSY (agent listener or download slots busy; retry with jitter), REQUEST_TIMEOUT (agent request deadline), PAYLOAD_TOO_LARGE (body over its limit), EXPORT_BUSY, EXPORT_CAPACITY, EXPORT_STORAGE, EXPORT_TIMEOUT, EXPORT_TOO_LARGE, VALIDATION_FAILED, INTERNAL. CONTRACT.md lists every code."
               },
               "message": {
                 "type": "string"
