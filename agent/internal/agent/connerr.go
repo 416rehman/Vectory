@@ -132,6 +132,46 @@ func certificateNames(c *x509.Certificate) string {
 	return strings.Join(names, ", ")
 }
 
+// outageReasons are transport failures that, for a server this device has
+// reached before, mean the server (or the way to it) is down rather than a
+// wrong address.
+var outageReasons = map[string]string{
+	"CONNECTION_REFUSED": "connection refused",
+	"NO_ROUTE":           "no network route",
+	"TIMEOUT":            "timed out",
+	"CONNECTION_RESET":   "connection reset",
+	"CONNECTION_CLOSED":  "connection closed",
+	"DNS":                "DNS lookup failed",
+	"PROXY_UNREACHABLE":  "proxy unreachable",
+	"PROXY_REFUSED":      "proxy couldn't connect",
+}
+
+// forKnownServer explains a failure to reach a server that last answered at
+// lastAnswered: the address is right, so it says the server is unreachable
+// and that Vector keeps running, instead of suggesting another port.
+func (e *ConnectionError) forKnownServer(lastAnswered, now time.Time) *ConnectionError {
+	reason, ok := outageReasons[e.Code]
+	if !ok {
+		return e
+	}
+	out := *e
+	out.Message = fmt.Sprintf("Can't reach the server (%s). It answered %s ago, so the address is right.", reason, humanDuration(now.Sub(lastAnswered)))
+	out.Fix = "The server is probably down or restarting. Vector keeps running the current pipeline, and the agent reconnects by itself (it retries every 10 s to 5 min)."
+	if e.Code == "NO_ROUTE" || e.Code == "DNS" || strings.HasPrefix(e.Code, "PROXY_") {
+		out.Fix = "Check this host's network and whether the server is up. Vector keeps running the current pipeline, and the agent reconnects by itself (it retries every 10 s to 5 min)."
+	}
+	return &out
+}
+
+// describeCheckInFailure is the text for a failed check-in: outage wording
+// when the server answered this device before.
+func describeCheckInFailure(err error, lastAnswered *time.Time, now time.Time) string {
+	if ce, ok := AsConnectionError(err); ok && lastAnswered != nil {
+		return ce.forKnownServer(*lastAnswered, now).Error()
+	}
+	return err.Error()
+}
+
 func listenerHint(target *url.URL) string {
 	if target.Port() == "8443" {
 		return "Check that the Vectory server is running and that this host can reach it."
