@@ -6,6 +6,7 @@ import {
   quote,
   setupArguments,
   setupCommand,
+  fingerprintRows,
   shortFingerprint,
   windowsCommand,
   type SetupChoices,
@@ -71,7 +72,9 @@ describe("install commands", () => {
       [
         "curl -fsSLk https://vectory.example.test:8443/agent/v1/install.sh -o vectory-install.sh",
         `echo '${installerSha}  vectory-install.sh' | sha256sum -c - &&`,
-        "  sudo sh vectory-install.sh --mode restricted --create-user",
+        "  sudo sh vectory-install.sh \\",
+        "    --mode restricted \\",
+        "    --create-user",
       ].join("\n"),
     );
     const mac = installerCommand(
@@ -79,8 +82,32 @@ describe("install commands", () => {
       choices({ os: "darwin", mode: "full" }),
     );
     expect(mac).toContain(
-      "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh --mode full",
+      "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh \\\n    --mode full",
     );
+  });
+
+  it("passes a Vector binary that isn't on PATH, one option per line", () => {
+    expect(
+      setupCommand(
+        install,
+        choices({ vectorBinary: "/opt/vector/bin/vector", createUser: false }),
+      ),
+    ).toBe(
+      [
+        "sudo vectory setup \\",
+        "  --server https://vectory.example.test:8443 \\",
+        `  --ca-sha256 ${pin} \\`,
+        "  --mode restricted \\",
+        "  --vector-binary /opt/vector/bin/vector",
+      ].join("\n"),
+    );
+  });
+
+  it("shows the whole CA fingerprint in rows of eight pairs", () => {
+    const rows = fingerprintRows(pin);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toBe("1F:3C:00:00:00:00:00:00");
+    expect(rows[3]).toBe("00:00:00:00:00:00:9A:B0");
   });
 
   it("verifies TLS normally when the listener is publicly trusted and never pins then", () => {
@@ -93,7 +120,13 @@ describe("install commands", () => {
     );
     expect(setupCommand(publicInstall, choices())).not.toContain("--ca-sha256");
     expect(setupCommand(install, choices())).toBe(
-      `sudo vectory setup --server https://vectory.example.test:8443 --ca-sha256 ${pin} --mode restricted --create-user`,
+      [
+        "sudo vectory setup \\",
+        "  --server https://vectory.example.test:8443 \\",
+        `  --ca-sha256 ${pin} \\`,
+        "  --mode restricted \\",
+        "  --create-user",
+      ].join("\n"),
     );
   });
 

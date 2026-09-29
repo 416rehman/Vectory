@@ -527,6 +527,8 @@ export type PreviewReplacement = {
 };
 export type DeploymentPreview = {
   request_correlation?: boolean;
+  /** The previewed version's pipeline name; older servers omit it. */
+  configuration_name?: string | null;
   devices: Device[];
   conflicts: PreviewConflict[];
   warnings: string[];
@@ -995,6 +997,8 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   last_seen?: string | null;
   replaced_by?: string | null;
   diagnostic?: string | null;
+  /** The agent's reported failure stage ("validation", "rollback", …). */
+  failure_stage?: string | null;
   check_in_seconds?: number | null;
   timeline?: { state: string; at: string }[];
   /** Verified, but an open data-plane issue says it isn't delivering. */
@@ -1117,7 +1121,13 @@ export type BindingSuggestions = {
   devices: Record<string, Record<string, string | number | boolean>>;
   sources: Record<
     string,
-    { deployment_id: string; version_number: number | null }
+    {
+      deployment_id: string;
+      version_number: number | null;
+      /** The pipeline it came from, which may be the one this was duplicated from. */
+      configuration_id?: string;
+      configuration_name?: string | null;
+    }
   >;
 };
 export type DeploymentTargetPage = {
@@ -1199,6 +1209,15 @@ export const AuditDetailsSchema = z.object({
   deployment_id: z.string().optional(),
   previous_signing_key_id: z.string().optional(),
   signing_key_id: z.string().optional(),
+  // Enrollment attempts, refused ones included (bounded by the server).
+  reason_code: z.string().max(64).optional(),
+  name: z.string().max(100).optional(),
+  token_id: z.string().max(128).optional(),
+  agent_os: z.string().max(64).optional(),
+  agent_arch: z.string().max(64).optional(),
+  agent_version: z.string().max(64).optional(),
+  configuration_mode: z.string().max(16).optional(),
+  client_address: z.string().max(64).optional(),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,

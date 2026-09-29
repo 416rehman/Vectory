@@ -4,10 +4,14 @@ import { ChevronDown, CopyPlus, Pencil, Plus } from "lucide-react";
 import { DataTable } from "./DataTable";
 import {
   can,
+  type DeploymentPage,
+  type DeploymentSummary,
+  type Policy,
   type SavedPolicy,
   type SavedPolicyListItem,
   type User,
 } from "./api";
+import { deploymentRoute } from "./deploymentRouting";
 import {
   Button,
   DateCell,
@@ -91,6 +95,13 @@ export function Policies({
   } | null>(null);
   const [editing, setEditing] = useState<SavedPolicyListItem | null>(null);
   const operate = can(user, "operate");
+  // Settings applied straight from a device or the deploy dialog have no
+  // saved record; devices still run them, so list them here too.
+  const history = useResource<DeploymentPage>(
+    "/deployments/history?status=all&search=Agent%20settings&page=1&page_size=50",
+    { items: [], total: 0, page: 1, page_size: 50 },
+  );
+  const unsaved = unsavedSettings(history.data.items);
   return (
     <div className="control-page agent-settings-page">
       <PageHeader
@@ -126,6 +137,18 @@ export function Policies({
         }}
       />
       {error && <ErrorBox message={error} retry={reload} />}
+      {unsaved.length > 0 && (
+        <UnsavedSettings
+          items={unsaved}
+          canSave={operate}
+          onSave={(opener, policy) =>
+            creation.current?.openCreate(opener, {
+              name: settingsName(policy),
+              policy,
+            })
+          }
+        />
+      )}
       <div className="control-table">
         <DataTable<SavedPolicyListItem>
           data={error ? [] : data}
@@ -239,7 +262,11 @@ export function Policies({
               "No settings match these filters."
             ) : (
               <Quiet
-                title="No saved agent settings"
+                title={
+                  unsaved.length
+                    ? "No saved agent settings yet"
+                    : "No saved agent settings"
+                }
                 action={
                   operate ? (
                     <Button
@@ -252,8 +279,9 @@ export function Policies({
                   ) : undefined
                 }
               >
-                Control how often agents check in, collect metrics, and sync
-                pipeline changes.
+                {unsaved.length
+                  ? "The settings above were applied without saving. Save them to reuse and track them here."
+                  : "Control how often agents check in, collect metrics, and sync pipeline changes."}
               </Quiet>
             )
           }
@@ -299,6 +327,85 @@ export function Policies({
         />
       )}
     </div>
+  );
+}
+
+/** "Check-ins every 15 s, sync on" as a starting name for saved settings. */
+function settingsName(policy: Policy) {
+  return [
+    `Check-ins every ${policy.heartbeat_seconds} s`,
+    policy.sync_paused ? "sync paused" : "",
+    policy.telemetry_enabled ? "" : "metrics off",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+/**
+ * Settings deployments without a saved record that still reach devices,
+ * newest first, one per distinct set of values.
+ */
+export function unsavedSettings(items: DeploymentSummary[]) {
+  const seen = new Set<string>();
+  return items.filter((d) => {
+    if (!d.policy || d.policy_id || d.rolled_back_by) return false;
+    if (!["active", "paused", "completed", "scheduled"].includes(d.status))
+      return false;
+    if (d.target_count - (d.state_counts.removed || 0) <= 0) return false;
+    const key = JSON.stringify(d.policy);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function UnsavedSettings({
+  items,
+  canSave,
+  onSave,
+}: {
+  items: DeploymentSummary[];
+  canSave: boolean;
+  onSave(opener: HTMLElement, policy: Policy): void;
+}) {
+  return (
+    <section
+      className="control-card agent-settings-unsaved"
+      aria-labelledby="agent-settings-unsaved-title"
+    >
+      <h2 id="agent-settings-unsaved-title">Applied without saving</h2>
+      <p className="control-muted">
+        Devices run these settings, but no saved record holds them.
+      </p>
+      <ul>
+        {items.map((d) => {
+          const devices = d.target_count - (d.state_counts.removed || 0);
+          return (
+            <li key={d.id}>
+              <span className="agent-settings-unsaved-copy">
+                <strong>{settingsName(d.policy!)}</strong>
+                <small>
+                  <a
+                    href={`#/${deploymentRoute(false, d.id, { search: "", status: "all", page: 1 })}`}
+                  >
+                    Applied to{" "}
+                    {devices === 1 ? "1 device" : `${devices} devices`}
+                  </a>
+                  {d.created_by_name ? ` by ${d.created_by_name}` : ""} ·{" "}
+                  <DateCell value={d.created_at} />
+                </small>
+              </span>
+              {canSave && (
+                <Button
+                  variant="secondary compact"
+                  onClick={(event) => onSave(event.currentTarget, d.policy!)}
+                >
+                  Save as settings…
+                </Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

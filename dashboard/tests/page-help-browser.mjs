@@ -204,6 +204,9 @@ await context.route("**/*", async (route) => {
       page_size: Number(url.searchParams.get("page_size") || 12),
     });
   if (path === `/configurations/${pipelineId}`) return reply(pipeline);
+  // Add device lists the last day's enrollment attempts.
+  if (path === "/agent-install/activity")
+    return reply({ events: [], now: new Date().toISOString() });
   unexpected.push(`${method} ${path}`);
   return route.fulfill({
     status: 500,

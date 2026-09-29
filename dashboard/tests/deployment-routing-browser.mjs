@@ -381,7 +381,8 @@ try {
             "?page=1&action=cancel",
         );
         await expect(
-          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+          // The heading names the instance: "Sign in to <instance>".
+          f.page.getByRole("heading", { name: /^Sign in to / }),
         ).toBeVisible();
         await f.page
           .getByLabel("Email address", { exact: true })
@@ -550,7 +551,8 @@ try {
         // An expired session is handled once by the shell's sign-in prompt;
         // the page keeps what it had instead of showing its own error.
         await expect(
-          f.page.getByText("Your session ended. Sign in again to continue.", {
+          f.page.getByRole("heading", {
+            name: "Your session ended",
             exact: true,
           }),
         ).toBeVisible();

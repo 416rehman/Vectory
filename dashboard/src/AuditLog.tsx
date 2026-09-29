@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
+  ChevronRight,
   Copy,
   Download,
   ExternalLink,
@@ -37,6 +38,7 @@ import {
   auditActionLabel,
   auditChanges,
   auditDateError,
+  auditEventLabel,
   auditFamilies,
   auditFilterParams,
   auditFilterSummary,
@@ -48,7 +50,9 @@ import {
   auditScopes,
   auditScopeSummary,
   defaultAuditQuery,
+  deviceResultsSummary,
   effectiveAuditScope,
+  groupDeviceResults,
   isAuditId,
   normalizeAuditQuery,
   type AuditQuery,
@@ -59,6 +63,7 @@ import { exactLocal, exactUtc, shortLocal } from "./time";
 import "./audit.css";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
+import { describeAgent, refusal } from "./enrollmentActivity";
 
 const emptyPage: AuditHistoryPage = {
   items: [],
@@ -171,6 +176,8 @@ function targetLabel(
   >,
 ) {
   if (item.target_name) return item.target_name;
+  // A refused enrollment never created a device.
+  if (item.target === "unregistered") return "Unregistered device";
   const kind = kindLabels[item.target_kind];
   if (kind && item.target_id && isAuditId(item.target_id))
     return `${kind} ${item.target_id.slice(0, 8)}`;
@@ -209,6 +216,7 @@ export function AuditLog({
   const [filterDraft, setFilterDraft] = useState(query);
   const [localId, setLocalId] = useState<string | null>(null);
   const [exportQuery, setExportQuery] = useState<AuditQuery | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const priorRoute = useRef(routeKey);
   const controlled = selectedAuditId !== undefined;
   const detailId =
@@ -371,8 +379,54 @@ export function AuditLog({
         openDetail(item.id, event.currentTarget);
       }}
     >
-      {auditActionLabel(item.action)}
+      {auditEventLabel(item)}
     </a>
+  );
+  // Per-device apply results collapse into one row in the default view, so
+  // edits and rollouts stay visible. Filters and other sorts show every row.
+  const grouping =
+    !eventFilter &&
+    !query.device_id &&
+    !query.target_id &&
+    query.sort === "created_at";
+  const results = new Map<string, AuditSummary[]>();
+  const members = new Set<string>();
+  const rows: AuditSummary[] = [];
+  for (const row of grouping
+    ? groupDeviceResults(data.items)
+    : data.items.map((item) => ({ kind: "event" as const, item }))) {
+    if (row.kind === "event") {
+      rows.push(row.item);
+      continue;
+    }
+    results.set(row.key, row.items);
+    rows.push({ ...row.items[0], id: row.key });
+    if (expanded.has(row.key))
+      for (const item of row.items) {
+        members.add(item.id);
+        rows.push(item);
+      }
+  }
+  const toggleResults = (key: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  const resultsToggle = (key: string, items: AuditSummary[]) => (
+    <button
+      type="button"
+      className="audit-results-toggle"
+      aria-expanded={expanded.has(key)}
+      onClick={() => toggleResults(key)}
+    >
+      <ChevronRight
+        size={14}
+        aria-hidden="true"
+        className="audit-results-chevron"
+      />
+      {deviceResultsSummary(items).title}
+    </button>
   );
   const columns: TableColumn<AuditSummary>[] = [
     {
@@ -430,21 +484,29 @@ export function AuditLog({
           </div>
         ),
       },
-      cell: (item) => (
-        <span className="audit-event">
-          {eventLink(item)}
-          {(item.target_name || item.target) && (
+      cell: (item) =>
+        results.has(item.id) ? (
+          <span className="audit-event">
+            {resultsToggle(item.id, results.get(item.id)!)}
             <span className="audit-target">
-              <ResourceLink
-                kind={item.target_kind}
-                id={item.target_exists === false ? null : item.target_id}
-                name={targetLabel(item)}
-                navigate={navigate}
-              />
+              {deviceResultsSummary(results.get(item.id)!).devices}
             </span>
-          )}
-        </span>
-      ),
+          </span>
+        ) : (
+          <span className="audit-event">
+            {eventLink(item)}
+            {(item.target_name || item.target) && (
+              <span className="audit-target">
+                <ResourceLink
+                  kind={item.target_kind}
+                  id={item.target_exists === false ? null : item.target_id}
+                  name={targetLabel(item)}
+                  navigate={navigate}
+                />
+              </span>
+            )}
+          </span>
+        ),
     },
     {
       id: "actor",
@@ -463,16 +525,19 @@ export function AuditLog({
             ),
           }
         : undefined,
-      cell: (item) => (
-        <span className="audit-actor">
-          <ResourceLink
-            kind={item.actor_kind}
-            id={item.actor_id}
-            name={actorLabel(item)}
-            navigate={navigate}
-          />
-        </span>
-      ),
+      cell: (item) =>
+        results.has(item.id) ? (
+          <span className="audit-muted">Each device's agent</span>
+        ) : (
+          <span className="audit-actor">
+            <ResourceLink
+              kind={item.actor_kind}
+              id={item.actor_id}
+              name={actorLabel(item)}
+              navigate={navigate}
+            />
+          </span>
+        ),
     },
     {
       id: "outcome",
@@ -499,7 +564,14 @@ export function AuditLog({
         ],
         onChange: (outcome) => applyScope({ outcome }),
       },
-      cell: (item) => <Result outcome={item.outcome} />,
+      cell: (item) =>
+        results.has(item.id) ? (
+          <span className="audit-muted audit-results-outcomes">
+            {deviceResultsSummary(results.get(item.id)!).outcomes}
+          </span>
+        ) : (
+          <Result outcome={item.outcome} />
+        ),
     },
     {
       id: "created_at",
@@ -670,9 +742,16 @@ export function AuditLog({
       )}
       <TableCard>
         <DataTable
-          data={dateError ? [] : data.items}
+          data={dateError ? [] : rows}
           columns={columns}
           rowKey={(item) => item.id}
+          rowClassName={(item) =>
+            results.has(item.id)
+              ? "audit-row-results"
+              : members.has(item.id)
+                ? "audit-row-member"
+                : ""
+          }
           label="Audit events"
           className="audit-table"
           loading={loading && !events.updatedAt}
@@ -685,7 +764,11 @@ export function AuditLog({
               direction: sort?.direction || "desc",
             })
           }
-          onRowClick={(item, event) => openDetail(item.id, event.currentTarget)}
+          onRowClick={(item, event) =>
+            results.has(item.id)
+              ? toggleResults(item.id)
+              : openDetail(item.id, event.currentTarget)
+          }
           pagination={{
             page: query.page,
             size: 12,
@@ -693,17 +776,29 @@ export function AuditLog({
             onPage: (page) => setQuery((current) => ({ ...current, page })),
             noun: "events",
           }}
-          mobileCard={(item) => ({
-            title: eventLink(item),
-            status: <Result outcome={item.outcome} />,
-            meta: [
-              targetLabel(item),
-              actorLabel(item) === targetLabel(item) ? null : actorLabel(item),
-              item.created_at
-                ? shortLocal(item.created_at)
-                : "Time unavailable",
-            ],
-          })}
+          mobileCard={(item) =>
+            results.has(item.id)
+              ? {
+                  title: resultsToggle(item.id, results.get(item.id)!),
+                  meta: [
+                    deviceResultsSummary(results.get(item.id)!).devices,
+                    deviceResultsSummary(results.get(item.id)!).outcomes,
+                  ],
+                }
+              : {
+                  title: eventLink(item),
+                  status: <Result outcome={item.outcome} />,
+                  meta: [
+                    targetLabel(item),
+                    actorLabel(item) === targetLabel(item)
+                      ? null
+                      : actorLabel(item),
+                    item.created_at
+                      ? shortLocal(item.created_at)
+                      : "Time unavailable",
+                  ],
+                }
+          }
           empty={
             error ? (
               <EmptyState variant="error" title="Activity could not be loaded">
@@ -931,7 +1026,7 @@ function AuditInspector({
           data && (
             <>
               <div className="audit-detail-title">
-                <h2>{auditActionLabel(data.action)}</h2>
+                <h2>{auditEventLabel(data)}</h2>
                 <Result outcome={data.outcome} />
               </div>
               <p className="audit-detail-time">
@@ -996,6 +1091,9 @@ function AuditInspector({
                       />
                     </dd>
                   </div>
+                )}
+                {data.action === "device.enroll" && (
+                  <EnrollmentAttempt detail={data} />
                 )}
                 {typeof data.details?.reason === "string" && (
                   <div>
@@ -1118,6 +1216,59 @@ function AuditInspector({
         </Button>
       </div>
     </Modal>
+  );
+}
+
+/** Who tried to enroll, from where, and why a refusal happened. */
+function EnrollmentAttempt({ detail }: { detail: AuditDetail }) {
+  const d = detail.details;
+  const refused = detail.outcome !== "success";
+  const why = refused && d.reason_code ? refusal(d) : null;
+  const agent = describeAgent(d);
+  return (
+    <>
+      {d.name && (
+        <div>
+          <dt>{refused ? "Attempted name" : "Device name"}</dt>
+          <dd>{d.name}</dd>
+        </div>
+      )}
+      {why && (
+        <div>
+          <dt>Why it was refused</dt>
+          <dd className="audit-reason">
+            <span className="audit-reason-title">
+              {why.title.replace(/^./, (c) => c.toUpperCase())}.
+            </span>{" "}
+            {why.fix}
+          </dd>
+        </div>
+      )}
+      {d.client_address && (
+        <div>
+          <dt>From</dt>
+          <dd>{d.client_address}</dd>
+        </div>
+      )}
+      {agent && (
+        <div>
+          <dt>Agent</dt>
+          <dd>{agent}</dd>
+        </div>
+      )}
+      {d.configuration_mode && (
+        <div>
+          <dt>Mode</dt>
+          <dd>
+            {d.configuration_mode === "full"
+              ? "Full Vector"
+              : d.configuration_mode === "restricted"
+                ? "Restricted"
+                : d.configuration_mode}
+          </dd>
+        </div>
+      )}
+    </>
   );
 }
 

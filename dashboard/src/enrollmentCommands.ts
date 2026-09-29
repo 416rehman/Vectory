@@ -20,6 +20,8 @@ export type SetupChoices = {
   stateDir: string;
   managedConfig: string;
   capabilityPolicy: string;
+  /** Empty: setup finds Vector on PATH or in the usual locations. */
+  vectorBinary?: string;
 };
 
 /** The same defaults `vectory setup`, the service definitions and the docs use. */
@@ -102,7 +104,21 @@ export function setupArguments(choices: SetupChoices): string[] {
     add("--managed-config", choices.managedConfig.trim());
   if (choices.mode === "restricted" && choices.capabilityPolicy.trim())
     add("--capability-policy", choices.capabilityPolicy.trim());
+  if (choices.vectorBinary?.trim())
+    add("--vector-binary", choices.vectorBinary.trim());
   return args;
+}
+
+/**
+ * One option per line with a trailing " \\" so the whole command is visible
+ * on a narrow screen and still pastes as one command in any POSIX shell.
+ */
+export function continued(head: string, args: string[], indent = "  ") {
+  const lines: string[] = [];
+  for (const arg of args)
+    if (arg.startsWith("--") || !lines.length) lines.push(arg);
+    else lines[lines.length - 1] += ` ${arg}`;
+  return [head, ...lines.map((line) => `${indent}${line}`)].join(" \\\n");
 }
 
 /** How devices will trust the agent listener, from the server's own chain. */
@@ -147,7 +163,7 @@ export function installerCommand(
   return [
     `curl -fsSL${trusted ? "" : "k"} ${install.agent_url}/agent/v1/install.sh -o vectory-install.sh`,
     `echo '${install.installer.sha256}  vectory-install.sh' | ${check} &&`,
-    `  sudo sh vectory-install.sh ${setupArguments(choices).join(" ")}`,
+    continued("  sudo sh vectory-install.sh", setupArguments(choices), "    "),
   ].join("\n");
 }
 
@@ -158,10 +174,10 @@ export function setupCommand(
 ): string | null {
   const trust = trustFor(install);
   if (!trust) return null;
-  const args = [...trustArguments(trust), ...setupArguments(choices)].join(" ");
+  const args = [...trustArguments(trust), ...setupArguments(choices)];
   return choices.os === "windows"
-    ? `.\\vectory.exe setup ${args}`
-    : `sudo vectory setup ${args}`;
+    ? `.\\vectory.exe setup ${args.join(" ")}`
+    : continued("sudo vectory setup", args);
 }
 
 /** Windows: verify the downloaded agent, then run setup from an elevated shell. */
@@ -195,6 +211,14 @@ export function shortDigest(sha256: string) {
   return sha256.length > 16
     ? `${sha256.slice(0, 8)}…${sha256.slice(-6)}`
     : sha256;
+}
+/** The full fingerprint in rows of eight pairs, for comparing by eye. */
+export function fingerprintRows(sha256: string) {
+  const pairs = sha256.toUpperCase().match(/../g) || [];
+  const rows: string[] = [];
+  for (let index = 0; index < pairs.length; index += 8)
+    rows.push(pairs.slice(index, index + 8).join(":"));
+  return rows;
 }
 /** "1F:3C:...:9A:B0", exactly as `vectory setup` prints the pin. */
 export function shortFingerprint(sha256: string) {

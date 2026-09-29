@@ -55,15 +55,17 @@ export function assignmentName(
 }
 
 /**
- * What a device runs now: its last verified managed version, or its own config.
- * Within the pipeline being deployed, the version number alone is clearest.
+ * What a device runs now: its last verified managed version, its own local
+ * config, or nothing at all. Within the pipeline being deployed, the version
+ * number alone is clearest.
  */
 export function runningName(
-  device: Pick<Device, "running_version">,
+  device: Pick<Device, "running_version"> & { actual_sha256?: string | null },
   configurationId?: string | null,
 ) {
   const running = device.running_version;
-  if (!running) return "Local config (adopted)";
+  if (!running)
+    return device.actual_sha256 ? "Its local config" : "Nothing running yet";
   if (
     configurationId &&
     running.configuration_id === configurationId &&

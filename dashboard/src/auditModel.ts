@@ -140,6 +140,12 @@ export function auditActionLabel(action: string) {
       .replace(/^./, (c) => c.toUpperCase())
   );
 }
+/** The event's name as the list shows it: a refused enrollment says so. */
+export function auditEventLabel(item: { action: string; outcome: string }) {
+  if (item.action === "device.enroll" && item.outcome !== "success")
+    return "Enrollment refused";
+  return auditActionLabel(item.action);
+}
 export function auditOutcomeLabel(outcome: string) {
   return (
     auditOutcomes[outcome] ||
@@ -390,4 +396,67 @@ export function auditChanges(
       });
   }
   return changes;
+}
+
+type GroupableEvent = {
+  id: string;
+  action: string;
+  outcome: string;
+  target_name: string | null;
+  created_at: string | null;
+};
+export type AuditRow<T extends GroupableEvent> =
+  | { kind: "event"; item: T }
+  | { kind: "results"; key: string; items: T[] };
+/**
+ * Consecutive per-device apply results ("edge-nyc-01 applied and verified")
+ * collapse into one row, so deployments and edits stay readable in the
+ * default view. A lone result stays a plain row.
+ */
+export function groupDeviceResults<T extends GroupableEvent>(
+  items: T[],
+): AuditRow<T>[] {
+  const rows: AuditRow<T>[] = [];
+  let run: T[] = [];
+  const flush = () => {
+    if (run.length > 1)
+      rows.push({ kind: "results", key: `results:${run[0].id}`, items: run });
+    else if (run.length) rows.push({ kind: "event", item: run[0] });
+    run = [];
+  };
+  for (const item of items) {
+    if (item.action === "device.apply_state") run.push(item);
+    else {
+      flush();
+      rows.push({ kind: "event", item });
+    }
+  }
+  flush();
+  return rows;
+}
+/** "3 device results" with names and outcomes, most common outcome first. */
+export function deviceResultsSummary(items: GroupableEvent[]) {
+  const names = [
+    ...new Set(items.map((item) => item.target_name || "a device")),
+  ];
+  const shown = names.slice(0, 2);
+  const devices =
+    names.length > 2
+      ? `${shown.join(", ")} and ${names.length - 2} more`
+      : shown.join(" and ");
+  const counts = new Map<string, number>();
+  for (const item of items)
+    counts.set(item.outcome, (counts.get(item.outcome) || 0) + 1);
+  const outcomes = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(
+      ([outcome, count]) =>
+        `${count} ${auditOutcomeLabel(outcome).toLowerCase()}`,
+    )
+    .join(", ");
+  return {
+    title: `${items.length} device results`,
+    devices,
+    outcomes,
+  };
 }

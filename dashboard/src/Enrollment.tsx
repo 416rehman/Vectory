@@ -189,6 +189,100 @@ function useEnrollmentWatch(command: Command | null, active: boolean) {
   return watch;
 }
 
+/**
+ * Every enrollment attempt of the last day, refused ones with their reason,
+ * so a refusal is still explained after a reload.
+ */
+function RecentAttempts({
+  events,
+  loading,
+  error,
+  currentTokenId,
+}: {
+  events: EnrollmentEvent[];
+  loading: boolean;
+  error: string;
+  currentTokenId: string | null;
+}) {
+  // The live timeline above already shows this command's attempts.
+  const shown = events.filter(
+    (event) => !currentTokenId || event.token_id !== currentTokenId,
+  );
+  const refused = shown.filter((event) => event.outcome === "failure").length;
+  return (
+    <details className="enroll-attempts">
+      <summary>
+        Recent enrollment attempts
+        {loading && !shown.length
+          ? ""
+          : ` (${shown.length}${refused ? `, ${refused} refused` : ""})`}
+      </summary>
+      <div className="control-card">
+        <p className="control-muted">
+          The last 24 hours. Devices only learn that enrollment was refused; the
+          reason is recorded here and in the audit log.
+        </p>
+        {error ? (
+          <p className="control-muted">
+            Enrollment attempts couldn&apos;t be loaded.
+          </p>
+        ) : !shown.length ? (
+          <p className="control-muted">
+            {loading
+              ? "Loading…"
+              : "No enrollment attempts in the last 24 hours."}
+          </p>
+        ) : (
+          <ol className="enroll-timeline">
+            {shown.map((event, index) => (
+              <li
+                key={event.id || index}
+                data-outcome={
+                  event.outcome === "failure" ? "failure" : "success"
+                }
+              >
+                {event.outcome === "failure" ? (
+                  <XCircle size={16} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={16} aria-hidden="true" />
+                )}
+                <span>
+                  <strong>
+                    {event.outcome === "failure"
+                      ? `Refused${event.device_name ? ` "${event.device_name}"` : ""}: ${refusal(event).title}.`
+                      : `Enrolled ${event.device_name || "a new device"}`}
+                  </strong>
+                  <small>
+                    {[
+                      event.created_at
+                        ? new Date(event.created_at).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : "",
+                      event.client_address
+                        ? `from ${event.client_address}`
+                        : "",
+                      describeAgent(event),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                  {event.outcome === "failure" && (
+                    <small>{refusal(event).fix}</small>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function CommandBlock({
   command,
   label,
@@ -253,6 +347,23 @@ export function Enrollment({
   const [stateDir, setStateDir] = useState("");
   const [managedConfig, setManagedConfig] = useState("");
   const [capabilityPolicy, setCapabilityPolicy] = useState("");
+  const [vectorBinary, setVectorBinary] = useState("");
+  const [revokingUnused, setRevokingUnused] = useState(false);
+  // Refused and accepted enrollments of the last day, kept across reloads.
+  const [historySince] = useState(() =>
+    new Date(Date.now() - 86400000).toISOString(),
+  );
+  // The live timeline polls while a command waits; this list only needs to
+  // survive a reload, so it refreshes rarely.
+  // Operators and admins only: the feed names addresses and attempted names.
+  const history = useResource<unknown>(
+    can(user, "operate")
+      ? `/agent-install/activity?since=${encodeURIComponent(historySince)}`
+      : null,
+    null,
+    0,
+    { interval: 300000 },
+  );
   const [hours, setHours] = useState(1);
   const [maxUses, setMaxUses] = useState("1");
   const [prefix, setPrefix] = useState("");
@@ -293,6 +404,7 @@ export function Enrollment({
     stateDir,
     managedConfig,
     capabilityPolicy,
+    vectorBinary,
   };
   const trimmedName = name.trim();
   const nameValid = !trimmedName || deviceNamePattern.test(trimmedName);
@@ -333,6 +445,7 @@ export function Enrollment({
     !pathProblem(stateDir) &&
     !pathProblem(managedConfig, true) &&
     !pathProblem(capabilityPolicy, true) &&
+    !pathProblem(vectorBinary) &&
     prefixValid &&
     prefixMatches &&
     usesValid &&
@@ -415,7 +528,27 @@ export function Enrollment({
       });
     }
   }
+  /** Best effort: a revoked unused token can't enroll anything later. */
+  async function revokeTokens(ids: string[]) {
+    let revoked = 0;
+    for (const id of ids)
+      try {
+        await api(`/tokens/${encodeURIComponent(id)}/revoke`, {
+          method: "POST",
+          body: "{}",
+        });
+        revoked += 1;
+      } catch {
+        // Left in the token list, where it can be revoked by hand.
+      }
+    void tokens.reload();
+    return revoked;
+  }
   function addAnother() {
+    // A command whose token enrolled nothing is done with: don't leave its
+    // token working until it expires.
+    if (command && !state?.enrolled && !state?.device && operate)
+      void revokeTokens([command.tokenId]);
     setCommand(null);
     setFinished(null);
     setShown(false);
@@ -445,6 +578,24 @@ export function Enrollment({
   const platformBuilds = install
     ? install.releases.filter((release) => release.os === os)
     : [];
+  const osLabel = platforms.find((item) => item.value === os)!.label;
+  // Without a build to download, never issue an installer that would fail on
+  // the host: issue the setup command for an agent copied there instead.
+  const noDownload =
+    !!install &&
+    (!install.downloads_enabled ||
+      platformBuilds.length === 0 ||
+      (os === "windows" ? !winRelease : !installCommand));
+  const unusedTokens = tokens.data.filter(
+    (token) =>
+      tokenStatus(token) === "Available" &&
+      token.uses === 0 &&
+      token.created_by?.id === user.id &&
+      /install command/i.test(token.name) &&
+      token.id !== command?.tokenId,
+  );
+  const parsedHistory = EnrollmentActivitySchema.safeParse(history.data);
+  const recentAttempts = parsedHistory.success ? parsedHistory.data.events : [];
   const commandExpired =
     !!commandToken &&
     (commandToken.revoked || Date.parse(commandToken.expires_at) < Date.now());
@@ -525,7 +676,8 @@ export function Enrollment({
               Advanced
               <span className="control-muted">
                 {" "}
-                · device name, token limits, service account, paths
+                · device name, Vector binary, token limits, service account,
+                paths
               </span>
             </summary>
             <fieldset disabled={busy} className="enroll-advanced-fields">
@@ -683,6 +835,22 @@ export function Enrollment({
                   />
                 </Field>
               )}
+              <Field
+                label="Vector binary (optional)"
+                hint={
+                  pathProblem(vectorBinary) ||
+                  "Set this if Vector isn't on PATH, for example a downloaded archive."
+                }
+              >
+                <input
+                  value={vectorBinary}
+                  aria-invalid={!!pathProblem(vectorBinary)}
+                  onChange={(event) => setVectorBinary(event.target.value)}
+                  placeholder="Found automatically on PATH"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </Field>
               <div className="control-three-col">
                 <Field
                   label="Token expires in (hours)"
@@ -755,11 +923,32 @@ export function Enrollment({
             </div>
           ) : !command ? (
             <>
-              <p className="control-muted">
-                {os === "windows"
-                  ? "You'll download the agent, check its SHA-256 and run setup from an elevated PowerShell."
-                  : "The command downloads the installer, checks it against the SHA-256 shown here and runs it with sudo. Setup then asks for the enrollment token on the terminal."}
-              </p>
+              {noDownload ? (
+                <div className="control-note enroll-no-build" role="note">
+                  <p>
+                    <strong>
+                      {!install.downloads_enabled
+                        ? "Agent downloads are off on this server."
+                        : `This server has no ${osLabel} agent build yet.`}
+                    </strong>{" "}
+                    Copy the vectory agent to the host yourself; you&apos;ll get
+                    the setup command to run next to it.{" "}
+                    {install.downloads_enabled &&
+                      (can(user, "admin")
+                        ? "To offer one here, add it to the release mirror."
+                        : "An administrator can add one to the release mirror.")}{" "}
+                    <DocLink topic="installation" section="install-and-enroll">
+                      Installation guide
+                    </DocLink>
+                  </p>
+                </div>
+              ) : (
+                <p className="control-muted">
+                  {os === "windows"
+                    ? "You'll download the agent, check its SHA-256 and run setup from an elevated PowerShell."
+                    : "The command downloads the installer, checks it against the SHA-256 shown here and runs it with sudo. Setup then asks for the enrollment token on the terminal."}
+                </p>
+              )}
               {error && <ErrorBox message={error} />}
               <div className="enroll-actions">
                 <Button
@@ -767,7 +956,9 @@ export function Enrollment({
                   busy={busy}
                   disabled={!operate || blocked || !ready}
                 >
-                  Create install command
+                  {noDownload
+                    ? "Create setup command"
+                    : "Create install command"}
                 </Button>
                 {!ready && !busy && (
                   <span className="control-muted" role="status">
@@ -783,6 +974,38 @@ export function Enrollment({
                   </span>
                 )}
               </div>
+              {operate && unusedTokens.length > 0 && (
+                <p className="control-muted enroll-unused">
+                  {unusedTokens.length === 1
+                    ? "An install command you created earlier wasn't used. Its token still works until it expires."
+                    : `${unusedTokens.length} install commands you created earlier weren't used. Their tokens still work until they expire.`}{" "}
+                  <button
+                    type="button"
+                    className="enroll-text-button"
+                    disabled={revokingUnused || busy || blocked}
+                    onClick={async () => {
+                      setRevokingUnused(true);
+                      const count = await revokeTokens(
+                        unusedTokens.map((token) => token.id),
+                      );
+                      setRevokingUnused(false);
+                      notify(
+                        count === unusedTokens.length
+                          ? count === 1
+                            ? "Unused token revoked."
+                            : `${count} unused tokens revoked.`
+                          : "Some tokens couldn't be revoked. Revoke them under Manage enrollment tokens.",
+                      );
+                    }}
+                  >
+                    {revokingUnused
+                      ? "Revoking…"
+                      : unusedTokens.length === 1
+                        ? "Revoke it"
+                        : "Revoke them"}
+                  </button>
+                </p>
+              )}
             </>
           ) : !current ? (
             <div className="control-note">
@@ -827,15 +1050,22 @@ export function Enrollment({
                       onFocused={commandFocused}
                     />
                   </>
-                ) : (
-                  <div className="control-note">
-                    This server has no Windows agent build.{" "}
-                    {can(user, "admin")
-                      ? "Add one to the release mirror, or use an image with bundled agents."
-                      : "Ask an administrator to add one."}
-                  </div>
-                )
-              ) : installCommand ? (
+                ) : manualCommand ? (
+                  <>
+                    <p className="control-muted">
+                      Copy vectory.exe to the host, then run this from an
+                      elevated PowerShell in the same folder.
+                    </p>
+                    <CommandBlock
+                      command={manualCommand}
+                      label="Setup command"
+                      onCopy={(value) => void copy(value)}
+                      focus={focusCommand}
+                      onFocused={commandFocused}
+                    />
+                  </>
+                ) : null
+              ) : installCommand && !noDownload ? (
                 <CommandBlock
                   command={installCommand}
                   label="Install command"
@@ -843,13 +1073,21 @@ export function Enrollment({
                   focus={focusCommand}
                   onFocused={commandFocused}
                 />
-              ) : (
-                <div className="control-note">
-                  {!install.downloads_enabled
-                    ? "Agent downloads for devices are turned off on this server. Install the agent from your package source, then run setup as shown under I already have the agent."
-                    : "This server has no agent builds yet. Use I already have the agent below."}
-                </div>
-              )}
+              ) : manualCommand ? (
+                <>
+                  <p className="control-muted">
+                    Copy the vectory agent to the host, then run this next to
+                    it.
+                  </p>
+                  <CommandBlock
+                    command={manualCommand}
+                    label="Setup command"
+                    onCopy={(value) => void copy(value)}
+                    focus={focusCommand}
+                    onFocused={commandFocused}
+                  />
+                </>
+              ) : null}
               <div className="enroll-secret">
                 <span>Enrollment token</span>
                 <code>
@@ -880,7 +1118,8 @@ export function Enrollment({
               </div>
               <p className="control-muted enroll-secret-hint">
                 Paste it when setup asks. This page keeps it only until the
-                device connects or you leave.
+                device connects or you leave. Starting over revokes it if no
+                device used it.
               </p>
               {problem && !install.certificate?.publicly_trusted && (
                 <div className="control-note">{problem}</div>
@@ -1116,6 +1355,15 @@ export function Enrollment({
             </div>
           )}
         </section>
+
+        {operate && (
+          <RecentAttempts
+            events={recentAttempts}
+            loading={history.loading}
+            error={history.error}
+            currentTokenId={command?.tokenId || null}
+          />
+        )}
 
         <details className="enroll-token-management">
           <summary>Manage enrollment tokens ({activeCount} active)</summary>
