@@ -405,6 +405,7 @@ export function Deployments({
         backHref={`#/${deploymentRoute(scheduled, null, query)}`}
         originLabel={originLabel}
         permalinkRoute={deploymentRoute(scheduled, detailId, query)}
+        linked={controlled}
       />
     );
   return (
@@ -1196,6 +1197,7 @@ function RolloutPage({
   backHref,
   permalinkRoute,
   originLabel,
+  linked,
 }: {
   id: string;
   user: User;
@@ -1205,11 +1207,13 @@ function RolloutPage({
   backHref: string;
   permalinkRoute: string;
   originLabel: string;
+  /** The URL names this rollout, so its device filter lives there too. */
+  linked: boolean;
 }) {
   // Poll faster while the rollout can still move. Background polls never
   // cancel a slow read in flight, so a loaded server still gets its answer in.
-  // Changing a resource's interval reads it once more, so only the two reads
-  // that decide it follow this state; everything below uses `live` directly.
+  // A new interval only reschedules the next poll; the two reads that decide
+  // it follow this state, and everything below uses `live` directly.
   const [polling, setPolling] = useState(false);
   const pollInterval = polling ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
   const {
@@ -1275,7 +1279,9 @@ function RolloutPage({
   // The device filter is in the URL, so a filtered rollout can be shared and
   // survives a reload. Typing settles before it reaches the URL; a search
   // from the URL (Back, a link) replaces what the box shows.
-  const [deviceUrl, updateDeviceUrl] = useHashQuery(deviceResultsUrl);
+  const [deviceUrl, updateDeviceUrl] = useHashQuery(deviceResultsUrl, {
+    enabled: linked,
+  });
   const deviceQuery = readDeviceResults(deviceUrl);
   const updateDeviceQuery = useCallback(
     (patch: Partial<DeviceResultsQuery>) =>
