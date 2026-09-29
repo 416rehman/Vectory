@@ -2278,6 +2278,16 @@ mod tests {
             call("dns_lookup!(.host)\n.name = reverse_dns!(.ip)"),
             BTreeSet::from(["dns_lookup", "reverse_dns"])
         );
+        // VRL's lexer allows whitespace between the name, the bang and the
+        // parenthesis (`http_request! ("u")` sends a real request).
+        assert_eq!(
+            call(".a = http_request! (\"http://example.test\")"),
+            BTreeSet::from(["http_request"])
+        );
+        assert_eq!(
+            call(".a, err = http_request\t(\"http://example.test\")"),
+            BTreeSet::from(["http_request"])
+        );
         // Field paths, longer identifiers and prose are not calls.
         assert!(call(".http_request = 1").is_empty());
         assert!(call("my_http_request(1)").is_empty());
