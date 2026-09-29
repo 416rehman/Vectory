@@ -3,6 +3,26 @@ import { withRequestDeadline } from "./api";
 import { isUncertainOutcome } from "./authRequests";
 import type { AccountContext, useAccountAuthority } from "./accountAuthority";
 
+type Authority = Pick<
+  ReturnType<typeof useAccountAuthority>,
+  "context" | "usable"
+>;
+export type KeyedHandlers<T, R> = {
+  read: (
+    request: KeyedRequest<T>,
+    signal: AbortSignal,
+  ) => Promise<Resolution<R>>;
+  cancel: (
+    request: KeyedRequest<T>,
+    signal: AbortSignal,
+  ) => Promise<Resolution<R>>;
+  done: (
+    request: KeyedRequest<T>,
+    result: R,
+    via: "receipt" | "status",
+  ) => void;
+};
+
 /**
  * What an exact status read (or a cancellation) says about a keyed request:
  * - `done`: its result is known, so the action finished.
@@ -46,51 +66,31 @@ export type KeyedRequest<T> = {
 export class NotSent extends Error {}
 
 /**
- * One-shot administrator requests with exact status reads (creating a person,
- * editing access, issuing a link). Passwords are the caller's to clear before
- * sending; nothing here is ever resent. An unconfirmed result is read once
- * automatically, and a second attempt needs a server-confirmed cancellation.
+ * The keyed-request state machine without React: the hook below keeps its
+ * state in React, and tests drive it directly. Passwords are the caller's to
+ * clear before sending; nothing here is ever resent. An unconfirmed result is
+ * read once automatically, and a second attempt needs a server-confirmed
+ * cancellation.
  */
-export function useKeyedRequest<T, R>({
+export function createKeyedRequest<T, R>({
   authority,
-  read,
-  cancel,
-  done,
+  handlers,
+  onRequest,
+  onOpen,
+  isMounted = () => true,
 }: {
-  authority: ReturnType<typeof useAccountAuthority>;
-  read: (
-    request: KeyedRequest<T>,
-    signal: AbortSignal,
-  ) => Promise<Resolution<R>>;
-  cancel: (
-    request: KeyedRequest<T>,
-    signal: AbortSignal,
-  ) => Promise<Resolution<R>>;
-  done: (
-    request: KeyedRequest<T>,
-    result: R,
-    via: "receipt" | "status",
-  ) => void;
+  authority: Authority;
+  handlers: () => KeyedHandlers<T, R>;
+  onRequest: (request: KeyedRequest<T> | null) => void;
+  onOpen: (open: boolean) => void;
+  isMounted?: () => boolean;
 }) {
-  const [request, setRequest] = useState<KeyedRequest<T> | null>(null);
-  const [open, setOpen] = useState(false);
-  const current = useRef<KeyedRequest<T> | null>(null);
-  const work = useRef<AbortController | null>(null);
-  const mounted = useRef(true);
-  const handlers = useRef({ read, cancel, done });
-  handlers.current = { read, cancel, done };
-  useLayoutEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      work.current?.abort();
-      work.current = null;
-    };
-  }, []);
+  const current: { current: KeyedRequest<T> | null } = { current: null };
+  const work: { current: AbortController | null } = { current: null };
 
   function keep(next: KeyedRequest<T> | null) {
     current.current = next;
-    setRequest(next);
+    onRequest(next);
   }
   function patch(changes: Partial<KeyedRequest<T>>) {
     if (current.current) keep({ ...current.current, ...changes });
@@ -109,7 +109,7 @@ export function useKeyedRequest<T, R>({
     work.current?.abort();
     work.current = null;
   }
-  /** Runs `step` for the current attempt; false once it's no longer ours. */
+  /** Runs `step` for the current attempt; null once it's no longer ours. */
   async function run<V>(
     phase: KeyedPhase,
     step: (request: KeyedRequest<T>, signal: AbortSignal) => Promise<V>,
@@ -122,7 +122,7 @@ export function useKeyedRequest<T, R>({
     const started = { ...attempt, phase, fields: {} };
     keep(started);
     const owns = () =>
-      mounted.current &&
+      isMounted() &&
       work.current === controller &&
       current.current?.id === started.id &&
       current.current.phase === phase;
@@ -152,8 +152,8 @@ export function useKeyedRequest<T, R>({
   function settle(resolution: Resolution<R>, attempt: KeyedRequest<T>) {
     if (resolution.kind === "done") {
       keep(null);
-      setOpen(false);
-      handlers.current.done(attempt, resolution.result, "status");
+      onOpen(false);
+      handlers().done(attempt, resolution.result, "status");
     } else if (resolution.kind === "retry")
       keep(fresh(attempt.target, resolution.notice));
     else patch({ phase: resolution.kind });
@@ -161,25 +161,26 @@ export function useKeyedRequest<T, R>({
   async function check() {
     const attempt = current.current;
     if (!attempt) return;
-    const outcome = await run("checking", handlers.current.read);
+    const outcome = await run("checking", handlers().read);
     if (!outcome) return;
     if ("error" in outcome) patch({ phase: "unconfirmed" });
     else settle(outcome.value, attempt);
   }
 
   return {
-    request,
-    open,
-    setOpen,
+    get request() {
+      return current.current;
+    },
+    stopWork,
     /** A new form for `target`, unless an earlier attempt is still unresolved. */
     begin(target: T) {
       const previous = current.current;
       if (previous && previous.phase !== "form") {
-        setOpen(true);
+        onOpen(true);
         return false;
       }
       keep(fresh(target));
-      setOpen(true);
+      onOpen(true);
       return true;
     },
     edit(changes: { target?: T; fields?: Fields }) {
@@ -213,8 +214,8 @@ export function useKeyedRequest<T, R>({
       if (!outcome) return;
       if ("value" in outcome) {
         keep(null);
-        setOpen(false);
-        handlers.current.done(attempt, outcome.value, "receipt");
+        onOpen(false);
+        handlers().done(attempt, outcome.value, "receipt");
       } else if (
         !(outcome.error instanceof NotSent) &&
         isUncertainOutcome(outcome.error)
@@ -234,7 +235,7 @@ export function useKeyedRequest<T, R>({
     async cancelAndRetry() {
       const attempt = current.current;
       if (!attempt) return;
-      const outcome = await run("cancelling", handlers.current.cancel);
+      const outcome = await run("cancelling", handlers().cancel);
       if (!outcome) return;
       if ("error" in outcome) patch({ phase: "unconfirmed" });
       else settle(outcome.value, attempt);
@@ -260,7 +261,7 @@ export function useKeyedRequest<T, R>({
      */
     close() {
       const attempt = current.current;
-      setOpen(false);
+      onOpen(false);
       if (!attempt) return;
       if (attempt.phase === "form") keep(null);
       else if (attempt.phase === "sending") {
@@ -286,7 +287,74 @@ export function useKeyedRequest<T, R>({
     forget() {
       stopWork();
       keep(null);
-      setOpen(false);
+      onOpen(false);
     },
+  };
+}
+
+/**
+ * One-shot administrator requests with exact status reads (creating a person,
+ * editing access, issuing a link). See createKeyedRequest for the rules.
+ */
+export function useKeyedRequest<T, R>({
+  authority,
+  read,
+  cancel,
+  done,
+}: {
+  authority: ReturnType<typeof useAccountAuthority>;
+} & KeyedHandlers<T, R>) {
+  const [request, setRequest] = useState<KeyedRequest<T> | null>(null);
+  const [open, setOpen] = useState(false);
+  const mounted = useRef(true);
+  const handlers = useRef<KeyedHandlers<T, R>>({ read, cancel, done });
+  handlers.current = { read, cancel, done };
+  const latestAuthority = useRef(authority);
+  latestAuthority.current = authority;
+  const machine = useRef<ReturnType<typeof createKeyedRequest<T, R>> | null>(
+    null,
+  );
+  machine.current ??= createKeyedRequest<T, R>({
+    authority: {
+      context: () => latestAuthority.current.context(),
+      usable: (original, admin) =>
+        latestAuthority.current.usable(original, admin),
+    },
+    handlers: () => handlers.current,
+    onRequest: setRequest,
+    onOpen: setOpen,
+    isMounted: () => mounted.current,
+  });
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      machine.current?.stopWork();
+    };
+  }, []);
+  const {
+    begin,
+    edit,
+    send,
+    check,
+    cancelAndRetry,
+    recheck,
+    close,
+    authorityChanged,
+    forget,
+  } = machine.current;
+  return {
+    request,
+    open,
+    setOpen,
+    begin,
+    edit,
+    send,
+    check,
+    cancelAndRetry,
+    recheck,
+    close,
+    authorityChanged,
+    forget,
   };
 }

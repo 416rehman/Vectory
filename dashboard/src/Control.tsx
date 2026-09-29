@@ -29,14 +29,9 @@ import AgentSettingsCreation, {
 } from "./AgentSettingsCreation";
 import AgentSettingsEditor from "./AgentSettingsEditor";
 import "./control.css";
+import type { Notify } from "./toast";
 
-export function Policies({
-  user,
-  notify,
-}: {
-  user: User;
-  notify: (message: string) => void;
-}) {
+export function Policies({ user, notify }: { user: User; notify: Notify }) {
   const { data, error, loading, reload, refreshing, updatedAt } = useResource<
     SavedPolicyListItem[]
   >("/policies", []);
@@ -83,7 +78,9 @@ export function Policies({
         ref={creation}
         user={user}
         onCreated={() => {
-          notify("Saved. No devices change until you apply these settings.");
+          notify("Saved. No devices change until you apply these settings.", {
+            tone: "success",
+          });
           void reload();
         }}
         onApply={(setting) => {
@@ -269,7 +266,9 @@ export function Policies({
           returnFocusRef={editOpener}
           onClose={() => setEditing(null)}
           onSaved={() => {
-            notify("Saved. No devices change until you apply these settings.");
+            notify("Saved. No devices change until you apply these settings.", {
+              tone: "success",
+            });
             void reload();
           }}
           onApply={(setting, deviceIds) => {
@@ -292,7 +291,7 @@ export function Policies({
           policyName={deploy.setting.name}
           initialDeviceIds={deploy.deviceIds}
           onDone={(message) => {
-            notify(message);
+            notify(message, { tone: "success" });
             void reload();
           }}
         />

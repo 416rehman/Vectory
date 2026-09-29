@@ -113,6 +113,7 @@ import {
   hasCanaryGate,
   readGateReason,
 } from "./canaryGateModel";
+import type { Notify } from "./toast";
 
 const knownStatuses = new Set<string>(deploymentLifecycle);
 function title(d: DeploymentSummary) {
@@ -215,7 +216,7 @@ export function Deployments({
 }: {
   scheduled?: boolean;
   user: User;
-  notify(message: string): void;
+  notify: Notify;
   navigate(path: string): void;
   initialQuery?: DeploymentQuery;
   onQueryChange?(query: DeploymentQuery): void;
@@ -422,7 +423,7 @@ export function Deployments({
           returnFocusRef={pickerOpener}
           onClose={() => setPickerOpen(false)}
           onDone={(message) => {
-            notify(message);
+            notify(message, { tone: "success" });
             void reload();
           }}
         />
@@ -1094,7 +1095,7 @@ function RolloutPage({
 }: {
   id: string;
   user: User;
-  notify(message: string): void;
+  notify: Notify;
   navigate(path: string): void;
   onBack(): void;
   backHref: string;
@@ -1216,6 +1217,7 @@ function RolloutPage({
       event.preventDefault();
       notify(
         "Wait for the current deployment action to finish before leaving.",
+        { tone: "info" },
       );
     };
     const unload = (event: BeforeUnloadEvent) => {
@@ -1232,7 +1234,7 @@ function RolloutPage({
     };
   }, [notify]);
   async function changed(message: string) {
-    notify(message);
+    notify(message, { tone: "success" });
     setRevision((old) => old + 1);
     await Promise.all([reload(), lanes.reload()]);
   }
@@ -1376,7 +1378,8 @@ function RolloutPage({
           finishDeploymentOperation(operation);
         } catch {
           notify(
-            "Rollback saved. This browser could not clear its recovery reminder; the confirmed deployment is still available.",
+            "Rollback saved. This browser couldn't clear its recovery reminder. The confirmed deployment is still available.",
+            { tone: "info" },
           );
         }
         if (!mounted.current) return;

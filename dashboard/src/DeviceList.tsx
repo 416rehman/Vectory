@@ -47,6 +47,7 @@ import {
   type VersionMarker,
 } from "./deviceModel";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 const PAGE_SIZES = [25, 50, 100];
@@ -120,7 +121,7 @@ export default function DeviceList({
   navigate,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
 }) {
   const devices = useResource<Device[]>("/devices", []);
@@ -650,7 +651,7 @@ export default function DeviceList({
           preserveExistingSettings
           initialDeviceIds={selectedIds}
           onDone={(message) => {
-            notify(message);
+            notify(message, { tone: "success" });
             setSelected([]);
             void devices.reload();
           }}

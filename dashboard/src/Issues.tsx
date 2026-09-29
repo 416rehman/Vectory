@@ -35,6 +35,7 @@ import { leadingDiagnostic } from "./runtimeModel";
 import { issueDispositions } from "./status";
 import "./control.css";
 import "./issues.css";
+import type { Notify } from "./toast";
 
 const issueTime = (value: string | null) =>
   value ? when(value) : "Unavailable";
@@ -103,7 +104,7 @@ export default function Issues({
   deviceId,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: (path: string) => void;
   deviceId?: string;
 }) {
@@ -384,7 +385,7 @@ export default function Issues({
           onDone={(message) => {
             closeDialog(true);
             void active.reload();
-            notify(message);
+            notify(message, { tone: "success" });
           }}
         />
       )}
@@ -399,7 +400,7 @@ export default function Issues({
           onDone={(message) => {
             closeDialog(true);
             void active.reload();
-            notify(message);
+            notify(message, { tone: "success" });
           }}
         />
       )}

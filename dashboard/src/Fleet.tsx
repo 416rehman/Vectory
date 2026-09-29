@@ -28,6 +28,7 @@ import DeviceList from "./DeviceList";
 import DeviceDetail from "./DeviceDetail";
 import "./fleet.css";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 
@@ -40,7 +41,7 @@ export function Devices({
   deviceId,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
   deviceId?: string;
 }) {
@@ -107,13 +108,7 @@ const groupDefaults = {
 };
 const GROUP_PAGE_SIZES = [25, 50, 100];
 
-export function Groups({
-  user,
-  notify,
-}: {
-  user: User;
-  notify: (message: string) => void;
-}) {
+export function Groups({ user, notify }: { user: User; notify: Notify }) {
   const groups = useResource<Group[]>("/groups", []),
     devices = useResource<Device[]>("/devices", []);
   const groupRequests = useGroupOperations(user.id);
@@ -313,7 +308,7 @@ export function Groups({
         user={user}
         onRecovered={() => {
           void groups.reload();
-          notify("Group creation confirmed.");
+          notify("Group creation confirmed.", { tone: "success" });
         }}
         onReview={(group) => edit(group)}
       />
@@ -449,7 +444,13 @@ export function Groups({
           onSaved={(saved) => {
             setSavedGroup(saved);
             setOpen(false);
-            notify("Group saved.");
+            notify("Group saved.", {
+              tone: "success",
+              action: {
+                label: "View devices",
+                href: `#/devices?group=${encodeURIComponent(saved.id)}`,
+              },
+            });
             void groups.reload();
           }}
         />
