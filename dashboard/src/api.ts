@@ -322,6 +322,24 @@ export const SessionSchema = z.object({
   /** When this sign-in ends; absent from older servers. */
   expires_at: z.string().optional(),
 });
+/** GET /users rows: the account plus its sign-in security state. */
+export const PersonSchema = UserSchema.extend({
+  status: z.enum(["invited", "active", "disabled"]).optional(),
+  mfa_enabled: z.boolean().optional(),
+  last_login_at: z.string().nullable().optional(),
+  invite_expires_at: z.string().nullable().optional(),
+});
+export type Person = z.infer<typeof PersonSchema>;
+export const SessionSummarySchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{32}$/),
+  current: z.boolean(),
+  created_at: z.string().nullable(),
+  last_seen_at: z.string().nullable(),
+  expires_at: z.string(),
+  user_agent: z.string().nullable(),
+  client_address: z.string().nullable(),
+});
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export const LoginChallengeSchema = z.object({
   mfa_required: z.literal(true),
   challenge_token: z.string().regex(/^[a-f0-9]{64}$/),
@@ -1402,7 +1420,9 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
       })
       .passthrough();
   if (/^\/configurations\/[^/]+$/.test(path)) return ConfigurationSchema;
-  if (path === "/users") return z.array(UserSchema);
+  if (path === "/users") return z.array(PersonSchema);
+  if (path === "/account/sessions" && method === "GET")
+    return z.object({ sessions: z.array(SessionSummarySchema) });
   const record = z.object({ id: z.string() }).passthrough();
   if (
     ["/deployments", "/policies", "/tokens", "/issues", "/audit"].includes(path)

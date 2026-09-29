@@ -61,6 +61,7 @@ import Issues from "./Issues";
 import { UsersSecurity } from "./UsersSecurity";
 import Auth from "./AuthScreen";
 import SessionRenewal from "./SessionRenewal";
+import PermissionNote from "./PermissionNote";
 import type { PipelineLibraryQuery } from "./PipelineLibrary";
 import { readPipelineDestination } from "./pipelineDestination";
 const primary = [
@@ -811,6 +812,13 @@ export default function App() {
                 <Policies user={user} notify={notify} />
               ) : page === "enrollment" && can(user, "operate") ? (
                 <Enrollment user={user} notify={notify} navigate={navigate} />
+              ) : page === "enrollment" ? (
+                <PermissionNote
+                  user={user}
+                  needs="operate"
+                  title="Add device"
+                  action="Adding devices"
+                />
               ) : page === "issues" ? (
                 <Issues
                   user={user}

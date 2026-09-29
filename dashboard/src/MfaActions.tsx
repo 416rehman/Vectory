@@ -1,723 +1,933 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Download } from "lucide-react";
 import {
-  api,
-  getCSRFToken,
-  getCSRFVersion,
-  getSessionEpoch,
-  isSessionValid,
-  download,
-  withRequestDeadline,
-  type User,
-} from "./api";
-import { isDefinitiveAuthRejection } from "./authRequests";
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
+import { createPortal } from "react-dom";
+import { Download, KeyRound, Printer, ShieldCheck } from "lucide-react";
+import { z } from "zod";
+import { APIError, api, download, withRequestDeadline, type User } from "./api";
+import { isUncertainOutcome, retryDelay } from "./authRequests";
 import {
   MfaConfirmSchema,
   MfaDisableSchema,
+  MfaRecoveryCodesSchema,
   MfaSetupSchema,
   MfaStatusSchema,
-  mfaCanUseContext,
-  mfaSameContext,
-  mfaStatusMeaning,
-  type MfaContext,
+  mfaOutcome,
+  recoveryCodesText,
+  type MfaFlow,
+  type MfaStatus,
 } from "./mfaActionModel";
 import AuthenticatorSetup, {
   type AuthenticatorEnrollment,
 } from "./AuthenticatorSetup";
-import { Button, ErrorBox, Field, Modal, useResource } from "./ui";
+import {
+  useAccountAuthority,
+  useLeaveGuard,
+  type AccountContext,
+} from "./accountAuthority";
+import {
+  AuthField,
+  CopyButton,
+  OtpInput,
+  PasswordField,
+  Unconfirmed,
+} from "./authControls";
+import { Button, Modal, Spinner } from "./ui";
+import "./account.css";
 
-type Flow = "setup" | "confirm" | "disable";
-type Review = {
-  flow: Flow;
-  context: MfaContext;
-  phase: "sending" | "unknown" | "changed";
-  observed: boolean | null;
-  error: string;
+type Flow = "setup" | "disable" | "codes";
+type Fields = Partial<Record<"password" | "code" | "form", string>>;
+type Sending = {
+  flow: MfaFlow;
+  context: AccountContext;
+  controller: AbortController;
 };
-type Wait = { review: Review; controller: AbortController };
+type Outcome = {
+  flow: MfaFlow;
+  context: AccountContext;
+  kind: "checking" | "unconfirmed" | "restart" | "codes-lost" | "still-on";
+};
+type Codes = {
+  list: string[];
+  generatedAt: Date;
+  owner: AccountContext;
+  /** Codes from finishing setup, or a replacement set. */
+  source: "setup" | "codes";
+};
+type Enrollment = { setup: AuthenticatorEnrollment; owner: AccountContext };
 
-/** MFA responses may contain secrets that cannot be read from the server again. */
+export type MfaActionsHandle = { setup: () => void };
+export type MfaResource = {
+  data: MfaStatus;
+  loading: boolean;
+  error: string;
+  reload: () => Promise<void>;
+};
+
+const titles: Record<Flow, string> = {
+  setup: "Set up two-factor authentication",
+  disable: "Turn off two-factor authentication",
+  codes: "Generate new recovery codes",
+};
+const descriptions: Record<Flow, string> = {
+  setup:
+    "Confirm your password to start. You'll need an authenticator app on your phone.",
+  disable:
+    "Your password alone will protect your account, and your other browsers are signed out.",
+  codes: "Your current recovery codes stop working as soon as new ones exist.",
+};
+
+/**
+ * The two-factor row of Your account, with setup, recovery codes and turning
+ * it off. Setup keys and recovery codes exist only in this page's memory: a
+ * lost response is never replayed, and a changed sign-in hides them.
+ */
 export default function MfaActions({
+  ref,
   user,
+  status,
   notify,
 }: {
+  ref?: Ref<MfaActionsHandle>;
   user: User;
+  status: MfaResource;
   notify: (message: string) => void;
 }) {
-  const status = useResource<{ enabled: boolean }>("/mfa", {
-    enabled: false,
-  });
-  const [action, setAction] = useState<"setup" | "disable" | null>(null);
+  const [form, setForm] = useState<{ flow: Flow; fields: Fields } | null>(null);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
-  const [setup, setSetup] = useState<AuthenticatorEnrollment | null>(null);
-  const [showSetup, setShowSetup] = useState(false);
-  const [setupError, setSetupError] = useState("");
-  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  const [showCodes, setShowCodes] = useState(false);
-  const [review, setReview] = useState<Review | null>(null);
-  const retained = useRef<Review | null>(null);
-  const [showReview, setShowReview] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [refreshingAfterAction, setRefreshingAfterAction] = useState(false);
-  const [formError, setFormError] = useState("");
-  const [notice, setNotice] = useState("");
-  const active = useRef<Wait | null>(null);
-  const statusRead = useRef<AbortController | null>(null);
-  const receiptRead = useRef(0);
-  const currentUser = useRef(user);
-  const owner = useRef<MfaContext | null>(null);
-  const secretOwner = useRef<MfaContext | null>(null);
-  const mfaCodeInput = useRef<HTMLInputElement>(null);
-  const recoveryAction = useRef<HTMLButtonElement>(null);
-
-  function context(): MfaContext {
-    return {
-      userId: currentUser.current.id,
-      role: currentUser.current.role,
-      enabled: currentUser.current.enabled,
-      csrfToken: getCSRFToken(),
-      csrfVersion: getCSRFVersion(),
-      epoch: getSessionEpoch(),
-      valid: isSessionValid(),
-    };
-  }
-  function remember(next: Review | null) {
-    retained.current = next;
-    setReview(next);
-  }
-  function clearSecrets() {
-    secretOwner.current = null;
-    setPassword("");
-    setCode("");
-    setSetup(null);
-    setShowSetup(false);
-    setRecoveryCodes([]);
-    setShowCodes(false);
-  }
-  function stopWaiting(hide = false) {
-    const request = active.current;
-    if (request) {
-      active.current = null;
-      request.controller.abort();
-      remember({ ...request.review, phase: "unknown", error: "" });
-      clearSecrets();
-    }
-    if (hide) setShowReview(false);
-  }
-  function authorityChanged() {
-    if (secretOwner.current)
-      setNotice(
-        "Authenticator details were hidden because your sign-in changed. Check the current setting before continuing.",
-      );
-    stopWaiting();
-    statusRead.current?.abort();
-    statusRead.current = null;
-    setChecking(false);
-    clearSecrets();
-    setAction(null);
-    setFormError("");
-    setSetupError("");
-    ++receiptRead.current;
-    setRefreshingAfterAction(false);
-    if (retained.current)
-      remember({ ...retained.current, phase: "changed", observed: null });
-  }
-  useLayoutEffect(() => {
-    currentUser.current = user;
-    const next = context();
-    if (owner.current && !mfaSameContext(owner.current, next))
-      authorityChanged();
-    owner.current = next;
-  }, [user]);
-  useLayoutEffect(
-    () => () => {
-      active.current?.controller.abort();
-      active.current = null;
-      statusRead.current?.abort();
-      statusRead.current = null;
-      ++receiptRead.current;
-    },
-    [],
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [busy, setBusy] = useState<MfaFlow | null>(null);
+  const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [scanFailures, setScanFailures] = useState(0);
+  const [scanAttempt, setScanAttempt] = useState(0);
+  const [scanEnded, setScanEnded] = useState<"expired" | "replaced" | null>(
+    null,
   );
-  useEffect(() => {
-    const changed = () => {
-      const next = context();
-      if (owner.current && !mfaSameContext(owner.current, next))
-        authorityChanged();
-      owner.current = next;
-    };
-    window.addEventListener("vectory:session-ended", changed);
-    window.addEventListener("vectory:session-changed", changed);
+  const [codes, setCodes] = useState<Codes | null>(null);
+  const [codesOpen, setCodesOpen] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const [notice, setNotice] = useState("");
+  const sending = useRef<Sending | null>(null);
+  const reading = useRef(0);
+  const mounted = useRef(true);
+  const opener = useRef<HTMLButtonElement>(null);
+  const passwordInput = useRef<HTMLInputElement>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const enrollmentRef = useRef(enrollment);
+  enrollmentRef.current = enrollment;
+  const codesRef = useRef(codes);
+  codesRef.current = codes;
+  const authority = useAccountAuthority(user, () => {
+    // Secrets and pending results belong to the sign-in that asked for them.
+    const hadSecrets = !!(enrollmentRef.current || codesRef.current);
+    const request = sending.current;
+    sending.current = null;
+    request?.controller.abort();
+    ++reading.current;
+    setBusy(null);
+    setForm(null);
+    clearEntry();
+    setEnrollment(null);
+    setScanOpen(false);
+    setCodes(null);
+    setCodesOpen(false);
+    setOutcome(null);
+    setOutcomeOpen(false);
+    if (hadSecrets)
+      setNotice("Two-factor details were hidden because your sign-in changed.");
+  });
+
+  useLayoutEffect(() => {
+    mounted.current = true;
     return () => {
-      window.removeEventListener("vectory:session-ended", changed);
-      window.removeEventListener("vectory:session-changed", changed);
+      mounted.current = false;
+      sending.current?.controller.abort();
+      sending.current = null;
+      ++reading.current;
     };
   }, []);
+  useLeaveGuard(
+    codes
+      ? "Leave without saving your new recovery codes? You can generate new ones later."
+      : enrollment
+        ? "Leave two-factor setup? The QR code you scanned stops working."
+        : null,
+  );
+  useImperativeHandle(ref, () => ({ setup: startSetup }));
+  // After a rejection, continue where typing has to start again.
   useEffect(() => {
-    if (
-      showReview &&
-      (review?.phase === "unknown" || review?.phase === "changed")
-    )
-      recoveryAction.current?.focus();
-  }, [showReview, review?.phase]);
-  useLayoutEffect(() => {
-    if (!recoveryCodes.length && !setup) return;
-    const leave = (event: Event) => {
-      const message = recoveryCodes.length
-        ? "You have not marked your recovery codes saved. Leave and discard this browser's only copy?"
-        : "Leave authenticator setup? Its current QR code and key will be lost.";
-      if (!window.confirm(message)) event.preventDefault();
-    };
-    const unload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("vectory:before-navigate", leave);
-    window.addEventListener("beforeunload", unload);
-    return () => {
-      window.removeEventListener("vectory:before-navigate", leave);
-      window.removeEventListener("beforeunload", unload);
-    };
-  }, [recoveryCodes.length, setup]);
+    const fields = form?.fields;
+    if (!fields || busy || (!fields.password && !fields.code)) return;
+    requestAnimationFrame(() =>
+      (fields.password || !passwordInput.current?.value
+        ? passwordInput.current
+        : codeInput.current
+      )?.focus(),
+    );
+  }, [form, busy]);
 
-  function open() {
-    if (active.current || statusRead.current) return;
-    if (
-      (recoveryCodes.length || setup) &&
-      (!secretOwner.current ||
-        !mfaCanUseContext(secretOwner.current, context()))
-    ) {
-      authorityChanged();
-      return;
-    }
-    if (recoveryCodes.length) {
-      setShowCodes(true);
-      return;
-    }
-    if (refreshingAfterAction) return;
-    if (retained.current) {
-      setShowReview(true);
-      return;
-    }
-    if (setup) {
-      setShowSetup(true);
-      return;
-    }
-    if (!mfaCanUseContext(context(), context())) return;
-    setNotice("");
-    setFormError("");
+  function clearEntry() {
     setPassword("");
     setCode("");
-    setUseRecoveryCode(false);
-    setAction(status.data.enabled ? "disable" : "setup");
   }
-  function owns(request: Wait) {
+  function closeForm() {
+    if (sending.current) stopWaiting();
+    else {
+      setForm(null);
+      clearEntry();
+    }
+  }
+  function openForm(flow: Flow) {
+    if (sending.current) return;
+    setNotice("");
+    clearEntry();
+    setUseRecovery(false);
+    setOutcome(null);
+    setOutcomeOpen(false);
+    setForm({ flow, fields: {} });
+  }
+  function startSetup() {
+    const held = enrollmentRef.current;
+    if (held && authority.usable(held.owner)) {
+      setScanOpen(true);
+      return;
+    }
+    if (status.data.enabled) return;
+    openForm("setup");
+  }
+  function owns(request: Sending) {
     return (
-      active.current === request &&
+      mounted.current &&
+      sending.current === request &&
       !request.controller.signal.aborted &&
-      mfaCanUseContext(request.review.context, context())
+      authority.usable(request.context)
     );
   }
-  function refreshAfterReceipt() {
-    // The POST receipt establishes what happened at that instant. Hold the
-    // action controls until a new status read resolves; pre-POST cache must not
-    // override a later change made by another browser.
-    const read = ++receiptRead.current;
-    setRefreshingAfterAction(true);
-    void status.reloadResult().finally(() => {
-      if (receiptRead.current === read) setRefreshingAfterAction(false);
-    });
+  function begin(flow: MfaFlow, context: AccountContext): Sending {
+    const request = { flow, context, controller: new AbortController() };
+    sending.current = request;
+    setBusy(flow);
+    return request;
   }
-  async function submit(flow: Flow, confirmationCode = "") {
-    if (active.current || retained.current || !currentUser.current.enabled)
+  function finish(request: Sending) {
+    if (sending.current !== request) return;
+    sending.current = null;
+    setBusy(null);
+  }
+  function stopWaiting() {
+    const request = sending.current;
+    if (!request) return;
+    sending.current = null;
+    request.controller.abort();
+    setBusy(null);
+    setForm(null);
+    setScanOpen(false);
+    void resolve(request.flow, request.context);
+  }
+  function post<T>(
+    path: string,
+    body: unknown,
+    schema: z.ZodType<T>,
+    request: Sending,
+  ) {
+    return withRequestDeadline(
+      (signal) =>
+        api(
+          path,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+            signal,
+            headers: { "X-CSRF-Token": request.context.csrfToken },
+          },
+          schema,
+        ),
+      30000,
+      request.controller.signal,
+    );
+  }
+  function showCodes(
+    list: string[],
+    owner: AccountContext,
+    source: Codes["source"],
+  ) {
+    setCodes({ list, generatedAt: new Date(), owner, source });
+    setCodesOpen(true);
+  }
+
+  async function submitForm(event?: React.FormEvent, typed = code) {
+    event?.preventDefault();
+    if (!form || sending.current) return;
+    const flow = form.flow;
+    const original = authority.context();
+    if (!authority.usable(original)) return;
+    const factor = typed.trim();
+    const fields: Fields = {};
+    if (!password) fields.password = "Enter your password.";
+    if (flow !== "setup") {
+      if (useRecovery && !factor)
+        fields.code = "Enter one of your unused recovery codes.";
+      if (!useRecovery && !/^[0-9]{6}$/.test(factor))
+        fields.code = "Enter the 6-digit code from your authenticator app.";
+    }
+    if (Object.keys(fields).length) {
+      setForm({ flow, fields });
       return;
-    if (flow !== "confirm" && action !== flow) return;
-    if (flow === "confirm" && (!setup || !showSetup)) return;
-    const original = context();
-    if (!mfaCanUseContext(original, context())) return;
-    if (flow === "confirm" && !/^[0-9]{6}$/.test(confirmationCode)) return;
-    if (flow === "disable" && !code.trim()) return;
-    if (flow !== "confirm" && !password) return;
-    const next: Review = {
-      flow,
-      context: original,
-      phase: "sending",
-      observed: null,
-      error: "",
-    };
-    const request = { review: next, controller: new AbortController() };
-    active.current = request;
+    }
     const body =
       flow === "setup"
         ? { password }
-        : flow === "confirm"
-          ? { code: confirmationCode }
-          : {
-              password,
-              ...(useRecoveryCode
-                ? { recovery_code: code.trim() }
-                : { code: code.trim() }),
-            };
-    setPassword("");
-    setCode("");
-    setFormError("");
-    setSetupError("");
-    setAction(null);
-    setShowSetup(false);
-    remember(next);
-    setShowReview(true);
-    const options = (signal: AbortSignal) => ({
-      method: "POST",
-      body: JSON.stringify(body),
-      signal,
-      headers: { "X-CSRF-Token": original.csrfToken },
-    });
+        : {
+            password,
+            ...(useRecovery ? { recovery_code: factor } : { code: factor }),
+          };
+    // Submitted secrets are never kept for a replay.
+    clearEntry();
+    setForm({ flow, fields: {} });
+    const request = begin(flow, original);
     try {
       if (flow === "setup") {
-        const result = await withRequestDeadline(
-          (signal) => api("/mfa/setup", options(signal), MfaSetupSchema),
-          30000,
-          request.controller.signal,
-        );
+        const setup = await post("/mfa/setup", body, MfaSetupSchema, request);
         if (!owns(request)) return;
-        secretOwner.current = original;
-        setSetup(result);
-        setShowSetup(true);
-      } else if (flow === "confirm") {
-        const result = await withRequestDeadline(
-          (signal) => api("/mfa/confirm", options(signal), MfaConfirmSchema),
-          30000,
-          request.controller.signal,
-        );
+        setForm(null);
+        setEnrollment({ setup, owner: original });
+        setScanError("");
+        setScanFailures(0);
+        setScanEnded(null);
+        setScanOpen(true);
+      } else if (flow === "disable") {
+        await post("/mfa/disable", body, MfaDisableSchema, request);
         if (!owns(request)) return;
-        secretOwner.current = original;
-        setSetup(null);
-        setRecoveryCodes(result.recovery_codes);
-        setShowCodes(true);
-      } else {
-        await withRequestDeadline(
-          (signal) => api("/mfa/disable", options(signal), MfaDisableSchema),
-          30000,
-          request.controller.signal,
-        );
-        if (!owns(request)) return;
-        clearSecrets();
+        setForm(null);
         notify(
-          "Two-factor authentication disabled. Other browser sessions were revoked.",
+          "Two-factor authentication is off. Other browsers were signed out.",
         );
-      }
-      active.current = null;
-      remember(null);
-      setShowReview(false);
-      refreshAfterReceipt();
-    } catch (failure) {
-      if (active.current !== request) return;
-      active.current = null;
-      if (!mfaCanUseContext(original, context())) {
-        authorityChanged();
-        return;
-      }
-      if (
-        isDefinitiveAuthRejection(failure) &&
-        (failure as { status: number }).status !== 409
-      ) {
-        remember(null);
-        setShowReview(false);
-        if (flow === "confirm") {
-          setSetupError((failure as Error).message);
-          setShowSetup(true);
-        } else {
-          setFormError((failure as Error).message);
-          setAction(flow);
-        }
+        void status.reload();
       } else {
-        clearSecrets();
-        remember({ ...next, phase: "unknown" });
+        const result = await post(
+          "/mfa/recovery-codes",
+          body,
+          MfaRecoveryCodesSchema,
+          request,
+        );
+        if (!owns(request)) return;
+        setForm(null);
+        showCodes(result.recovery_codes, original, "codes");
+        void status.reload();
       }
-    }
-  }
-  async function checkStatus() {
-    const previous = retained.current;
-    if (!previous || previous.phase !== "unknown" || statusRead.current) return;
-    if (!mfaCanUseContext(previous.context, context())) {
-      authorityChanged();
-      return;
-    }
-    const controller = new AbortController();
-    statusRead.current = controller;
-    setChecking(true);
-    remember({ ...previous, error: "" });
-    try {
-      const result = await withRequestDeadline(
-        (signal) => api("/mfa", { signal }, MfaStatusSchema),
-        30000,
-        controller.signal,
-      );
-      if (statusRead.current !== controller || !retained.current) return;
-      if (!mfaCanUseContext(previous.context, context())) {
-        authorityChanged();
+    } catch (failure) {
+      if (!owns(request)) return;
+      finish(request);
+      if (isUncertainOutcome(failure)) {
+        setForm(null);
+        void resolve(flow, original);
         return;
       }
-      remember({ ...retained.current, observed: result.enabled, error: "" });
-      void status.reload();
-    } catch (failure) {
-      if (statusRead.current !== controller || !retained.current) return;
-      remember({
-        ...retained.current,
-        observed: null,
-        error: (failure as Error).message,
+      const error = failure instanceof APIError ? failure : null;
+      const wait = retryDelay(failure);
+      if (error?.code === "MFA_ALREADY_ENABLED") {
+        setForm(null);
+        notify("Two-factor authentication is already on.");
+        void status.reload();
+        return;
+      }
+      if (error?.code === "MFA_NOT_ENABLED") {
+        setForm(null);
+        notify("Two-factor authentication is already off.");
+        void status.reload();
+        return;
+      }
+      if (error?.code === "MFA_CHANGED") void status.reload();
+      setForm({
+        flow,
+        fields:
+          error?.code === "WRONG_PASSWORD"
+            ? { password: "Your password didn't match." }
+            : error?.code === "INVALID_MFA_CODE"
+              ? {
+                  code: useRecovery
+                    ? "That recovery code didn't work. Check it, or use a code from your app. Enter your password again too."
+                    : "That code didn't match. Enter the current code and your password again.",
+                }
+              : {
+                  form: wait
+                    ? `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`
+                    : (failure as Error).message,
+                },
       });
     } finally {
-      if (statusRead.current === controller) {
-        statusRead.current = null;
-        setChecking(false);
+      finish(request);
+    }
+  }
+
+  async function confirm(value: string) {
+    const held = enrollmentRef.current;
+    if (!held || sending.current) return;
+    if (!authority.usable(held.owner)) return;
+    setScanError("");
+    const request = begin("confirm", held.owner);
+    try {
+      const result = await post(
+        "/mfa/confirm",
+        { code: value },
+        MfaConfirmSchema,
+        request,
+      );
+      if (!owns(request)) return;
+      setEnrollment(null);
+      setScanOpen(false);
+      showCodes(result.recovery_codes, held.owner, "setup");
+      void status.reload();
+    } catch (failure) {
+      if (!owns(request)) return;
+      finish(request);
+      if (isUncertainOutcome(failure)) {
+        setScanOpen(false);
+        void resolve("confirm", held.owner);
+        return;
       }
+      const error = failure instanceof APIError ? failure.code : "";
+      const wait = retryDelay(failure);
+      if (error === "INVALID_MFA_CODE") {
+        setScanFailures((count) => count + 1);
+        setScanAttempt((count) => count + 1);
+        setScanError(
+          "That code didn't match. Enter the current 6-digit code; they change every 30 seconds.",
+        );
+      } else if (error === "MFA_SETUP_EXPIRED") setScanEnded("expired");
+      else if (error === "MFA_CHANGED") setScanEnded("replaced");
+      else if (error === "MFA_ALREADY_ENABLED") {
+        setEnrollment(null);
+        setScanOpen(false);
+        setOutcome({
+          flow: "confirm",
+          context: held.owner,
+          kind: "codes-lost",
+        });
+        setOutcomeOpen(true);
+        void status.reload();
+      } else
+        setScanError(
+          wait
+            ? `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`
+            : (failure as Error).message,
+        );
+    } finally {
+      finish(request);
     }
   }
-  function closeReview() {
-    if (active.current) stopWaiting(true);
-    else {
-      statusRead.current?.abort();
-      statusRead.current = null;
-      setChecking(false);
-      setShowReview(false);
+
+  /**
+   * After an unconfirmed request, read the current setting once. The read is
+   * safe; it says what is true now, and nothing is resent automatically.
+   */
+  async function resolve(flow: MfaFlow, context: AccountContext) {
+    const read = ++reading.current;
+    setOutcome({ flow, context, kind: "checking" });
+    setOutcomeOpen(true);
+    const current = () =>
+      mounted.current && reading.current === read && authority.usable(context);
+    try {
+      const now = await withRequestDeadline(
+        (signal) => api("/mfa", { signal }, MfaStatusSchema),
+        30000,
+      );
+      if (!current()) return;
+      void status.reload();
+      const kind = mfaOutcome(flow, now.enabled);
+      if (kind === "off") {
+        setOutcome(null);
+        setOutcomeOpen(false);
+        notify("Two-factor authentication is off.");
+      } else if (kind === "retry-code") {
+        setOutcome(null);
+        setOutcomeOpen(false);
+        setScanAttempt((count) => count + 1);
+        setScanError(
+          "We couldn't confirm that code. Enter the next code from your app.",
+        );
+        setScanOpen(true);
+      } else {
+        if (kind === "codes-lost") setEnrollment(null);
+        setOutcome({
+          flow,
+          context,
+          kind:
+            kind === "codes-unknown" || kind === "codes-lost"
+              ? "codes-lost"
+              : kind === "still-on"
+                ? "still-on"
+                : "restart",
+        });
+      }
+    } catch {
+      if (current()) setOutcome({ flow, context, kind: "unconfirmed" });
     }
   }
-  function startFresh() {
-    const previous = retained.current;
-    if (
-      !previous ||
-      previous.phase !== "unknown" ||
-      previous.observed === null ||
-      checking ||
-      active.current
-    )
-      return;
-    if (!mfaCanUseContext(previous.context, context())) {
-      authorityChanged();
-      return;
-    }
-    clearSecrets();
-    remember(null);
-    setShowReview(false);
-    setFormError("");
-    // A currently enabled authenticator must be deliberately disabled before
-    // a new setup can issue codes; current status never proves the old result.
-    setAction(previous.observed ? "disable" : "setup");
+  function dismissOutcome() {
+    ++reading.current;
+    if (outcome?.kind === "checking") setOutcome(null);
+    setOutcomeOpen(false);
   }
-  const buttonLabel = recoveryCodes.length
-    ? "Show recovery codes"
-    : refreshingAfterAction
-      ? "Checking authenticator..."
-      : review
-        ? "Review authenticator change"
-        : setup
-          ? "Continue authenticator setup"
-          : status.data.enabled
-            ? "Disable authenticator"
-            : "Set up authenticator";
+
+  const enabled = status.data.enabled;
+  const remaining = status.data.recovery_codes_remaining;
+  const privileged = user.role === "admin" || user.role === "operator";
+  const outcomeCopy: Record<
+    Exclude<Outcome["kind"], "checking">,
+    {
+      title: string;
+      body: string;
+      note: string;
+      action: string;
+      next: () => void;
+    }
+  > = {
+    unconfirmed: {
+      title: "We couldn't confirm that",
+      body: "Check your connection, then check again. Nothing is sent again until you choose to.",
+      note: "We couldn't confirm your last change.",
+      action: "Check again",
+      next: () => outcome && void resolve(outcome.flow, outcome.context),
+    },
+    restart: {
+      title: "Two-factor is still off",
+      body: "We couldn't show the QR code. Start the setup again to get a new one.",
+      note: "Setup didn't start.",
+      action: "Start again",
+      next: () => openForm("setup"),
+    },
+    "codes-lost": {
+      title: "Two-factor is on",
+      body:
+        outcome?.flow === "codes"
+          ? "We couldn't show your new recovery codes, and your old ones may no longer work. Generate new codes to be sure."
+          : "We couldn't show your recovery codes. Generate new ones now so you can still sign in if you lose your phone.",
+      note: "Your recovery codes weren't shown. Generate new ones.",
+      action: "Generate new codes",
+      next: () => openForm("codes"),
+    },
+    "still-on": {
+      title: "Two-factor is still on",
+      body: "We couldn't confirm your request. Try again with your password and a new code.",
+      note: "We couldn't confirm turning it off.",
+      action: "Try again",
+      next: () => openForm("disable"),
+    },
+  };
+  const pending =
+    outcome && outcome.kind !== "checking" ? { kind: outcome.kind } : null;
+
   return (
     <>
-      <section className="control-card">
-        <div className="control-section-head">
-          <h2>Your account</h2>
-        </div>
-        <div className="control-security-account">
-          <div>
-            <h3>{user.name}</h3>
-            <p>{user.email}</p>
-            <p>
-              Two-factor authentication:{" "}
-              {status.loading || refreshingAfterAction
-                ? "Checking..."
-                : status.error
-                  ? "Unavailable"
-                  : status.data.enabled
-                    ? "Enabled"
-                    : "Not enabled"}
-            </p>
-            {review?.phase === "unknown" && (
-              <p role="status">Authenticator change not confirmed.</p>
-            )}
-            {recoveryCodes.length > 0 && (
-              <p role="status">
-                Recovery codes are ready to save in this browser.
-              </p>
-            )}
-            {setup && !showSetup && (
-              <p role="status">Authenticator setup is ready to continue.</p>
-            )}
-            {notice && <p role="status">{notice}</p>}
-          </div>
-          <Button
-            variant="secondary"
-            disabled={
-              !review &&
-              !setup &&
-              !recoveryCodes.length &&
-              (status.loading || !!status.error || refreshingAfterAction)
-            }
-            onClick={open}
-          >
-            {buttonLabel}
-          </Button>
-        </div>
-        {status.error && (
-          <ErrorBox message={status.error} retry={() => void status.reload()} />
-        )}
-      </section>
-      <Modal
-        open={!!action}
-        onClose={() => {
-          setAction(null);
-          setPassword("");
-          setCode("");
-          setFormError("");
-        }}
-        title={
-          action === "disable"
-            ? "Disable two-factor authentication"
-            : "Verify your password"
-        }
-        description="Re-enter your current password to change account authentication."
-      >
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (action) void submit(action);
-          }}
-        >
-          <div className="modal-body">
-            {formError && <ErrorBox message={formError} />}
-            <Field label="Current password">
-              <input
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </Field>
-            {action === "disable" && (
+      <div className="account-row">
+        <div className="account-row-copy">
+          <h3>Two-factor authentication</h3>
+          <div className="account-row-status">
+            {status.loading && !status.error ? (
+              <span className="status-dot">Checking…</span>
+            ) : status.error ? (
+              <span className="status-dot off">Couldn't check</span>
+            ) : enabled ? (
               <>
-                <Field
-                  label={
-                    useRecoveryCode
-                      ? "Recovery code"
-                      : "Current authenticator code"
-                  }
-                >
-                  <input
-                    ref={mfaCodeInput}
-                    key={useRecoveryCode ? "recovery" : "authenticator"}
-                    inputMode={useRecoveryCode ? "text" : "numeric"}
-                    autoComplete={useRecoveryCode ? "off" : "one-time-code"}
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    required
-                    maxLength={useRecoveryCode ? 80 : 6}
-                    pattern={useRecoveryCode ? undefined : "[0-9]{6}"}
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                  />
-                </Field>
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => {
-                    setUseRecoveryCode((value) => !value);
-                    setCode("");
-                    setFormError("");
-                    requestAnimationFrame(() => mfaCodeInput.current?.focus());
-                  }}
-                >
-                  {useRecoveryCode
-                    ? "Use an authenticator code instead"
-                    : "Use a recovery code instead"}
-                </Button>
-                <p>
-                  Disabling invalidates your remaining recovery codes and signs
-                  out your other sessions.
-                </p>
+                <span className="status-dot on">On</span>
+                {remaining !== null && remaining !== undefined && (
+                  <span className={remaining <= 2 ? "account-row-warning" : ""}>
+                    {remaining === 0
+                      ? "No recovery codes left"
+                      : `${remaining} of 8 recovery codes left`}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="status-dot off">Off</span>
+                {privileged && (
+                  <span className="account-row-warning">
+                    Recommended for{" "}
+                    {user.role === "admin" ? "administrators" : "operators"}
+                  </span>
+                )}
               </>
             )}
           </div>
-          <div className="modal-footer">
+          <p>
+            {enabled
+              ? "Signing in needs your password and a code from your authenticator app."
+              : "Add a code from your phone to every sign-in, so a password alone can't open your account."}
+          </p>
+          {enrollment && !scanOpen && (
+            <p className="account-row-note" role="status">
+              Setup in progress. Enter a code from your app to finish.
+            </p>
+          )}
+          {codes && !codesOpen && (
+            <p className="account-row-warning" role="status">
+              Your new recovery codes aren't saved yet.
+            </p>
+          )}
+          {pending && !outcomeOpen && (
+            <p className="account-row-warning" role="status">
+              {outcomeCopy[pending.kind].note}
+            </p>
+          )}
+          {notice && (
+            <p className="account-row-note" role="status">
+              {notice}
+            </p>
+          )}
+        </div>
+        <div className="account-row-actions">
+          {status.error ? (
+            <Button variant="secondary" onClick={() => void status.reload()}>
+              Try again
+            </Button>
+          ) : codes ? (
             <Button
-              variant="secondary"
-              onClick={() => {
-                setAction(null);
-                setPassword("");
-                setCode("");
-              }}
+              ref={opener}
+              icon={KeyRound}
+              onClick={() => setCodesOpen(true)}
             >
-              Cancel
+              Show recovery codes
+            </Button>
+          ) : pending ? (
+            <Button
+              ref={opener}
+              variant="secondary"
+              onClick={() => setOutcomeOpen(true)}
+            >
+              Review
+            </Button>
+          ) : enrollment ? (
+            <Button ref={opener} onClick={() => setScanOpen(true)}>
+              Continue setup
+            </Button>
+          ) : enabled ? (
+            <>
+              <Button
+                variant="secondary"
+                disabled={status.loading}
+                onClick={(event) => {
+                  opener.current = event.currentTarget;
+                  openForm("codes");
+                }}
+              >
+                New recovery codes
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={status.loading}
+                onClick={(event) => {
+                  opener.current = event.currentTarget;
+                  openForm("disable");
+                }}
+              >
+                Turn off
+              </Button>
+            </>
+          ) : (
+            <Button
+              ref={opener}
+              variant={privileged ? undefined : "secondary"}
+              icon={ShieldCheck}
+              disabled={status.loading}
+              onClick={startSetup}
+            >
+              Set up
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <Modal
+        open={!!form}
+        title={form ? titles[form.flow] : ""}
+        description={form ? descriptions[form.flow] : undefined}
+        onClose={closeForm}
+        returnFocusRef={opener}
+      >
+        <form onSubmit={(event) => void submitForm(event)} noValidate>
+          <div className="modal-body">
+            {form?.fields.form && (
+              <p className="signin-alert" role="alert">
+                {form.fields.form}
+              </p>
+            )}
+            <fieldset className="plain-fieldset" disabled={!!busy}>
+              <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                value={user.email}
+                readOnly
+                hidden
+              />
+              <PasswordField
+                label="Password"
+                name="current-password"
+                autoComplete="current-password"
+                value={password}
+                onChange={setPassword}
+                error={form?.fields.password}
+                inputRef={passwordInput}
+                autoFocus
+              />
+              {form && form.flow !== "setup" && (
+                <>
+                  {useRecovery ? (
+                    <AuthField
+                      label="Recovery code"
+                      error={form.fields.code}
+                      hint="Each recovery code works once."
+                    >
+                      {({ id, describedBy, invalid }) => (
+                        <input
+                          ref={codeInput}
+                          id={id}
+                          name="recovery-code"
+                          className="auth-mono"
+                          autoComplete="off"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          maxLength={80}
+                          value={code}
+                          aria-invalid={invalid || undefined}
+                          aria-describedby={describedBy}
+                          onChange={(event) => setCode(event.target.value)}
+                        />
+                      )}
+                    </AuthField>
+                  ) : (
+                    <OtpInput
+                      label="Code from your authenticator app"
+                      value={code}
+                      onChange={setCode}
+                      onComplete={(value) => {
+                        if (password) void submitForm(undefined, value);
+                      }}
+                      inputRef={codeInput}
+                      error={form.fields.code}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="text-link factor-toggle"
+                    onClick={() => {
+                      setUseRecovery((value) => !value);
+                      setCode("");
+                      setForm((current) =>
+                        current ? { ...current, fields: {} } : current,
+                      );
+                      requestAnimationFrame(() => codeInput.current?.focus());
+                    }}
+                  >
+                    {useRecovery
+                      ? "Use your authenticator app instead"
+                      : "Use a recovery code instead"}
+                  </button>
+                </>
+              )}
+            </fieldset>
+          </div>
+          <div className="modal-footer">
+            <Button variant="secondary" onClick={closeForm}>
+              {busy ? "Stop waiting" : "Cancel"}
             </Button>
             <Button
               type="submit"
-              variant={action === "disable" ? "danger" : undefined}
+              busy={!!busy}
+              variant={form?.flow === "disable" ? "danger" : undefined}
             >
-              {action === "disable" ? "Disable authenticator" : "Continue"}
+              {form?.flow === "disable"
+                ? "Turn off two-factor"
+                : form?.flow === "codes"
+                  ? "Generate new codes"
+                  : "Continue"}
             </Button>
           </div>
         </form>
       </Modal>
-      {setup && (
+
+      {enrollment && (
         <AuthenticatorSetup
-          setup={setup}
+          setup={enrollment.setup}
           email={user.email}
-          busy={false}
-          error={setupError}
-          expired={false}
-          open={showSetup}
-          onClose={() => setShowSetup(false)}
+          busy={busy === "confirm"}
+          error={scanError}
+          failures={scanFailures}
+          attempt={scanAttempt}
+          ended={scanEnded}
+          open={scanOpen}
+          onClose={() =>
+            busy === "confirm" ? stopWaiting() : setScanOpen(false)
+          }
           onRestart={() => {
-            setShowSetup(false);
-            setSetup(null);
-            secretOwner.current = null;
-            setAction("setup");
-            setSetupError("");
+            setEnrollment(null);
+            setScanOpen(false);
+            openForm("setup");
           }}
-          onConfirm={(value) => void submit("confirm", value)}
+          onConfirm={(value) => void confirm(value)}
         />
       )}
+
+      {codes && (
+        <RecoveryCodesDialog
+          open={codesOpen}
+          codes={codes.list}
+          email={user.email}
+          generatedAt={codes.generatedAt}
+          onHide={() => setCodesOpen(false)}
+          onSaved={() => {
+            setCodes(null);
+            setCodesOpen(false);
+            notify(
+              codes.source === "setup"
+                ? "Two-factor authentication is on. Other browsers were signed out."
+                : "New recovery codes are ready. Your old codes no longer work.",
+            );
+          }}
+        />
+      )}
+
       <Modal
-        open={showReview && !!review}
-        onClose={closeReview}
+        open={outcomeOpen && !!outcome}
         title={
-          review?.phase === "sending"
-            ? "Waiting for the server"
-            : review?.phase === "changed"
-              ? "Your sign-in changed"
-              : "Authenticator change not confirmed"
+          outcome?.kind === "checking"
+            ? "Checking two-factor authentication"
+            : pending
+              ? outcomeCopy[pending.kind].title
+              : ""
         }
-        description="Review the current state before another authenticator action."
+        onClose={dismissOutcome}
+        returnFocusRef={opener}
       >
         <div className="modal-body">
-          {review?.error && <ErrorBox message={review.error} />}
-          {review?.phase === "sending" ? (
-            <p role="status">
-              Waiting for the server. You can stop waiting, but the action may
-              still finish.
-            </p>
-          ) : review?.phase === "changed" ? (
-            <p>
-              Your sign-in changed. The earlier request may have completed. Sign
-              in again and inspect your account before another change.
+          {outcome?.kind === "checking" ? (
+            <p className="signin-loading" role="status">
+              <Spinner /> Checking whether your change went through…
             </p>
           ) : (
-            review && (
-              <>
-                <p>
-                  The response did not confirm this action. Checking status
-                  reads the current setting only; it cannot prove what happened
-                  to the earlier request.
-                </p>
-                {review.flow === "setup" && (
-                  <p>
-                    A setup key from an unread response cannot be retrieved. A
-                    new setup needs your password and can invalidate an earlier
-                    QR code. If a new code is rejected, check status and start
-                    again.
-                  </p>
-                )}
-                {review.flow === "confirm" && (
-                  <p>
-                    If confirmation finished, the eight recovery codes from its
-                    unread response cannot be shown again. Keep your working
-                    authenticator. To obtain new codes, deliberately disable it
-                    and set it up again.
-                  </p>
-                )}
-                {review.flow === "disable" && (
-                  <p>
-                    Do not resend the same code. Disabling again can affect
-                    sessions created after the first request. Review the current
-                    state before any new attempt.
-                  </p>
-                )}
-                {review.observed !== null && (
-                  <p role="status">
-                    {mfaStatusMeaning(review.flow, review.observed)}
-                  </p>
-                )}
-              </>
+            pending && (
+              <Unconfirmed title={outcomeCopy[pending.kind].title}>
+                <p>{outcomeCopy[pending.kind].body}</p>
+              </Unconfirmed>
             )
           )}
         </div>
         <div className="modal-footer">
-          <Button variant="secondary" onClick={closeReview}>
-            {review?.phase === "sending" ? "Stop waiting" : "Back to account"}
+          <Button variant="secondary" onClick={dismissOutcome}>
+            {outcome?.kind === "checking" ? "Stop checking" : "Not now"}
           </Button>
-          {review?.phase === "unknown" && (
+          {pending && (
             <Button
-              ref={recoveryAction}
-              busy={checking}
-              onClick={() => void checkStatus()}
-            >
-              Check current status
-            </Button>
-          )}
-          {review?.phase === "unknown" && review.observed !== null && (
-            <Button onClick={startFresh}>
-              {review.observed
-                ? "Review a new disable request"
-                : "Review a new setup"}
-            </Button>
-          )}
-          {review?.phase === "changed" && (
-            <Button
-              ref={recoveryAction}
+              autoFocus
               onClick={() => {
-                remember(null);
-                setShowReview(false);
-                void status.reload();
+                setOutcomeOpen(false);
+                outcomeCopy[pending.kind].next();
               }}
             >
-              Dismiss old review
+              {outcomeCopy[pending.kind].action}
             </Button>
           )}
-        </div>
-      </Modal>
-      <Modal
-        open={showCodes && recoveryCodes.length > 0}
-        onClose={() => setShowCodes(false)}
-        title="Save your recovery codes"
-        description="These single-use codes are shown once by the server. Keep them outside Vectory in a secure place."
-      >
-        <div className="modal-body">
-          <p>
-            These codes came from your confirmed setup. A later authenticator
-            change can make them unusable.
-          </p>
-          <pre className="control-command">{recoveryCodes.join("\n")}</pre>
-          <Button
-            variant="secondary"
-            icon={Download}
-            onClick={() =>
-              download("vectory-recovery-codes.txt", recoveryCodes.join("\n"))
-            }
-          >
-            Download recovery codes
-          </Button>
-        </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={() => setShowCodes(false)}>
-            Hide for now
-          </Button>
-          <Button
-            onClick={() => {
-              setRecoveryCodes([]);
-              setShowCodes(false);
-              secretOwner.current = null;
-            }}
-          >
-            I’ve saved my recovery codes
-          </Button>
         </div>
       </Modal>
     </>
+  );
+}
+
+const StatusNameSchema = z
+  .object({ instance_name: z.string().optional() })
+  .passthrough();
+
+/** One-time recovery codes with Copy, Download and Print, labelled for later. */
+function RecoveryCodesDialog({
+  open,
+  codes,
+  email,
+  generatedAt,
+  onHide,
+  onSaved,
+}: {
+  open: boolean;
+  codes: string[];
+  email: string;
+  generatedAt: Date;
+  onHide: () => void;
+  onSaved: () => void;
+}) {
+  const [instance, setInstance] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    api("/status", { signal: controller.signal }, StatusNameSchema)
+      .then((status) => setInstance(status.instance_name?.trim() || ""))
+      .catch(() => {
+        /* The host alone still identifies the workspace. */
+      });
+    return () => controller.abort();
+  }, []);
+  const host = location.host;
+  const workspace =
+    instance && instance !== host ? `${instance} (${host})` : host;
+  const text = recoveryCodesText({ codes, email, workspace, generatedAt });
+  const file = `vectory-recovery-codes-${host.replace(/[^a-z0-9.-]+/gi, "-")}-${generatedAt.toISOString().slice(0, 10)}.txt`;
+  return (
+    <Modal
+      open={open}
+      title="Save your recovery codes"
+      description="If you lose your phone, each code signs you in once."
+      onClose={onHide}
+      className="recovery-dialog"
+    >
+      <div className="modal-body">
+        <ol className="recovery-codes" aria-label="Recovery codes">
+          {codes.map((code) => (
+            <li key={code}>
+              <code translate="no">{code}</code>
+            </li>
+          ))}
+        </ol>
+        <p className="recovery-context">
+          For <strong>{email}</strong> on {workspace}. Keep them somewhere safe,
+          like your password manager. They won't be shown again.
+        </p>
+        <div className="recovery-actions">
+          <CopyButton text={text} label="Copy" copiedLabel="Copied" />
+          <Button
+            variant="secondary compact"
+            icon={Download}
+            onClick={() => download(file, text)}
+          >
+            Download
+          </Button>
+          <Button
+            variant="secondary compact"
+            icon={Printer}
+            onClick={() => window.print()}
+          >
+            Print
+          </Button>
+        </div>
+        {open &&
+          createPortal(
+            <pre className="recovery-print" aria-hidden="true">
+              {text}
+            </pre>,
+            document.body,
+          )}
+      </div>
+      <div className="modal-footer">
+        <Button onClick={onSaved}>I've saved these codes</Button>
+      </div>
+    </Modal>
   );
 }

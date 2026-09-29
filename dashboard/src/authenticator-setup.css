@@ -1,89 +1,156 @@
+/* Connect an authenticator app: QR and key side by side, then the code. */
 .authenticator-setup {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "scan manual"
+    "confirm confirm";
+  align-items: center;
+  gap: 18px 24px;
 }
 .authenticator-scan {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 9px;
+  grid-area: scan;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
 }
 .authenticator-scan > svg {
   display: block;
   flex: none;
-  background: #fff;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: #fff;
 }
-.authenticator-scan > p {
+.authenticator-account {
+  max-width: 186px;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  text-align: center;
   overflow-wrap: anywhere;
-  max-width: 100%;
-}
-.authenticator-app-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  margin-top: 2px;
-  color: var(--accent);
-  text-underline-offset: 3px;
-}
-.authenticator-app-hint {
-  margin-top: -5px;
-  color: var(--muted);
-  font-size: 11px;
 }
 .authenticator-manual {
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 12px 0;
+  grid-area: manual;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  min-width: 0;
 }
-.authenticator-manual > summary {
-  cursor: pointer;
-  font-size: 13px;
+.authenticator-app-link {
+  justify-self: start;
+  text-decoration: none;
+}
+.authenticator-key-label {
+  margin: 8px 0 0;
   color: var(--muted);
-}
-.authenticator-manual > p {
-  margin: 12px 0;
   font-size: 13px;
-  line-height: 1.5;
-  color: var(--muted);
 }
-.authenticator-key {
+.authenticator-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.authenticator-key-row > code {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--ink);
   font:
-    12px/1.5 ui-monospace,
+    600 14px/1.45 ui-monospace,
     SFMono-Regular,
     Consolas,
     monospace;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
-.authenticator-confirm .field {
-  margin-bottom: 0;
+.authenticator-confirm {
+  grid-area: confirm;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
 }
-.authenticator-code {
+.authenticator-confirm .auth-field {
+  margin-bottom: 10px;
+}
+.authenticator-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.authenticator-expiry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.authenticator-expiry.soon {
+  color: var(--va-warning);
+  font-weight: 500;
+}
+.authenticator-expiry .tabular {
   font-variant-numeric: tabular-nums;
-  font-size: 21px;
-  letter-spacing: 0.3em;
-  max-width: 200px;
 }
-.authenticator-confirm .error-box {
-  margin-top: 12px;
+.authenticator-expired {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
 }
-@media (max-width: 600px) {
+.authenticator-expired > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--muted);
+}
+.authenticator-expired strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.authenticator-expired p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.authenticator-restart {
+  margin-right: auto;
+}
+
+/* A phone can't scan its own screen: offer the app link and key first. */
+@media (max-width: 600px), (pointer: coarse) and (max-width: 900px) {
   .authenticator-setup {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "manual"
+      "scan"
+      "confirm";
     gap: 16px;
   }
-  .authenticator-setup + .modal-footer .button {
-    padding-inline: 10px;
-    font-size: 12px;
+  .authenticator-app-link {
+    justify-self: stretch;
+    justify-content: center;
+  }
+  .authenticator-key-label {
+    margin-top: 2px;
   }
 }
-@media (max-width: 350px) {
-  .authenticator-setup + .modal-footer .button {
-    width: 100%;
+@media (max-width: 600px) {
+  .authenticator-dialog .modal-footer {
+    flex-wrap: wrap;
+  }
+  .authenticator-dialog .modal-footer .button {
+    padding-inline: 12px;
+  }
+  .authenticator-restart {
+    flex-basis: 100%;
+    justify-content: center;
+    margin-right: 0;
   }
 }

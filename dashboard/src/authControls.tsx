@@ -453,3 +453,24 @@ export function formatRemaining(
   if (minutes < 60) return `in ${minutes} min`;
   return `in ${Math.round(minutes / 60)} h`;
 }
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago", then a date; "Never" when absent. */
+export function formatAgo(value: string | null | undefined, now = Date.now()) {
+  const at = value ? Date.parse(value) : NaN;
+  if (!Number.isFinite(at)) return "Never";
+  const minutes = Math.floor(Math.max(0, now - at) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(at).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year:
+      new Date(at).getFullYear() === new Date(now).getFullYear()
+        ? undefined
+        : "numeric",
+  });
+}
