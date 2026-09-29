@@ -32,11 +32,10 @@ import {
   MobileHeader,
   NotFound,
   PageSkeleton,
-  PermissionNeeded,
   Sidebar,
   useGlobalShortcuts,
 } from "./Shell";
-import { knownPages, routeTitle, sectionOf, shellInfo } from "./navigation";
+import { routeTitle, sectionOf, shellInfo } from "./navigation";
 import { notifyToast, toast, ToastViewport, type Notify } from "./toast";
 import { useAppearance } from "./appearance";
 import PageBoundary from "./PageBoundary";
@@ -44,39 +43,45 @@ import { loadPage } from "./pageLoading";
 const Editor = lazy(() => loadPage(() => import("./Editor")));
 const Configurations = lazy(() => loadPage(() => import("./PipelineLibrary")));
 const Documentation = lazy(() => loadPage(() => import("./Documentation")));
-import { Devices, Groups, Overview } from "./Fleet";
-import { Policies, Settings as InstanceSettings } from "./Control";
-import { Enrollment } from "./Enrollment";
-import Auth from "./AuthScreen";
+// Every page loads when its route opens, so the sign-in screen and the shell
+// download only what they show.
+const Overview = lazy(() =>
+  loadPage(() => import("./Overview").then((m) => ({ default: m.Overview }))),
+);
+const Devices = lazy(() =>
+  loadPage(() => import("./Fleet").then((m) => ({ default: m.Devices }))),
+);
+const Groups = lazy(() =>
+  loadPage(() => import("./Fleet").then((m) => ({ default: m.Groups }))),
+);
+const Policies = lazy(() =>
+  loadPage(() => import("./Control").then((m) => ({ default: m.Policies }))),
+);
+const InstanceSettings = lazy(() =>
+  loadPage(() => import("./Control").then((m) => ({ default: m.Settings }))),
+);
+const Enrollment = lazy(() =>
+  loadPage(() =>
+    import("./Enrollment").then((m) => ({ default: m.Enrollment })),
+  ),
+);
+const Deployments = lazy(() => loadPage(() => import("./Deployments")));
+const AuditLog = lazy(() => loadPage(() => import("./AuditLog")));
+const Issues = lazy(() => loadPage(() => import("./Issues")));
+const UsersSecurity = lazy(() =>
+  loadPage(() =>
+    import("./UsersSecurity").then((m) => ({ default: m.UsersSecurity })),
+  ),
+);
+const Auth = lazy(() => loadPage(() => import("./AuthScreen")));
 import SessionRenewal from "./SessionRenewal";
 import PermissionNote from "./PermissionNote";
-import Deployments, { type DeploymentQuery } from "./Deployments";
+import Brand from "./Brand";
+import type { DeploymentQuery } from "./Deployments";
 import { readDeploymentQuery } from "./deploymentRouting";
-import AuditLog from "./AuditLog";
 import { readAuditQuery, type AuditQuery } from "./auditModel";
-import Issues from "./Issues";
-import { UsersSecurity } from "./UsersSecurity";
 import type { PipelineLibraryQuery } from "./PipelineLibrary";
 import { readPipelineDestination } from "./pipelineDestination";
-export function Brand({ small = false }: { small?: boolean }) {
-  return (
-    <span className={`brand ${small ? "small" : ""}`}>
-      <svg
-        className="brand-mark"
-        viewBox="0 0 28 30"
-        fill="none"
-        aria-hidden="true"
-      >
-        <path
-          fill="currentColor"
-          d="M1 3h6.2l7 18.6L21.2 3H27L16.4 28h-5.2L1 3Z"
-        />
-        <path fill="currentColor" d="M11.4 3H17l-2.8 7.3L11.4 3Z" />
-      </svg>
-      <span className="brand-word">Vectory</span>
-    </span>
-  );
-}
 export default function App() {
   const [user, setUser] = useState<User | null>(null),
     [initialized, setInitialized] = useState<boolean | null>(null),
@@ -521,20 +526,31 @@ export default function App() {
     );
   if (!user)
     return (
-      <Auth
-        initialized={initialized}
-        error={connectionError}
-        onSetupDetected={() => setInitialized(true)}
-        onAuthenticated={(u) => {
-          setInitialized(true);
-          setSessionEnded(false);
-          setUser(u);
-        }}
-        retry={() => void initialize()}
-      />
+      <PageBoundary resetKey={`sign-in:${route}`}>
+        <Suspense
+          fallback={
+            <div className="app-loading">
+              <Brand />
+              <Spinner />
+              <p role="status">Loading Vectory…</p>
+            </div>
+          }
+        >
+          <Auth
+            initialized={initialized}
+            error={connectionError}
+            onSetupDetected={() => setInitialized(true)}
+            onAuthenticated={(u) => {
+              setInitialized(true);
+              setSessionEnded(false);
+              setUser(u);
+            }}
+            retry={() => void initialize()}
+          />
+        </Suspense>
+      </PageBoundary>
     );
   const section = sectionOf(page);
-  const known = knownPages.has(page);
   return (
     <ShellContext.Provider value={shell}>
       <div
@@ -754,13 +770,6 @@ export default function App() {
                   />
                 ) : page === "settings" ? (
                   <InstanceSettings />
-                ) : known ? (
-                  <PermissionNeeded
-                    title={routeTitle(page).split(" · ")[0]}
-                    task="This page"
-                    role="Administrator"
-                    user={user}
-                  />
                 ) : (
                   <NotFound onSearch={() => openShellModal("search")} />
                 )}

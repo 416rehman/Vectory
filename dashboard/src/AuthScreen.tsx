@@ -40,7 +40,7 @@ import {
 } from "./authControls";
 import { passwordIssue } from "./passwordStrength";
 import { Button, Spinner } from "./ui";
-import { Brand } from "./App";
+import { Brand } from "./Brand";
 
 const SetupHintSchema = z.object({
   source: z.enum(["file", "environment", "unknown"]),

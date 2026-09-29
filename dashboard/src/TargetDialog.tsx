@@ -12,7 +12,6 @@ import {
   type Version,
 } from "./api";
 import { Button, ErrorBox, Field, Modal, useResource } from "./ui";
-import agentCatalog from "./generated/vector-catalog.json";
 import DocLink from "./DocLink";
 import { DataTable } from "./DataTable";
 import { deploymentRoute } from "./deploymentRouting";
@@ -113,7 +112,30 @@ function isLoopbackSocketAddress(value: unknown): boolean {
     return false;
   }
 }
-function fullModeRequirements(config: Record<string, any>): string[] {
+type AgentCatalog = typeof import("./generated/vector-catalog.json");
+/**
+ * Which components a restricted device accepts. The 99 KB catalog is read
+ * only when this dialog opens, so it is not part of any page's download.
+ * "failed" means it could not be read: nothing can be declared safe then.
+ */
+function useAgentCatalog() {
+  const [catalog, setCatalog] = useState<AgentCatalog | "failed" | null>(null);
+  useEffect(() => {
+    let live = true;
+    import("./generated/vector-catalog.json").then(
+      (module) => live && setCatalog(module.default),
+      () => live && setCatalog("failed"),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return catalog;
+}
+function fullModeRequirements(
+  config: Record<string, any>,
+  agentCatalog: AgentCatalog,
+): string[] {
   const required = new Set<string>();
   const restrictedRoots = new Set([
     "sources",
@@ -487,7 +509,14 @@ export default function TargetDialog({
       blockersByDevice.set(id, labels);
     }
   }
-  const requirements = version ? fullModeRequirements(version.config) : [];
+  const agentCatalog = useAgentCatalog();
+  const requirements =
+    version && agentCatalog && agentCatalog !== "failed"
+      ? fullModeRequirements(version.config, agentCatalog)
+      : [];
+  // Until the component list is read, what the pipeline needs is unknown.
+  const capabilityUnknown =
+    !!version && !(agentCatalog && agentCatalog !== "failed");
   const restrictedTargets: Device[] = (
     preview?.devices ||
     devices.data.filter((device) => effective.has(device.id))
@@ -665,6 +694,12 @@ export default function TargetDialog({
       if (settingsMismatch.length)
         throw Error(
           "Some selected devices use different agent settings. Return to the device list and select devices with matching settings.",
+        );
+      if (capabilityUnknown)
+        throw Error(
+          agentCatalog === "failed"
+            ? "Vectory couldn't read the component list to check this pipeline. Reload the page and try again."
+            : "Vectory is still checking what this pipeline needs. Try again in a moment.",
         );
       if (capabilityBlocked)
         throw Error(
@@ -1731,7 +1766,7 @@ export default function TargetDialog({
             !!devices.error ||
             !!groups.error ||
             (!preview && !releaseValid) ||
-            (!!preview && capabilityBlocked) ||
+            (!!preview && (capabilityBlocked || capabilityUnknown)) ||
             (!!preview &&
               (preview.create_idempotency !== true ||
                 preview.request_correlation !== true)) ||

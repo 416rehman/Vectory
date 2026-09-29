@@ -1,7 +1,6 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
   Compass,
-  LockKeyhole,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -272,37 +271,6 @@ const roleNames: Record<User["role"], string> = {
   admin: "Administrator",
 };
 export const roleName = (role: User["role"]) => roleNames[role] ?? role;
-
-export function PermissionNeeded({
-  title,
-  task,
-  role,
-  user,
-}: {
-  title: string;
-  task: string;
-  role: string;
-  user: User;
-}) {
-  return (
-    <>
-      <PageHeader title={title} />
-      <EmptyState
-        variant="first-run"
-        icon={LockKeyhole}
-        title={`${task} needs the ${role} role`}
-        action={
-          <a className="button secondary" href="#/overview">
-            Go to Overview
-          </a>
-        }
-      >
-        You’re signed in as {user.name || user.email} with the{" "}
-        {roleName(user.role)} role. Ask an administrator to change your role.
-      </EmptyState>
-    </>
-  );
-}
 
 /** The page frame while a lazy page loads, so the header doesn't jump. */
 export function PageSkeleton({
