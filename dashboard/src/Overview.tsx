@@ -912,16 +912,18 @@ function NeedsYou({
   const affected = groups
     .filter((group) => group.severity !== "neutral")
     .reduce((sum, group) => sum + group.count, 0);
+  // A stopped or rolled-back rollout is listed below, so never say
+  // "Nothing is failing" above it.
+  const summary = [
+    affected ? `${countLabel(affected, "device")} need attention` : "",
+    stopped.length ? `${countLabel(stopped.length, "rollout")} stopped` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <Card
       title="Needs you"
-      subtitle={
-        groups.length
-          ? affected
-            ? `${countLabel(affected, "device")} need attention`
-            : "Nothing is failing"
-          : undefined
-      }
+      subtitle={summary || (groups.length ? "Nothing is failing" : undefined)}
       className="needs-you"
       action={
         data.issues_open > 0 ? (
