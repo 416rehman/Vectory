@@ -371,6 +371,8 @@ async function open(options = {}) {
     overview: overview(),
     summary: null,
     releases: [],
+    // Deployment history by status, for stopped and rolled-back rollouts.
+    history: {},
     ...options,
   };
   const context = await browser.newContext({
@@ -396,6 +398,12 @@ async function open(options = {}) {
           });
     if (req.method() === "GET" && path === "/releases")
       return route.fulfill({ json: state.releases });
+    if (req.method() === "GET" && path === "/deployments/history") {
+      const items = state.history[url.searchParams.get("status")] || [];
+      return route.fulfill({
+        json: { items, total: items.length, page: 1, page_size: 5 },
+      });
+    }
     unexpected.push(`${req.method()} ${path}`);
     return route.fulfill({
       status: 500,
@@ -507,6 +515,53 @@ try {
       await expect(
         rollouts.nth(1).locator(".overview-rollout-meta"),
       ).toContainText(/Starts in (2h 5\dm|3h)/);
+      await context.close();
+    },
+  );
+  await check(
+    "A rollout that stopped stays in Needs you with a way into it",
+    async () => {
+      const stoppedId = uuid(77);
+      const { context, page } = await open({
+        history: {
+          failed: [
+            {
+              id: stoppedId,
+              name: null,
+              version_id: uuid(78),
+              policy: null,
+              scheduled_at: null,
+              configuration_id: pipeline,
+              configuration_name: "Orders",
+              version_number: 4,
+              status: "failed",
+              failure_reason: "threshold",
+              failed_at: new Date(Date.now() - 120000).toISOString(),
+              created_at: new Date(Date.now() - 180000).toISOString(),
+              target_count: 3,
+              verified_count: 0,
+              state_counts: { rolled_back: 1, pending: 2 },
+              priority: 100,
+              target_mode: "snapshot",
+              rollout: {
+                kind: "canary",
+                canary_size: 1,
+                batch_size: 1,
+                observation_seconds: 60,
+                failure_threshold: 0,
+              },
+            },
+          ],
+        },
+      });
+      const item = page
+        .locator(".needs-you .overview-attention-item")
+        .filter({ hasText: "Orders v4 stopped after a failure" });
+      await expect(item).toContainText("1 failed · 2 not released");
+      await expect(
+        item.getByRole("link", { name: "Open rollout", exact: true }),
+      ).toHaveAttribute("href", `#/deployments/${stoppedId}`);
+      await expect(page.locator(".overview-kpis")).toContainText("1 stopped");
       await context.close();
     },
   );
