@@ -145,6 +145,8 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
     if (path === "/settings")
       return reply({ instance_name: "Synthetic enrollment review" });
     if (path === "/devices") return reply([]);
+    // The device list also reads groups for its filter.
+    if (path === "/groups") return reply([]);
     if (path === "/releases")
       return reply(
         ["windows", "linux", "darwin"].map((os) => ({

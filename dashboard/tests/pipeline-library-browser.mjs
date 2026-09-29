@@ -126,6 +126,8 @@ await context.route("**/api/v1/**", async (route) => {
       devices: [],
       recent_activity: [],
     });
+  // The Overview's first-run checklist asks whether agent downloads exist.
+  if (path === "/releases") return reply([]);
   if (path === "/configurations/library" && method === "GET") {
     const query = Object.fromEntries(url.searchParams);
     requests.push(query);

@@ -292,11 +292,8 @@ function FailureDetails({
         </strong>
         <code>{attempt.error.code}</code>
       </div>
-      {attempt.error.message && (
-        <pre className="device-failure-details-message">
-          {attempt.error.message}
-        </pre>
-      )}
+      {/* The reason is explained from the code above; agent messages are
+          never shown, even the server's substituted ones. */}
       <DocLink
         topic="troubleshooting"
         section="a-pipeline-is-rejected-or-rolled-back"
