@@ -23,6 +23,42 @@ const version = (draft_changed?: boolean) => ({
 });
 
 describe("library status", () => {
+  it("says which version devices run, not only where it is assigned", () => {
+    const latest = { ...base, latest_version: version(false) };
+    expect(
+      libraryStatus({
+        ...latest,
+        assigned_devices: 3,
+        running_versions: [{ id: "v2", number: 2, devices: 3 }],
+      }).detail,
+    ).toBe("Running v2 on 3 of 3 · v3 not running");
+    expect(
+      libraryStatus({
+        ...latest,
+        assigned_devices: 3,
+        running_versions: [
+          { id: "v3", number: 3, devices: 2 },
+          { id: "v2", number: 2, devices: 1 },
+        ],
+      }).detail,
+    ).toBe("Running v3 on 2, v2 on 1 of 3");
+    expect(
+      libraryStatus({
+        ...latest,
+        assigned_devices: 1,
+        running_versions: [{ id: "v3", number: 3, devices: 1 }],
+      }).detail,
+    ).toBe("Running v3 on 1 of 1");
+    expect(
+      libraryStatus({ ...latest, assigned_devices: 2, running_versions: [] })
+        .detail,
+    ).toBe("Assigned to 2 devices · not verified running yet");
+    expect(
+      libraryStatus({ ...latest, assigned_devices: 0, running_versions: [] })
+        .detail,
+    ).toBe("Not assigned to devices");
+  });
+
   it("leads with the published version and where it is assigned", () => {
     expect(
       libraryStatus({

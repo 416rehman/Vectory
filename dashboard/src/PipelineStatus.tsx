@@ -14,6 +14,46 @@ const published = (at: string) => {
     : `Published ${relative}`;
 };
 
+const plural = (count: number) => (count === 1 ? "device" : "devices");
+
+/**
+ * Where the pipeline runs: the versions devices last verified, against how
+ * many are assigned. A newer version that no device runs yet is named, so a
+ * rolled-back release never reads as live.
+ */
+function reachDetail(pipeline: PipelineSummary, latest: number) {
+  const assigned = pipeline.assigned_devices;
+  const running = (pipeline.running_versions ?? []).filter(
+    (entry) => entry.devices > 0,
+  );
+  if (!pipeline.running_versions)
+    return assigned === undefined
+      ? undefined
+      : assigned === 0
+        ? "Not assigned to devices"
+        : `Assigned to ${assigned} ${plural(assigned)}`;
+  if (!running.length)
+    return !assigned
+      ? "Not assigned to devices"
+      : `Assigned to ${assigned} ${plural(assigned)} · not verified running yet`;
+  const total = running.reduce((sum, entry) => sum + entry.devices, 0);
+  const of =
+    assigned !== undefined && assigned >= total
+      ? ` of ${assigned}`
+      : ` ${plural(total)}`;
+  const versions =
+    running.length === 1
+      ? `Running v${running[0].number} on ${running[0].devices}${of}`
+      : `Running ${running
+          .map((entry) => `v${entry.number} on ${entry.devices}`)
+          .join(
+            ", ",
+          )}${assigned !== undefined && assigned >= total ? ` of ${assigned}` : ""}`;
+  return running.some((entry) => entry.number === latest)
+    ? versions
+    : `${versions} · v${latest} not running`;
+}
+
 /**
  * What the library says about a pipeline: its published state first, then
  * where it is assigned, and whether the draft has changes that are not
@@ -28,15 +68,9 @@ export function libraryStatus(pipeline: PipelineSummary): LibraryStatus {
     };
   if (!version)
     return { primary: "Not published", detail: "Draft only", changed: false };
-  const devices = pipeline.assigned_devices;
   return {
     primary: `v${version.number} · ${published(version.created_at)}`,
-    detail:
-      devices === undefined
-        ? undefined
-        : devices === 0
-          ? "Not assigned to devices"
-          : `Assigned to ${devices} ${devices === 1 ? "device" : "devices"}`,
+    detail: reachDetail(pipeline, version.number),
     changed: version.draft_changed === true,
     title: `Version ${version.number} published ${new Date(version.created_at).toLocaleString()}${version.author ? ` by ${version.author}` : ""}`,
   };
