@@ -132,6 +132,13 @@ func enrollmentInput(s Settings, token string) (Settings, string, error) {
 	return s, token, nil
 }
 
+// ValidateDeviceName applies the server's device-name rules locally, so a bad
+// name is reported before anyone types a token.
+func ValidateDeviceName(name string) error {
+	_, _, err := enrollmentInput(Settings{Server: "https://name-check.invalid", Name: name}, "placeholder")
+	return err
+}
+
 func readOptionalEnrollmentJSON(path string, value any) (bool, error) {
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return false, nil
