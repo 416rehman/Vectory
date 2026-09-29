@@ -1860,11 +1860,20 @@ export function when(value?: string | null) {
         minute: "2-digit",
       });
 }
+/**
+ * Save `content` as a file. The link is attached while it is clicked and the
+ * blob URL outlives the click: some browsers cancel a download whose URL is
+ * revoked, or whose link is detached, before the save starts. This starts a
+ * save; it cannot know whether the file was kept.
+ */
 export function download(name: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.hidden = true;
+  document.body.append(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
