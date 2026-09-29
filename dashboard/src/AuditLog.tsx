@@ -1223,7 +1223,7 @@ function AuditInspector({
 function EnrollmentAttempt({ detail }: { detail: AuditDetail }) {
   const d = detail.details;
   const refused = detail.outcome !== "success";
-  const why = refused ? refusal(d) : null;
+  const why = refused && d.reason_code ? refusal(d) : null;
   const agent = describeAgent(d);
   return (
     <>

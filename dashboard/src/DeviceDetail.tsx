@@ -1268,10 +1268,7 @@ export default function DeviceDetail({
           initialDeviceIds={[device.id]}
           deviceName={device.name}
           onClose={() => setDeployOpen(false)}
-          onDone={(message) => {
-            setDeployOpen(false);
-            afterAction(message);
-          }}
+          onDone={afterAction}
         />
       )}
       {policy && canReviewPolicy && (
