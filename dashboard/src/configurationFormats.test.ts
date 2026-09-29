@@ -3,6 +3,40 @@ import YAML from "yaml";
 import { parse as parseToml } from "smol-toml";
 import { stringifyConfiguration } from "./configurationFormats";
 
+it("puts type and inputs first in every step without dropping settings", () => {
+  const config = {
+    sinks: {
+      out: { encoding: { codec: "json" }, inputs: ["in"], type: "console" },
+    },
+    sources: { in: { format: "json", type: "demo_logs" } },
+  };
+  const text = stringifyConfiguration(config, "yaml");
+  expect(text.indexOf("type: console")).toBeLessThan(text.indexOf("inputs:"));
+  expect(text.indexOf("inputs:")).toBeLessThan(text.indexOf("encoding:"));
+  expect(text.indexOf("sources:")).toBeLessThan(text.indexOf("sinks:"));
+  expect(YAML.parse(text)).toEqual(config);
+});
+
+it("writes multi-line TOML programs as literal blocks that read back exactly", () => {
+  const source = '# keep\n.message = "a \\\\ b"\ndel(.password)\n';
+  const config = {
+    transforms: { parse: { type: "remap", inputs: ["in"], source } },
+  };
+  const text = stringifyConfiguration(config, "toml");
+  expect(text).toContain("source = '''\n# keep\n");
+  expect(parseToml(text)).toEqual(config);
+  for (const awkward of [
+    "uses ''' quotes\n",
+    "ends in a quote\n'",
+    "tab\tand\r\n",
+  ]) {
+    const value = { transforms: { t: { type: "remap", source: awkward } } };
+    const kept = stringifyConfiguration(value, "toml");
+    expect(kept).not.toContain("'''\n");
+    expect(parseToml(kept)).toEqual(value);
+  }
+});
+
 function parse(text: string, format: string) {
   return format === "json"
     ? JSON.parse(text)

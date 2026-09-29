@@ -208,6 +208,8 @@ import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
 
 const edgeTypes = { pipeline: PipelineEdge };
+// React Flow (MIT) permits hiding its attribution badge; the brief asks for it.
+const FLOW_PRO_OPTIONS = { hideAttribution: true };
 // Canvas options keep one identity: React Flow copies changed props into its
 // store, which re-runs every node and edge subscription.
 const connectionLineStyle = { stroke: "var(--accent)", strokeWidth: 2 };
@@ -3992,6 +3994,7 @@ export default function Editor({
                 }}
               >
                 <ReactFlow
+                  proOptions={FLOW_PRO_OPTIONS}
                   nodes={canvasNodes}
                   edges={canvasEdges}
                   nodeTypes={nodeTypes}
