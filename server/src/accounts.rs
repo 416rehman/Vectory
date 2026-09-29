@@ -1,7 +1,9 @@
 //! Local account maintenance. All commits recheck the live session and password
 //! verifier under the same writer lock as account changes and session revocation.
 use crate::{
-    State, auth, db,
+    State,
+    auth::{self, ending},
+    db,
     error::{ApiError, Result},
 };
 use axum::{
@@ -13,6 +15,20 @@ use axum::{
 use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 use sqlx::{Row, SqliteConnection};
+
+/// Every code works once. Administrator resets keep their reviewed 15-minute
+/// window; invitations wait a day for someone new; a host-issued break-glass
+/// code allows time to restart the server first.
+pub const RESET_MINUTES: i64 = 15;
+pub const INVITE_MINUTES: i64 = 24 * 60;
+pub const LOCAL_RESET_MINUTES: i64 = 60;
+fn code_minutes(purpose: &str) -> i64 {
+    match purpose {
+        "invite" => INVITE_MINUTES,
+        "local" => LOCAL_RESET_MINUTES,
+        _ => RESET_MINUTES,
+    }
+}
 
 pub(crate) async fn reauthenticate(
     s: &State,
@@ -37,7 +53,7 @@ pub(crate) async fn reauthenticate(
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "WRONG_PASSWORD",
-            "Current password is incorrect",
+            "Your current password didn't match.",
         ));
     }
     Ok((actor, hash))
@@ -60,7 +76,7 @@ pub(crate) async fn recheck(
     Ok(actor)
 }
 
-fn revision(v: &Value, current: i64) -> Result<()> {
+pub(crate) fn revision(v: &Value, current: i64) -> Result<()> {
     let expected = v["revision"]
         .as_i64()
         .filter(|r| *r > 0)
@@ -69,13 +85,13 @@ fn revision(v: &Value, current: i64) -> Result<()> {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "STALE_REVISION",
-            "Account changed; refresh before trying again",
+            "This account changed since you opened it. Load the latest details and try again.",
         ));
     }
     Ok(())
 }
 
-async fn user(conn: &mut SqliteConnection, id: &str) -> Result<sqlx::sqlite::SqliteRow> {
+pub(crate) async fn user(conn: &mut SqliteConnection, id: &str) -> Result<sqlx::sqlite::SqliteRow> {
     sqlx::query("SELECT * FROM users WHERE id=?")
         .bind(id)
         .fetch_optional(conn)
@@ -122,7 +138,7 @@ pub async fn edit(
             ));
         }
     }
-    let name = db::string(&v, "name", 100)?;
+    let name = auth::user_name(&v)?;
     let role = db::string(&v, "role", 20)?;
     if !["viewer", "editor", "operator", "admin"].contains(&role) {
         return Err(ApiError::invalid("Invalid role"));
@@ -155,25 +171,24 @@ pub async fn edit(
                 .fetch_one(&mut *tx)
                 .await?;
         if admins <= 1 {
-            return Err(ApiError::conflict(
-                "At least one enabled administrator is required",
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "LAST_ADMIN",
+                "Make someone else an administrator first. A workspace needs at least one active administrator.",
             ));
         }
     }
     let access_changed =
         before.get::<bool, _>("enabled") != enabled || before.get::<String, _>("role") != role;
     sqlx::query("UPDATE users SET name=?,role=?,enabled=?,revision=revision+1 WHERE id=?")
-        .bind(name)
+        .bind(&name)
         .bind(role)
         .bind(enabled)
         .bind(&id)
         .execute(&mut *tx)
         .await?;
     if access_changed {
-        sqlx::query("DELETE FROM sessions WHERE user_id=?")
-            .bind(&id)
-            .execute(&mut *tx)
-            .await?;
+        auth::end_sessions(&mut tx, &id, None, ending::ACCESS_CHANGED).await?;
         sqlx::query("DELETE FROM password_reset_codes WHERE user_id=?")
             .bind(&id)
             .execute(&mut *tx)
@@ -202,13 +217,28 @@ pub async fn edit(
 pub async fn change_password(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<(HeaderMap, Json<Value>)> {
-    let password = db::string(&v, "new_password", 256)?;
-    auth::check_password(password)?;
-    let (_, current_hash) =
-        reauthenticate(&s, &h, &[], db::string(&v, "current_password", 256)?).await?;
+    let password = auth::password_field(&v, "new_password")?;
+    let current = db::string(&v, "current_password", 256)?;
+    let (actor, current_hash) = reauthenticate(&s, &h, &[], current).await?;
+    if password == current {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "PASSWORD_UNCHANGED",
+            "Choose a password that's different from your current one.",
+        ));
+    }
+    auth::check_new_password(
+        password,
+        &[
+            actor["email"].as_str().unwrap_or(""),
+            actor["name"].as_str().unwrap_or(""),
+        ],
+    )?;
     let next_hash = auth::password_hash(password.to_owned()).await?;
+    let client = s.client_key(&h, peer);
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
     let actor = recheck(&mut tx, &h, &[], &current_hash).await?;
@@ -216,7 +246,7 @@ pub async fn change_password(
     replace_password(&mut tx, id, &next_hash).await?;
     db::audit(&mut tx, id, "account.password", id, "success").await?;
     let updated = auth::public_user(&user(&mut tx, id).await?);
-    let out = auth::create_session(&s, &mut tx, updated).await?;
+    let out = auth::create_session(&s, &mut tx, updated, &h, &client).await?;
     tx.commit().await?;
     Ok(out)
 }
@@ -227,10 +257,7 @@ async fn replace_password(conn: &mut SqliteConnection, id: &str, hash: &str) -> 
         .bind(id)
         .execute(&mut *conn)
         .await?;
-    sqlx::query("DELETE FROM sessions WHERE user_id=?")
-        .bind(id)
-        .execute(&mut *conn)
-        .await?;
+    auth::end_sessions(conn, id, None, ending::PASSWORD_CHANGED).await?;
     sqlx::query("DELETE FROM password_reset_codes WHERE user_id=?")
         .bind(id)
         .execute(&mut *conn)
@@ -267,14 +294,41 @@ pub async fn revoke_sessions(
     let actor = recheck(&mut tx, &h, &[], &hash).await?;
     let id = actor["id"].as_str().unwrap();
     crate::login_challenges::clear(&mut tx, id).await?;
-    sqlx::query("DELETE FROM sessions WHERE user_id=? AND verifier<>?")
-        .bind(id)
-        .bind(db::hash(auth::session_token(&h)?))
-        .execute(&mut *tx)
-        .await?;
+    let current = db::hash(auth::session_token(&h)?);
+    auth::end_sessions(&mut tx, id, Some(&current), ending::SIGNED_OUT_ELSEWHERE).await?;
     db::audit(&mut tx, id, "account.revoke_sessions", id, "success").await?;
     tx.commit().await?;
     Ok(Json(json!({"ok":true})))
+}
+
+/// Replace any live code for `user_id` with a new single-use code. `purpose`
+/// is `reset`, `invite` or `local`; administrator codes carry their issuer.
+pub(crate) async fn issue_code(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    issuer: Option<&str>,
+    purpose: &str,
+) -> Result<(String, String, String)> {
+    let code = auth::random_secret();
+    let verifier = db::hash(&code);
+    let expires_at = (Utc::now() + Duration::minutes(code_minutes(purpose)))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    sqlx::query("DELETE FROM password_reset_codes WHERE user_id=? OR expires_at<=?")
+        .bind(user_id)
+        .bind(db::now())
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "INSERT INTO password_reset_codes(verifier,user_id,expires_at,issuer_id,purpose) VALUES(?,?,?,?,?)",
+    )
+    .bind(&verifier)
+    .bind(user_id)
+    .bind(&expires_at)
+    .bind(issuer)
+    .bind(purpose)
+    .execute(&mut *conn)
+    .await?;
+    Ok((code, verifier, expires_at))
 }
 
 pub async fn issue_reset(
@@ -339,28 +393,19 @@ pub async fn issue_reset(
     let target = user(&mut tx, &id).await?;
     revision(&v, target.get("revision"))?;
     if !target.get::<bool, _>("enabled") {
-        return Err(ApiError::conflict(
-            "Enable the account before issuing a password reset",
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "ACCOUNT_DISABLED",
+            "Turn this person's access back on before resetting their password.",
         ));
     }
-    let code = auth::random_secret();
-    let verifier = db::hash(&code);
-    let expires_at =
-        (Utc::now() + Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    sqlx::query("DELETE FROM password_reset_codes WHERE user_id=? OR expires_at<=?")
-        .bind(&id)
-        .bind(db::now())
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "INSERT INTO password_reset_codes(verifier,user_id,expires_at,issuer_id) VALUES(?,?,?,?)",
-    )
-    .bind(&verifier)
-    .bind(&id)
-    .bind(&expires_at)
-    .bind(actor_id)
-    .execute(&mut *tx)
-    .await?;
+    // Someone who has never chosen a password gets a fresh invitation instead.
+    let purpose = if target.get::<String, _>("password_hash").is_empty() {
+        "invite"
+    } else {
+        "reset"
+    };
+    let (code, verifier, expires_at) = issue_code(&mut tx, &id, Some(actor_id), purpose).await?;
     if let Some(key) = key.as_deref() {
         sqlx::query("INSERT INTO password_reset_requests(actor_id,request_id,user_id,state,was_issued,verifier,expires_at,created_at) VALUES(?,?,?,'issued',1,?,?,?)")
             .bind(actor_id)
@@ -379,24 +424,42 @@ pub async fn issue_reset(
     db::audit(
         &mut tx,
         actor_id,
-        "user.password_reset.issue",
+        if purpose == "invite" {
+            "user.invite.issue"
+        } else {
+            "user.password_reset.issue"
+        },
         &id,
         "success",
     )
     .await?;
     tx.commit().await?;
     let response = match key {
-        Some(key) => json!({"request_id":key,"user_id":id,"code":code,"expires_at":expires_at}),
-        None => json!({"code":code,"expires_at":expires_at}),
+        Some(key) => {
+            json!({"request_id":key,"user_id":id,"code":code,"expires_at":expires_at,"purpose":purpose})
+        }
+        None => json!({"code":code,"expires_at":expires_at,"purpose":purpose}),
     };
     Ok(Json(response))
 }
 
-pub async fn redeem_reset(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Json(v): Json<Value>,
-) -> Result<Json<Value>> {
+fn code_invalid(invite: bool) -> ApiError {
+    if invite {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "INVITE_INVALID",
+            "This invite link is invalid, expired or already used. Ask your administrator for a new one.",
+        )
+    } else {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "RESET_CODE_INVALID",
+            "This reset code is invalid, expired or already used. Ask your administrator for a new one.",
+        )
+    }
+}
+/// Public code checks: same-site only, bounded globally and per code.
+fn public_code(s: &State, h: &HeaderMap, v: &Value, invite: bool) -> Result<String> {
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
@@ -407,36 +470,187 @@ pub async fn redeem_reset(
     )?;
     let code = v["code"]
         .as_str()
+        .map(str::trim)
         .filter(|c| c.len() == 64 && c.bytes().all(|b| b.is_ascii_hexdigit()))
-        .ok_or_else(ApiError::unauthorized)?;
-    let verifier = db::hash(code);
+        .ok_or_else(|| code_invalid(invite))?
+        .to_ascii_lowercase();
+    let verifier = db::hash(&code);
     s.limit(
         format!("password-reset:{verifier}"),
         8,
         std::time::Duration::from_secs(300),
     )?;
-    let password = db::string(&v, "new_password", 256)?;
-    auth::check_password(password)?;
+    Ok(verifier)
+}
+
+pub async fn redeem_reset(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    let verifier = public_code(&s, &h, &v, false)?;
+    let password = auth::password_field(&v, "new_password")?;
     // Reject unknown/expired codes before starting expensive password work, then
-    // check again transactionally. No read of account details is returned.
+    // check again transactionally.
     let mut conn = s.pool.acquire().await?;
-    if reset_target(&mut conn, &verifier).await?.is_none() {
-        return Err(ApiError::unauthorized());
-    }
+    let target = reset_target(&mut conn, &verifier)
+        .await?
+        .ok_or_else(|| code_invalid(false))?;
     drop(conn);
+    auth::check_new_password(password, &[&target.email, &target.name])?;
     let hash = auth::password_hash(password.to_owned()).await?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
-    let id = reset_target(&mut tx, &verifier)
+    let target = reset_target(&mut tx, &verifier)
         .await?
-        .ok_or_else(ApiError::unauthorized)?;
-    replace_password(&mut tx, &id, &hash).await?;
-    db::audit(&mut tx, &id, "user.password_reset.redeem", &id, "success").await?;
+        .ok_or_else(|| code_invalid(false))?;
+    replace_password(&mut tx, &target.id, &hash).await?;
+    db::audit(
+        &mut tx,
+        &target.id,
+        if target.purpose == "invite" {
+            "user.invite.accept"
+        } else {
+            "user.password_reset.redeem"
+        },
+        &target.id,
+        "success",
+    )
+    .await?;
     tx.commit().await?;
-    Ok(Json(json!({"ok":true})))
+    // The code proved control of this account; its email lets the sign-in form
+    // and password managers continue without retyping.
+    Ok(Json(json!({"ok":true,"email":target.email})))
 }
 
-async fn reset_target(conn: &mut SqliteConnection, verifier: &str) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar("SELECT r.user_id FROM password_reset_codes r JOIN users u ON u.id=r.user_id JOIN users issuer ON issuer.id=r.issuer_id WHERE r.verifier=? AND r.expires_at>? AND u.enabled=1 AND issuer.enabled=1 AND issuer.role='admin'")
-        .bind(verifier).bind(db::now()).fetch_optional(conn).await?)
+pub(crate) struct CodeTarget {
+    id: String,
+    email: String,
+    name: String,
+    purpose: String,
+    expires_at: String,
+    unactivated: bool,
+}
+async fn reset_target(conn: &mut SqliteConnection, verifier: &str) -> Result<Option<CodeTarget>> {
+    // Administrator codes need an issuer who is still an enabled administrator.
+    // Host-issued break-glass codes have no issuer by design.
+    let row = sqlx::query("SELECT u.id,u.email,u.name,u.password_hash,r.purpose,r.expires_at FROM password_reset_codes r JOIN users u ON u.id=r.user_id LEFT JOIN users issuer ON issuer.id=r.issuer_id WHERE r.verifier=? AND r.expires_at>? AND u.enabled=1 AND ((r.purpose='local' AND r.issuer_id IS NULL) OR (r.purpose<>'local' AND issuer.enabled=1 AND issuer.role='admin'))")
+        .bind(verifier)
+        .bind(db::now())
+        .fetch_optional(conn)
+        .await?;
+    Ok(row.map(|row| CodeTarget {
+        id: row.get("id"),
+        email: row.get("email"),
+        name: row.get("name"),
+        purpose: row.get("purpose"),
+        expires_at: row.get("expires_at"),
+        unactivated: row.get::<String, _>("password_hash").is_empty(),
+    }))
+}
+async fn invite_target(conn: &mut SqliteConnection, verifier: &str) -> Result<CodeTarget> {
+    reset_target(conn, verifier)
+        .await?
+        .filter(|target| target.purpose == "invite" && target.unactivated)
+        .ok_or_else(|| code_invalid(true))
+}
+
+/// Who an invitation is for, so the invited person can confirm before choosing
+/// a password. Possession of the code is the authorization.
+pub async fn preview_invite(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    s.limit(
+        format!("invite-preview:{}", s.client_key(&h, peer)),
+        30,
+        std::time::Duration::from_secs(60),
+    )?;
+    let verifier = public_code(&s, &h, &v, true)?;
+    let mut conn = s.pool.acquire().await?;
+    let target = invite_target(&mut conn, &verifier).await?;
+    Ok(Json(json!({
+        "email":target.email,
+        "name":target.name,
+        "expires_at":target.expires_at,
+        "instance_name":s.settings.instance_name
+    })))
+}
+
+/// Accept an invitation: choose the first password and start a session. The
+/// account has no password or second factor yet, so nothing is bypassed.
+pub async fn accept_invite(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
+    Json(v): Json<Value>,
+) -> Result<(HeaderMap, Json<Value>)> {
+    let verifier = public_code(&s, &h, &v, true)?;
+    let password = auth::password_field(&v, "new_password")?;
+    let mut conn = s.pool.acquire().await?;
+    let target = invite_target(&mut conn, &verifier).await?;
+    drop(conn);
+    auth::check_new_password(password, &[&target.email, &target.name])?;
+    let hash = auth::password_hash(password.to_owned()).await?;
+    let client = s.client_key(&h, peer);
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    let target = invite_target(&mut tx, &verifier).await?;
+    replace_password(&mut tx, &target.id, &hash).await?;
+    sqlx::query("UPDATE users SET last_login_at=? WHERE id=?")
+        .bind(db::now())
+        .bind(&target.id)
+        .execute(&mut *tx)
+        .await?;
+    db::audit(
+        &mut tx,
+        &target.id,
+        "user.invite.accept",
+        &target.id,
+        "success",
+    )
+    .await?;
+    let account = auth::public_user(&user(&mut tx, &target.id).await?);
+    let response = auth::create_session(&s, &mut tx, account, &h, &client).await?;
+    tx.commit().await?;
+    Ok(response)
+}
+
+/// Break-glass reset from `vectory-admin` on a stopped server: a single-use code
+/// with no administrator issuer. Changes nothing until the code is redeemed.
+pub async fn local_reset(s: &State, email: &str) -> anyhow::Result<(String, String, String)> {
+    let email = email.trim().to_ascii_lowercase();
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    let row = sqlx::query("SELECT id,name,enabled FROM users WHERE email=?")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("No account uses {email}."))?;
+    if !row.get::<bool, _>("enabled") {
+        anyhow::bail!(
+            "The account {email} is disabled. Another administrator must turn its access back on first."
+        );
+    }
+    let id: String = row.get("id");
+    let (code, _, expires_at) = issue_code(&mut tx, &id, None, "local")
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    sqlx::query("UPDATE users SET revision=revision+1 WHERE id=?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    db::audit(
+        &mut tx,
+        "local-admin",
+        "user.password_reset.issue",
+        &id,
+        "success",
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))?;
+    tx.commit().await?;
+    Ok((code, expires_at, row.get("name")))
 }

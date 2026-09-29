@@ -75,6 +75,23 @@ pub fn router(s: State) -> Router {
             "/api/v1/password-reset",
             post(crate::accounts::redeem_reset),
         )
+        .route("/api/v1/account/sessions", get(auth::sessions))
+        .route(
+            "/api/v1/account/sessions/{id}/revoke",
+            post(auth::revoke_session),
+        )
+        .route(
+            "/api/v1/users/{id}/two-factor-reset",
+            post(crate::mfa::admin_reset),
+        )
+        .route(
+            "/api/v1/invite/preview",
+            post(crate::accounts::preview_invite),
+        )
+        .route(
+            "/api/v1/invite/accept",
+            post(crate::accounts::accept_invite),
+        )
         .route("/api/v1/openapi.json", get(openapi))
         .route("/api/v1/audit/history", get(crate::audit::history))
         .route(

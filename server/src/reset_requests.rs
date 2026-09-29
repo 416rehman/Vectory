@@ -32,7 +32,7 @@ fn no_query(raw: Option<&str>) -> Result<()> {
 }
 
 pub(crate) fn already_used() -> ApiError {
-    ApiError::conflict("This password reset request already finished. Check its status.")
+    crate::user_requests::already_used()
 }
 
 pub(crate) async fn entry(
