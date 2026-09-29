@@ -724,6 +724,14 @@ const detailLabels: Record<string, string> = {
   replacement_device_id: "Replacement device ID",
   previous_signing_key_id: "Previous signing key ID",
   signing_key_id: "Signing key ID",
+  reason_code: "Refusal reason",
+  name: "Device name",
+  token_id: "Enrollment token ID",
+  agent_os: "Agent operating system",
+  agent_arch: "Agent architecture",
+  agent_version: "Agent version",
+  configuration_mode: "Configuration mode",
+  client_address: "Client address",
 };
 
 function AuditInspector({

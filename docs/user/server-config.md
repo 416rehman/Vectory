@@ -53,6 +53,7 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 | `VECTORY_RELEASES_DIR` | `<data dir>/releases` | Optional mirror of agent downloads with a `catalog.json`. An entry here overrides the bundled one for the same OS and CPU. |
 | `VECTORY_PUBLIC_AGENT_URL` | The agent listener | Agent URL that **Add device** puts in install commands, for when devices reach the server through another name or port. |
 | `VECTORY_PUBLIC_AGENT_DOWNLOADS` | `true` | Serve the installer and agent downloads on the agent listener. Set `false` to require manual downloads. |
+| `VECTORY_PUBLIC_URL` | `http://<this host>:<web port>` | The dashboard address people use (`https://` or `http://`). The installer prints a link to the new device there, and the startup banner shows it. |
 
 > [!IMPORTANT]
 > **A production server refuses to start without its safety settings**
@@ -79,6 +80,7 @@ The validator container (`vector-validator`) reads these.
 | `VECTORY_PREVIEW_AGENT_PORT` | `8443` | Agent listener port on 127.0.0.1. |
 | `VECTORY_PREVIEW_VALIDATOR_PORT` | `8081` | Validator port on 127.0.0.1. |
 | `VECTORY_PREVIEW_VECTOR` | First `.local/tools/*/bin/vector` | Vector binary for the preview's validator. Without one, checks are structural only. |
+| `VECTORY_PREVIEW_AGENT_TARGETS` | Every supported platform | Space-separated `os/arch` list of bundled agents to build, for example `linux/amd64 darwin/arm64`, for a faster first start. |
 
 The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `node scripts/demo.mjs` uses the same preview variables, plus `VECTORY_DEMO_DIR` (default `.local/demo`) for its agents and `VECTORY_DEMO_METRICS_PORT` (default `19600`), the first loopback port its agents' metrics exporters use.
 

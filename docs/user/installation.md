@@ -32,7 +32,7 @@ Prepare the handover while the old Vector is still running:
 <!-- steps -->
 1. In Vectory, open **Pipelines → Create pipeline**, then **Actions → Import configuration file** and choose the running config (YAML, TOML or JSON; combine several files into one first). Fix anything the import flags.
 2. In **Code** view, choose **JSON**, then **Actions → Export configuration**.
-3. Copy the exported file to the host as the agent's managed configuration, for example `/etc/vector/vectory-managed/managed.json`. Provision everything it reads: files, credentials, `data_dir`, and in restricted mode the [allowances](#configure-restricted-allowances) it needs.
+3. Copy the exported file to the host as the agent's managed configuration, for example `/etc/vectory/managed/vector.json`. Provision everything it reads: files, credentials, `data_dir`, and in restricted mode the [allowances](#configure-restricted-allowances) it needs.
 4. Stop and disable the old Vector service, then install and enroll the agent as below.
 5. Confirm your outputs still flow. The device shows no assignment until you deploy a version; its adopted configuration keeps running meanwhile.
 
@@ -114,7 +114,7 @@ Use these steps for air-gapped hosts, configuration management or Windows. Downl
 sudo install -m 0755 vectory /usr/local/bin/vectory
 sudo vectory install \
   --vector-binary /usr/bin/vector \
-  --managed-config /etc/vector/vectory-managed/managed.json \
+  --managed-config /etc/vectory/managed/vector.json \
   --adopt
 sudo vectory enroll \
   --server https://vectory.example.com:8443 \
@@ -131,7 +131,7 @@ sudo vectory service-start
 sudo install -m 0755 vectory /usr/local/bin/vectory
 sudo vectory install \
   --vector-binary "$(realpath "$(which vector)")" \
-  --managed-config "/Library/Application Support/VectoryConfig/managed.json" \
+  --managed-config "/Library/Application Support/Vectory/managed/vector.json" \
   --adopt
 sudo vectory enroll \
   --server https://vectory.example.com:8443 \
@@ -151,7 +151,7 @@ Copy-Item .\vectory.exe 'C:\Program Files\Vectory\vectory.exe'
 Set-Location 'C:\Program Files\Vectory'
 .\vectory.exe install `
   --vector-binary 'C:\Program Files\Vector\bin\vector.exe' `
-  --managed-config 'C:\ProgramData\VectoryConfig\managed.json' `
+  --managed-config 'C:\ProgramData\Vectory\managed\vector.json' `
   --adopt
 .\vectory.exe enroll `
   --server https://vectory.example.com:8443 `

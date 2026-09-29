@@ -35,7 +35,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies,Enrollment}from'/src/Control.tsx';import TargetDialog from'/src/TargetDialog.tsx';import{AssignmentActions}from'/src/RecoveryActions.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:AssignmentActions})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies}from'/src/Control.tsx';import{Enrollment}from'/src/Enrollment.tsx';import TargetDialog from'/src/TargetDialog.tsx';import{AssignmentActions}from'/src/RecoveryActions.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:AssignmentActions})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
@@ -168,6 +168,8 @@ async function load(name, props = {}) {
       if (path === "/policies") return reply(policies);
       if (path === "/tokens") return reply(tokens);
       if (path === "/releases") return reply([]);
+      if (path === "/agent-install")
+        return reply({ agent_url: null, agent_url_configured: false, listener_enabled: false, dashboard_url: null, certificate: null, downloads_enabled: true, installer: null, default_install_dir: "/usr/local/bin", releases: [], catalog_problems: [] });
       if (/^\/groups\/requests\//.test(path) || /^\/deployments\/requests\//.test(path))
         return reply({ request_id: path.split("/").at(-1), found: false });
     }
@@ -453,6 +455,11 @@ try {
         .locator("summary")
         .filter({ hasText: /^Manage enrollment tokens/ })
         .click();
+      // Inactive tokens are hidden until asked for.
+      await expect(rows("Enrollment tokens")).toHaveCount(1);
+      await page
+        .getByLabel("Show expired, used and revoked tokens", { exact: true })
+        .check();
       await filter("Status", "Revoked");
       await expect(rows("Enrollment tokens")).toHaveCount(1);
       await expect(rows("Enrollment tokens").first()).toContainText(

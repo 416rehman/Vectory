@@ -11,6 +11,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
+use std::collections::HashMap;
 
 // Every supplied field is bound, including unknown fields. Reject duplicate keys
 // before canonicalization so two different parsers cannot bind different requests.
@@ -92,7 +93,80 @@ fn no_query(raw: Option<&str>) -> Result<()> {
     Ok(())
 }
 pub async fn list(state: AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
-    api::list(state, h, Path("tokens".to_owned())).await
+    let s = state.0.clone();
+    let Json(tokens) = api::list(state, h, Path("tokens".to_owned())).await?;
+    let mut conn = s.pool.acquire().await?;
+    Ok(Json(usage(&mut conn, tokens).await?))
+}
+/// Adds who created each token, when it last enrolled a device and which
+/// devices it enrolled (most recent first, at most 20, plus the total).
+async fn usage(db: &mut SqliteConnection, tokens: Value) -> Result<Value> {
+    let Value::Array(mut tokens) = tokens else {
+        return Ok(tokens);
+    };
+    let users: HashMap<String, String> =
+        sqlx::query_as::<_, (String, String)>("SELECT id,name FROM users")
+            .fetch_all(&mut *db)
+            .await?
+            .into_iter()
+            .collect();
+    type Event = (Option<String>, Option<String>, String);
+    let created: Vec<Event> = sqlx::query_as(
+        "SELECT json_extract(data,'$.target'),json_extract(data,'$.actor'),created_at FROM records WHERE kind='audit' AND json_extract(data,'$.action')='token.create' AND json_extract(data,'$.outcome')='success'",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let authorized: Vec<Event> = sqlx::query_as(
+        "SELECT json_extract(data,'$.target'),json_extract(data,'$.actor'),created_at FROM records WHERE kind='audit' AND json_extract(data,'$.action')='device.recovery_authorize' AND json_extract(data,'$.outcome')='success' ORDER BY created_at",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let enrolled: Vec<(String, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT e.token_id,d.id,d.name,d.revoked,json_extract(d.data,'$.created_at') AS enrolled_at FROM enrollments e JOIN devices d ON d.id=json_extract(e.response,'$.device_id') ORDER BY enrolled_at DESC,d.id",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    let person = |actor: &Option<String>| {
+        actor.as_ref().map_or(
+            Value::Null,
+            |id| json!({"id":id,"name":users.get(id).map_or(Value::Null,|name|json!(name))}),
+        )
+    };
+    for token in tokens.iter_mut() {
+        let id = api::text(token, "id").to_owned();
+        let creator = if let Some(device) = token["recovery_device_id"].as_str() {
+            // Recovery tokens are issued by the administrator who authorized recovery.
+            let at = api::text(token, "created_at");
+            authorized
+                .iter()
+                .rev()
+                .find(|(target, _, when)| target.as_deref() == Some(device) && when.as_str() <= at)
+                .map(|(_, actor, _)| person(actor))
+        } else {
+            created
+                .iter()
+                .find(|(target, ..)| target.as_deref() == Some(id.as_str()))
+                .map(|(_, actor, _)| person(actor))
+        };
+        let devices: Vec<Value> = enrolled
+            .iter()
+            .filter(|(token_id, ..)| *token_id == id)
+            .map(|(_, device, name, revoked, at)| {
+                // A recovered device's old record keeps its name with a marker.
+                let name = name
+                    .split_once("#retired-")
+                    .map_or(name.as_str(), |(n, _)| n);
+                json!({"id":device,"name":name,"revoked":*revoked != 0,"enrolled_at":at})
+            })
+            .collect();
+        token["created_by"] = creator.unwrap_or(Value::Null);
+        token["last_used_at"] = devices
+            .first()
+            .map_or(Value::Null, |d| d["enrolled_at"].clone());
+        token["device_count"] = json!(devices.len());
+        token["devices"] = json!(devices.into_iter().take(20).collect::<Vec<_>>());
+    }
+    Ok(Value::Array(tokens))
 }
 pub async fn post(
     AppState(s): AppState<State>,

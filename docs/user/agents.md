@@ -155,7 +155,7 @@ Delete any downloaded token file afterwards. If creating the token was interrupt
 
    <!-- verify-after-merge: default Linux state directory after W1 unifies paths -->
    ```sh
-   sudo vectory uninstall --purge --state-dir /var/lib/vectory
+   sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
    ```
 
 `--purge` needs the exact state directory. It leaves Vector and the managed configuration in place; delete them yourself if you no longer need them. If the purge is interrupted, run the same command again.

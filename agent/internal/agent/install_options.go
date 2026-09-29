@@ -143,6 +143,15 @@ func capabilityChanged(before, after CapabilityPolicy) bool {
 		!slices.Equal(before.AllowedListenAddresses, after.AllowedListenAddresses)
 }
 
+// vectorMissing explains a missing Vector binary and points at one it found.
+func vectorMissing(ctx context.Context, binary string) error {
+	message := "Vector isn't at " + binary + "."
+	if found, _ := FindVector(ctx); found != nil {
+		return fmt.Errorf("%s Found Vector %s at %s: use --vector-binary %s", message, found.Version, found.Path, quoteArg(found.Path))
+	}
+	return errors.New(message + " Install Vector " + VectorVersion + " (https://vector.dev/download/) or pass the right --vector-binary")
+}
+
 func InstallWithOptions(ctx context.Context, dir string, options InstallOptions) error {
 	return installWithOptions(ctx, dir, options, ProbeVector)
 }
@@ -163,14 +172,17 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 	}
 	var fresh *Settings
 	if _, err := os.Lstat(filepath.Join(dir, "settings.json")); os.IsNotExist(err) {
-		if !options.Adopt {
-			return errors.New("explicit --adopt is required; stop the previous Vector service and inventory all existing config/include paths first")
-		}
 		if options.VectorBinary == nil || options.ManagedConfig == nil {
-			return errors.New("provide absolute Vector binary and sole managed .json configuration paths")
+			return errors.New("a new installation needs --vector-binary PATH and --managed-config PATH (absolute paths), plus --adopt; vectory setup finds them for you")
 		}
 		binary, config := *options.VectorBinary, *options.ManagedConfig
+		if !options.Adopt {
+			return fmt.Errorf("add --adopt to confirm that the agent takes over Vector at %s and manages %s; stop any other Vector that uses this configuration first", binary, config)
+		}
 		if err = regularPath(binary); err != nil {
+			if os.IsNotExist(err) {
+				return vectorMissing(ctx, binary)
+			}
 			return err
 		}
 		if err = SafePath(config); err != nil {
@@ -191,6 +203,9 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 		}
 		s := options.compose(Settings{VectorBinary: binary, ManagedConfig: config, Adopted: true, ValidationSeconds: 30, StartupSeconds: 20})
 		if _, err = probe(ctx, s); err != nil {
+			if found := InspectVector(ctx, binary); found.Version != "" && found.Version != VectorVersion {
+				return fmt.Errorf("found Vector %s at %s; this agent requires %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, VectorVersion)
+			}
 			return err
 		}
 		if s.VectorBinarySHA256, err = FileDigest(binary); err != nil {

@@ -107,7 +107,7 @@ func TestEnrollmentOptionsLocalRefusalsPreserveFiles(t *testing.T) {
 					name = "original-name"
 					_, _, _ = EnsureKey(dir)
 				}
-				_ = WriteJSON(filepath.Join(dir, "enrollment.json"), enrollmentPending{RandomID(), name, options.Server})
+				_ = WriteJSON(filepath.Join(dir, "enrollment.json"), enrollmentPending{RequestID: RandomID(), Name: name, Server: options.Server})
 			case "recovery-no-identity", "recovery-token-mismatch", "recovery-orphan", "recovery-bad-ca":
 				options.Recover, options.Name = true, s.Name
 				if kind != "recovery-no-identity" {
@@ -120,7 +120,7 @@ func TestEnrollmentOptionsLocalRefusalsPreserveFiles(t *testing.T) {
 					pending := filepath.Join(dir, "pending-recovery")
 					_ = PrivateDir(pending)
 					_, _, _ = EnsureKey(pending)
-					_ = WriteJSON(filepath.Join(pending, "enrollment.json"), enrollmentPending{RandomID(), s.Name, s.Server})
+					_ = WriteJSON(filepath.Join(pending, "enrollment.json"), enrollmentPending{RequestID: RandomID(), Name: s.Name, Server: s.Server})
 					if kind == "recovery-token-mismatch" {
 						_ = WriteJSON(filepath.Join(pending, "origin.json"), pendingRecovery{OldDeviceID: "existing", TokenSHA256: Digest([]byte("different-token"))})
 					}
@@ -266,9 +266,17 @@ func TestEnrollmentOptionsExplicitTrustRepairAndSystemSelectionPreservePending(t
 	}
 	saved, _ := LoadSettings(dir)
 	gotKey, _ := os.ReadFile(filepath.Join(dir, "private-key.pem"))
-	gotRequest, _ := os.ReadFile(filepath.Join(dir, "enrollment.json"))
-	if saved.CAFile != "" || calls.Load() != 2 || !bytes.Equal(key, gotKey) || !bytes.Equal(request, gotRequest) {
-		t.Fatal("explicit system trust was ignored or rebound a pending request")
+	var before, after enrollmentPending
+	_ = json.Unmarshal(request, &before)
+	_ = ReadJSON(filepath.Join(dir, "enrollment.json"), &after)
+	// The unsent TLS failure records its cause but keeps the answered request
+	// bound: the server saw it, so only the same request may be retried.
+	if saved.CAFile != "" || calls.Load() != 2 || !bytes.Equal(key, gotKey) || after.RequestID != before.RequestID || after.Name != before.Name || after.Server != before.Server || after.Delivery != "maybe" || after.LastFailure != "TLS_UNKNOWN_AUTHORITY" {
+		t.Fatal("explicit system trust was ignored or rebound a pending request", before, after)
+	}
+	options.Name = "renamed"
+	if err := EnrollWithOptions(context.Background(), dir, options); err == nil || !strings.Contains(err.Error(), "may have reached the server") {
+		t.Fatal("a possibly delivered request was rebound to another name", err)
 	}
 }
 
@@ -339,7 +347,7 @@ func TestEnrollmentOptionsRecoveryPreservesStagedIntentUntilCommit(t *testing.T)
 	raw, _ := json.Marshal(fields)
 	_ = os.WriteFile(filepath.Join(dir, "settings.json"), raw, 0600)
 	options := EnrollmentOptions{Recover: true, Token: "synthetic-original"}
-	if err = EnrollWithOptions(context.Background(), dir, options); err == nil || !strings.Contains(err.Error(), "preparation was saved") {
+	if err = EnrollWithOptions(context.Background(), dir, options); err == nil || !strings.Contains(err.Error(), "may have received the request") {
 		t.Fatal(err)
 	}
 	before := enrollmentSnapshot(t, dir)

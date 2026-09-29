@@ -543,6 +543,38 @@
             "signing_key_id": {
               "type": "string",
               "pattern": "^[a-f0-9]{64}$"
+            },
+            "reason_code": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "token_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "agent_os": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "agent_arch": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "agent_version": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "configuration_mode": {
+              "type": "string",
+              "maxLength": 16
+            },
+            "client_address": {
+              "type": "string",
+              "maxLength": 64
             }
           },
           "required": [],
@@ -4770,6 +4802,98 @@
         "created_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "recovery_device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recovery_name": {
+          "type": "string"
+        },
+        "created_by": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Token list only: the account that created it (recovery: authorized it)."
+        },
+        "last_used_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Token list only: when it last enrolled a device."
+        },
+        "device_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Token list only: devices it enrolled."
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 20,
+          "description": "Token list only: most recently enrolled devices.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "revoked": {
+                "type": "boolean"
+              },
+              "enrolled_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "revoked",
+              "enrolled_at"
+            ],
+            "additionalProperties": true
+          }
         }
       },
       "required": [
@@ -5353,6 +5477,368 @@
       ],
       "description": "Empty legacy request or strict correlated request. The expected name must exactly match the original source device on first issuance. Same actor/request key cannot be rebound to another device or reviewed name."
     },
+    "AgentInstall": {
+      "type": "object",
+      "properties": {
+        "agent_url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^https://[^/?#@]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_url_configured": {
+          "type": "boolean"
+        },
+        "listener_enabled": {
+          "type": "boolean"
+        },
+        "dashboard_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "certificate": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "available": {
+                  "type": "boolean"
+                },
+                "publicly_trusted": {
+                  "type": "boolean"
+                },
+                "ca_sha256": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ca_fingerprint": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ca_name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ca_issuer": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ca_not_after": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "problem": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "available",
+                "publicly_trusted",
+                "ca_sha256",
+                "problem"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "downloads_enabled": {
+          "type": "boolean"
+        },
+        "installer": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "platforms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "url",
+                "sha256",
+                "platforms"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_install_dir": {
+          "type": "string"
+        },
+        "releases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Release"
+          }
+        },
+        "catalog_problems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Why catalog entries are not offered; administrators only, empty for other roles."
+        }
+      },
+      "required": [
+        "agent_url",
+        "agent_url_configured",
+        "listener_enabled",
+        "dashboard_url",
+        "certificate",
+        "downloads_enabled",
+        "installer",
+        "default_install_dir",
+        "releases",
+        "catalog_problems"
+      ],
+      "additionalProperties": true
+    },
+    "EnrollmentEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "success",
+            "failure"
+          ]
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "TOKEN_UNKNOWN",
+                "TOKEN_EXPIRED",
+                "TOKEN_REVOKED",
+                "TOKEN_EXHAUSTED",
+                "NAME_TAKEN",
+                "NAME_PREFIX_MISMATCH",
+                "RECOVERY_NAME_MISMATCH",
+                "RECOVERY_TARGET_MISSING",
+                "REQUEST_MISMATCH",
+                "DEVICE_REVOKED",
+                "MALFORMED",
+                "INTERNAL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "token_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_os": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_arch": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agent_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configuration_mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 16
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client_address": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "created_at",
+        "outcome",
+        "reason_code",
+        "device_id",
+        "device_name",
+        "token_id",
+        "agent_os",
+        "agent_arch",
+        "agent_version",
+        "configuration_mode",
+        "client_address"
+      ],
+      "additionalProperties": false
+    },
+    "EnrollmentActivity": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/EnrollmentEvent"
+          }
+        },
+        "now": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "events",
+        "now"
+      ],
+      "additionalProperties": false
+    },
     "Release": {
       "type": "object",
       "properties": {
@@ -5360,10 +5846,17 @@
           "type": "string"
         },
         "os": {
-          "type": "string"
+          "enum": [
+            "linux",
+            "darwin",
+            "windows"
+          ]
         },
         "arch": {
-          "type": "string"
+          "enum": [
+            "amd64",
+            "arm64"
+          ]
         },
         "version": {
           "type": "string"
@@ -5381,6 +5874,13 @@
         },
         "signed": {
           "type": "boolean"
+        },
+        "source": {
+          "enum": [
+            "bundled",
+            "mirror"
+          ],
+          "description": "bundled with the server image, or from the operator mirror, which replaces a platform bundled build"
         }
       },
       "required": [

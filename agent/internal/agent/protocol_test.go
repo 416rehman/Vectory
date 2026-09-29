@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,23 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
 	}
+	hermeticTestEnvironment()
 	os.Exit(m.Run())
+}
+
+// hermeticTestEnvironment makes t.TempDir() return canonical paths (on macOS
+// the temporary directory lives under the /var -> /private/var symlink, which
+// strict path checks rightly refuse) and keeps proxy settings of the machine
+// running the tests out of network classification tests.
+func hermeticTestEnvironment() {
+	if runtime.GOOS != "windows" {
+		if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+			_ = os.Setenv("TMPDIR", dir)
+		}
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		_ = os.Unsetenv(name)
+	}
 }
 func signed(t *testing.T, m Manifest, key ed25519.PrivateKey) Envelope {
 	t.Helper()
