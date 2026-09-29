@@ -55,15 +55,17 @@ export function assignmentName(
 }
 
 /**
- * What a device runs now: its last verified managed version, or its own config.
- * Within the pipeline being deployed, the version number alone is clearest.
+ * What a device runs now: its last verified managed version, its own local
+ * config, or nothing at all. Within the pipeline being deployed, the version
+ * number alone is clearest.
  */
 export function runningName(
-  device: Pick<Device, "running_version">,
+  device: Pick<Device, "running_version"> & { actual_sha256?: string | null },
   configurationId?: string | null,
 ) {
   const running = device.running_version;
-  if (!running) return "Local config (adopted)";
+  if (!running)
+    return device.actual_sha256 ? "Its local config" : "Nothing running yet";
   if (
     configurationId &&
     running.configuration_id === configurationId &&
@@ -418,4 +420,93 @@ export function scheduledAt(release: ReleaseSettings) {
   if (release.strategy !== "scheduled" || !release.schedule) return null;
   const at = new Date(release.schedule);
   return Number.isNaN(at.valueOf()) ? null : at.toISOString();
+}
+
+/** What a restricted device must approve locally before it runs a config. */
+export type HostApprovals = {
+  destinations: string[];
+  listeners: string[];
+  fileRoots: string[];
+};
+const destinationKeys = new Set(["endpoint", "endpoints", "uri", "url"]);
+function destination(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    const host = url.hostname.toLowerCase();
+    return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
+  } catch {
+    return null;
+  }
+}
+/** The directory to approve for a path: the part before any wildcard. */
+function fileRoot(path: string) {
+  const wildcard = path.search(/[*?[]/);
+  if (wildcard < 0) return path.replace(/\/+$/, "") || "/";
+  const head = path.slice(0, wildcard);
+  return head.slice(0, head.lastIndexOf("/")) || "/";
+}
+/**
+ * Destinations, listeners and file roots a pipeline uses, found the way the
+ * agent's restricted-mode check finds them. A restricted host refuses the
+ * version until its local allowances list each one; the dashboard can't grant
+ * them.
+ */
+export function hostApprovals(config: Record<string, unknown>): HostApprovals {
+  const destinations = new Set<string>();
+  const listeners = new Set<string>();
+  const fileRoots = new Set<string>();
+  const walk = (value: unknown, key: string) => {
+    if (Array.isArray(value)) value.forEach((item) => walk(item, key));
+    else if (value && typeof value === "object")
+      for (const [child, nested] of Object.entries(value))
+        walk(nested, child.toLowerCase());
+    else if (typeof value === "string") {
+      if (destinationKeys.has(key) || value.includes("://")) {
+        const found = destination(value);
+        if (found) destinations.add(found);
+      }
+      if (key === "address") listeners.add(value);
+      if (
+        (key === "include" ||
+          key === "exclude" ||
+          key === "path" ||
+          key.endsWith("_file") ||
+          key.endsWith("_path") ||
+          key.endsWith("_dir")) &&
+        value.startsWith("/")
+      )
+        fileRoots.add(fileRoot(value));
+    }
+  };
+  for (const kind of ["sources", "transforms", "sinks"])
+    walk(config[kind] || {}, kind);
+  if (typeof config.data_dir === "string" && config.data_dir.startsWith("/"))
+    fileRoots.add(fileRoot(config.data_dir));
+  return {
+    destinations: [...destinations].sort(),
+    listeners: [...listeners].sort(),
+    fileRoots: [...fileRoots].sort(),
+  };
+}
+export function hasHostApprovals(approvals: HostApprovals) {
+  return (
+    approvals.destinations.length +
+      approvals.listeners.length +
+      approvals.fileRoots.length >
+    0
+  );
+}
+/** The allowances file a restricted host needs for these approvals. */
+export function allowancesFile(approvals: HostApprovals) {
+  return JSON.stringify(
+    {
+      allowed_file_roots: approvals.fileRoots,
+      allowed_network_hosts: approvals.destinations,
+      allowed_listen_addresses: approvals.listeners,
+    },
+    null,
+    2,
+  );
 }

@@ -526,6 +526,8 @@ export type PreviewReplacement = {
 };
 export type DeploymentPreview = {
   request_correlation?: boolean;
+  /** The previewed version's pipeline name; older servers omit it. */
+  configuration_name?: string | null;
   devices: Device[];
   conflicts: PreviewConflict[];
   warnings: string[];
@@ -1107,7 +1109,13 @@ export type BindingSuggestions = {
   devices: Record<string, Record<string, string | number | boolean>>;
   sources: Record<
     string,
-    { deployment_id: string; version_number: number | null }
+    {
+      deployment_id: string;
+      version_number: number | null;
+      /** The pipeline it came from, which may be the one this was duplicated from. */
+      configuration_id?: string;
+      configuration_name?: string | null;
+    }
   >;
 };
 export type DeploymentTargetPage = {

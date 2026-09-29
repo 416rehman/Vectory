@@ -41,6 +41,38 @@
   flex: none;
   margin-top: 2px;
 }
+.target-prefill strong {
+  font-weight: 600;
+}
+.target-approval-note p {
+  margin: 4px 0 0;
+}
+.target-approval-steps {
+  margin-top: 8px;
+}
+.target-approval-steps > summary {
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.target-approval-steps pre {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.target-approval-steps pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+}
 
 /* Release strategy */
 .release-strategy {
@@ -358,6 +390,11 @@
 .target-now-after strong[data-unchanged] {
   color: var(--muted);
   font-weight: 500;
+}
+.target-same-content {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12px;
 }
 .target-outcome {
   display: grid;
