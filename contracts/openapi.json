@@ -741,7 +741,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Device"
+                    "$ref": "#/components/schemas/DeviceListItem"
                   }
                 }
               }
@@ -15325,7 +15325,7 @@
           "devices": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Device"
+              "$ref": "#/components/schemas/DeviceListItem"
             }
           },
           "recent_activity": {
@@ -17766,12 +17766,19 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "issue_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10,
+                "description": "Open issues on this version. List rows (DeviceListItem) carry only the first of them in issues."
               }
             },
             "required": [
               "version_id",
               "evaluations",
-              "issues"
+              "issues",
+              "issue_count"
             ],
             "additionalProperties": false,
             "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
@@ -24412,6 +24419,645 @@
         ],
         "additionalProperties": false,
         "description": "Waves recovered from persisted release times; queued waves follow the scheduler order (pending targets by device ID, canary first, then batches). Failures group current failed targets by diagnostic or error."
+      },
+      "DeviceListTelemetry": {
+        "type": "object",
+        "properties": {
+          "sampled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "events_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events_out_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bytes_in_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bytes_out_per_second": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errors_per_minute": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uptime_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_bytes": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpu_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "discarded_events": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "discarded_intentional": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "discarded_error": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filtered_per_minute": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dropped_per_minute": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "buffer_bytes": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "buffer_events": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "buffer_utilization": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sampled_at"
+        ],
+        "additionalProperties": true,
+        "description": "The latest device-level sample. Per-component numbers are on GET /api/v1/devices/{id}."
+      },
+      "DeviceListItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "configuration_mode": {
+            "enum": [
+              "restricted",
+              "full"
+            ],
+            "description": "Locally granted capability profile reported by the device; omission means restricted. Never writable through remote policy."
+          },
+          "effective_policy": {
+            "$ref": "#/components/schemas/AgentPolicy"
+          },
+          "assignment": {
+            "$ref": "#/components/schemas/Assignment"
+          },
+          "policy_assignment": {
+            "$ref": "#/components/schemas/Assignment"
+          },
+          "os": {
+            "type": "string"
+          },
+          "arch": {
+            "type": "string"
+          },
+          "agent_version": {
+            "type": "string"
+          },
+          "vector_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Computed status. awaiting_first_check_in: enrolled but never checked in. offline: more than three check-in intervals late."
+          },
+          "apply_state": {
+            "type": "string"
+          },
+          "desired_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reported_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "desired_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actual_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "applied_template_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secret_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uses_local_secrets": {
+            "type": "boolean"
+          },
+          "local_paused": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "object"
+          },
+          "sync_paused": {
+            "type": "boolean"
+          },
+          "pause_acknowledged": {
+            "type": "boolean"
+          },
+          "telemetry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceListTelemetry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retry_preconditions": {
+            "const": true,
+            "description": "Retry requires the reviewed desired version and generation plus current retryable state and enabled sync."
+          },
+          "desired_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact rendered artifact digest for the currently released device generation. Version identity, delivered artifact bytes, and actual managed-file digest are distinct."
+          },
+          "configuration_attempt": {
+            "$ref": "#/components/schemas/ConfigurationAttempt"
+          },
+          "reported_apply_state": {
+            "type": "string",
+            "description": "Agent-reported workload state, separate from progress of the current desired assignment."
+          },
+          "data_plane": {
+            "type": "object",
+            "properties": {
+              "version_id": {
+                "type": "string"
+              },
+              "evaluations": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3,
+                "description": "Evaluations on this version, counted up to 3 (what the canary gate needs)."
+              },
+              "issues": {
+                "type": "array",
+                "maxItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "issue_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "code": {
+                      "enum": [
+                        "DATA_PLANE_STALLED",
+                        "DATA_PLANE_SINK_ERRORS",
+                        "DATA_PLANE_BUFFER_FULL",
+                        "DATA_PLANE_ERROR_DROPS"
+                      ]
+                    },
+                    "component_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "component_kind": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "source",
+                            "transform",
+                            "sink"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "title": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "message": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 300
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "hint": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "since": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "issue_id",
+                    "code",
+                    "component_id",
+                    "component_kind",
+                    "title",
+                    "message",
+                    "hint",
+                    "since"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "The first open issue (stalls first), or none; issue_count counts them all."
+              },
+              "issue_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10,
+                "description": "Open issues on this version. List rows (DeviceListItem) carry only the first of them in issues."
+              }
+            },
+            "required": [
+              "version_id",
+              "evaluations",
+              "issues",
+              "issue_count"
+            ],
+            "additionalProperties": false,
+            "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+          },
+          "check_in_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600,
+            "description": "Current check-in interval; until the agent acknowledges a policy change, the longer of the old and new interval."
+          },
+          "desired_version": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 240
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "number",
+                  "configuration_id",
+                  "configuration_name"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running_version": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 240
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "number",
+                  "configuration_id",
+                  "configuration_name"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last verified managed version on the host, which keeps running after a failed update or a removed assignment. Null means no managed version was ever verified (the host runs its adopted local config)."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "apply_state",
+          "desired_generation",
+          "reported_generation"
+        ],
+        "additionalProperties": true,
+        "description": "A device as GET /api/v1/devices and the Overview list it: the Device without host_runtime, vector_log_summary and telemetry.components, and with only the first open data-plane issue. GET /api/v1/devices/{id} returns the full Device."
       },
       "SavedPolicyListItem": {
         "type": "object",

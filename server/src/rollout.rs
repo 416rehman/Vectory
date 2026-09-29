@@ -266,9 +266,38 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         }
         d["desired_sha256"] = d["desired_artifact_sha256"].clone();
         d.as_object_mut().unwrap().remove("desired_artifact_sha256");
+        if let Some(summary) = d.get_mut("data_plane").and_then(Value::as_object_mut) {
+            let open = summary
+                .get("issues")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            summary.insert("issue_count".into(), json!(open));
+        }
         out.push(d);
     }
     Ok(out)
+}
+/// A device as lists show it (`GET /devices`, the Overview's `devices`): the
+/// full projection without what only the device page reads, which is most
+/// of a reporting device's row (per-component telemetry, the Vector log
+/// summary and the host runtime), and with only the first open delivery
+/// issue; `data_plane.issue_count` still counts them all.
+pub fn list_row(mut device: Value) -> Value {
+    if let Some(fields) = device.as_object_mut() {
+        fields.remove("vector_log_summary");
+        fields.remove("host_runtime");
+    }
+    if let Some(sample) = device.get_mut("telemetry").and_then(Value::as_object_mut) {
+        sample.remove("components");
+    }
+    if let Some(issues) = device
+        .get_mut("data_plane")
+        .and_then(|summary| summary.get_mut("issues"))
+        .and_then(Value::as_array_mut)
+    {
+        issues.truncate(1);
+    }
+    device
 }
 pub async fn targets(db: &mut SqliteConnection, id: &str) -> Result<Vec<Value>> {
     let rows=sqlx::query("SELECT device_id,state,generation,error,original FROM deployment_targets WHERE deployment_id=? ORDER BY device_id").bind(id).fetch_all(db).await?;
