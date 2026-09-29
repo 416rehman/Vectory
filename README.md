@@ -69,9 +69,9 @@ The same guides ship inside every server as a searchable, offline Help center at
 
 ## Project status
 
-Vectory is a **0.1 developer preview**. The full loop works today against real Vector 0.58.0 agents on Linux and Windows: build, publish, canary, apply and roll back.
+Vectory is a **0.1 developer preview**. The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents in the local demo on Linux. On every change, CI runs the agent's native apply and rollback tests with Vector 0.58.0 on Linux, Windows and macOS. A run on Windows from install through apply against a real server last passed on 2026-09-26, by hand.
 
-Not done yet: published images and packages, signed releases, and service and reboot tests on every operating system. See [Compatibility](docs/user/compatibility.md) for what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and [docs/internal](docs/internal/) for test evidence.
+Not done yet: published images and packages, signed releases, and service and reboot tests on every operating system. See [Compatibility](docs/user/compatibility.md) for minimums and what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the test behind each requirement.
 
 ## Develop
 
