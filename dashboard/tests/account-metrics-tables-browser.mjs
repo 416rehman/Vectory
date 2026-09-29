@@ -115,7 +115,8 @@ async function fixture() {
       },
     });
   });
-  await page.goto(`${origin}/__table-fixture`);
+  // A cold dev-server transform can exceed the action timeout on a busy host.
+  await page.goto(`${origin}/__table-fixture`, { timeout: 60000 });
   await page.waitForFunction(() => window.ready);
   return { page, close: () => context.close() };
 }
