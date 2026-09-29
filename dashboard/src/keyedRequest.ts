@@ -193,8 +193,21 @@ export function useKeyedRequest<T, R>({
       const attempt = current.current;
       if (!attempt || attempt.phase !== "form") return;
       if (!authority.usable(attempt.context, true)) {
-        keep(fresh(attempt.target));
-        return;
+        // Nothing was sent yet, so the form may continue under a new sign-in
+        // by the same administrator (after re-signing in over this page).
+        const now = authority.context();
+        if (
+          now.userId !== attempt.context.userId ||
+          !authority.usable(now, true)
+        ) {
+          patch({
+            fields: {
+              form: "Your sign-in changed. Sign in again as an administrator to continue.",
+            },
+          });
+          return;
+        }
+        patch({ context: now });
       }
       const outcome = await run("sending", step);
       if (!outcome) return;
@@ -264,12 +277,11 @@ export function useKeyedRequest<T, R>({
     /** The account or session changed: nothing unresolved may be adopted now. */
     authorityChanged() {
       const attempt = current.current;
+      // An unsent form stays as typed (its secrets are the caller's to clear);
+      // it is bound to the current sign-in only when it is sent.
+      if (!attempt || attempt.phase === "form") return;
       stopWork();
-      if (!attempt) return;
-      if (attempt.phase === "form") {
-        keep(null);
-        setOpen(false);
-      } else patch({ phase: "changed" });
+      patch({ phase: "changed" });
     },
     forget() {
       stopWork();

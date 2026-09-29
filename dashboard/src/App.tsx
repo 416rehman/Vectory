@@ -812,7 +812,8 @@ export default function App() {
                 <Policies user={user} notify={notify} />
               ) : page === "enrollment" && can(user, "operate") ? (
                 <Enrollment user={user} notify={notify} navigate={navigate} />
-              ) : page === "enrollment" ? (
+              ) : page === "enrollment" &&
+                !["operator", "admin"].includes(user.role) ? (
                 <PermissionNote
                   user={user}
                   needs="operate"

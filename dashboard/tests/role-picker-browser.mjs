@@ -288,7 +288,8 @@ async function load({ width = 899, theme = "light" } = {}) {
   page = await context.newPage();
   page.setDefaultTimeout(8000);
   page.on("pageerror", (error) => errors.push(safe(error.message)));
-  await page.goto(`${origin}/__role-picker#/users`);
+  // A cold dev-server transform can exceed the 8 s action timeout on a busy host.
+  await page.goto(`${origin}/__role-picker#/users`, { timeout: 60000 });
   await expect(
     page.getByRole("heading", { name: "People & security", exact: true }),
   ).toBeVisible();

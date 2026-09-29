@@ -8,7 +8,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { can, type Person, type User } from "./api";
+import type { Person, User } from "./api";
 import { ErrorBox, IconButton, PageHeader, useResource, Button } from "./ui";
 import { AccountActions } from "./AccountActions";
 import { WorkspaceAccess } from "./AccountAccess";
@@ -61,7 +61,9 @@ export function UsersSecurity({
   onSignIn: () => void;
   onReload: () => void;
 }) {
-  const admin = can(user, "admin");
+  // The account's role, not the live session: while a re-sign-in dialog is
+  // open, forms and unresolved requests on this page must stay mounted.
+  const admin = user.role === "admin";
   const people = useResource<Person[]>(admin ? "/users" : null, []);
   const mfa = useResource<MfaStatus>("/mfa", { enabled: false });
   const [links, setLinks] = useState<Record<string, HeldLink>>({});
