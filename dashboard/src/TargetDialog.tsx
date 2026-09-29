@@ -1660,8 +1660,11 @@ export default function TargetDialog({
                     .
                   </strong>
                   <small>
-                    Only the other{" "}
-                    {devicesText(preview.devices.length - kept.length)} change.
+                    {preview.devices.length - kept.length === 1
+                      ? "Only the other device changes."
+                      : preview.devices.length === kept.length
+                        ? "No device changes now."
+                        : `Only the other ${devicesText(preview.devices.length - kept.length)} change.`}{" "}
                     Replace or outrank what{" "}
                     {kept.length === 1 ? "it follows" : "they follow"} to
                     include {kept.length === 1 ? "it" : "them"}.
