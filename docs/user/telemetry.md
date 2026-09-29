@@ -94,7 +94,7 @@ Applied means Vector runs the version. Delivery is a separate question, so Vecto
 - **Buffer filling:** a buffer is over 80% full and rising, or over 95% full.
 - **Error drops:** a component drops at least one event a minute because of errors.
 
-A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. Meanwhile the device reads **Degraded**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
+A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. A sink counts as recovered only when its buffer is seen low or it sends events again: silence isn't recovery. If you turn metrics off for a device, its delivery issues close as **unmonitored**, because Vectory can no longer check. Meanwhile the device reads **Degraded**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
 
 ## Read history and gaps
 
