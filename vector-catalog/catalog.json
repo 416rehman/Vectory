@@ -2,7 +2,7 @@
   "version": 2,
   "vector_version": "0.58.0",
   "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
-  "schema_sha256": "750b3f954022601721b4d8cde077f4c9f6efe1a967cea0bff8e31e79e900f502",
+  "schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
   "source": "Pinned experimental Vector-generated JSON Schema plus upstream platform metadata. Type editing coverage is separate from tested fixtures and local agent support.",
   "coverage_note": "Component availability depends on the target Vector build. Empty platforms means no platform restriction recorded, not platform certification. Generated schemas guide editing; actual target Vector validation and local agent policy decide activation.",
   "components": [
