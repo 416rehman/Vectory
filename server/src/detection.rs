@@ -21,15 +21,24 @@ pub struct Field {
     pub key: &'static str,
     /// Plain words for the audit summary.
     pub label: &'static str,
+    /// The unit after a count of one, then after any other count.
+    pub one: &'static str,
     pub unit: &'static str,
     pub default: u64,
     pub min: u64,
     pub max: u64,
 }
+impl Field {
+    /// "1 failed request a minute", "20 failed requests a minute", "90%".
+    pub fn amount(&self, value: u64) -> String {
+        format!("{value}{}", if value == 1 { self.one } else { self.unit })
+    }
+}
 pub const FIELDS: [Field; 5] = [
     Field {
         key: "sink_errors_per_minute",
         label: "Failing destination",
+        one: " failed request a minute",
         unit: " failed requests a minute",
         default: data_plane::SINK_ERRORS_PER_MINUTE as u64,
         min: 1,
@@ -38,6 +47,7 @@ pub const FIELDS: [Field; 5] = [
     Field {
         key: "error_drops_per_minute",
         label: "Dropped events",
+        one: " event dropped a minute",
         unit: " events dropped a minute",
         default: data_plane::ERROR_DROPS_PER_MINUTE as u64,
         min: 1,
@@ -46,6 +56,7 @@ pub const FIELDS: [Field; 5] = [
     Field {
         key: "buffer_full_percent",
         label: "Full buffer",
+        one: "%",
         unit: "%",
         default: (data_plane::BUFFER_FULL * 100.0) as u64,
         // Below 55% a buffer is barely out of the "clear" range (under 50%).
@@ -55,6 +66,7 @@ pub const FIELDS: [Field; 5] = [
     Field {
         key: "stall_checks",
         label: "Stalled pipeline",
+        one: " check",
         unit: " checks",
         default: data_plane::STALL_SAMPLES,
         min: 2,
@@ -63,6 +75,7 @@ pub const FIELDS: [Field; 5] = [
     Field {
         key: "canary_checks",
         label: "Canary measurement",
+        one: " check",
         unit: " checks",
         default: data_plane::GATE_MIN_EVALUATIONS,
         min: 1,
@@ -216,7 +229,9 @@ pub async fn put(
         .iter()
         .zip(previous.iter().zip(proposed.iter()))
         .filter(|(_, (before, after))| before != after)
-        .map(|(f, (before, after))| format!("{}: {before}{} → {after}{}", f.label, f.unit, f.unit))
+        .map(|(f, (before, after))| {
+            format!("{}: {} → {}", f.label, f.amount(*before), f.amount(*after))
+        })
         .collect::<Vec<_>>()
         .join(". ");
     db::insert(
