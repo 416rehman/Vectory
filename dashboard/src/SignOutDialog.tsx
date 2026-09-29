@@ -6,7 +6,7 @@ import {
   type RefObject,
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { LogOut, X } from "lucide-react";
+import { X } from "lucide-react";
 import { z } from "zod";
 import {
   api,
@@ -19,26 +19,37 @@ import {
   withRequestDeadline,
   type User,
 } from "./api";
-import { isDefinitiveAuthRejection, isMissingSession } from "./authRequests";
+import {
+  isDefinitiveAuthRejection,
+  isMissingSession,
+  noteSignedOut,
+} from "./authRequests";
 import {
   matchesSignOutContext,
   matchesSignOutSession,
+  setSigningOut,
   type SignOutContext,
   type SignOutIntent,
 } from "./signOutSession";
-import { Button, ErrorBox, IconButton } from "./ui";
+import { Button, IconButton, Spinner } from "./ui";
+import "./auth.css";
 
 type Phase =
-  | "confirm"
+  | "idle"
   | "sending"
-  | "review"
   | "checking"
   | "retry"
   | "signed-out"
-  | "changed";
+  | "changed"
+  | "unknown";
 type Wait = { controller: AbortController; context: SignOutContext };
+/** Sign-out is usually instant; only a slow one shows its progress. */
+const QUIET_MS = 450;
 
-/** Remains mounted when hidden so an uncertain request keeps its original session. */
+/**
+ * Sign-out without a confirmation step: the page's own unsaved-work guard is
+ * the consent. A failure checks the session once before offering a retry.
+ */
 export default function SignOutDialog({
   user,
   open,
@@ -58,16 +69,13 @@ export default function SignOutDialog({
   onReviewChange: (pending: boolean) => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const [phase, setPhase] = useState<Phase>("confirm");
-  const [error, setError] = useState("");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [slow, setSlow] = useState(false);
   const intent = useRef<SignOutIntent | null>(null);
-  const absentSession = useRef<{ csrfVersion: number; epoch: number } | null>(
-    null,
-  );
+  const absent = useRef<{ csrfVersion: number; epoch: number } | null>(null);
   const active = useRef<Wait | null>(null);
   const visible = useRef(open);
   const currentUser = useRef(user);
-  const cancelRef = useRef<HTMLButtonElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
   const busy = phase === "sending" || phase === "checking";
 
@@ -81,32 +89,48 @@ export default function SignOutDialog({
       valid: isSessionValid(),
     };
   }
-  function retireWait() {
+  function retire() {
     const request = active.current;
-    if (!request) return;
     active.current = null;
-    request.controller.abort();
-    setPhase("review");
-    setError("");
+    request?.controller.abort();
   }
   useLayoutEffect(() => {
     currentUser.current = user;
-    visible.current = open;
-    if (!open) retireWait();
-  }, [open, user]);
+  }, [user]);
   useLayoutEffect(
     () => () => {
-      const request = active.current;
-      active.current = null;
-      request?.controller.abort();
+      retire();
+      setSigningOut(false);
     },
     [],
   );
-  useEffect(() => onReviewChange(phase !== "confirm"), [phase, onReviewChange]);
+  // The account menu keeps its plain "Sign out" label: every outcome here is
+  // either resolved or offered again from this dialog.
+  useEffect(() => onReviewChange(false), [onReviewChange]);
   useEffect(() => {
-    if (open && !busy && phase !== "confirm") actionRef.current?.focus();
-  }, [open, busy, phase]);
+    visible.current = open;
+    if (!open) {
+      retire();
+      setSigningOut(false);
+      setPhase("idle");
+      setSlow(false);
+      return;
+    }
+    void start();
+  }, [open]);
+  useEffect(() => {
+    if (phase !== "sending" && phase !== "checking") return;
+    const timer = setTimeout(() => setSlow(true), QUIET_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
+  useEffect(() => {
+    if (!busy && phase !== "idle") actionRef.current?.focus();
+  }, [busy, phase]);
 
+  function dismiss() {
+    retire();
+    onClose();
+  }
   function claim() {
     if (active.current || !visible.current) return null;
     const request = { controller: new AbortController(), context: context() };
@@ -120,42 +144,27 @@ export default function SignOutDialog({
       !request.controller.signal.aborted
     );
   }
-  function dismiss() {
-    visible.current = false;
-    retireWait();
-    onClose();
+  async function start() {
+    // The page asks about unsaved work; declining keeps everything as it was.
+    if (!onBeforeSignOut()) {
+      onClose();
+      return;
+    }
+    setSigningOut(true);
+    intent.current = context();
+    await send();
   }
   async function send() {
-    if (phase !== "confirm" && phase !== "retry") return;
+    const original = intent.current;
     const request = claim();
-    if (!request) return;
-    const original = intent.current || request.context;
-    if (!matchesSignOutContext(original, context())) {
-      intent.current = original;
-      active.current = null;
-      setPhase("review");
-      setError(
-        "Your sign-in state changed. Check the current session before continuing.",
-      );
-      return;
-    }
-    // Consent is evaluated against the currently visible editor before every send.
-    if (!onBeforeSignOut()) {
-      active.current = null;
-      dismiss();
-      return;
-    }
-    intent.current = original;
+    if (!original || !request) return;
     if (!matchesSignOutContext(original, context())) {
       active.current = null;
-      setPhase("review");
-      setError(
-        "Your sign-in state changed. Check the current session before continuing.",
-      );
+      setPhase("changed");
       return;
     }
+    setSlow(false);
     setPhase("sending");
-    setError("");
     try {
       await withRequestDeadline(
         (signal) =>
@@ -165,7 +174,7 @@ export default function SignOutDialog({
               method: "POST",
               body: "{}",
               signal,
-              // A cookie rotated after a status read must not widen this old intent.
+              // A later sign-in in another tab must never be the target.
               headers: { "X-CSRF-Token": original.csrfToken },
             },
             z.object({ ok: z.literal(true) }),
@@ -175,33 +184,34 @@ export default function SignOutDialog({
       );
       if (!owns(request)) return;
       if (!matchesSignOutContext(original, context())) {
-        setPhase("review");
-        setError(
-          "Your sign-in state changed while waiting. Check the current session.",
-        );
+        active.current = null;
+        setPhase("changed");
         return;
       }
-      // The same modal still owns focus, so its initial draft consent remains valid.
+      active.current = null;
+      noteSignedOut();
       onSignedOut();
     } catch (failure) {
       if (!owns(request)) return;
-      setPhase("review");
-      setError(
-        isDefinitiveAuthRejection(failure)
-          ? `The server rejected this sign-out request. ${(failure as Error).message}`
-          : "The response did not confirm sign-out. The server may already have ended the session.",
-      );
-    } finally {
-      if (active.current === request) active.current = null;
+      active.current = null;
+      if (
+        isDefinitiveAuthRejection(failure) &&
+        !isMissingSession(failure) &&
+        (failure as { status: number }).status !== 403
+      ) {
+        setPhase("retry");
+        return;
+      }
+      await check();
     }
   }
+  /** One read of the current session. It never restores local authority. */
   async function check() {
     const original = intent.current;
-    if (!original) return;
     const request = claim();
-    if (!request) return;
+    if (!original || !request) return;
+    setSlow(false);
     setPhase("checking");
-    setError("");
     try {
       const session = await withRequestDeadline(
         (signal) => api("/session", { signal }, SessionSchema),
@@ -211,40 +221,37 @@ export default function SignOutDialog({
       if (!owns(request)) return;
       setPhase(
         matchesSignOutContext(original, context()) &&
-          matchesSignOutContext(request.context, context()) &&
           matchesSignOutSession(original, session)
           ? "retry"
           : "changed",
       );
     } catch (failure) {
       if (!owns(request)) return;
-      // This read can itself invalidate the old epoch on401. A new credential
-      // version still makes its result obsolete; do not clear that newer sign-in.
       if (
         isMissingSession(failure) &&
         request.context.csrfVersion === getCSRFVersion()
       ) {
         invalidateSession();
-        absentSession.current = {
+        noteSignedOut();
+        absent.current = {
           csrfVersion: getCSRFVersion(),
           epoch: getSessionEpoch(),
         };
         setPhase("signed-out");
-      } else {
-        setPhase("review");
-        setError(
-          `Could not check sign-out status. ${(failure as Error).message}`,
-        );
-      }
+        // The session is gone, as asked. Leaving still consults the page's
+        // unsaved-work guard; without unsaved work this is immediate.
+        leave(onSignedOut, "signed-out");
+      } else setPhase("unknown");
     } finally {
       if (active.current === request) active.current = null;
     }
   }
-  function leave(action: () => void) {
+  function leave(action: () => void, current: Phase = phase) {
+    // A later sign-in invalidates this exit; review it again instead.
     if (
-      phase === "signed-out" &&
-      (absentSession.current?.csrfVersion !== getCSRFVersion() ||
-        absentSession.current?.epoch !== getSessionEpoch())
+      current === "signed-out" &&
+      (absent.current?.csrfVersion !== getCSRFVersion() ||
+        absent.current?.epoch !== getSessionEpoch())
     ) {
       setPhase("changed");
       return;
@@ -252,31 +259,29 @@ export default function SignOutDialog({
     if (onBeforeSignOut()) action();
     else dismiss();
   }
-  const title =
-    phase === "confirm" || phase === "sending"
-      ? "Sign out of Vectory?"
-      : phase === "signed-out"
-        ? "No active session found"
-        : phase === "changed"
-          ? "Your sign-in changed"
-          : phase === "retry"
-            ? "This session is still active"
-            : "Sign-out not confirmed";
-  const description =
-    phase === "confirm"
-      ? "You’ll need to sign in again to access this workspace."
-      : phase === "sending"
-        ? "Waiting for the server. Stopping this wait will not undo sign-out."
-        : phase === "signed-out"
-          ? "The last check found no active session. Your local work is still here; go to sign in when you’re ready."
-          : phase === "changed"
-            ? "A different sign-in or account state is active. Reload the workspace to review it before starting a new sign-out."
-            : phase === "retry"
-              ? "The last check found the original session. You can retry sign-out. The earlier request may still finish."
-              : "Check the current session before trying again. This only reads status; it does not send another sign-out request.";
+
+  const shown = open && phase !== "idle" && (!busy || slow);
+  const title = busy
+    ? "Signing out…"
+    : phase === "signed-out"
+      ? "You're signed out"
+      : phase === "changed"
+        ? "Your sign-in changed"
+        : phase === "unknown"
+          ? "We couldn't reach Vectory"
+          : "Couldn't sign out";
+  const description = busy
+    ? "This usually takes a moment."
+    : phase === "signed-out"
+      ? "Go to the sign-in page when you're ready. Your unsaved work stays here until then."
+      : phase === "changed"
+        ? "This browser is now signed in differently. Reload to see the current account."
+        : phase === "unknown"
+          ? "We couldn't confirm whether you're signed out. Check again when your connection is back."
+          : "Your session is still active. Try again, or close this and keep working.";
 
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => !next && dismiss()}>
+    <Dialog.Root open={shown} onOpenChange={(next) => !next && dismiss()}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
         <Dialog.Content
@@ -285,7 +290,7 @@ export default function SignOutDialog({
           aria-busy={busy || undefined}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            (phase === "confirm" ? cancelRef : actionRef).current?.focus();
+            actionRef.current?.focus();
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
@@ -296,7 +301,7 @@ export default function SignOutDialog({
               ),
               document.getElementById("main-content"),
               document.querySelector<HTMLInputElement>(
-                '.auth-card input[autocomplete="username"]',
+                '.signin-card input[autocomplete="username"]',
               ),
             ]
               .find(
@@ -318,49 +323,40 @@ export default function SignOutDialog({
             </div>
             <IconButton icon={X} label="Close dialog" onClick={dismiss} />
           </div>
-          {error && (
-            <div className="modal-body">
-              <ErrorBox message={error} />
+          {busy && (
+            <div className="modal-body signout-progress" role="status">
+              <Spinner />
+              {phase === "checking"
+                ? "Checking your session…"
+                : "Ending this session…"}
             </div>
           )}
           <div className="modal-footer">
-            <button
-              ref={cancelRef}
-              type="button"
-              className="button secondary"
+            <Button
+              ref={busy ? actionRef : undefined}
+              variant="secondary"
               onClick={dismiss}
             >
-              {phase === "confirm"
-                ? "Cancel"
-                : busy
-                  ? "Stop waiting"
-                  : "Back to workspace"}
-            </button>
-            {phase === "confirm" || phase === "sending" || phase === "retry" ? (
-              <Button
-                ref={actionRef}
-                variant="danger"
-                busy={busy}
-                icon={LogOut}
-                onClick={() => void send()}
-              >
-                {phase === "sending"
-                  ? "Signing out…"
-                  : phase === "retry"
-                    ? "Retry sign out"
-                    : "Sign out"}
+              {busy ? "Stop waiting" : "Keep working"}
+            </Button>
+            {phase === "retry" && (
+              <Button ref={actionRef} onClick={() => void send()}>
+                Try again
               </Button>
-            ) : phase === "signed-out" ? (
+            )}
+            {phase === "unknown" && (
+              <Button ref={actionRef} onClick={() => void check()}>
+                Check again
+              </Button>
+            )}
+            {phase === "signed-out" && (
               <Button ref={actionRef} onClick={() => leave(onSignedOut)}>
                 Go to sign in
               </Button>
-            ) : phase === "changed" ? (
+            )}
+            {phase === "changed" && (
               <Button ref={actionRef} onClick={() => leave(onReload)}>
-                Reload workspace
-              </Button>
-            ) : (
-              <Button ref={actionRef} busy={busy} onClick={() => void check()}>
-                Check sign-out status
+                Reload
               </Button>
             )}
           </div>

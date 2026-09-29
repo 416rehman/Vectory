@@ -77,3 +77,45 @@ export function isDefinitiveAuthRejection(error: unknown) {
     error.status !== 408
   );
 }
+
+/** The server says this exact request identity already finished: read its status. */
+export function isRequestAlreadyUsed(error: unknown) {
+  return error instanceof APIError && error.code === "REQUEST_ALREADY_USED";
+}
+
+/**
+ * Whether a failed request may still have taken effect: transport failures,
+ * timeouts, unreadable or 5xx responses, and reused request identities. Every
+ * other rejection is definitive and belongs next to the form.
+ */
+export function isUncertainOutcome(error: unknown) {
+  return !isDefinitiveAuthRejection(error) || isRequestAlreadyUsed(error);
+}
+
+/** Seconds to wait after a 429, from Retry-After, defaulting to a minute. */
+export function retryDelay(error: unknown) {
+  return error instanceof APIError && error.status === 429
+    ? error.retryAfter || 60
+    : 0;
+}
+
+const SIGNED_OUT_KEY = "vectory-signed-out";
+/**
+ * Leave a nonsecret timestamp when this browser signs out. Signing out deletes
+ * the shared cookie, so other tabs can't ask the server why their session ended.
+ */
+export function noteSignedOut() {
+  try {
+    localStorage.setItem(SIGNED_OUT_KEY, String(Date.now()));
+  } catch {
+    /* Other tabs fall back to the generic explanation. */
+  }
+}
+export function signedOutRecently(now = Date.now()) {
+  try {
+    const at = Number(localStorage.getItem(SIGNED_OUT_KEY));
+    return at > 0 && now - at >= 0 && now - at < 10 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}
