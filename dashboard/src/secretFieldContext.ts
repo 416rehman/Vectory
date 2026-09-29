@@ -5,11 +5,8 @@ import type { SecretPath } from "./secretFields";
  * The component whose settings are on screen. Credential fields accept a
  * device secret only inside a component whose type lists them.
  */
-export const SecretScopeContext = createContext<{
-  kind: string;
-  type: string;
-  id: string;
-} | null>(null);
+export type SecretScope = { kind: string; type: string; id: string };
+export const SecretScopeContext = createContext<SecretScope | null>(null);
 
 /**
  * The field's place inside the component: object fields by name, list items
