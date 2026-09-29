@@ -165,6 +165,16 @@ input[type="radio"] {
   flex-shrink: 0;
   box-shadow: none;
 }
+/* The reset above drops the field ring; small controls get an outline instead. */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Card-style choices carry the ring on the whole card. */
+.pipeline-start-option:has(> input:focus-visible) {
+  box-shadow: 0 0 0 2px var(--focus);
+}
 textarea {
   resize: vertical;
   line-height: 1.6;

@@ -780,9 +780,20 @@ export function PageHeader({
 function SectionTabs({ shell }: { shell: ShellInfo }) {
   const list = useRef<HTMLElement>(null);
   useEffect(() => {
-    list.current
-      ?.querySelector('[aria-current="page"]')
-      ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    // Scroll only the strip. scrollIntoView would also move the sequential
+    // focus start, so the first Tab would skip the skip link and the shell.
+    const nav = list.current;
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
+    const left =
+      active.getBoundingClientRect().left -
+      nav.getBoundingClientRect().left +
+      nav.scrollLeft;
+    if (
+      left < nav.scrollLeft ||
+      left + active.offsetWidth > nav.scrollLeft + nav.clientWidth
+    )
+      nav.scrollLeft = Math.max(0, left - 16);
   }, [shell.currentTab]);
   return (
     <nav
