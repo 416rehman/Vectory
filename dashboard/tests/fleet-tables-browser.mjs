@@ -293,6 +293,11 @@ async function load(name, props = {}) {
     }
     if (method === "POST" && path === "/deployments/binding-suggestions")
       return route.fulfill({ json: { devices: {}, sources: {} } });
+    // Agent settings also lists settings that were applied without saving.
+    if (method === "GET" && path === "/deployments/history")
+      return route.fulfill({
+        json: { items: [], total: 0, page: 1, page_size: 50 },
+      });
     // Add device lists the last day's enrollment attempts.
     if (method === "GET" && path === "/agent-install/activity")
       return route.fulfill({

@@ -235,13 +235,15 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
     return (
       <span className="device-running-value">
         <Check size={14} aria-hidden="true" />
-        {v} at the last report
-        {device.last_seen && (
-          <>
-            {" "}
-            (<TimeAgo value={device.last_seen} />)
-          </>
-        )}
+        <span>
+          {v} at the last report
+          {device.last_seen && (
+            <>
+              {" "}
+              (<TimeAgo value={device.last_seen} />)
+            </>
+          )}
+        </span>
       </span>
     );
   if (device.status === "failed" || device.status === "rolled_back") {
@@ -445,6 +447,11 @@ function VectorLogs({ device }: { device: Device }) {
 
 /* ---------- Activity ---------- */
 
+/** "APPLY_ROLLED_BACK" as "Apply rolled back", for servers without issue titles. */
+function codeSentence(code: string) {
+  const words = code.replaceAll("_", " ").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 function DeviceActivity({
   device,
   outage,
@@ -510,7 +517,7 @@ function DeviceActivity({
             {reports.map((issue) => (
               <li key={issue.id}>
                 <a href={`#/issues/${encodeURIComponent(issue.id)}`}>
-                  {issue.title || issue.code.replaceAll("_", " ")}
+                  {issue.title || codeSentence(issue.code)}
                 </a>
                 <p>{issue.message}</p>
                 <small>

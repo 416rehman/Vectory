@@ -1119,8 +1119,10 @@ function RolloutPage({
 }) {
   // Poll faster while the rollout can still move. Background polls never
   // cancel a slow read in flight, so a loaded server still gets its answer in.
-  const [live, setLive] = useState(false);
-  const pollInterval = live ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
+  // Changing a resource's interval reads it once more, so only the two reads
+  // that decide it follow this state; everything below uses `live` directly.
+  const [polling, setPolling] = useState(false);
+  const pollInterval = polling ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
   const {
     data: deployment,
     error,
@@ -1214,8 +1216,8 @@ function RolloutPage({
     // Focus the page title once, when the rollout first loads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading && !deployment]);
-  const movable = !!deployment && isLive(deployment.status);
-  useEffect(() => setLive(movable), [movable]);
+  const live = !!deployment && isLive(deployment.status);
+  useEffect(() => setPolling(live), [live]);
   useEffect(() => {
     mounted.current = true;
     const guard = (event: Event) => {
