@@ -8,6 +8,7 @@ pub mod auth;
 pub mod canary_gate;
 pub mod configuration_attempt;
 pub mod crypto;
+pub mod data_plane;
 pub mod db;
 pub mod deployment_history;
 pub mod deployment_requests;

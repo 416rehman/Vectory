@@ -931,6 +931,21 @@ pub async fn heartbeat(
     } else if device["apply_state"] == "verified_applied" {
         crate::issues::resolve_device(&mut tx, &id, "verified").await?;
     }
+    crate::data_plane::observe(
+        &mut tx,
+        crate::data_plane::Observation {
+            device_id: &id,
+            device: &device,
+            desired_version: desired_version.as_deref(),
+            assignment_id: row.get("assignment_id"),
+            sample: if policy["telemetry_enabled"] == true {
+                &sample
+            } else {
+                &Value::Null
+            },
+        },
+    )
+    .await?;
     let issued = Utc::now();
     let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":HEARTBEAT_FEATURES});
     let signing_id: Option<String> =
