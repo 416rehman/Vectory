@@ -1157,10 +1157,16 @@ async fn device_detail_reads_one_device_with_its_groups_on_request() {
     let mut conn = f.s.pool.acquire().await.unwrap();
     let every = rollout::devices(&mut conn).await.unwrap();
     drop(conn);
+    // The page adds only the live wake-up projection (no agent waits here).
+    let unwoken = |mut detail: Value| {
+        let wake = detail.as_object_mut().unwrap().remove("wake");
+        assert_eq!(wake, Some(json!({"listening": false})));
+        detail
+    };
     for (name, id) in &f.ids {
         let detail = get(&f.app, &f.admin, &format!("/api/v1/devices/{id}")).await;
         let expected = every.iter().find(|d| d["id"] == id.as_str()).unwrap();
-        assert_eq!(&detail, expected, "{name}");
+        assert_eq!(&unwoken(detail), expected, "{name}");
     }
     let edge = get(
         &f.app,
@@ -1172,7 +1178,7 @@ async fn device_detail_reads_one_device_with_its_groups_on_request() {
         edge["groups"],
         json!({"total":2,"items":[{"id":f.groups["Edge collectors"],"name":"Edge collectors"},{"id":f.groups["Everything"],"name":"Everything"}]})
     );
-    let mut without = edge.clone();
+    let mut without = unwoken(edge.clone());
     without.as_object_mut().unwrap().remove("groups");
     assert_eq!(
         &without,
