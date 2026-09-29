@@ -15,6 +15,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - Restricted and full modes, local allowances and device-local secret bindings, all controlled on the host.
 - Device secrets in every credential field: a pipeline stores `vectory-secret:NAME`, each device fills in the value from its own file, and the device page shows which names each device has bound.
 - Device metrics, issues, and an exportable audit log.
+- Alerts in Slack, any webhook or email when an issue opens, a rollout fails or a device goes offline, with quiet hours, a delivery log with retries, and editable detection thresholds.
 - Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
 - A Help center bundled with the server, searchable offline, with every page available as Markdown and an `llms.txt` index.
 

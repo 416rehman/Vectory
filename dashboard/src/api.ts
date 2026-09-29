@@ -19,6 +19,14 @@ import {
   MfaStatusSchema,
 } from "./mfaActionModel";
 import {
+  AttemptPageSchema,
+  ChannelListSchema,
+  ChannelSchema,
+  DetectionSchema,
+  PreviewSchema,
+  TestResultSchema,
+} from "./notificationsModel";
+import {
   ConfigurationTelemetrySchema,
   DiagnosticsSchema,
   HostRuntimeSchema,
@@ -1239,6 +1247,12 @@ export const AuditDetailsSchema = z.object({
   agent_version: z.string().max(64).optional(),
   configuration_mode: z.string().max(16).optional(),
   client_address: z.string().max(64).optional(),
+  // Notification channel and detection threshold changes, in words. The
+  // server cuts it at 500 characters (code points, not UTF-16 units).
+  summary: z
+    .string()
+    .refine((value) => Array.from(value).length <= 500)
+    .optional(),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,
@@ -1783,6 +1797,17 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return AssignmentRemovalPreviewSchema;
   if (method === "POST" && /^\/deployments\/[^/]+\/refresh-preview$/.test(path))
     return ScheduledAssignmentRefreshPreviewSchema;
+  if (path === "/notifications/channels")
+    return method === "POST" ? ChannelSchema : ChannelListSchema;
+  if (/^\/notifications\/channels\/[^/]+\/test$/.test(path))
+    return TestResultSchema;
+  if (/^\/notifications\/channels\/[^/]+$/.test(path))
+    return method === "DELETE"
+      ? z.object({ ok: z.literal(true) })
+      : ChannelSchema;
+  if (path === "/notifications/preview") return PreviewSchema;
+  if (path === "/notifications/deliveries") return AttemptPageSchema;
+  if (path === "/detection") return DetectionSchema;
   if (method !== "GET") return undefined;
   if (/^\/deployments\/requests\/[^/]+$/.test(path))
     return DeploymentRequestLookupSchema;

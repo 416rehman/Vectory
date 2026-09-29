@@ -1077,6 +1077,16 @@ function AuditInspector({
                     <dd className="audit-reason">{data.details.reason}</dd>
                   </div>
                 )}
+                {typeof data.details?.summary === "string" && (
+                  <div>
+                    <dt>
+                      {data.action === "notification.channel.test"
+                        ? "Result"
+                        : "Change"}
+                    </dt>
+                    <dd className="audit-reason">{data.details.summary}</dd>
+                  </div>
+                )}
                 {data.action === "group.update" && (
                   <>
                     <div>
@@ -1176,7 +1186,12 @@ function AuditInspector({
                     )
                     .map(([key, value]) => (
                       <div key={key}>
-                        <dt>{detailLabels[key]}</dt>
+                        <dt>
+                          {key === "name" &&
+                          data.action.startsWith("notification.")
+                            ? "Channel name"
+                            : detailLabels[key]}
+                        </dt>
                         <dd>{String(value)}</dd>
                       </div>
                     ))}

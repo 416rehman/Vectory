@@ -6,6 +6,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { configuredChannels } from "./notification-fixtures.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -161,6 +162,9 @@ async function fixture(props = {}, { layout = "list" } = {}) {
         },
         status,
       );
+    // An administrator's Issues page asks whether a notification channel exists.
+    if (path === "/notifications/channels" && method === "GET")
+      return reply(configuredChannels);
     if (path === "/audit/history" && method === "GET") {
       const records = state.auditRecords.slice().reverse();
       return reply({

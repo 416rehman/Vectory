@@ -156,6 +156,7 @@ pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) ->
         ),
         Err(e) => return Err(e),
     };
+    let opened = new || issue["resolved"] == true;
     if new || issue["resolved"] == true || issue["last_attempt"] != f.attempt {
         if !new {
             advance_revision(&mut issue)?;
@@ -186,10 +187,14 @@ pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) ->
     issue["desired_version_id"] = json!(f.version_id);
     issue["deployment_id"] = json!(f.deployment_id);
     if new {
-        db::insert(db, "issue", &issue).await
+        db::insert(db, "issue", &issue).await?;
     } else {
-        db::update(db, "issue", &issue).await
+        db::update(db, "issue", &issue).await?;
     }
+    if opened {
+        crate::notifications::issue_opened(db, &issue).await?;
+    }
+    Ok(())
 }
 
 /// Resolve a device's open issues: `verified` when it verified a
@@ -212,6 +217,7 @@ pub(crate) async fn resolve_device(
         let mut issue = db::parse(&row)?;
         resolve(&mut issue, reason)?;
         db::update(db, "issue", &issue).await?;
+        crate::notifications::issue_resolved(db, &issue).await?;
     }
     Ok(())
 }
@@ -259,7 +265,8 @@ pub(crate) async fn record_data_plane(
         ),
         Err(e) => return Err(e),
     };
-    if new || issue["resolved"] == true {
+    let opened = new || issue["resolved"] == true;
+    if opened {
         if !new {
             advance_revision(&mut issue)?;
         }
@@ -288,6 +295,9 @@ pub(crate) async fn record_data_plane(
     } else {
         db::update(db, "issue", &issue).await?;
     }
+    if opened {
+        crate::notifications::issue_opened(db, &issue).await?;
+    }
     Ok(id)
 }
 /// Resolve one data-plane issue, e.g. `healthy` after clean evaluations.
@@ -304,6 +314,7 @@ pub(crate) async fn resolve_data_plane_issue(
     if issue["resolved"] != true {
         resolve(&mut issue, reason)?;
         db::update(db, "issue", &issue).await?;
+        crate::notifications::issue_resolved(db, &issue).await?;
     }
     Ok(())
 }
@@ -323,6 +334,7 @@ pub(crate) async fn resolve_data_plane(
         let mut issue = db::parse(&row)?;
         resolve(&mut issue, reason)?;
         db::update(db, "issue", &issue).await?;
+        crate::notifications::issue_resolved(db, &issue).await?;
     }
     Ok(())
 }
@@ -382,7 +394,7 @@ fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
 /// Render the plain-language title and reason from the code and the
 /// diagnostics, which are revalidated so imported records cannot inject
 /// unbounded or unexpected content.
-fn render(mut issue: Value) -> Value {
+pub(crate) fn render(mut issue: Value) -> Value {
     let code = issue["code"].as_str().unwrap_or("APPLY_FAILED").to_owned();
     let diagnostics = crate::configuration_attempt::diagnostics(&issue["diagnostics"])
         .unwrap_or_else(|_| json!([]));

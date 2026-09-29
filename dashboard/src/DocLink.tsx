@@ -8,6 +8,7 @@ export type DocTopic =
   | "pipelines"
   | "deployments"
   | "telemetry"
+  | "notifications"
   | "resources"
   | "glossary"
   | "troubleshooting"

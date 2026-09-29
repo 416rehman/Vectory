@@ -92,6 +92,13 @@ pub async fn evaluate(
         .as_ref()
         .map(|r| r.get::<i64, _>("variable_count"))
         .unwrap_or(0);
+    // Evaluations a device needs on this version before delivery counts as
+    // measured (Settings → Notifications → Detection).
+    let measured_after = if config {
+        crate::detection::thresholds(db).await?.gate_min_evaluations
+    } else {
+        crate::data_plane::GATE_MIN_EVALUATIONS
+    };
     let now = Utc::now();
     let mut digest = Sha256::new();
     let mut out = Assessment {
@@ -248,7 +255,7 @@ pub async fn evaluate(
                 };
                 if state == "verified_applied" && accepted {
                     if config {
-                        data_plane(&evidence, &policy, d, interval, now)
+                        data_plane(&evidence, &policy, d, interval, now, measured_after)
                     } else {
                         None
                     }
@@ -311,6 +318,7 @@ fn data_plane(
     d: &Value,
     interval: i64,
     now: DateTime<Utc>,
+    measured_after: u64,
 ) -> Option<&'static str> {
     let measured_version = evidence["data_plane_version"].as_str() == d["version_id"].as_str();
     if measured_version && evidence["data_plane_issues"].as_i64().unwrap_or(0) > 0 {
@@ -325,8 +333,7 @@ fn data_plane(
                 age >= -300 && age <= (interval * 3).max(180)
             });
     let evaluations = evidence["data_plane_evaluations"].as_u64().unwrap_or(0);
-    (reporting && !(measured_version && evaluations >= crate::data_plane::GATE_MIN_EVALUATIONS))
-        .then_some("measuring")
+    (reporting && !(measured_version && evaluations >= measured_after)).then_some("measuring")
 }
 /// Released devices of a configuration rollout whose data plane is failing on
 /// its version. The scheduler counts them as failures against the threshold.

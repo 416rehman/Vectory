@@ -89,6 +89,11 @@ export const auditActions: Record<string, string> = {
   "deployment.refresh_targets": "Scheduled targets refreshed",
   "issue.acknowledge": "Issue acknowledged",
   "issue.reopen": "Issue reopened",
+  "notification.channel.create": "Notification channel added",
+  "notification.channel.update": "Notification channel changed",
+  "notification.channel.delete": "Notification channel removed",
+  "notification.channel.test": "Test notification sent",
+  "detection.update": "Detection thresholds changed",
   "signing.rotate.prepare": "Signing key rotation prepared",
   "signing.rotate": "Signing key rotated",
   "signing.prune": "Retired signing key removed",
@@ -107,6 +112,8 @@ export const auditFamilies: Record<string, string> = {
   policy: "Agent settings",
   signing: "Signing keys",
   vrl: "VRL tests",
+  notification: "Notifications",
+  detection: "Detection thresholds",
 };
 
 export function auditActionLabel(action: string) {
