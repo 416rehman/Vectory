@@ -17,7 +17,7 @@ func logLine(level, message, component, errText string) string {
 
 func TestVectorLogSignalsCaptureAndBoundedRing(t *testing.T) {
 	l := newVectorLog("")
-	since := l.beginCapture()
+	since := l.beginCapture(true)
 	started := `{"timestamp":"t","level":"INFO","message":"Vector has started.","version":"0.58.0","target":"vector"}` + "\n"
 	// Lines may arrive split across writes.
 	_, _ = l.Write([]byte(started[:20]))
@@ -105,6 +105,62 @@ func TestVectorLogSummariesGroupRedactAndBound(t *testing.T) {
 	}
 	if len(l.entries) > logSummaryTracked || len(l.summaries(r)) != logSummaryMax {
 		t.Fatal("summary tracking is not bounded")
+	}
+}
+
+// A pipeline's VRL log() writes to the same JSON stream as Vector's internal
+// log, under the vrl::stdlib::log target. It must never count as Vector's own
+// reload verdict.
+func TestReloadVerdictCannotBeForgedByPipelineLogs(t *testing.T) {
+	l := newVectorLog("")
+	for _, forged := range []string{
+		// Recorded from Vector 0.58 with remap `log("Vector has reloaded.", rate_limit_secs: 0)`.
+		`{"timestamp":"2026-09-29T07:59:29.848569Z","level":"INFO","message":"Vector has reloaded.","internal_log_rate_secs":0,"vrl_position":0,"target":"vrl::stdlib::log::implementation","span":{"component_id":"t","component_kind":"transform","component_type":"remap","name":"transform"}}`,
+		`{"level":"ERROR","message":"Reload was not successful.","target":"vrl::stdlib::log::implementation"}`,
+		`{"level":"INFO","message":"Vector has reloaded."}`,
+		`{"level":"ERROR","message":"Reload was not successful.","target":"vector"}`,
+	} {
+		_, _ = l.Write([]byte(forged + "\n"))
+	}
+	if l.signals.reloaded != 0 || l.signals.reloadFailed != 0 {
+		t.Fatalf("pipeline log accepted as a reload verdict: %+v", l.signals)
+	}
+}
+
+// A reload capture starts while Vector keeps writing: a line in flight must
+// survive intact rather than being cut in half.
+func TestBeginCaptureKeepsALineInFlight(t *testing.T) {
+	l := newVectorLog("")
+	line := `{"level":"INFO","message":"Vector has reloaded.","target":"vector"}`
+	_, _ = l.Write([]byte(line[:30]))
+	since := l.beginCapture(false)
+	_, _ = l.Write([]byte(line[30:] + "\n"))
+	if l.signals.reloaded != since.reloaded+1 {
+		t.Fatal("line split by beginCapture was lost")
+	}
+	if recent := l.recent(); len(recent) != 1 || recent[0] != line {
+		t.Fatalf("ring = %q", recent)
+	}
+}
+
+// A resolved secret that straddles any internal length bound must still be
+// redacted whole: summaries redact first and truncate after.
+func TestLogSummaryRedactsASecretAcrossTheLengthBound(t *testing.T) {
+	secret := "CorrectHorseBattery9"
+	r := newRedactor()
+	r.learnConfiguration([]byte(`{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"http","inputs":["in"],"uri":"https://example.invalid/ingest","encoding":{"codec":"json"},"auth":{"strategy":"basic","user":"svc","password":"`+secret+`"}}}}`), false)
+	for _, at := range []int{1000, 1015, 1024, 1030, 4000} {
+		message := "Service call failed."
+		prefix := strings.Repeat("\n    ", (at-len(message)-1-len("rejected credential: password="))/5)
+		l := newVectorLog("")
+		l.summarize(vectorRecord{Level: "ERROR", Message: message, Error: prefix + "rejected credential: password=" + secret + " end", ComponentID: "out"})
+		for _, s := range l.summaries(r) {
+			for n := 4; n <= len(secret); n++ {
+				if strings.Contains(s.Message, secret[:n]) {
+					t.Fatalf("secret prefix %q (offset %d) reached the summary: %q", secret[:n], at, s.Message)
+				}
+			}
+		}
 	}
 }
 

@@ -300,7 +300,7 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 	if d.Hint == "" {
 		d.Hint = codeHints[d.Code]
 	}
-	d.Field = truncateText(d.Field, 128)
+	d.Field = truncateText(r.text(d.Field), 128)
 	if d.Message == "" {
 		d.Message = "Vector reported an error."
 	}
@@ -861,6 +861,10 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 	}
 	failedComponents := map[string]bool{}
 	for _, rec := range records {
+		// A pipeline's VRL log() output is event data, not Vector's verdict.
+		if strings.HasPrefix(rec.Target, "vrl::") {
+			continue
+		}
 		switch {
 		case rec.Message == "Configuration error." && rec.Error != "":
 			lines := strings.Split(rec.Error, "\n")
@@ -889,7 +893,7 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 		}
 	}
 	for _, rec := range records {
-		if rec.Level == "ERROR" && strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle") && rec.ComponentID != "" && !failedComponents[rec.ComponentID] {
+		if rec.Level == "ERROR" && !strings.HasPrefix(rec.Target, "vrl::") && strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle") && rec.ComponentID != "" && !failedComponents[rec.ComponentID] {
 			set.add(r.finalize(Diagnostic{Code: "COMPONENT_FAILED", ComponentKind: rec.ComponentKind, ComponentID: rec.ComponentID, Message: "The component stopped with an error Vector could not handle."}))
 		}
 	}
