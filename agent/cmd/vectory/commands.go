@@ -186,10 +186,18 @@ func defineServiceInstall(c *cli) func() int {
 		if err := agent.CheckInstalled(*c.state); err != nil {
 			return c.fail(err)
 		}
-		if err := agent.ServiceInstall(*c.state, *account); err != nil {
+		registration, err := agent.ServiceInstall(*c.state, *account)
+		if err != nil {
 			return c.fail(err)
 		}
-		fmt.Fprintf(c.stdout, "Registered %s for %s (runs as %s).\nNext: sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		switch registration {
+		case agent.ServiceUpdated:
+			fmt.Fprintf(c.stdout, "Updated the %s definition for %s (runs as %s).\nA running service uses it from its next restart: sudo vectory service-stop && sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		case agent.ServiceUnchanged:
+			fmt.Fprintf(c.stdout, "%s is already registered for %s (runs as %s).\n", agent.ServiceName, *c.state, *account)
+		default:
+			fmt.Fprintf(c.stdout, "Registered %s for %s (runs as %s).\nNext: sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		}
 		return exitOK
 	}
 }

@@ -28,13 +28,16 @@ type SetupStep struct {
 // Setup is a convenience over the separate install, enroll and service
 // operations, which keep all of their own checks and guarantees.
 type SetupOptions struct {
-	Server             string
-	CASHA256           string
-	CAFile             *string // nil: not chosen; "": system trust; otherwise a CA file
-	Name               string
-	Mode               string // restricted (default) or full, only when passed
-	CapabilityPolicy   string
-	VectorBinary       string
+	Server           string
+	CASHA256         string
+	CAFile           *string // nil: not chosen; "": system trust; otherwise a CA file
+	Name             string
+	Mode             string // restricted (default) or full, only when passed
+	CapabilityPolicy string
+	VectorBinary     string
+	// AgentPath is where the service runs the agent from; the installer
+	// sets it to the file it installed. Empty: the default location.
+	AgentPath          string
 	StateDir           string
 	ManagedConfig      string
 	Service            string // auto, systemd, launchd, windows or none
@@ -317,7 +320,13 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		executable = resolved
 	}
 	agentPath, installBinary := executable, false
-	if service != "none" && !packagedLocation(executable, defaults.Binary) {
+	switch {
+	case service == "none":
+	case options.AgentPath != "":
+		// The installer placed the agent (--install-dir); that path is final.
+		agentPath = options.AgentPath
+		installBinary = !sameContents(executable, agentPath)
+	case !packagedLocation(executable, defaults.Binary):
 		agentPath = defaults.Binary
 		installBinary = !sameContents(executable, agentPath)
 	}
@@ -509,6 +518,21 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		}
 	}
 
+	if account != "" && service != "windows" {
+		if problem := accountAccessProblem(ctx, account, vector.Path, true, "--version"); problem != "" {
+			fix := "Install Vector system-wide (https://vector.dev/download/), or pass --vector-binary with a path the account can read."
+			if installed {
+				fix = "Install Vector system-wide (https://vector.dev/download/), then approve it: stop the agent and run `vectory re-adopt --vector-binary PATH --expected-sha256 SHA256`."
+			}
+			return r.fail("vector", "Vector", "The service account "+account+" can't run "+vector.Path+": "+problem+".", fix)
+		}
+		if !installBinary {
+			if problem := accountAccessProblem(ctx, account, agentPath, false, "version"); problem != "" {
+				return r.fail("agent", "Agent", "The service account "+account+" can't run "+agentPath+": "+problem+".", agentAccessFix)
+			}
+		}
+	}
+
 	name := options.Name
 	if enrolled {
 		if name != "" && !strings.EqualFold(name, settings.Name) {
@@ -545,7 +569,14 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 			r.add("enroll", "plan", "Enroll", "Would enroll as "+name+" (asks for the token).", "")
 		}
 		if service != "none" {
-			r.add("service", "plan", "Service", "Would register and start the "+service+" service, then wait for the first check-in.", "")
+			plan := "Would register and start the " + service + " service, then wait for the first check-in."
+			if ServiceStatus(ctx).Running() {
+				plan = ServiceInfoName(service) + " is running " + Version + "; nothing to restart."
+				if running := runningBuild(dir); running == nil || running.SHA256 != fileDigestOrEmpty(executable) {
+					plan = "Would restart " + ServiceInfoName(service) + " to run " + Version + ", then wait for its check-in."
+				}
+			}
+			r.add("service", "plan", "Service", plan, "")
 		}
 		r.result.OK = true
 		r.result.Next = "Run the same command without --dry-run to apply."
@@ -569,10 +600,23 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		r.add("account", "ok", "Account", account+" (created, no login shell)", "")
 	}
 	if installBinary {
+		// Windows can't replace a running executable: stop the service first
+		// (it stops Vector); the service step starts it again.
+		if runtime.GOOS == "windows" && ServiceStatus(ctx).Running() {
+			if err := ServiceControl("stop"); err != nil {
+				return r.failErr("agent", "Agent", err, "Stop the Vectory service, then run the command again.")
+			}
+			r.add("agent", "info", "Agent", ServiceInfoName(service)+" stopped to replace "+agentPath+".", "")
+		}
 		if err := installAgentBinary(executable, agentPath); err != nil {
 			return r.failErr("agent", "Agent", err, "Check that "+filepath.Dir(agentPath)+" is writable.")
 		}
 		r.add("agent", "ok", "Agent", agentPath+" "+Version+" (installed)", "")
+		if account != "" && service != "windows" {
+			if problem := accountAccessProblem(ctx, account, agentPath, false, "version"); problem != "" {
+				return r.fail("agent", "Agent", "The service account "+account+" can't run "+agentPath+": "+problem+".", agentAccessFix)
+			}
+		}
 	}
 
 	if !installed {
@@ -639,33 +683,97 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		return r.result, nil
 	}
 
-	serviceName := ServiceInfoName(service)
-	wasRunning := ServiceStatus(ctx).Running()
-	started := time.Now()
-	if err := ServiceInstallFor(agentPath, dir, account); err != nil {
-		return r.failErr("service", "Service", err, "")
-	}
-	if err := ServiceControl("start"); err != nil {
-		return r.failErr("service", "Service", err, "")
-	}
 	r.result.Next = "Deploy a pipeline to " + settings.Name + " from the dashboard."
-	if state, err := LoadState(dir); wasRunning && err == nil && state.LastHeartbeat != nil && time.Since(*state.LastHeartbeat) < 3*time.Duration(max(state.Policy.HeartbeatSeconds, 10))*time.Second {
-		r.add("service", "ok", "Service", fmt.Sprintf("%s running · last check-in %s ago", serviceName, humanLatency(time.Since(*state.LastHeartbeat))), "")
-		r.result.OK = true
-		return r.result, nil
+	return r.startService(ctx, nativeService, service, agentPath, dir, account, settings.gracefulShutdownSeconds())
+}
+
+// serviceOps is the service manager setup drives; tests replace it.
+type serviceOps struct {
+	install func(exe, dir, account string) (ServiceRegistration, error)
+	control func(action string) error
+	status  func(context.Context) ServiceInfo
+}
+
+var nativeService = serviceOps{install: ServiceInstallFor, control: ServiceControl, status: ServiceStatus}
+
+// startService registers the service and makes sure it ends up running the
+// installed build: an upgrade replaces the file, but the old process keeps
+// running until it is restarted. It reports the first check-in of that build.
+func (r *setupRun) startService(ctx context.Context, ops serviceOps, service, agentPath, dir, account string, drain int) (SetupResult, error) {
+	serviceName := ServiceInfoName(service)
+	registration, err := ops.install(agentPath, dir, account)
+	if err != nil {
+		return r.failErr("service", "Service", err, "")
 	}
-	wait := options.CheckIn
+	if registration == ServiceUpdated {
+		r.add("service", "info", "Service", serviceName+" definition updated.", "")
+	}
+	digest := fileDigestOrEmpty(agentPath)
+	running := runningBuild(dir)
+	current := running != nil && digest != "" && running.SHA256 == digest
+	wait := r.options.CheckIn
 	if wait <= 0 {
 		wait = 45 * time.Second
 	}
-	if checkedIn := waitForCheckIn(ctx, dir, started, wait); checkedIn != nil {
+	started := time.Now()
+	restarted := false
+	switch {
+	case !ops.status(ctx).Running():
+		if err := ops.control("start"); err != nil {
+			return r.failErr("service", "Service", err, "")
+		}
+	case !current || registration == ServiceUpdated && runtime.GOOS == "darwin":
+		r.add("service", "info", "Service", fmt.Sprintf("Restarting %s to run %s. Vector finishes in-flight events first (up to %d s).", serviceName, Version, drain), "")
+		started, restarted = time.Now(), true
+		if err := ops.control("restart"); err != nil {
+			return r.failErr("service", "Service", err, "")
+		}
+		wait += time.Duration(drain) * time.Second
+	default:
+		if state, err := LoadState(dir); err == nil && state.LastHeartbeat != nil && time.Since(*state.LastHeartbeat) < 3*time.Duration(max(state.Policy.HeartbeatSeconds, 10))*time.Second {
+			r.add("service", "ok", "Service", fmt.Sprintf("%s running %s · last check-in %s ago", serviceName, Version, humanLatency(time.Since(*state.LastHeartbeat))), "")
+			r.result.OK = true
+			return r.result, nil
+		}
+	}
+	checkedIn := waitForCheckIn(ctx, dir, started, wait, digest)
+	switch {
+	case checkedIn != nil && restarted && running != nil && running.Version != Version:
+		r.add("service", "ok", "Service", fmt.Sprintf("%s upgraded %s → %s · first check-in %s after restart", serviceName, running.Version, Version, humanLatency(checkedIn.Sub(started))), "")
+	case checkedIn != nil && restarted:
+		r.add("service", "ok", "Service", fmt.Sprintf("%s restarted on %s · first check-in %s after restart", serviceName, Version, humanLatency(checkedIn.Sub(started))), "")
+	case checkedIn != nil:
 		r.add("service", "ok", "Service", fmt.Sprintf("%s running · first check-in %s after start", serviceName, humanLatency(checkedIn.Sub(started))), "")
-	} else {
-		r.add("service", "warn", "Service", serviceName+" started, but hasn't checked in after "+humanLatency(wait)+".", "Check it with `sudo vectory doctor`; the service log: "+serviceLogHint(service))
+	default:
+		what := "started"
+		if restarted {
+			what = "restarted on " + Version
+		}
+		r.add("service", "warn", "Service", serviceName+" "+what+", but hasn't checked in after "+humanLatency(wait)+".", "Check it with `sudo vectory doctor`; the service log: "+serviceLogHint(service))
 		r.result.Next = "Run `sudo vectory doctor` to check the connection."
 	}
 	r.result.OK = true
 	return r.result, nil
+}
+
+// agentAccessFix explains how to make the agent runnable for its account.
+const agentAccessFix = "Install the agent where every account can run it (mode 0755, for example in /usr/local/bin), then run setup again."
+
+// runningBuild is the agent build that last saved the state, if recorded.
+func runningBuild(dir string) *AgentBuild {
+	state, err := LoadState(dir)
+	if err != nil {
+		return nil
+	}
+	return state.Agent
+}
+
+func fileDigestOrEmpty(path string) string {
+	digest, err := FileDigest(path)
+	if err != nil {
+		return ""
+	}
+	return digest
 }
 
 // ServiceInfoName is the user-facing service name for a manager.
@@ -691,10 +799,13 @@ func serviceLogHint(service string) string {
 	return "sudo vectory run in a terminal"
 }
 
-func waitForCheckIn(ctx context.Context, dir string, after time.Time, limit time.Duration) *time.Time {
+// waitForCheckIn waits for a check-in after the given time, from the agent
+// build with the given digest when one is given.
+func waitForCheckIn(ctx context.Context, dir string, after time.Time, limit time.Duration, digest string) *time.Time {
 	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
-		if state, err := LoadState(dir); err == nil && state.LastHeartbeat != nil && !state.LastHeartbeat.Before(after.Add(-time.Second)) {
+		if state, err := LoadState(dir); err == nil && state.LastHeartbeat != nil && !state.LastHeartbeat.Before(after.Add(-time.Second)) &&
+			(digest == "" || state.Agent != nil && state.Agent.SHA256 == digest) {
 			seen := *state.LastHeartbeat
 			return &seen
 		}
