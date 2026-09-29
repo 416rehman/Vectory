@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { Check, Copy, Layers, ShieldCheck } from "lucide-react";
+import { Layers, ShieldCheck } from "lucide-react";
 import type { AgentInstall } from "./api";
 import DocLink from "./DocLink";
+import { CopyButton } from "./ui";
 import {
   fingerprint,
   fingerprintRows,
@@ -102,7 +102,6 @@ export function isAbsoluteLocalFilePath(value: string, os: string): boolean {
 
 /** The whole CA fingerprint in rows of eight pairs, with Copy. */
 function Fingerprint({ sha256 }: { sha256: string }) {
-  const [copied, setCopied] = useState(false);
   return (
     <span className="enroll-fingerprint">
       <code aria-label={`SHA-256 fingerprint ${fingerprint(sha256)}`}>
@@ -110,26 +109,12 @@ function Fingerprint({ sha256 }: { sha256: string }) {
           <span key={row}>{row}</span>
         ))}
       </code>
-      <button
-        type="button"
-        className="button ghost compact"
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(fingerprint(sha256));
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
-          } catch {
-            setCopied(false);
-          }
-        }}
-      >
-        {copied ? (
-          <Check size={14} aria-hidden="true" />
-        ) : (
-          <Copy size={14} aria-hidden="true" />
-        )}
-        {copied ? "Copied" : "Copy"}
-      </button>
+      <CopyButton
+        text={fingerprint(sha256)}
+        variant="ghost compact"
+        ariaLabel="Copy the CA fingerprint"
+        copiedMessage="CA fingerprint copied."
+      />
     </span>
   );
 }

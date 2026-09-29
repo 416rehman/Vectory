@@ -55,6 +55,7 @@ import {
 } from "./pipelineDestination";
 import { useCommand } from "./commands";
 import "./pipeline-library.css";
+import type { Notify } from "./toast";
 
 export type PipelineLibraryQuery = {
   search: string;
@@ -89,7 +90,7 @@ export default function PipelineLibrary({
   destination,
 }: {
   user: User;
-  notify(message: string): void;
+  notify: Notify;
   navigate(path: string): void;
   initialDeviceId?: string;
   initialQuery?: PipelineLibraryQuery;
@@ -318,7 +319,7 @@ export default function PipelineLibrary({
       }
       active.current = null;
       setOpen(false);
-      notify("Pipeline created.");
+      notify("Pipeline created.", { tone: "success" });
       navigate(pipelineRoute(result.id, initialDeviceId, destination));
     } catch (failure) {
       if (!current()) return;
@@ -608,13 +609,14 @@ export default function PipelineLibrary({
             const completed = action.action;
             setAction(null);
             if (completed === "duplicate") {
-              notify("Pipeline duplicated.");
+              notify("Pipeline duplicated.", { tone: "success" });
               navigate(pipelineRoute(result.id, initialDeviceId, destination));
             } else {
               notify(
                 completed === "archive"
                   ? "Pipeline archived. Running deployments are unchanged."
                   : "Pipeline unarchived.",
+                { tone: "success" },
               );
               reload();
             }

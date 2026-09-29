@@ -65,6 +65,15 @@
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
 }
+.copy-fallback-text {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  white-space: pre;
+  overflow: auto;
+  background: var(--surface-sunken);
+}
 
 /* ---------- Keyboard hints and tooltips ---------- */
 .kbd {

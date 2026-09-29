@@ -1,24 +1,28 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { guessTone, notifyToast, toast, toastSnapshot } from "./toast";
+import { notifyToast, refusal, toast, toastSnapshot } from "./toast";
 
 beforeEach(() => toast.clear());
 
 describe("toast store", () => {
-  it("uses the tone the caller states", () => {
+  it("uses the tone the caller states, whatever the wording", () => {
     notifyToast("Group saved.", { tone: "success" });
     notifyToast("Couldn't save the group.", { tone: "info" });
+    notifyToast("Draft revision saved.", { tone: "error" });
     expect(toastSnapshot().map((item) => item.tone)).toEqual([
       "success",
       "info",
+      "error",
     ]);
   });
 
-  it("reads the wording only when no tone is given", () => {
-    expect(guessTone("Failed to publish")).toBe("error");
-    expect(guessTone("Couldn't copy")).toBe("error");
-    expect(guessTone("Draft revision saved.")).toBe("info");
-    notifyToast("Unable to reach the server");
-    expect(toastSnapshot()[0]).toMatchObject({ tone: "error", duration: null });
+  it("says a refused gesture as an error that leaves after six seconds", () => {
+    notifyToast("This connection already exists.", refusal);
+    expect(toastSnapshot()[0]).toMatchObject({
+      tone: "error",
+      duration: 6000,
+    });
+    notifyToast("Couldn't publish.", { tone: "error" });
+    expect(toastSnapshot()[1]).toMatchObject({ tone: "error", duration: null });
   });
 
   it("keeps errors until dismissed and confirmations for five seconds", () => {

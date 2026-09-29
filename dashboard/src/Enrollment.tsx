@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
-  Copy,
   Download,
   Eye,
   EyeOff,
@@ -26,6 +25,7 @@ import {
 } from "./api";
 import {
   Button,
+  CopyButton,
   DateCell,
   ErrorBox,
   Field,
@@ -287,13 +287,11 @@ function RecentAttempts({
 function CommandBlock({
   command,
   label,
-  onCopy,
   focus = false,
   onFocused,
 }: {
   command: string;
   label: string;
-  onCopy: (value: string) => void;
   /** Move focus here once, after the command was created. */
   focus?: boolean;
   onFocused?: () => void;
@@ -309,14 +307,11 @@ function CommandBlock({
       <pre ref={block} tabIndex={0} aria-label={label}>
         <code>{command}</code>
       </pre>
-      <Button
-        variant="secondary compact"
-        icon={Copy}
-        onClick={() => onCopy(command)}
-        aria-label={`Copy ${label.toLowerCase()}`}
-      >
-        Copy
-      </Button>
+      <CopyButton
+        text={command}
+        ariaLabel={`Copy ${label.toLowerCase()}`}
+        copiedMessage={`${label} copied.`}
+      />
     </div>
   );
 }
@@ -481,16 +476,6 @@ export function Enrollment({
     void reloadTokens();
   }, [command, state?.checkedIn, finished, reloadTokens]);
 
-  async function copy(value: string, what = "Command") {
-    try {
-      await navigator.clipboard.writeText(value);
-      notify(`${what} copied.`, { tone: "success" });
-    } catch {
-      notify("Clipboard access is unavailable. Select the text and copy it.", {
-        tone: "error",
-      });
-    }
-  }
   async function createCommand() {
     setError("");
     if (!ready) {
@@ -998,6 +983,10 @@ export function Enrollment({
                             ? "Unused token revoked."
                             : `${count} unused tokens revoked.`
                           : "Some tokens couldn't be revoked. Revoke them under Manage enrollment tokens.",
+                        {
+                          tone:
+                            count === unusedTokens.length ? "success" : "error",
+                        },
                       );
                     }}
                   >
@@ -1048,7 +1037,6 @@ export function Enrollment({
                     <CommandBlock
                       command={windows}
                       label="Windows setup command"
-                      onCopy={(value) => void copy(value)}
                       focus={focusCommand}
                       onFocused={commandFocused}
                     />
@@ -1062,7 +1050,6 @@ export function Enrollment({
                     <CommandBlock
                       command={manualCommand}
                       label="Setup command"
-                      onCopy={(value) => void copy(value)}
                       focus={focusCommand}
                       onFocused={commandFocused}
                     />
@@ -1072,7 +1059,6 @@ export function Enrollment({
                 <CommandBlock
                   command={installCommand}
                   label="Install command"
-                  onCopy={(value) => void copy(value)}
                   focus={focusCommand}
                   onFocused={commandFocused}
                 />
@@ -1085,7 +1071,6 @@ export function Enrollment({
                   <CommandBlock
                     command={manualCommand}
                     label="Setup command"
-                    onCopy={(value) => void copy(value)}
                     focus={focusCommand}
                     onFocused={commandFocused}
                   />
@@ -1111,13 +1096,15 @@ export function Enrollment({
                 >
                   {shown ? "Hide" : "Show"}
                 </Button>
-                <Button
-                  variant="secondary compact"
-                  icon={Copy}
-                  onClick={() => void tokenFlow.current?.copySecret()}
-                >
-                  Copy token
-                </Button>
+                <CopyButton
+                  text={() => {
+                    const flow = tokenFlow.current;
+                    if (!flow) throw Error("The token is no longer shown here.");
+                    return flow.secret();
+                  }}
+                  label="Copy token"
+                  failedMessage="Copy isn't available here. Show the token and select it to copy."
+                />
               </div>
               <p className="control-muted enroll-secret-hint">
                 Paste it when setup asks. This page keeps it only until the
@@ -1147,7 +1134,6 @@ export function Enrollment({
               <CommandBlock
                 command={manualCommand}
                 label="Setup command"
-                onCopy={(value) => void copy(value)}
               />
               {platformBuilds.length > 0 ? (
                 <ul className="enroll-builds">

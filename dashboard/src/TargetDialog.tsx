@@ -11,7 +11,14 @@ import {
   type Policy,
   type Version,
 } from "./api";
-import { Button, ErrorBox, Field, Modal, useResource } from "./ui";
+import {
+  Button,
+  CopyButton,
+  ErrorBox,
+  Field,
+  Modal,
+  useResource,
+} from "./ui";
 import DocLink from "./DocLink";
 import { DataTable } from "./DataTable";
 import { deploymentRoute } from "./deploymentRouting";
@@ -110,7 +117,6 @@ function HostApprovalNote({
   approvals: ReturnType<typeof hostApprovals>;
   devices: Device[];
 }) {
-  const [copied, setCopied] = useState(false);
   const parts = [
     approvals.destinations.length
       ? `${approvals.destinations.length === 1 ? "destination" : "destinations"} ${approvals.destinations.join(", ")}`
@@ -151,21 +157,11 @@ function HostApprovalNote({
         <pre tabIndex={0} aria-label="Host approval commands">
           <code>{hostSteps}</code>
         </pre>
-        <button
-          type="button"
-          className="button secondary compact"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(hostSteps);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 2000);
-            } catch {
-              setCopied(false);
-            }
-          }}
-        >
-          {copied ? "Copied" : "Copy commands"}
-        </button>
+        <CopyButton
+          text={hostSteps}
+          label="Copy commands"
+          copiedMessage="Host commands copied."
+        />
       </details>
     </div>
   );
