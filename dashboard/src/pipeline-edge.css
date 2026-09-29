@@ -51,7 +51,8 @@
     margin-bottom: 10px;
   }
 }
-.pipeline-edge-actions {
+.pipeline-edge-actions,
+.pipeline-edge-insert {
   position: absolute;
   display: grid;
   place-items: center;
@@ -65,10 +66,17 @@
   pointer-events: all;
   cursor: pointer;
 }
-.pipeline-edge-actions:hover {
+.pipeline-edge-actions:hover,
+.pipeline-edge-insert:hover {
   background: var(--surface-soft);
 }
-.pipeline-edge-actions:focus-visible {
+.pipeline-edge-insert {
+  width: 26px;
+  border-radius: 999px;
+  color: var(--accent-ink, var(--accent));
+}
+.pipeline-edge-actions:focus-visible,
+.pipeline-edge-insert:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

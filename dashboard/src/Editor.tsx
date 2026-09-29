@@ -135,6 +135,9 @@ import {
   disconnect,
   canConnect,
   connectConnection,
+  besidePosition,
+  freePosition,
+  primaryOutput,
 } from "./pipelineEditing";
 import PipelineSchemaFields from "./PipelineSchemaFields";
 import { resolveSchema } from "./pipelineSchema";
@@ -214,6 +217,7 @@ import {
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
+  PIPELINE_NODE_COLUMN_GAP,
 } from "./pipelineNodeModel";
 import "./pipeline-node.css";
 import CanvasComponentMenu, {
@@ -578,13 +582,20 @@ export default function Editor({
     nodeMenu: MenuHandler;
     edgeMenu: MenuHandler;
     edgeHover: (id: string, hovered: boolean) => void;
-  }>({ nodeMenu: () => {}, edgeMenu: () => {}, edgeHover: () => {} });
+    edgeInsert: (id: string, position: { x: number; y: number }) => void;
+  }>({
+    nodeMenu: () => {},
+    edgeMenu: () => {},
+    edgeHover: () => {},
+    edgeInsert: () => {},
+  });
   const handlerCache = useRef(
     new Map<
       string,
       {
         menu: (position: { x: number; y: number }, opener: HTMLElement) => void;
         hover: (hovered: boolean) => void;
+        insert: (position: { x: number; y: number }) => void;
       }
     >(),
   );
@@ -599,6 +610,7 @@ export default function Editor({
             ? graphHandlers.current.nodeMenu
             : graphHandlers.current.edgeMenu)(id, position, opener),
         hover: (hovered) => graphHandlers.current.edgeHover(id, hovered),
+        insert: (position) => graphHandlers.current.edgeInsert(id, position),
       };
       handlerCache.current.set(key, entry);
     }
@@ -1469,31 +1481,73 @@ export default function Editor({
     screen: { x: number; y: number },
     input = "",
     kind?: Kind,
+    position?: { x: number; y: number },
+    insertBefore?: string[],
+    shiftFrom?: number,
   ) {
     if (!editable || busy || !flow.current || !closeSettings()) return;
     setGraphMenu(null);
     const location = {
       screen,
-      position: flow.current.screenToFlowPosition(screen),
+      position: position ?? flow.current.screenToFlowPosition(screen),
       input,
       kind,
+      insertBefore,
+      shiftFrom,
     };
     pickerPlacement.current = location;
     pickerOpener.current = document.activeElement as HTMLElement;
     setCanvasPicker(location);
     setError("");
   }
+  // A new step goes into free space: beside the selected step and fed by its
+  // main output, or near the middle of the view when nothing is selected.
+  /** Insert a step on a connection, taking over its downstream end. */
+  function insertOnEdge(edgeId: string, screen?: { x: number; y: number }) {
+    const edge = edges.find((item) => item.id === edgeId);
+    const source = nodes.find((node) => node.id === edge?.source),
+      target = nodes.find((node) => node.id === edge?.target);
+    if (!edge || !source || !target || !flow.current) return;
+    const input =
+      !edge.sourceHandle || edge.sourceHandle === "output"
+        ? edge.source
+        : `${edge.source}.${edge.sourceHandle}`;
+    // Use the gap between the steps when there is one; otherwise the new
+    // step takes the target's column and everything from there moves right.
+    const roomy =
+      target.position.x - source.position.x >= 2 * PIPELINE_NODE_COLUMN_GAP;
+    const position = roomy
+      ? freePosition(nodes, {
+          x: source.position.x + PIPELINE_NODE_COLUMN_GAP,
+          y: (source.position.y + target.position.y) / 2,
+        })
+      : { x: target.position.x, y: target.position.y };
+    openCanvasPicker(
+      screen ?? flow.current.flowToScreenPosition(position),
+      input,
+      "transforms",
+      position,
+      [edge.target],
+      roomy ? undefined : target.position.x,
+    );
+  }
   function openPicker(kind?: Kind) {
     const bounds = graphRef.current?.getBoundingClientRect();
-    if (bounds)
-      openCanvasPicker(
-        {
-          x: bounds.left + bounds.width / 2,
-          y: bounds.top + Math.min(bounds.height / 3, 180),
-        },
-        "",
-        kind,
-      );
+    if (!bounds || !flow.current) return;
+    const screen = {
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + Math.min(bounds.height / 3, 180),
+    };
+    const anchor = selected
+      ? nodes.find((node) => node.id === selected && !node.data.enrichmentTable)
+      : undefined;
+    const input = anchor && kind !== "sources" ? primaryOutput(anchor) : "";
+    const position = anchor
+      ? input
+        ? besidePosition(nodes, anchor)
+        : freePosition(nodes, anchor.position)
+      : freePosition(nodes, flow.current.screenToFlowPosition(screen));
+    openCanvasPicker(screen, input, kind, position);
   }
   const onConnectStart: OnConnectStart = (_event, params) => {
     connectionCancelled.current = false;
@@ -1538,23 +1592,40 @@ export default function Editor({
         : state.fromNode.id + "." + port,
     );
   };
-  function add(item: Component) {
+  function add(item: Component, input?: string) {
     if (!editable || busy || !guardInspectorDrafts()) return;
     try {
-      const placement = pickerPlacement.current;
+      const placement = pickerPlacement.current
+        ? {
+            ...pickerPlacement.current,
+            input: input ?? pickerPlacement.current.input,
+          }
+        : null;
+      // Sources never take an input; other steps join the chosen output, and
+      // an insertion on a connection takes over its downstream end.
       const result = addConnectedComponent(
         config,
         item,
-        placement?.input || "",
-        [],
+        item.kind === "sources" ? "" : placement?.input || "",
+        item.kind === "transforms" ? (placement?.insertBefore ?? []) : [],
         { autoConnectSource: false },
       );
       const nextGraph = toGraph(result.config, { nodes, edges });
       if (placement) {
+        const shiftFrom =
+          item.kind === "transforms" ? placement.shiftFrom : undefined;
         nextGraph.nodes = nextGraph.nodes.map((node) =>
           node.id === result.id
             ? { ...node, position: placement.position }
-            : node,
+            : shiftFrom !== undefined && node.position.x >= shiftFrom - 1
+              ? {
+                  ...node,
+                  position: {
+                    x: node.position.x + PIPELINE_NODE_COLUMN_GAP,
+                    y: node.position.y,
+                  },
+                }
+              : node,
         );
         setAutoArrange(false);
       }
@@ -1709,6 +1780,16 @@ export default function Editor({
         },
         ...(editable
           ? [
+              {
+                id: "insert",
+                label: "Insert a step",
+                icon: Plus,
+                onSelect: () =>
+                  insertOnEdge(edge.id, {
+                    x: graphMenu.position.x,
+                    y: graphMenu.position.y,
+                  }),
+              },
               {
                 id: "disconnect",
                 label: "Disconnect",
@@ -3302,6 +3383,7 @@ export default function Editor({
     edgeMenu: (edgeId, position, opener) =>
       openGraphMenu("edge", edgeId, position, opener),
     edgeHover: (edgeId, hovered) => hoverConnection(edgeId, hovered),
+    edgeInsert: (edgeId, position) => insertOnEdge(edgeId, position),
   };
   if (flowCache.current.size > 4 * (nodes.length + edges.length) + 64)
     flowCache.current.clear();
@@ -3403,6 +3485,9 @@ export default function Editor({
           connectionHighlight: highlight,
           onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
           openMenu: stableHandlers(`edge:${edge.id}`).menu,
+          insertStep: editable
+            ? stableHandlers(`edge:${edge.id}`).insert
+            : undefined,
         },
       }),
     );

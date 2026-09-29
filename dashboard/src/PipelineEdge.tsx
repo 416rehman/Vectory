@@ -5,7 +5,7 @@ import {
   type EdgeProps,
   useStoreApi,
 } from "@xyflow/react";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Plus } from "lucide-react";
 import {
   connectionEndpointPositions,
   getConnectionPath,
@@ -24,6 +24,8 @@ function PipelineEdge(props: EdgeProps) {
   const openMenu = props.data?.openMenu as
     | ((position: { x: number; y: number }, opener: HTMLElement) => void)
     | undefined;
+  const insertStep = props.data?.insertStep as
+    ((position: { x: number; y: number }) => void) | undefined;
   // Live: undefined when off, null when no device reports this output.
   const rate = props.data?.liveRate as number | null | undefined;
   const live = rate !== undefined;
@@ -68,6 +70,23 @@ function PipelineEdge(props: EdgeProps) {
       )}
       {props.selected && openMenu && (
         <EdgeLabelRenderer>
+          {insertStep && (
+            <button
+              type="button"
+              className="pipeline-edge-insert nodrag nopan"
+              style={{
+                transform: `translate(-50%, -50%) translate(${x - 30}px, ${y}px)`,
+              }}
+              aria-label={`Insert a step between ${props.source} and ${props.target}`}
+              title="Insert a step"
+              onClick={(event) => {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                insertStep({ x: bounds.left, y: bounds.bottom + 6 });
+              }}
+            >
+              <Plus size={15} aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className="pipeline-edge-actions nodrag nopan"
