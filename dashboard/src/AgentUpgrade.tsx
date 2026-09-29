@@ -98,6 +98,11 @@ export default function AgentUpgrade({ device }: { device: Device }) {
                       {release.signed
                         ? "Signed release"
                         : "Unsigned development build"}
+                      {release.source === "mirror"
+                        ? " · Operator mirror"
+                        : release.source === "bundled"
+                          ? " · Bundled with this server"
+                          : ""}
                     </p>
                   </div>
                   <a
