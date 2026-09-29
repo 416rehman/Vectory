@@ -396,7 +396,7 @@ try {
       );
     }
   });
-  await test("overflowing reference tables support keyboard scrolling and remove extra tab stops when they fit", async () => {
+  await test("narrow screens stack wide tables with labels; wider ones scroll by keyboard until they fit", async () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await visit(page, "resources");
     await page
@@ -405,22 +405,42 @@ try {
     await expect(
       page.getByRole("navigation", { name: "Breadcrumb", exact: true }),
     ).toContainText("Build pipelines");
-    await page.setViewportSize({ width: 375, height: 812 });
     const table = page.locator(".sl-markdown-content table").first();
+    const state = () =>
+      table.evaluate((element) => ({
+        stacked: element.classList.contains("help-stacked-table"),
+        overflow: element.scrollWidth > element.clientWidth + 1,
+        tabindex: element.getAttribute("tabindex"),
+      }));
+    // 375px: every table fits; a four-column table becomes labelled blocks.
+    await page.setViewportSize({ width: 375, height: 812 });
     await expect
       .poll(() =>
-        table.evaluate(
-          (element) =>
-            element.scrollWidth > element.clientWidth && element.tabIndex === 0,
-        ),
+        page
+          .locator(".sl-markdown-content table")
+          .evaluateAll((tables) =>
+            tables.every(
+              (element) =>
+                element.scrollWidth <= element.clientWidth + 1 &&
+                !element.hasAttribute("tabindex"),
+            ),
+          ),
       )
       .toBe(true);
-    await table.focus();
-    await expect(table).toBeFocused();
-    await page.keyboard.press("ArrowRight");
-    await expect
-      .poll(() => table.evaluate((element) => element.scrollLeft))
-      .toBeGreaterThan(0);
+    assert.deepEqual(await state(), {
+      stacked: true,
+      overflow: false,
+      tabindex: null,
+    });
+    const cell = table.locator("tbody tr").first().locator("td").nth(1);
+    assert.equal(await cell.getAttribute("role"), "cell");
+    assert.equal(
+      await cell.evaluate(
+        (element) => getComputedStyle(element, "::before").content,
+      ),
+      '"Example"',
+    );
+    assert.equal(await table.getAttribute("role"), "table");
     await page.waitForFunction(() =>
       [...document.querySelectorAll("pre")].every(
         (block) =>
@@ -437,16 +457,23 @@ try {
       violations: result.violations,
     });
     assert.deepEqual(result.violations, []);
+    // 641px, just above the stacking breakpoint: the table scrolls sideways
+    // and becomes a keyboard stop.
+    await page.setViewportSize({ width: 641, height: 900 });
+    await expect
+      .poll(state)
+      .toEqual({ stacked: true, overflow: true, tabindex: "0" });
+    await table.focus();
+    await expect(table).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect
+      .poll(() => table.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(0);
+    // 1440px: it fits and leaves the tab order.
     await page.setViewportSize({ width: 1440, height: 1000 });
     await expect
-      .poll(() =>
-        table.evaluate(
-          (element) =>
-            element.scrollWidth <= element.clientWidth + 1 &&
-            !element.hasAttribute("tabindex"),
-        ),
-      )
-      .toBe(true);
+      .poll(state)
+      .toEqual({ stacked: true, overflow: false, tabindex: null });
   });
   assert.deepEqual(evidence.network.external, []);
   assert.deepEqual(evidence.network.mutations, []);

@@ -8,13 +8,13 @@ Run Vectory on one Linux or macOS machine, connect that same machine as a device
 
 ## Before you start
 
-| You need | Check with |
+| Check | You need |
 | --- | --- |
-| Linux (x86-64 or Arm64) or macOS on Apple silicon | `uname -sm` |
-| Git and curl | `git --version` |
-| Node.js 22.12 or newer | `node --version` |
-| Rust 1.94 or newer | `cargo --version` |
-| Go 1.26 (an older Go fetches 1.26 automatically) | `go version` |
+| `uname -sm` | Linux (x86-64 or Arm64), or macOS on Apple silicon |
+| `git --version` | Git and curl |
+| `node --version` | Node.js 22.12 or newer |
+| `cargo --version` | Rust 1.94 or newer |
+| `go version` | Go 1.26 (an older Go fetches 1.26 automatically) |
 
 ## 1. Build Vectory
 
