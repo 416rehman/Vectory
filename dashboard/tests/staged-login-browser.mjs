@@ -15,7 +15,7 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:staged-login-fixture";
-// An OS-assigned port: harnesses never claim a fixed port another worker may use.
+// An OS-assigned port: a harness never claims a fixed port another process may use.
 const reservation = net.createServer();
 await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
 const port = reservation.address().port;
@@ -75,9 +75,9 @@ const user = {
   enabled: true,
   revision: 1,
 };
-// A teammate invited with a hyphenated address, as in the review.
+// A teammate invited with a hyphenated address.
 const invited = {
-  email: "r16-teammate@example.com",
+  email: "ops-teammate@example.com",
   name: "Synthetic teammate",
 };
 const inviteCode = "c".repeat(64);
@@ -697,7 +697,7 @@ try {
           .fill("Synthetic admin");
         await f.page
           .getByLabel("Email address", { exact: true })
-          .fill("r16-admin@example.com");
+          .fill("ops-admin@example.com");
         const password = f.page.getByLabel("Password", { exact: true });
         await password.fill("password");
         await f.page

@@ -250,7 +250,7 @@ func TestStatusSaysRevokedAndNamesTheAgentProcess(t *testing.T) {
 	now := time.Now()
 	heartbeat := now.Add(-10 * time.Minute)
 	view := &StatusView{StateDir: "/var/lib/vectory-agent", DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", CertExpiry: now.Add(20 * time.Hour),
-		Settings:   Settings{Name: "r16-host", Server: "https://vectory.example.test:8443"},
+		Settings:   Settings{Name: "web-01", Server: "https://vectory.example.test:8443"},
 		State:      State{LastHeartbeat: &heartbeat, CheckInFailure: &CheckInFailure{Since: now.Add(-5 * time.Minute), Code: "CREDENTIAL_REJECTED", Message: "The server doesn't accept this device's credential (HTTP 401)."}},
 		Foreground: true, Owner: &LockOwner{PID: 4242, Command: "run"}, BinaryOK: true}
 	text := RenderStatus(view, now)

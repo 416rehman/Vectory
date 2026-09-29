@@ -97,7 +97,7 @@ export function hostApprovalCommands(
   return [...blocks].map(([commands, names]) => ({ devices: names, commands }));
 }
 
-/** "r16-host", "r16-host and edge-2", "r16-host, edge-2 and 3 more". */
+/** "web-01", "web-01 and edge-2", "web-01, edge-2 and 3 more". */
 export function namedDevices(names: string[]) {
   if (names.length <= 2) return names.join(" and ");
   return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;

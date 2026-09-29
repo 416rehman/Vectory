@@ -1623,7 +1623,7 @@ try {
         version_id: id(71),
         version_number: 1,
         configuration_id: id(72),
-        configuration_name: "r16-first",
+        configuration_name: "edge-syslog",
         policy: null,
         policy_id: null,
         policy_name: null,
@@ -1643,7 +1643,7 @@ try {
       await open({ fromDevicePage: true }, true);
       await expect(
         dialog().getByText(
-          "Replaces r16-first v1: only this device follows it, so nothing else changes.",
+          "Replaces edge-syslog v1: only this device follows it, so nothing else changes.",
           { exact: true },
         ),
       ).toBeVisible();
@@ -1664,7 +1664,7 @@ try {
       // Keeping it brings back the choice, and nothing is replaced.
       await dialog()
         .getByRole("button", {
-          name: "Keep r16-first v1 as well",
+          name: "Keep edge-syslog v1 as well",
           exact: true,
         })
         .click();
