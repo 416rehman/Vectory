@@ -134,6 +134,7 @@ async function load({
   width = 899,
   theme = "light",
   path = `devices/${id(1)}`,
+  library = [],
 } = {}) {
   if (context) await context.close();
   state = { device, reads: 0, holdNext: false, failNext: false, holds: [] };
@@ -202,7 +203,14 @@ async function load({
       if (path === `/versions/${version.id}`) return reply(version);
       if (path === `/configurations/${pipeline.id}`) return reply(pipeline);
       if (path === "/configurations/library")
-        return reply({ items: [], total: 0, page: 1, page_size: 12 });
+        return reply({
+          items: library,
+          total: library.length,
+          page: 1,
+          page_size: 12,
+        });
+      if (path === `/configurations/${pipeline.id}/history`)
+        return reply({ items: [], total: 0 });
       if (path === "/deployments/history")
         return reply({
           items: [],
@@ -772,6 +780,76 @@ try {
           page.getByRole("heading", { name: "Pipelines", exact: true }),
         ).toBeVisible();
       }
+    },
+  );
+  await check(
+    "the pipeline chooser on a device page has its own styles, without the Deployments page's stylesheet",
+    async () => {
+      await load({
+        role: "operator",
+        library: [
+          {
+            id: pipeline.id,
+            name: pipeline.name,
+            description: "",
+            revision: 1,
+            created_at: created,
+            updated_at: created,
+            archived: false,
+            archived_at: null,
+            component_counts: { sources: 1, transforms: 1, sinks: 1 },
+            latest_version: { id: version.id, number: 3, created_at: created },
+          },
+        ],
+      });
+      await deviceVisible();
+      await page
+        .getByRole("button", { name: "Deploy a pipeline", exact: true })
+        .click();
+      const picker = page.getByRole("dialog", {
+        name: "Deploy a pipeline to Synthetic edge",
+      });
+      const option = picker.locator(".deployment-picker-option");
+      await expect(option).toHaveCount(1);
+      await expect(option).toContainText("1 in, 1 transform, 1 out");
+      const styles = await option.evaluate((el) => {
+        const own = getComputedStyle(el);
+        const list = getComputedStyle(el.parentElement);
+        return {
+          display: own.display,
+          padding: own.padding,
+          cursor: own.cursor,
+          listBorder: list.borderTopWidth,
+          listHeight: list.maxHeight,
+        };
+      });
+      expect(styles).toEqual({
+        display: "flex",
+        padding: "12px 14px",
+        cursor: "pointer",
+        listBorder: "1px",
+        listHeight: "360px",
+      });
+      // Nothing from the Deployments page was loaded to get here.
+      expect(
+        await page.evaluate(() =>
+          [
+            ...document.querySelectorAll(
+              "style[data-vite-dev-id], link[rel=stylesheet]",
+            ),
+          ]
+            .map(
+              (el) =>
+                el.getAttribute("data-vite-dev-id") ||
+                el.getAttribute("href") ||
+                "",
+            )
+            .filter((source) => /deployments\.css/.test(source)),
+        ),
+      ).toEqual([]);
+      const file = resolve(output, "device-deploy-picker.png");
+      await page.screenshot({ path: file, animations: "disabled" });
+      screenshots.push(relative(repository, file));
     },
   );
   await check(
