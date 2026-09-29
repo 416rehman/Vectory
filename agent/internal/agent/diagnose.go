@@ -68,10 +68,13 @@ type componentRef struct{ Kind, Type string }
 
 // redactor knows which tokens are safe to echo and which values must never be.
 type redactor struct {
-	safe       map[string]bool
-	secrets    []string
-	labels     [][2]string
-	components map[string]componentRef
+	safe    map[string]bool
+	secrets []string
+	// Credentials under four bytes can't be replaced wherever they appear
+	// without mangling ordinary text, so only whole words are redacted.
+	shortSecrets []string
+	labels       [][2]string
+	components   map[string]componentRef
 }
 
 var (
@@ -118,9 +121,41 @@ func (r *redactor) allowText(value string) {
 }
 
 func (r *redactor) addSecret(value string) {
-	if len(value) >= 4 {
+	switch {
+	case len(value) >= 4:
 		r.secrets = append(r.secrets, value)
+	case value != "":
+		r.shortSecrets = append(r.shortSecrets, value)
 	}
+}
+
+func isWordRune(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_' }
+
+// replaceWord replaces word only where it stands alone, not touching a letter,
+// digit or underscore on either side.
+func replaceWord(s, word, with string) string {
+	var out strings.Builder
+	for {
+		i := strings.Index(s, word)
+		if i < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		end := i + len(word)
+		before, nb := utf8.DecodeLastRuneInString(s[:i])
+		after, na := utf8.DecodeRuneInString(s[end:])
+		out.WriteString(s[:i])
+		if (nb > 0 && isWordRune(before)) || (na > 0 && isWordRune(after)) {
+			out.WriteString(word)
+		} else {
+			out.WriteString(with)
+		}
+		s = s[end:]
+	}
+}
+
+func containsWord(s, word string) bool {
+	return replaceWord(s, word, "") != s
 }
 
 func (r *redactor) addLabel(path, label string) {
@@ -212,6 +247,9 @@ func (r *redactor) text(s string) string {
 	s = strings.ToValidUTF8(ansiEscape.ReplaceAllString(s, ""), "")
 	for _, secret := range r.secrets {
 		s = strings.ReplaceAll(s, secret, redactedToken)
+	}
+	for _, secret := range r.shortSecrets {
+		s = replaceWord(s, secret, redactedToken)
 	}
 	for _, label := range r.labels {
 		s = strings.ReplaceAll(s, label[0], label[1])
@@ -953,6 +991,11 @@ func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
 func (r *redactor) containsSecret(text string) bool {
 	for _, secret := range r.secrets {
 		if strings.Contains(text, secret) || strings.Contains(secret, text) {
+			return true
+		}
+	}
+	for _, secret := range r.shortSecrets {
+		if containsWord(text, secret) {
 			return true
 		}
 	}

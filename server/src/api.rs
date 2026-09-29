@@ -1024,6 +1024,11 @@ async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>
     .map(|(value, _)| value)
     .collect())
 }
+/// The unpaged list is a convenience for scripts. The audit trail grows without
+/// bound, so it answers with the newest events only; clients that need more
+/// page through `GET /audit/history`.
+const LEGACY_AUDIT_EVENTS: i64 = 1000;
+
 async fn audit_view(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
-    crate::audit::legacy(conn, i64::MAX).await
+    crate::audit::legacy(conn, LEGACY_AUDIT_EVENTS).await
 }

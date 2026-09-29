@@ -2376,7 +2376,7 @@
     },
     "/api/v1/audit": {
       "get": {
-        "summary": "Read audit",
+        "summary": "Read the newest 1000 audit events (unpaged legacy list; page through /api/v1/audit/history for more)",
         "operationId": "get__api_v1_audit",
         "security": [
           {

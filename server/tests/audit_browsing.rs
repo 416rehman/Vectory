@@ -954,3 +954,26 @@ async fn scope_separates_sign_in_activity_from_changes() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
     }
 }
+
+#[tokio::test]
+async fn the_unpaged_list_answers_with_the_newest_events_only() {
+    let (_temp, s, app, admin) = fixture().await;
+    sqlx::query(
+        "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1300) \
+         INSERT INTO records(kind,id,data,created_at) \
+         SELECT 'audit',printf('audit-%08d',x),\
+                json_object('id',printf('audit-%08d',x),'actor','scheduler','action','deployment.release','target','','outcome','success'),\
+                printf('2026-09-26T%02d:%02d:%02dZ',x/3600,(x/60)%60,x%60) FROM n",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let legacy = get(&app, "/api/v1/audit", &admin).await;
+    let events = legacy.as_array().unwrap();
+    assert_eq!(events.len(), 1000);
+    assert_eq!(events[0]["id"], "audit-00001300");
+    assert_eq!(events[999]["id"], "audit-00000301");
+    // Paging through history still reaches every event.
+    let history = get(&app, "/api/v1/audit/history?page=1&page_size=50", &admin).await;
+    assert_eq!(history["total"], 1300);
+}

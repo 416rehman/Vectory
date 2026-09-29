@@ -209,6 +209,26 @@ async fn issue(app: &Router, admin: &Session, target: &Value) -> Value {
 }
 
 #[tokio::test]
+async fn account_administration_authenticates_before_it_reads_the_body() {
+    let (_temp, _s, app, admin) = fixture().await;
+    let viewer = create(&app, &admin, "viewer", "viewer@example.test").await;
+    let target = format!("/api/v1/users/{}", viewer.id());
+    for (method, path) in [
+        ("PUT", target.clone()),
+        ("POST", format!("{target}/password-reset")),
+        ("POST", format!("{target}/two-factor-reset")),
+    ] {
+        // A body that would fail validation must never be judged for someone
+        // who is not allowed to send it.
+        let junk = json!({"unexpected": true});
+        let (status, body, _) = call(&app, method, &path, junk.clone(), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path} {body}");
+        let (status, body, _) = call(&app, method, &path, junk, Some(&viewer)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path} {body}");
+    }
+}
+
+#[tokio::test]
 async fn user_edit_requires_reauth_csrf_role_and_current_revision() {
     let (_temp, _s, app, admin) = fixture().await;
     let viewer = create(&app, &admin, "viewer", "viewer@example.test").await;

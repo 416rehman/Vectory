@@ -380,6 +380,7 @@ pub async fn admin_reset(
     Path(id): Path<String>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
+    crate::auth::authorize(&s, &h, &["admin"], true).await?;
     let id = crate::deployment_requests::parse_id(&id)?;
     let (_, hash) = crate::accounts::reauthenticate(
         &s,

@@ -106,12 +106,12 @@ pub async fn edit(
     RawQuery(raw): RawQuery,
     body: Bytes,
 ) -> Result<Json<Value>> {
+    let actor = auth::authorize(&s, &h, &["admin"], true).await?;
     let v = crate::token_requests::parse(&body)?;
     let key = crate::deployment_requests::request_id(&v)?;
     if let Some(key) = key.as_deref() {
         crate::access_requests::no_query(raw.as_deref())?;
         crate::deployment_requests::parse_id(&id)?;
-        let actor = auth::authorize(&s, &h, &["admin"], true).await?;
         let mut conn = s.pool.acquire().await?;
         if crate::access_requests::entry(&mut conn, actor["id"].as_str().unwrap(), key, &id)
             .await?
@@ -335,6 +335,7 @@ pub async fn issue_reset(
     RawQuery(raw): RawQuery,
     body: axum::body::Bytes,
 ) -> Result<Json<Value>> {
+    let actor = auth::authorize(&s, &h, &["admin"], true).await?;
     let v = crate::token_requests::parse(&body)?;
     let key = crate::deployment_requests::request_id(&v)?;
     let id = if key.is_some() {
@@ -361,7 +362,6 @@ pub async fn issue_reset(
         id
     };
     if let Some(key) = key.as_deref() {
-        let actor = auth::authorize(&s, &h, &["admin"], true).await?;
         let already_seen: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM password_reset_requests WHERE actor_id=? AND request_id=?",
         )
