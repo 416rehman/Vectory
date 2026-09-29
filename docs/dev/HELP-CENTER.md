@@ -21,6 +21,8 @@ The build:
 5. Moves Astro's inline scripts into files under `/help/_scripts/`, so pages work under the server's `script-src 'self'` policy. Only `/help/` responses allow WebAssembly, for search.
 6. Checks every link, then copies the site to `dashboard/dist/help/`.
 
+In the browser, a small script in `src/components/Footer.astro` labels table cells so that wide tables stack into one block per row on phones, and makes any table that still scrolls sideways a keyboard stop.
+
 The Docker image builds the Help center from `docs/user/`, `help-center/` and `contracts/` only, so the build must not read other folders.
 
 ## Links from the dashboard
@@ -59,4 +61,4 @@ node help-center/tests/ci.mjs                # the built site on a disposable se
 
 ## API reference
 
-`/api-reference.html` is a separate page built from `contracts/openapi.json` with the Scalar API reference component (`dashboard/src/ScalarReference.tsx`). `contracts/generate.mjs` groups operations by resource, gives each a short name and states the session authentication. Requests from the page go only to the same server.
+`/api-reference.html` is a separate page built from `contracts/openapi.json` with the Scalar API reference component (`dashboard/src/ScalarReference.tsx`). `contracts/generate.mjs` groups operations by resource and states the session authentication. Requests from the page go only to the same server.
