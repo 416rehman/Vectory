@@ -224,10 +224,10 @@ export default function AccountMenu({
                 href={helpHref()}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Vectory documentation (opens in a new tab)"
+                aria-label="Help center (opens in a new tab)"
               >
                 <BookOpen size={16} aria-hidden="true" />
-                <span>Vectory documentation</span>
+                <span>Help center</span>
                 <ExternalLink
                   className="account-menu-external"
                   size={13}
