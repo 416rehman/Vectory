@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download, Plus } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
+import {
+  ChevronDown,
+  Copy,
+  CopyPlus,
+  Download,
+  Pencil,
+  Plus,
+} from "lucide-react";
 import { DataTable } from "./DataTable";
 import {
   api,
   can,
   when,
   type Device,
-  type Policy,
   type Release,
   type SavedPolicy,
+  type SavedPolicyListItem,
   type Token,
   type User,
 } from "./api";
@@ -28,6 +36,8 @@ import TargetDialog from "./TargetDialog";
 import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
+import AgentSettingsEditor from "./AgentSettingsEditor";
+import { policySummary } from "./deploymentReview";
 import DocLink from "./DocLink";
 import {
   ConfigurationModePicker,
@@ -97,23 +107,29 @@ export function Policies({
   user: User;
   notify: (message: string) => void;
 }) {
-  const { data, error, loading, reload } = useResource<SavedPolicy[]>(
+  const { data, error, loading, reload } = useResource<SavedPolicyListItem[]>(
     "/policies",
     [],
   );
   const creation = useRef<AgentSettingsCreationHandle>(null);
-  const [deploy, setDeploy] = useState<Policy | null>(null);
+  const editOpener = useRef<HTMLElement | null>(null);
+  const [deploy, setDeploy] = useState<{
+    setting: SavedPolicy;
+    deviceIds: string[];
+  } | null>(null);
+  const [editing, setEditing] = useState<SavedPolicyListItem | null>(null);
+  const operate = can(user, "operate");
   return (
-    <div className="control-page">
+    <div className="control-page agent-settings-page">
       <PageHeader
         title="Agent settings"
         help={{
           topic: "glossary",
           section: "devices-permissions-and-credentials",
         }}
-        description="Save a set of agent settings, then apply it to selected devices."
+        description="Reusable check-in, sync and metrics settings. Devices change only when you apply them."
       >
-        {can(user, "operate") && (
+        {operate && (
           <Button
             icon={Plus}
             onClick={(event) =>
@@ -129,17 +145,17 @@ export function Policies({
         ref={creation}
         user={user}
         onCreated={() => {
-          notify("Agent settings saved. Choose devices to apply them.");
+          notify("Saved. No devices change until you apply these settings.");
           void reload();
         }}
         onApply={(setting) => {
-          setDeploy(setting.policy);
+          setDeploy({ setting, deviceIds: [] });
           return true;
         }}
       />
       {error && <ErrorBox message={error} retry={reload} />}
       <div className="control-table">
-        <DataTable
+        <DataTable<SavedPolicyListItem>
           data={error ? [] : data}
           rowKey={(setting) => setting.id}
           label="Agent settings"
@@ -147,57 +163,70 @@ export function Policies({
           columns={[
             {
               id: "name",
-              header: "Name",
+              header: "Settings",
               value: (setting) => setting.name,
               filter: { placeholder: "Filter settings names" },
-              cell: (setting) => <strong>{setting.name}</strong>,
+              cell: (setting) => (
+                <>
+                  <strong>{setting.name}</strong>
+                  <small>{policySummary(setting.policy)}</small>
+                </>
+              ),
             },
             {
-              id: "interval",
-              header: "Check-in interval",
-              value: (setting) => setting.policy.heartbeat_seconds,
-              filter: { placeholder: "Filter seconds" },
-              cell: (setting) => `${setting.policy.heartbeat_seconds} seconds`,
+              id: "applied",
+              header: "Applied to",
+              value: (setting) => setting.applied_device_count ?? -1,
+              cell: (setting) => <AppliedDevices setting={setting} />,
             },
             {
-              id: "sync",
-              header: "Configuration sync",
-              value: (setting) =>
-                setting.policy.sync_paused ? "Paused" : "Enabled",
-              filter: {
-                options: [
-                  { value: "Paused", label: "Paused" },
-                  { value: "Enabled", label: "Enabled" },
-                ],
-              },
-              cell: (setting) =>
-                setting.policy.sync_paused ? "Paused" : "Enabled",
-            },
-            {
-              id: "metrics",
-              header: "Metrics",
-              value: (setting) =>
-                setting.policy.telemetry_enabled ? "Collected" : "Off",
-              filter: {
-                options: [
-                  { value: "Collected", label: "Collected" },
-                  { value: "Off", label: "Off" },
-                ],
-              },
-              cell: (setting) =>
-                setting.policy.telemetry_enabled ? "Collected" : "Off",
+              id: "updated",
+              header: "Updated",
+              value: (setting) => setting.updated_at || setting.created_at,
+              cell: (setting) => (
+                <DateCell value={setting.updated_at || setting.created_at} />
+              ),
             },
             {
               id: "actions",
-              header: <span className="sr-only">Apply settings</span>,
+              header: <span className="sr-only">Actions</span>,
+              label: "Actions",
               cell: (setting) =>
-                can(user, "operate") && (
-                  <Button
-                    variant="secondary compact"
-                    onClick={() => setDeploy(setting.policy)}
-                  >
-                    Apply to devices
-                  </Button>
+                operate && (
+                  <div className="agent-settings-actions">
+                    <Button
+                      variant="secondary compact"
+                      onClick={() => setDeploy({ setting, deviceIds: [] })}
+                    >
+                      Apply to devices
+                    </Button>
+                    {setting.revision !== undefined && (
+                      <Button
+                        variant="ghost compact"
+                        icon={Pencil}
+                        aria-label={`Edit ${setting.name}`}
+                        onClick={(event) => {
+                          editOpener.current = event.currentTarget;
+                          setEditing(setting);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost compact"
+                      icon={CopyPlus}
+                      aria-label={`Duplicate ${setting.name}`}
+                      onClick={(event) =>
+                        creation.current?.openCreate(event.currentTarget, {
+                          name: `${setting.name} copy`.slice(0, 120),
+                          policy: setting.policy,
+                        })
+                      }
+                    >
+                      Duplicate
+                    </Button>
+                  </div>
                 ),
             },
           ]}
@@ -210,7 +239,7 @@ export function Policies({
               <Quiet
                 title="No saved agent settings"
                 action={
-                  can(user, "operate") ? (
+                  operate ? (
                     <Button
                       onClick={(event) =>
                         creation.current?.openCreate(event.currentTarget)
@@ -229,20 +258,94 @@ export function Policies({
         />
       </div>
       <p className="control-muted">
-        Changes take effect after each agent checks in. A local emergency pause
-        always stays in effect until cleared on that device.
+        Devices pick up applied settings on their next check-in. A pause set on
+        the device itself stays until someone clears it there.
       </p>
-      {deploy && can(user, "operate") && (
+      {editing && operate && (
+        <AgentSettingsEditor
+          key={editing.id}
+          setting={editing}
+          returnFocusRef={editOpener}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            notify("Saved. No devices change until you apply these settings.");
+            void reload();
+          }}
+          onApply={(setting, deviceIds) => {
+            setEditing(null);
+            setDeploy({ setting, deviceIds });
+          }}
+        />
+      )}
+      {deploy && operate && (
         <TargetDialog
           key={user.id}
           userId={user.id}
           open
-          onClose={() => setDeploy(null)}
-          policy={deploy}
-          onDone={notify}
+          onClose={() => {
+            setDeploy(null);
+            void reload();
+          }}
+          policy={deploy.setting.policy}
+          policyId={deploy.setting.id}
+          policyName={deploy.setting.name}
+          initialDeviceIds={deploy.deviceIds}
+          onDone={(message) => {
+            notify(message);
+            void reload();
+          }}
         />
       )}
     </div>
+  );
+}
+
+/** "3 devices", opening the list of devices that follow these settings. */
+function AppliedDevices({ setting }: { setting: SavedPolicyListItem }) {
+  const count = setting.applied_device_count;
+  const devices = setting.applied_devices || [];
+  const outdated = setting.outdated_device_count || 0;
+  if (count === undefined)
+    return <span className="control-muted">Unknown</span>;
+  if (!count) return <span className="control-muted">Not applied</span>;
+  return (
+    <span className="agent-settings-applied">
+      <Popover.Root>
+        <Popover.Trigger asChild>
+          <button type="button" className="agent-settings-applied-trigger">
+            {count === 1 ? "1 device" : `${count} devices`}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            className="agent-settings-applied-menu"
+            align="start"
+            sideOffset={6}
+            collisionPadding={12}
+            aria-label={`Devices using ${setting.name}`}
+          >
+            <ul>
+              {devices.map((device) => (
+                <li key={device.id}>
+                  <a href={`#/devices/${encodeURIComponent(device.id)}`}>
+                    {device.name || device.id}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            {count > devices.length && <p>and {count - devices.length} more</p>}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+      {outdated > 0 && (
+        <small className="agent-settings-outdated">
+          {outdated === count
+            ? "On earlier values"
+            : `${outdated} on earlier values`}
+        </small>
+      )}
+    </span>
   );
 }
 
