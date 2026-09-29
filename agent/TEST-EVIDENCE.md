@@ -1,6 +1,8 @@
 # Agent test evidence — 2026-09-26
 
 > **Historical record of 2026-09-26 and 2026-09-27.** The evidence files it names were not committed; see commit `c88758e` ("Generated evidence JSON and screenshots from local review runs are not committed"). They are named below in backticks instead of linked, so you can see what each passage claimed, but none of those claims can be checked from this repository. Current evidence: the CI workflow `checks` for the commit under test and `docs/internal/REQUIREMENTS.md`.
+>
+> **Linux and macOS are no longer compile-only.** Since 2026-09-29 the `agent` job of the CI workflow `checks` runs `go test ./...` with `VECTOR_TEST_BINARY` set on Ubuntu 24.04, Windows Server 2025 and macOS 15 (Apple silicon), against the official Vector 0.58.0 archive for each runner, checked by its pinned SHA-256 (`.github/workflows/ci.yml`). The native tests there cover validation, activation, drift repair and rollback, reload or restart, telemetry, secret rotation and full mode; the reload test skips on Windows, where the agent restarts Vector instead. The "compile-only" and "without target execution" statements below describe the Windows sessions of their dates. CI does not cover installed services, reboot, upgrade, power loss or the race detector.
 
 Host: Windows 11 Pro 10.0.26200 amd64. Final toolchain: `go version go1.26.8 windows/amd64` (initial development checks used 1.26.6; current 1.26 patch was subsequently verified through the official Go release feed and all checks repeated). Vector: official 0.58.0 Windows amd64, reported revision `2bcad9b 2026-08-26 13:37:07.557544670`; downloaded/checksum verification handled by release workstream.
 
