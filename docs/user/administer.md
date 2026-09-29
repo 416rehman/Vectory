@@ -119,6 +119,8 @@ An old backup also restores old decisions: accounts that were disabled, old role
 
 The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
 
+If a migration fails, nothing from it is kept: the database stays at the previous migration, and the server stops with a message that names the failed migration, its cause and where the database stands. Fix the cause and start again, or restore the pre-upgrade backup.
+
 Migrations only move forward. An older server refuses a database that a newer one migrated, so going back to a previous version means restoring its backup: if an upgrade fails, stop and restore the pre-upgrade backup into a new volume with the previous image.
 
 ## Rotate the signing key

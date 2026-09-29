@@ -20,6 +20,62 @@ pub async fn write_tx(
     let guard = s.writer.lock().await;
     Ok((guard, begin_write(&s.pool).await?))
 }
+/// Bring the database to this server's schema. Each migration commits with
+/// its bookkeeping row in one transaction, so a failure keeps nothing of that
+/// migration. The error says where the database stands and what to do.
+pub async fn migrate(
+    pool: &sqlx::SqlitePool,
+    migrator: &sqlx::migrate::Migrator,
+) -> anyhow::Result<()> {
+    use sqlx::migrate::MigrateError;
+    let Err(error) = migrator.run(pool).await else {
+        return Ok(());
+    };
+    let applied: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success=1")
+            .fetch_one(pool)
+            .await
+            .ok()
+            .flatten();
+    let at = applied.map_or_else(
+        || "an empty schema".to_owned(),
+        |version| format!("migration {version}"),
+    );
+    let named = |version: i64| {
+        migrator.iter().find(|m| m.version == version).map_or_else(
+            || version.to_string(),
+            |m| format!("{version} ({})", m.description),
+        )
+    };
+    let pending = migrator
+        .iter()
+        .find(|m| applied.is_none_or(|last| m.version > last))
+        .map(|m| named(m.version));
+    let failed = |version: Option<String>, cause: &dyn std::fmt::Display| {
+        anyhow::anyhow!(
+            "Vectory could not upgrade its database: migration {} failed: {cause}. Nothing from that migration was kept; the database is still at {at}. Fix the cause and start the server again, or restore the backup you took before upgrading.",
+            version.unwrap_or_else(|| "(unknown)".into())
+        )
+    };
+    Err(match error {
+        MigrateError::ExecuteMigration(cause, version) => failed(Some(named(version)), &cause),
+        MigrateError::Execute(cause) => failed(pending, &cause),
+        MigrateError::VersionMissing(version) => anyhow::anyhow!(
+            "This database was upgraded by a newer Vectory: it has migration {version}, which this server doesn't include. Migrations only move forward. Run that newer version, or restore a backup taken before the upgrade."
+        ),
+        MigrateError::VersionMismatch(version) => anyhow::anyhow!(
+            "Migration {} in this database differs from the one this server ships. Run the Vectory version that migrated it, or restore a backup.",
+            named(version)
+        ),
+        MigrateError::Dirty(version) => anyhow::anyhow!(
+            "Migration {} is marked as partly applied. Restore the backup you took before upgrading.",
+            named(version)
+        ),
+        other => anyhow::anyhow!(
+            "Vectory could not upgrade its database: {other}. The database is still at {at}."
+        ),
+    })
+}
 pub fn telemetry_retention_days() -> i64 {
     std::env::var("VECTORY_TELEMETRY_RETENTION_DAYS")
         .ok()
