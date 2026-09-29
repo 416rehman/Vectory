@@ -708,14 +708,14 @@ export default function AuthScreen({
         setConfirm("");
         toSignIn({
           tone: "info",
-          text: "We couldn't confirm your new password was saved. Try signing in with it. If that doesn't work, ask your administrator for a new reset code.",
+          text: "We couldn't confirm your new password was saved. Try signing in with it. If that doesn't work, ask your administrator for a new reset link.",
         });
         return;
       }
       const failed = failure instanceof APIError ? failure.code : "";
       if (failed === "RESET_CODE_INVALID")
         setFields({
-          code: "This reset code is invalid, expired or already used. Ask your administrator for a new one.",
+          code: "This reset link is invalid, expired or already used. Ask your administrator for a new one.",
         });
       else if (failed === "PASSWORD_TOO_WEAK")
         setFields({ password: (failure as Error).message });

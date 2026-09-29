@@ -515,7 +515,7 @@ export default function App() {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Vectory documentation <ExternalLink size={14} aria-hidden="true" />
+          Help center <ExternalLink size={14} aria-hidden="true" />
         </a>
       </div>
     );

@@ -914,7 +914,7 @@ try {
         }),
       ).toHaveCount(0);
       const documentation = page.getByRole("menuitem", {
-        name: "Vectory documentation (opens in a new tab)",
+        name: "Help center (opens in a new tab)",
         exact: true,
       });
       await expect(documentation).toHaveAttribute("target", "_blank");
