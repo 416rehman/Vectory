@@ -66,6 +66,10 @@ function location(text: string, name?: string) {
   const from = match ? match.index + match[0].lastIndexOf(name) : 0;
   return range(text, from, from + (match ? name.length : 1));
 }
+/** Where a component (or option) name is written in configuration text. */
+export function sourceOffset(text: string, name?: string) {
+  return location(text, name).from;
+}
 function failure(text: string, message: string, field?: string): never {
   throw new ConfigurationSourceError([
     { ...location(text, field), severity: "error", message },

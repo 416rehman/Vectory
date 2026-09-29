@@ -477,11 +477,12 @@ export default function PipelineSettings({
         );
         if (control) {
           control.scrollIntoView?.({ block: "center" });
-          control
-            .querySelector<HTMLElement>(
-              "input:not([type=hidden]), select, textarea, [contenteditable=true], button",
-            )
-            ?.focus({ preventScroll: true });
+          // The value itself, not the help or actions buttons in its header.
+          (
+            control.querySelector<HTMLElement>(
+              "input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled), [contenteditable=true]",
+            ) || control.querySelector<HTMLElement>("button:not(:disabled)")
+          )?.focus({ preventScroll: true });
           return;
         }
       }

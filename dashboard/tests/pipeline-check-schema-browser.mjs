@@ -99,6 +99,7 @@ async function load(config, expectedNodes = 2) {
   await context.addInitScript(() => {
     localStorage.setItem("vectory-sidebar-collapsed", "true");
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   });
   await context.route("**/*", async (route) => {
     const request = route.request();
@@ -190,7 +191,8 @@ async function load(config, expectedNodes = 2) {
 }
 
 const button = (name) => page.getByRole("button", { name, exact: true });
-const checkButton = () => button("Check pipeline");
+const checkButton = () =>
+  page.getByRole("button", { name: /^Check pipeline: / });
 const code = () =>
   page.getByRole("textbox", { name: "Vector configuration code", exact: true });
 const sink = () => page.locator('.react-flow__node[data-id="discard_copy"]');
@@ -228,8 +230,16 @@ try {
         "max_size",
       );
       await checkButton().click();
-      await expect(checkButton()).toHaveAttribute("data-check-state", "failed");
-      expect(current.validations).toEqual([]);
+      // Vector checks the Code text too, but the permissive structural reply
+      // cannot hide the local schema error.
+      await expect.poll(() => current.validations.length).toBe(1);
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "problems",
+      );
+      await expect(
+        page.getByRole("region", { name: "Problems", exact: true }),
+      ).toContainText("max_size");
       expect(current.mutations).toEqual([]);
     },
   );
@@ -242,7 +252,13 @@ try {
       await codeView();
       await code().fill(JSON.stringify(pipeline(true)));
       await checkButton().click();
-      await expect(checkButton()).toHaveAttribute("data-check-state", "partial");
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "partial",
+      );
+      await expect(checkButton()).toHaveAccessibleName(
+        "Check pipeline: Partly checked",
+      );
       expect(current.validations).toHaveLength(1);
       expect(current.validations[0].config).toEqual(pipeline(true));
       expect(current.document.config).toEqual(pipeline(false));
@@ -253,14 +269,17 @@ try {
         path: resolve(output, "discarded-code-check-state.png"),
         animations: "disabled",
       });
-      await expect(checkButton()).toHaveAttribute("data-check-state", "stale");
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "problems",
+      );
       expect(current.validations).toHaveLength(1);
       expect(current.mutations).toEqual([]);
     },
   );
 
   await record(
-    "Graph scalar/schema error marks the node and blocks Check and publication",
+    "Graph scalar/schema error marks the node, keeps Check red and blocks publication",
     async () => {
       const invalid = pipeline(true);
       invalid.sinks.discard_copy.buffer.max_size = "bad";
@@ -270,9 +289,16 @@ try {
         "aria-label",
         /max_size/,
       );
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "problems",
+      );
       await checkButton().click();
-      await expect(checkButton()).toHaveAttribute("data-check-state", "failed");
-      expect(current.validations).toEqual([]);
+      await expect.poll(() => current.validations.length).toBe(1);
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "problems",
+      );
       await button("Review & publish").click();
       const review = page.getByRole("dialog", {
         name: "Review & publish",
@@ -282,7 +308,7 @@ try {
       await expect(
         review.getByRole("button", { name: "Publish version", exact: true }),
       ).toBeDisabled();
-      expect(current.validations).toEqual([]);
+      expect(current.validations).toHaveLength(1);
       expect(current.mutations).toEqual([]);
     },
   );
@@ -328,8 +354,11 @@ try {
         ).toBe(true);
       }
       await checkButton().click();
-      await expect(checkButton()).toHaveAttribute("data-check-state", "failed");
-      expect(current.validations).toEqual([]);
+      await expect.poll(() => current.validations.length).toBe(1);
+      await expect(checkButton()).toHaveAttribute(
+        "data-check-state",
+        "problems",
+      );
       expect(current.mutations).toEqual([]);
     },
   );
@@ -341,7 +370,7 @@ try {
     JSON.stringify(
       {
         scope:
-          "Actual App/editor with isolated synthetic API and in-memory configuration. Code, graph and shared memory-table scalar/schema errors must not retain a passing Check. No real server, preview, draft, publication or device mutations.",
+          "Actual App/editor with isolated synthetic API and in-memory configuration. Code, graph and shared memory-table scalar/schema errors must never show a passing Check, even when the checker replies permissively. No real server, preview, draft, publication or device mutations.",
         passed: results.length === 4 && results.every((item) => item.passed),
         results,
         unexpected,

@@ -141,6 +141,7 @@ import {
   detectConfigurationFormat,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
+  sourceOffset,
 } from "./configurationSource";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
 import ConfigurationImportDialog, {
@@ -399,6 +400,10 @@ export default function Editor({
     [checkError, setCheckError] = useState(""),
     [problemsOpen, setProblemsOpen] = useState(false),
     [autoCheck, setAutoCheck] = useState(readAutoCheck),
+    [codeReveal, setCodeReveal] = useState<{
+      offset: number;
+      nonce: number;
+    } | null>(null),
     [focusRequest, setFocusRequest] = useState<{
       component: string;
       field?: string;
@@ -668,7 +673,7 @@ export default function Editor({
   // Problems: instant local checks plus the last Vector check. Vector's
   // findings stay visible, marked stale, until a check of the edited draft.
   const codeChecked = view === "code" && importedCodeDirty.current;
-  const checkStale = useMemo(() => {
+  const draftChanged = useMemo(() => {
     if (!check) return false;
     if (codeChecked) return check.code !== code;
     return (
@@ -677,15 +682,31 @@ export default function Editor({
         JSON.stringify(check.variables) !== JSON.stringify(variables))
     );
   }, [check, config, variables, code, codeChecked]);
+  // An unfinished field value is not in the draft yet, so the last check no
+  // longer describes what is on screen.
+  const checkStale = draftChanged || (!!check && pendingFieldCount > 0);
+  // Unapplied Code edits are what a check sends, so their local findings
+  // count until the text is applied or discarded.
+  const codeProblemSource =
+    codeChecked && currentAnalysis ? currentAnalysis : null;
   const draftProblems = useMemo(
     () =>
-      localProblems(
-        graphDiagnosis.diagnostics,
-        connectivity,
-        variableMessages,
-        config,
-      ),
-    [graphDiagnosis, connectivity, variableMessages, config],
+      codeProblemSource
+        ? localProblems(
+            codeProblemSource.diagnostics,
+            codeProblemSource.config
+              ? pipelineConnectivity(codeProblemSource.config)
+              : new Map(),
+            variableMessages,
+            codeProblemSource.config || config,
+          )
+        : localProblems(
+            graphDiagnosis.diagnostics,
+            connectivity,
+            variableMessages,
+            config,
+          ),
+    [codeProblemSource, graphDiagnosis, connectivity, variableMessages, config],
   );
   const problems = useMemo(() => {
     const vector = checkProblems(check?.result || null, config, checkStale);
@@ -716,21 +737,32 @@ export default function Editor({
   const verdict = checkError
     ? `Couldn't check with Vector: ${checkError}`
     : checkStale
-      ? autoCheck
-        ? "Changed since the last check. Checking again when you pause."
-        : "Changed since the last check."
+      ? pendingFieldCount
+        ? "Apply or discard the field you're editing, then check again."
+        : autoCheck
+          ? "Changed since the last check. Checking again when you pause."
+          : "Changed since the last check."
       : checkVerdict(check?.result || null, problemCounts.errors);
   const autoCheckAttempt = useRef<{
     config: Config;
     variables: VariableDeclaration[];
   } | null>(null);
+  // Auto-check waits while a dialog or unfinished field has the user's focus.
   const autoCheckReady =
     autoCheck &&
     checkable &&
+    !!doc &&
     view === "canvas" &&
     !checking &&
     !busy &&
     !historyOpen &&
+    !publishOpen &&
+    !globalsOpen &&
+    !detailsOpen &&
+    !discardOpen &&
+    !deployVersion &&
+    !pipelineAction &&
+    !importCandidate &&
     pendingFieldCount === 0 &&
     (!check || checkStale) &&
     Object.keys(config.sources || {}).length > 0 &&
@@ -2333,12 +2365,18 @@ export default function Editor({
   // Open the step a problem belongs to and reveal the field and position.
   // Pipeline-wide problems open the matching pipeline settings section.
   function openProblem(problem: Problem) {
+    // In Code, go to where the step (or the first syntax error) is written.
     if (view === "code") {
-      if (importedCodeDirty.current) {
-        setError("Apply or discard your Code changes to open this problem.");
-        return;
-      }
-      changeView("canvas");
+      const syntax = currentAnalysis?.diagnostics.find(
+        (item) => item.severity === "error" && !item.componentId,
+      );
+      setCodeReveal({
+        offset: problem.component
+          ? sourceOffset(code, problem.component)
+          : syntax?.from || 0,
+        nonce: Date.now(),
+      });
+      return;
     }
     const node = problem.component
       ? nodes.find(
@@ -3842,6 +3880,7 @@ export default function Editor({
               value={code}
               diagnostics={currentAnalysis?.diagnostics || []}
               onFormat={formatCode}
+              reveal={codeReveal}
               onChange={(value) => {
                 setCode(value);
                 importedCodeDirty.current = value !== stringify(config);
