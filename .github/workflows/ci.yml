@@ -780,13 +780,16 @@ jobs:
           docker compose up -d --wait --wait-timeout 300
           docker compose ps
       - name: The instance answers through the TLS proxy and is not set up yet
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          curl -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
+          # A started container is not yet a listening proxy: retry a refused connection.
+          curl -fsS --retry 30 --retry-delay 2 --retry-connrefused --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
           echo
           jq -e '.initialized == false' "$RUNNER_TEMP/status-before.json"
       - name: Provide the pinned Vector 0.58.0 for the enrolled device
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         timeout-minutes: 10
         env:
           VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
