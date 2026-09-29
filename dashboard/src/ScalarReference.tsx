@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PanelsTopLeft, Server } from "lucide-react";
+import { ExternalLink, PanelsTopLeft, Server } from "lucide-react";
 import {
   ApiReferenceReact,
   type AnyApiReferenceConfiguration,
@@ -9,12 +9,24 @@ import "@scalar/api-reference-react/style.css";
 import spec from "../../contracts/openapi.json";
 import { scalarFetch } from "./scalarTransport";
 import TabLabel from "./TabLabel";
-import { ExternalDocLink } from "./DocLink";
+import "./help-link.css";
 import "./scalar-reference.css";
 
 function documentFor(agent: boolean) {
+  const paths = Object.fromEntries(
+    Object.entries(spec.paths).filter(([path]) =>
+      path.startsWith(agent ? "/agent/v1/" : "/api/v1/"),
+    ),
+  );
+  const used = new Set(
+    Object.values(paths).flatMap((methods) =>
+      Object.values(methods).flatMap((operation) => operation.tags ?? []),
+    ),
+  );
   return {
     ...spec,
+    tags: spec.tags.filter((tag) => used.has(tag.name)),
+    security: agent ? [{ deviceMTLS: [] }] : spec.security,
     info: {
       ...spec.info,
       title: agent ? "Vectory agent protocol" : "Vectory dashboard API",
@@ -31,11 +43,7 @@ function documentFor(agent: boolean) {
           },
         ]
       : [{ url: window.location.origin, description: "This Vectory instance" }],
-    paths: Object.fromEntries(
-      Object.entries(spec.paths).filter(([path]) =>
-        path.startsWith(agent ? "/agent/v1/" : "/api/v1/"),
-      ),
-    ),
+    paths,
   };
 }
 
@@ -102,12 +110,21 @@ function Reference() {
           >
             <TabLabel icon={Server}>Agent protocol</TabLabel>
           </button>
-          <ExternalDocLink
-            href="/api/v1/openapi.json"
+          <a
             className="scalar-openapi-link"
+            href="/api/v1/openapi.json"
+            target="_blank"
+            rel="noopener noreferrer"
           >
             OpenAPI JSON
-          </ExternalDocLink>
+            <ExternalLink
+              className="doc-link-indicator"
+              size={12}
+              aria-hidden="true"
+              focusable="false"
+            />
+            <span className="scalar-sr-only"> (opens in a new tab)</span>
+          </a>
         </nav>
       </header>
       <p className="scalar-vectory-context">
