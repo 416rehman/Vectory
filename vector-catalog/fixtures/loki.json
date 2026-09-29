@@ -23,7 +23,7 @@
         "codec": "json"
       },
       "labels": {
-        "service": "vectory"
+        "job": "vector"
       },
       "inputs": [
         "enrich"
