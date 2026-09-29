@@ -389,7 +389,7 @@ function DeliveryHealth({ device }: { device: Device }) {
         <p className="device-delivery-foot">
           {since && (
             <>
-              Since <TimeAgo value={since} />.{" "}
+              Started <TimeAgo value={since} />.{" "}
             </>
           )}
           Clears by itself after three clean checks.{" "}

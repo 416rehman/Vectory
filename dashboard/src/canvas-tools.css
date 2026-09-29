@@ -137,9 +137,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.canvas-find li.canvas-find-empty {
-  color: var(--muted);
-  cursor: default;
+/* Always mounted so screen readers hear it change; empty takes no room. */
+.canvas-find-status {
+  margin: 0;
+  padding: 8px 13px 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.canvas-find ul + .canvas-find-status {
+  border-top: 1px solid var(--border);
+}
+.canvas-find-status:empty {
+  padding: 0;
+  border: 0;
 }
 @media (max-width: 600px) {
   .editor-selection-toolbar,
