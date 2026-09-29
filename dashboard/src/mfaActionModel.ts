@@ -139,6 +139,16 @@ export function groupSetupKey(secret: string) {
   return secret.match(/.{1,4}/g)?.join(" ") ?? secret;
 }
 
+/**
+ * "0f3a 91c2 …": a recovery code in groups of four, to type from paper
+ * without losing place. Sign-in ignores the spaces (and dashes), so the
+ * grouped form works as typed; anything unexpected is shown as it came.
+ */
+export function groupRecoveryCode(code: string) {
+  const plain = code.replace(/[\s-]/g, "");
+  return /^[0-9a-f]{32}$/i.test(plain) ? plain.match(/.{4}/g)!.join(" ") : code;
+}
+
 /** The recovery-code file: what the codes are for, then one code per line. */
 export function recoveryCodesText({
   codes,
@@ -155,9 +165,11 @@ export function recoveryCodesText({
   return [
     `Vectory recovery codes for ${email} on ${workspace}, generated ${date}.`,
     "Each code works once. Generating new codes replaces all of these.",
+    "Type a code with or without its spaces.",
     "",
     ...codes.map(
-      (code, index) => `${String(index + 1).padStart(2, " ")}. ${code}`,
+      (code, index) =>
+        `${String(index + 1).padStart(2, " ")}. ${groupRecoveryCode(code)}`,
     ),
     "",
   ].join("\n");

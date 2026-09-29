@@ -5,6 +5,7 @@ import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -14,12 +15,17 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:staged-login-fixture";
+// An OS-assigned port: harnesses never claim a fixed port another worker may use.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5202,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -55,7 +61,8 @@ const results = [],
   unexpected = [],
   errors = [],
   requestSummaries = [],
-  accessibility = [];
+  accessibility = [],
+  layouts = [];
 const credentials = {
   email: "synthetic-mfa@example.test",
   password: "synthetic-only-password",
@@ -68,9 +75,21 @@ const user = {
   enabled: true,
   revision: 1,
 };
-async function fixture({ mfa = true } = {}) {
+// A teammate invited with a hyphenated address, as in the review.
+const invited = {
+  email: "r16-teammate@example.com",
+  name: "Synthetic teammate",
+};
+const inviteCode = "c".repeat(64);
+async function fixture({
+  mfa = true,
+  setupPath = null,
+  route = "users",
+  theme = "light",
+} = {}) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
+    colorScheme: theme,
   });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
@@ -105,7 +124,33 @@ async function fixture({ mfa = true } = {}) {
     };
     const session = () => ({ user, csrf_token: "synthetic-csrf" });
     if (path === "/status")
-      return reply({ initialized: true, version: "synthetic" });
+      return reply(
+        setupPath
+          ? {
+              initialized: false,
+              version: "synthetic",
+              setup_hint: {
+                source: "file",
+                variable: "VECTORY_BOOTSTRAP_SECRET_FILE",
+                container: false,
+                path: setupPath,
+              },
+            }
+          : { initialized: true, version: "synthetic" },
+      );
+    if (path === "/invite/preview" && method === "POST")
+      return reply({
+        ...invited,
+        expires_at: new Date(Date.now() + 86400000).toISOString(),
+        instance_name: "Synthetic verification",
+      });
+    if (path === "/invite/accept" && method === "POST") {
+      state.authenticated = true;
+      return reply({
+        user: { ...user, ...invited },
+        csrf_token: "synthetic-csrf",
+      });
+    }
     if (path === "/session")
       return state.authenticated
         ? reply(session())
@@ -194,7 +239,10 @@ async function fixture({ mfa = true } = {}) {
     if (path === "/account/sessions" && state.authenticated)
       return reply({ sessions: [] });
     if (path === "/mfa" && state.authenticated)
-      return reply({ enabled: state.mfa });
+      return reply({
+        enabled: state.mfa,
+        recovery_codes_remaining: state.mfa ? 7 : null,
+      });
     unexpected.push({ path, method });
     return reply(
       {
@@ -203,9 +251,17 @@ async function fixture({ mfa = true } = {}) {
       500,
     );
   });
-  await page.goto("http://127.0.0.1:5202/__staged-login#/users");
+  await page.goto(`http://127.0.0.1:${port}/__staged-login#/${route}`);
   await expect(
-    page.getByRole("heading", { name: /^Sign in to / }),
+    page.getByRole("heading", {
+      name: setupPath
+        ? "Set up Vectory"
+        : route.startsWith("invite")
+          ? /^Join /
+          : route.startsWith("reset")
+            ? "Reset your password"
+            : /^Sign in to /,
+    }),
   ).toBeVisible();
   return {
     context,
@@ -393,6 +449,12 @@ try {
             exact: true,
           }),
         ).toBeVisible();
+        // The person learns that the code is spent and how many are left.
+        await expect(
+          f.page.getByText("You used a recovery code; 7 left.", {
+            exact: true,
+          }),
+        ).toBeVisible();
       } finally {
         await f.close();
       }
@@ -514,6 +576,206 @@ try {
       }
     },
   );
+  await check(
+    "every auth screen fits 320 to 430 px without sideways scrolling, including a long setup-secret command",
+    async () => {
+      const screens = [
+        {
+          name: "setup",
+          options: {
+            setupPath: "/home/you/Vectory/.local/preview/bootstrap.secret",
+          },
+          themes: ["light", "dark"],
+        },
+        {
+          name: "setup-long-path",
+          options: {
+            setupPath:
+              "/srv/vectory/deployments/production-control-plane/secrets/bootstrap.secret",
+          },
+          themes: ["light"],
+        },
+        { name: "signin", options: {}, themes: ["light"] },
+        { name: "reset", options: { route: "reset" }, themes: ["light"] },
+        {
+          name: "invite",
+          options: { route: `invite?code=${inviteCode}` },
+          themes: ["light", "dark"],
+        },
+        { name: "mfa", options: {}, mfa: true, themes: ["light", "dark"] },
+      ];
+      for (const screen of screens)
+        for (const theme of screen.themes) {
+          const f = await fixture({ ...screen.options, theme });
+          try {
+            if (screen.mfa) {
+              await f.credentials();
+              await pending(f);
+            }
+            for (const width of [320, 360, 390, 430]) {
+              await f.page.setViewportSize({ width, height: 900 });
+              const layout = await f.page.evaluate(() => {
+                const code = document.querySelector(".copy-line > code");
+                const card = document
+                  .querySelector(".signin-card")
+                  .getBoundingClientRect();
+                return {
+                  page: document.documentElement.scrollWidth,
+                  viewport: innerWidth,
+                  commandRight: code
+                    ? code.getBoundingClientRect().right
+                    : null,
+                  // Anything that sticks out past the card's edge.
+                  outside: [...document.querySelectorAll(".signin-card *")]
+                    .filter(
+                      (element) =>
+                        element.getBoundingClientRect().right > card.right + 1,
+                    )
+                    .map((element) => element.className || element.tagName),
+                };
+              });
+              layouts.push({ screen: screen.name, theme, width, ...layout });
+              expect(
+                layout.page,
+                `${screen.name} at ${width}`,
+              ).toBeLessThanOrEqual(layout.viewport);
+              expect(layout.outside, `${screen.name} at ${width}`).toEqual([]);
+              // A long command stays inside its own box.
+              if (layout.commandRight !== null)
+                expect(layout.commandRight).toBeLessThanOrEqual(width);
+              if (
+                screen.name !== "setup-long-path" &&
+                (width !== 360 || theme === "dark")
+              )
+                await f.page.screenshot({
+                  path: resolve(
+                    output,
+                    `auth-${screen.name}-${width}-${theme}.png`,
+                  ),
+                  fullPage: true,
+                  animations: "disabled",
+                });
+            }
+          } finally {
+            await f.close();
+          }
+        }
+    },
+  );
+  await check(
+    "the setup form says each problem once, clears it as you type and focuses the first field to fix",
+    async () => {
+      const f = await fixture({
+        setupPath: "/home/you/Vectory/.local/preview/bootstrap.secret",
+      });
+      try {
+        const submit = f.page.getByRole("button", {
+          name: "Create administrator account",
+          exact: true,
+        });
+        const secret = f.page.getByLabel("Setup secret", { exact: true });
+        await submit.click();
+        await expect(
+          f.page.getByText("Paste the setup secret from your server.", {
+            exact: true,
+          }),
+        ).toBeVisible();
+        await expect(
+          f.page.getByText("Enter your name.", { exact: true }),
+        ).toBeVisible();
+        await expect(secret).toBeFocused();
+        // Typing in a field clears its own error only.
+        await secret.fill("synthetic-setup-secret");
+        await expect(
+          f.page.getByText("Paste the setup secret from your server."),
+        ).toHaveCount(0);
+        await expect(
+          f.page.getByText("Enter your name.", { exact: true }),
+        ).toBeVisible();
+        await f.page
+          .getByLabel("Your name", { exact: true })
+          .fill("Synthetic admin");
+        await f.page
+          .getByLabel("Email address", { exact: true })
+          .fill("r16-admin@example.com");
+        const password = f.page.getByLabel("Password", { exact: true });
+        await password.fill("password");
+        await f.page
+          .getByLabel("Confirm password", { exact: true })
+          .fill("password");
+        await submit.click();
+        await expect(password).toBeFocused();
+        // The weak-password advice appears once: the error, not the meter too.
+        await expect(f.page.locator(".auth-field-error")).toHaveCount(1);
+        await expect(f.page.locator(".password-meter")).toHaveCount(0);
+        await password.fill("password1");
+        await expect(f.page.locator(".auth-field-error")).toHaveCount(0);
+        await expect(f.page.locator(".password-meter")).toHaveCount(1);
+        expect(
+          f.state.requests.filter((r) => r.path === "/bootstrap"),
+        ).toHaveLength(0);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check("the welcome text keeps a hyphenated email whole", async () => {
+    // The number of lines a text spans.
+    const lines = (element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return new Set(
+        [...range.getClientRects()].map((rect) => Math.round(rect.top)),
+      ).size;
+    };
+    for (const theme of ["light", "dark"]) {
+      const f = await fixture({
+        route: `invite?code=${inviteCode}`,
+        theme,
+      });
+      try {
+        // The invitation names the address too.
+        await f.page.setViewportSize({ width: 320, height: 900 });
+        const invitedAddress = f.page.locator(".signin-lede .auth-email");
+        await expect(invitedAddress).toHaveText(invited.email);
+        expect(await invitedAddress.evaluate(lines)).toBe(1);
+        await f.page.setViewportSize({ width: 390, height: 900 });
+        const chosen = "violet-harbor-lantern-2046";
+        await f.page.getByLabel("Password", { exact: true }).fill(chosen);
+        await f.page
+          .getByLabel("Confirm password", { exact: true })
+          .fill(chosen);
+        await f.page
+          .getByRole("button", { name: "Create my account", exact: true })
+          .click();
+        await expect(
+          f.page.getByRole("heading", { name: /^Welcome, / }),
+        ).toBeVisible();
+        const address = f.page.locator(".signin-lede .auth-email");
+        await expect(address).toHaveText(invited.email);
+        for (const width of [320, 390]) {
+          await f.page.setViewportSize({ width, height: 900 });
+          // One line of text: the address never breaks at its hyphen.
+          expect(
+            await address.evaluate((element) => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return new Set(
+                [...range.getClientRects()].map((rect) => Math.round(rect.top)),
+              ).size;
+            }),
+          ).toBe(1);
+        }
+        await f.page.screenshot({
+          path: resolve(output, `auth-welcome-320-${theme}.png`),
+          fullPage: true,
+          animations: "disabled",
+        });
+      } finally {
+        await f.close();
+      }
+    }
+  });
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   await writeFile(
@@ -525,6 +787,7 @@ try {
           "Actual App staged sign-in with synthetic transport. Backend security verified separately; no real secrets or accounts.",
         results,
         accessibility,
+        layouts,
         requests: requestSummaries,
         errors,
         unexpected,
