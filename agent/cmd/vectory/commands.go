@@ -186,10 +186,18 @@ func defineServiceInstall(c *cli) func() int {
 		if err := agent.CheckInstalled(*c.state); err != nil {
 			return c.fail(err)
 		}
-		if err := agent.ServiceInstall(*c.state, *account); err != nil {
+		registration, err := agent.ServiceInstall(*c.state, *account)
+		if err != nil {
 			return c.fail(err)
 		}
-		fmt.Fprintf(c.stdout, "Registered %s for %s (runs as %s).\nNext: sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		switch registration {
+		case agent.ServiceUpdated:
+			fmt.Fprintf(c.stdout, "Updated the %s definition for %s (runs as %s).\nA running service uses it from its next restart: sudo vectory service-stop && sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		case agent.ServiceUnchanged:
+			fmt.Fprintf(c.stdout, "%s is already registered for %s (runs as %s).\n", agent.ServiceName, *c.state, *account)
+		default:
+			fmt.Fprintf(c.stdout, "Registered %s for %s (runs as %s).\nNext: sudo vectory service-start\n", agent.ServiceName, *c.state, *account)
+		}
 		return exitOK
 	}
 }
@@ -356,6 +364,24 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			if count > 1 {
 				return c.fail(errors.New("choose only one token input"))
 			}
+			// Token input is checked before any state is touched: a public or
+			// alternate-stream token file is refused at input preflight.
+			var fileToken string
+			if *tokenFile != "" {
+				path, ok := c.resolvePath("token-file", *tokenFile)
+				if !ok {
+					return exitUsage
+				}
+				f, err := agent.OpenEnrollmentTokenFile(path)
+				if err != nil {
+					return c.fail(err)
+				}
+				fileToken, err = readToken(f)
+				_ = f.Close()
+				if err != nil {
+					return c.fail(err)
+				}
+			}
 			dir := *c.state
 			if err := agent.CheckInstalled(dir); err != nil {
 				var missing *agent.NotInstalledError
@@ -400,15 +426,7 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			case *stdin:
 				value, err = readToken(os.Stdin)
 			case *tokenFile != "":
-				path, ok := c.resolvePath("token-file", *tokenFile)
-				if !ok {
-					return exitUsage
-				}
-				var f *os.File
-				if f, err = agent.OpenEnrollmentTokenFile(path); err == nil {
-					value, err = readToken(f)
-					_ = f.Close()
-				}
+				value = fileToken
 			case *token != "":
 				fmt.Fprintln(c.stderr, "Warning: command-line tokens may appear in shell history and process listings; prefer --token-stdin.")
 				value = *token

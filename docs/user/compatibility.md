@@ -1,6 +1,6 @@
 # Compatibility
 
-Which platforms, Vector versions and browsers Vectory supports today, and what has been tested on each. This release targets **Vector 0.58.0**.
+Which platforms, Vector versions and browsers Vectory supports today, and what has been tested on each. This release targets **Vector 0.58**: any 0.58.x patch release runs on a device, and the sandbox that validates pipelines on your server runs 0.58.0.
 
 ## Devices
 

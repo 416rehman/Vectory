@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,10 +18,12 @@ var setupCommand = command{
 	about: `Checks this host, adopts Vector, enrolls with your server, registers the
 service and waits for the first check-in. Nothing on the host changes until
 every check has passed and you've entered the token. Safe to run again: it
-resumes where it stopped. Restricted mode is the default; full mode only
-when you pass --mode full.`,
+resumes where it stopped, and restarts a running service on this build.
+Restricted mode is the default; full mode only when you pass --mode full.`,
 	examples: []string{
-		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh | sudo sh -s -- --create-user",
+		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh",
+		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
+		"sudo sh vectory-install.sh --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 1F3C...9AB0 --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --token-file /run/secrets/vectory-token --service none",
 		"sudo vectory setup --server https://vectory.example.com:8443 --dry-run",
@@ -48,6 +49,7 @@ func defineSetup(c *cli) func() int {
 	tokenFile := c.String("token-file", "", "PATH", "Read the enrollment token from a private file")
 	tokenStdin := c.Bool("token-stdin", "Read the enrollment token from standard input")
 	dashboard := c.HiddenString("dashboard-url", "dashboard address for the device link (set by the installer)")
+	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
@@ -82,6 +84,13 @@ func defineSetup(c *cli) func() int {
 		if *vector != "" {
 			options.VectorBinary = *vector
 		}
+		if *agentPath != "" {
+			resolved, ok := c.resolvePath("agent-path", *agentPath)
+			if !ok {
+				return exitUsage
+			}
+			options.AgentPath = resolved
+		}
 		if c.supplied("ca-file") {
 			value := *ca
 			if value != "" {
@@ -95,6 +104,20 @@ func defineSetup(c *cli) func() int {
 		}
 		human := !*c.json
 		color := human && colorEnabled(c.stdout)
+		// Refuse an unsafe token file before any check or change; the token
+		// itself is read only when enrollment needs it.
+		tokenPath := ""
+		if *tokenFile != "" {
+			var ok bool
+			if tokenPath, ok = c.resolvePath("token-file", *tokenFile); !ok {
+				return exitUsage
+			}
+			f, err := agent.OpenEnrollmentTokenFile(tokenPath)
+			if err != nil {
+				return c.fail(err)
+			}
+			_ = f.Close()
+		}
 		if human {
 			fmt.Fprintf(c.stdout, "Vectory agent setup %s%s\n", agent.Version, map[bool]string{true: " (dry run: nothing will change)"}[*dryRun])
 			options.Progress = func(step agent.SetupStep) { printStep(c.stdout, step, color) }
@@ -103,12 +126,8 @@ func defineSetup(c *cli) func() int {
 			switch {
 			case *tokenStdin:
 				return readToken(os.Stdin)
-			case *tokenFile != "":
-				path, ok := c.resolvePath("token-file", *tokenFile)
-				if !ok {
-					return "", errors.New("invalid --token-file")
-				}
-				f, err := agent.OpenEnrollmentTokenFile(path)
+			case tokenPath != "":
+				f, err := agent.OpenEnrollmentTokenFile(tokenPath)
 				if err != nil {
 					return "", err
 				}

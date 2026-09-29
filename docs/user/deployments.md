@@ -29,7 +29,7 @@ Scheduled deployments always use a fixed list.
 The review also blocks devices that can't run the version, and says why:
 
 - **Full mode needed.** The version uses something only full-mode devices allow. Only the host can [switch modes](agents.md#switch-between-restricted-and-full-mode).
-- **Wrong Vector version.** The device doesn't report Vector 0.58.0.
+- **Wrong Vector version.** The device doesn't report a Vector 0.58.x release.
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 

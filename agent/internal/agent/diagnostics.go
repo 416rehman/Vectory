@@ -106,11 +106,11 @@ func applyNextAction(state State) string {
 	}
 	switch state.Error.Code {
 	case "CAPABILITY_DENIED":
-		return "Review desired_configuration below for current local capability checks. The managed file may still be the last working configuration."
+		return "Allow what the problem names on this host, or change the pipeline and deploy again. Vector keeps running the last working configuration."
 	case "VALIDATION_FAILED":
-		return "Vector rejected the desired version; the diagnostics below say why (redacted). Run `vectory logs` for Vector's full output on this host. The managed file may still be last-good. After correcting the cause, request Retry in the dashboard or stop the agent, run retry, and restart it."
+		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `vectory logs` shows Vector's full output. Vector keeps running the last working configuration."
 	case "SECRET_RESOLUTION_FAILED":
-		return "Review desired_configuration below and the host-owned secret bindings. Check private-file permissions under the service account; never share the rendered managed configuration."
+		return "Check the host's secret bindings and the files' permissions for the service account. Never share the rendered managed configuration."
 	case "APPLY_ROLLED_BACK":
 		return "The attempted version did not become the active version; the last verified configuration was restored. Check host resources and destination health before requesting Retry or deploying a corrected version."
 	case "ROLLBACK_FAILED", "ROLLBACK_UNAVAILABLE", "RECOVERY_INVALID":

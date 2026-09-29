@@ -84,9 +84,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	case report.legacy != nil && report.legacy["binary_integrity"] == false:
 		report.add("vector", "fail", "Vector", "The adopted binary at "+s.VectorBinary+" changed or is missing since adoption.", "Restore it, or stop the agent and approve the new binary: vectory re-adopt --expected-sha256 SHA256")
 	case report.legacyErr != nil && report.legacy != nil && report.legacy["vector_version"] == "":
-		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report version "+VectorVersion+".", "Install Vector "+VectorVersion+" (https://vector.dev/download/), then approve it with vectory re-adopt.")
+		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report a "+VectorSeries+" version.", "Install Vector "+VectorSeries+" (https://vector.dev/download/), then approve it with vectory re-adopt.")
 	default:
-		report.add("vector", "ok", "Vector", VectorVersion+" at "+s.VectorBinary+" (adopted binary unchanged)", "")
+		report.add("vector", "ok", "Vector", s.adoptedVectorVersion()+" at "+s.VectorBinary+" (adopted binary unchanged)", "")
 	}
 
 	if err := SafePath(s.ManagedConfig); err != nil {
@@ -141,7 +141,11 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 		if enrolled {
 			credentials = &cred
 		}
-		report.Checks = append(report.Checks, networkChecks(ctx, server, caFile, credentials, key)...)
+		var lastAnswered *time.Time
+		if enrolled && stateErr == nil {
+			lastAnswered = st.LastHeartbeat
+		}
+		report.Checks = append(report.Checks, networkChecks(ctx, server, caFile, credentials, key, lastAnswered)...)
 	}
 
 	svc := ServiceStatus(ctx)
@@ -181,6 +185,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 				status = "fail"
 			}
 			report.add("apply", status, "Last apply", fmt.Sprintf("%s during %s: %s", st.Error.Code, st.Error.Stage, st.Error.Message), applyNextAction(st))
+			for _, problem := range problemRows(st.Error.Diagnostics) {
+				report.add("apply", "info", "Problem", problem.Message, problem.Hint)
+			}
 		}
 	}
 	return report, nil
@@ -208,13 +215,16 @@ func byteSize(n int64) string {
 
 // networkChecks runs DNS, TCP, TLS, clock and credential checks. It sends one
 // read-only request; with credentials it proves the server still accepts them.
-func networkChecks(ctx context.Context, server, caFile string, credentials *Credentials, key []byte) []DoctorCheck {
+func networkChecks(ctx context.Context, server, caFile string, credentials *Credentials, key []byte, lastAnswered *time.Time) []DoctorCheck {
 	var checks []DoctorCheck
 	add := func(id, status, title, detail, fix string) {
 		checks = append(checks, DoctorCheck{ID: id, Status: status, Title: title, Detail: detail, Fix: fix})
 	}
 	fail := func(id, title string, err error) {
 		if ce, ok := AsConnectionError(err); ok {
+			if lastAnswered != nil {
+				ce = ce.forKnownServer(*lastAnswered, time.Now())
+			}
 			add(id, "fail", title, ce.Message, ce.Fix)
 		} else {
 			add(id, "fail", title, sentence(err.Error()), "")

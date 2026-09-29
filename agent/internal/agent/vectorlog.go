@@ -56,7 +56,7 @@ type LogSummary struct {
 
 type logEntry struct {
 	summary LogSummary
-	message string // unredacted, bounded; redacted when reported
+	message string // unredacted, at most one log line; redacted when reported
 }
 
 type vectorLog struct {
@@ -120,14 +120,16 @@ func (l *vectorLog) handle(line []byte) {
 	if !ok {
 		return
 	}
+	// Verdicts count only from Vector's own targets: a pipeline's VRL log()
+	// writes arbitrary messages to the same stream (target vrl::stdlib::log).
 	switch {
-	case rec.Message == "Vector has started." && rec.Target == "vector" && rec.Version == VectorVersion:
+	case rec.Message == "Vector has started." && rec.Target == "vector" && SupportedVectorVersion(rec.Version):
 		l.signals.started++
 		l.notify()
-	case rec.Message == "Vector has reloaded.":
+	case rec.Message == "Vector has reloaded." && rec.Target == "vector":
 		l.signals.reloaded++
 		l.notify()
-	case rec.Message == "Reload was not successful.":
+	case rec.Message == "Reload was not successful." && rec.Target == "vector::internal_events::process":
 		l.signals.reloadFailed++
 		l.notify()
 	}
@@ -223,11 +225,15 @@ func (l *vectorLog) close() {
 }
 
 // beginCapture starts collecting records for one start or reload attempt and
-// returns the signal counters to wait beyond.
-func (l *vectorLog) beginCapture() logSignals {
+// returns the signal counters to wait beyond. A new process starts a new
+// stream, so an unterminated line left by the previous one is dropped; a
+// reload keeps the line Vector is writing.
+func (l *vectorLog) beginCapture(newProcess bool) logSignals {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.line, l.dropping = l.line[:0], false
+	if newProcess {
+		l.line, l.dropping = l.line[:0], false
+	}
 	l.capturing, l.captured = true, nil
 	return l.signals
 }
@@ -304,9 +310,9 @@ func (l *vectorLog) summarize(rec vectorRecord) {
 		if rec.Error != "" {
 			text += " " + rec.Error
 		}
-		if len(text) > 1024 {
-			text = text[:1024]
-		}
+		// Kept whole (the line is already bounded by vectorLogMaxLine):
+		// summaries redact before they truncate, and a secret cut in half
+		// here would no longer match its redaction.
 		entry.message = text
 	}
 	if reason != "" {

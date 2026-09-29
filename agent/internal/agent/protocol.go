@@ -281,7 +281,7 @@ func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c
 			return e
 		}
 	}
-	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
+	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: s.adoptedVectorVersion(), ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
 	if e != nil {
 		if ce, ok := AsConnectionError(e); ok {
 			outcome := pending

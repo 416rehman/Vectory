@@ -300,7 +300,7 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 	if d.Hint == "" {
 		d.Hint = codeHints[d.Code]
 	}
-	d.Field = truncateText(d.Field, 128)
+	d.Field = truncateText(r.text(d.Field), 128)
 	if d.Message == "" {
 		d.Message = "Vector reported an error."
 	}
@@ -823,7 +823,8 @@ func parseVectorRecord(line []byte) (vectorRecord, bool) {
 		return vectorRecord{}, false
 	}
 	rec := vectorRecord{
-		Level: strings.ToUpper(jsonText(raw["level"])), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
+		// "Log level is enabled." repeats the level key with a quoted value.
+		Level: strings.ToUpper(strings.Trim(jsonText(raw["level"]), `"`)), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
 		Error: jsonText(raw["error"]), ErrorType: jsonText(raw["error_type"]), Stage: jsonText(raw["stage"]),
 		Reason: jsonText(raw["reason"]), Address: jsonText(raw["address"]), ChangedFields: jsonText(raw["changed_fields"]),
 		Version: jsonText(raw["version"]), Timestamp: jsonText(raw["timestamp"]),
@@ -861,6 +862,10 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 	}
 	failedComponents := map[string]bool{}
 	for _, rec := range records {
+		// A pipeline's VRL log() output is event data, not Vector's verdict.
+		if strings.HasPrefix(rec.Target, "vrl::") {
+			continue
+		}
 		switch {
 		case rec.Message == "Configuration error." && rec.Error != "":
 			lines := strings.Split(rec.Error, "\n")
@@ -889,7 +894,7 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 		}
 	}
 	for _, rec := range records {
-		if rec.Level == "ERROR" && strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle") && rec.ComponentID != "" && !failedComponents[rec.ComponentID] {
+		if rec.Level == "ERROR" && !strings.HasPrefix(rec.Target, "vrl::") && strings.HasPrefix(rec.Message, "An error occurred that Vector couldn't handle") && rec.ComponentID != "" && !failedComponents[rec.ComponentID] {
 			set.add(r.finalize(Diagnostic{Code: "COMPONENT_FAILED", ComponentKind: rec.ComponentKind, ComponentID: rec.ComponentID, Message: "The component stopped with an error Vector could not handle."}))
 		}
 	}
@@ -925,6 +930,33 @@ func (e *Engine) diagnoseFailure(err error, effective []byte) []Diagnostic {
 		out = []Diagnostic{r.finalize(Diagnostic{Code: "VECTOR_" + strings.ToUpper(failure.Phase) + "_FAILED", Message: failure.Summary})}
 	}
 	return out
+}
+
+// policyDiagnostics explains a restricted-mode refusal: the component, the
+// resource and the allowance that would permit it. The resource comes from
+// the published pipeline, so it may be echoed unless it carries a secret.
+func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
+	var refusal *PolicyRefusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	r := e.redactorFor(effective)
+	for _, token := range []string{refusal.Resource, refusal.Suggested} {
+		if token != "" && !r.containsSecret(token) {
+			r.safe[token] = true
+		}
+	}
+	return []Diagnostic{r.finalize(refusal.Diagnostic())}
+}
+
+// containsSecret reports whether text overlaps a secret value.
+func (r *redactor) containsSecret(text string) bool {
+	for _, secret := range r.secrets {
+		if strings.Contains(text, secret) || strings.Contains(secret, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // secretDiagnostics explains a failed typed secret reference by name.

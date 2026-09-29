@@ -70,6 +70,10 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 
 `setup` never adopts a Vector that is already running. If it finds one, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
 
+Before it asks for the token, `setup` checks that the service account can run Vector and the agent. A Vector under a private home folder, such as `/root/.vector/bin/vector`, is refused with the folder that blocks it: install Vector system-wide or pass `--vector-binary`.
+
+Run `setup` again after replacing the agent binary to upgrade: it restarts the service on the new build and waits for that build's first check-in, for example `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. Vector finishes its in-flight events before the old agent exits.
+
 ## install
 
 Adopt a Vector binary and the configuration file the agent will manage. Run it again on an existing install, with the agent stopped, to change local settings.
@@ -83,7 +87,7 @@ sudo vectory install \
 
 | Flag | Meaning |
 | --- | --- |
-| `--vector-binary PATH` | The installed Vector 0.58.0 binary to adopt, pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
+| `--vector-binary PATH` | The installed Vector 0.58.x binary to adopt (any 0.58 patch release), pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
 | `--managed-config PATH` | The single JSON configuration file the agent manages. Its folder becomes private. |
 | `--adopt` | Confirms the adoption. Required for a new install. |
 | `--capability-policy PATH` | Restricted-mode allowances. Replaces all three lists. |
@@ -91,7 +95,7 @@ sudo vectory install \
 | `--metrics-url URL` | Loopback Prometheus endpoint to read metrics from, for example `http://127.0.0.1:9598/metrics`. |
 | `--clear-metrics-url` | Remove the saved metrics endpoint. |
 | `--secret-files PATH` | JSON map of secret names to absolute private files. Replaces all bindings. |
-| `--vector-data-dir PATH` | Data directory for pipelines that don't set `data_dir`. Empty restores the automatic choice: the adopted configuration's `data_dir`, then `/var/lib/vector` if it exists and is writable (not on Windows), then `<state-dir>/vector-data`. |
+| `--vector-data-dir PATH` | Data directory for pipelines that don't set `data_dir`. Empty restores the automatic choice: the adopted configuration's `data_dir`, then `/var/lib/vector` if it exists and is writable (not on Windows), then `<state-dir>/vector-data`. The automatic choice is made once, at the first activation, and kept, so checkpoints and disk buffers never move. |
 | `--graceful-shutdown-seconds N` | How long Vector may drain on stop or restart before it is killed, 5 to 300. Default 60. |
 
 All options are checked together before anything is saved. Options you leave out keep their values.
@@ -121,7 +125,7 @@ If an enrollment is interrupted, run the same command again with the same server
 
 ## run
 
-Run the agent in the foreground. It starts Vector, applies versions and checks in until you stop it with Ctrl-C, which also stops Vector.
+Run the agent in the foreground. It starts Vector, applies versions and checks in until you stop it with Ctrl-C. Vector then finishes its in-flight events (up to `--graceful-shutdown-seconds`, 60 by default) before both exit.
 
 ```sh
 sudo vectory run

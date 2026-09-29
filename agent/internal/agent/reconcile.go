@@ -110,7 +110,7 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 			return e.fail("RECOVERY_INVALID", "startup", "Last verified recovery artifact is missing or corrupted")
 		}
 		if err = e.Settings.CapabilityPolicy.Check(good); err != nil {
-			return e.fail("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy")
+			return e.failWith("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy", e.policyDiagnostics(err, good))
 		}
 		if honorPause && e.paused() {
 			return errWorkloadPaused
@@ -127,7 +127,7 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 		return err
 	}
 	if err = e.Settings.CapabilityPolicy.Check(data); err != nil {
-		return e.fail("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy")
+		return e.failWith("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy", e.policyDiagnostics(err, data))
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
 		return e.failWith("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration", e.diagnoseFailure(err, data))
@@ -188,7 +188,7 @@ func (e *Engine) Poll(ctx context.Context) error {
 	if err := e.observeProcessExit(); err != nil {
 		return err
 	}
-	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: e.Settings.adoptedVectorVersion(), ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	e.addHeartbeatFeatures(&heartbeat, running, metricsSource, metricsAddress)
 	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", heartbeat)
 	if err != nil {
@@ -253,7 +253,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	d := m.Desired
-	if d.VectorVersion != VectorVersion {
+	if !SupportedVectorVersion(d.VectorVersion) {
 		return e.failAttempt("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
 	}
 	if !e.Settings.Adopted {
@@ -315,7 +315,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttempt("CAPABILITY_DENIED", "validation", "Effective configuration violates the local capability policy")
+		return e.failAttemptWith("CAPABILITY_DENIED", "validation", "This host's restricted-mode policy doesn't allow this pipeline", e.policyDiagnostics(err, data))
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {
@@ -326,7 +326,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version", e.diagnoseFailure(err, data))
+		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Vector rejected this version on the device", e.diagnoseFailure(err, data))
 	}
 	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
@@ -595,6 +595,24 @@ func (e *Engine) renewForced(ctx context.Context) error {
 	_ = os.Remove(filepath.Join(e.Dir, "renewal-key.pem"))
 	return nil
 }
+
+// runningAgentBuild identifies this process's executable. It is read at
+// startup, before an upgrade can replace the file.
+func runningAgentBuild() *AgentBuild {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	digest, err := FileDigest(exe)
+	if err != nil {
+		return nil
+	}
+	return &AgentBuild{Version: Version, SHA256: digest}
+}
+
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
 	unlock, err := Lock(dir)
 	if err != nil {
@@ -615,6 +633,9 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		}
 	}()
 	defer func() {
+		if e.Driver.Alive() {
+			report(fmt.Sprintf("Stopping Vector: it finishes in-flight events for up to %d s.", e.Settings.gracefulShutdownSeconds()))
+		}
 		_ = e.Driver.Stop()
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"
@@ -628,19 +649,40 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 	} else if err = e.StartExisting(ctx); err != nil {
 		report(err.Error())
 	}
-	failures := 0
+	e.State.Agent = runningAgentBuild()
+	if e.Settings.VectorVersion == "" {
+		// Adopted before the version was recorded: report what the binary says.
+		if version, err := ProbeVector(ctx, e.Settings); err == nil {
+			e.Settings.VectorVersion = version
+		}
+	}
+	failures, followed := 0, false
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
+		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
 		err = supervisor.poll(ctx, e, report)
 		if err != nil {
 			failures++
-			report(err.Error())
+			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
+			report(message)
+			if _, network := AsConnectionError(err); network {
+				failure := CheckInFailure{Since: e.now(), Message: message}
+				if previous := e.State.CheckInFailure; previous != nil {
+					failure.Since = previous.Since
+				}
+				e.State.CheckInFailure = &failure
+				_ = e.save()
+			}
 		} else {
 			failures = 0
+			if e.State.CheckInFailure != nil {
+				e.State.CheckInFailure = nil
+				_ = e.save()
+			}
 			report("heartbeat: " + e.State.ApplyState)
 		}
 		if once {
@@ -659,6 +701,12 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		var b [1]byte
 		_, _ = rand.Read(b[:])
 		delay := time.Duration(float64(seconds) * (0.8 + float64(b[0])/255*0.4) * float64(time.Second))
+		// Never two follow-ups in a row: a flapping outcome can't speed up
+		// the check-in cadence.
+		followed = err == nil && !followed && followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration})
+		if followed {
+			delay = followUpDelay
+		}
 		if delay < e.Client.RetryAfter {
 			delay = e.Client.RetryAfter
 		}
@@ -667,6 +715,28 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		}
 	}
 }
+
+// appliedOutcome is what a heartbeat tells the server about the last apply.
+type appliedOutcome struct {
+	state      string
+	generation uint64
+}
+
+// followUpDelay brings an apply's outcome to the dashboard within seconds
+// instead of a full check-in interval.
+const followUpDelay = 2 * time.Second
+
+// followUp reports whether this poll finished an apply the last heartbeat
+// didn't report. The follow-up heartbeat reports it, so the next poll sees
+// no change and returns to the normal interval: one follow-up per outcome.
+func followUp(reported, now appliedOutcome) bool {
+	switch now.state {
+	case "verified_applied", "failed", "rolled_back":
+		return now != reported
+	}
+	return false
+}
+
 func StateSummary(dir string) (map[string]any, error) {
 	st, err := LoadState(dir)
 	if err != nil {

@@ -98,6 +98,17 @@ func TestDoctorChecksTheRealConnectionAndCredential(t *testing.T) {
 	if err := WriteJSON(filepath.Join(dir, "settings.json"), settings); err != nil {
 		t.Fatal(err)
 	}
+	// A device that checked in before has the right address: the server is down.
+	report, _ = RunDoctor(context.Background(), dir)
+	if text := RenderDoctor(report); !strings.Contains(text, "Can't reach the server (connection refused). It answered") || !strings.Contains(text, "Vector keeps running") {
+		t.Fatalf("outage not explained:\n%s", text)
+	}
+	// Without a previous check-in, the address itself is suspect.
+	state, _ := LoadState(dir)
+	state.LastHeartbeat = nil
+	if err := SaveState(dir, state); err != nil {
+		t.Fatal(err)
+	}
 	report, _ = RunDoctor(context.Background(), dir)
 	if !strings.Contains(RenderDoctor(report), "Nothing is accepting connections on 127.0.0.1:1") {
 		t.Fatalf("refused connection not explained:\n%s", RenderDoctor(report))

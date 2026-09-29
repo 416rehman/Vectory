@@ -43,6 +43,7 @@ const (
 var vectorDefaultDataDirProbe = vectorDefaultDataDir
 
 func hostRuntimePath(dir string) string { return filepath.Join(dir, "host-runtime.json") }
+func hostDataDirPath(dir string) string { return filepath.Join(dir, "vector-data-dir.json") }
 func agentDataDir(dir string) string    { return filepath.Join(dir, "vector-data") }
 
 // gracefulShutdownSeconds bounds the local drain limit passed to Vector.
@@ -111,14 +112,30 @@ func topLevelString(data []byte, key string) (string, bool) {
 	return value, true
 }
 
+// hostDataDirChoice is the derived data directory, remembered at the first
+// activation that uses it.
+type hostDataDirChoice struct {
+	DataDir string `json:"data_dir"`
+	Source  string `json:"source"`
+}
+
 // hostDataDir is the directory this device offers to a pipeline that does not
-// set data_dir. Resolution is deterministic: an explicit host setting, then
-// the adopted configuration's data_dir (keeps checkpoints and disk buffers),
-// then Vector's own default when it already exists and is writable, then a
-// private directory in the agent state directory.
+// set data_dir. An explicit host setting wins. Otherwise the directory chosen
+// at the first activation stays: checkpoints and disk buffers live there, so
+// it must not move because /var/lib/vector appears or becomes writable later.
+// The first choice is the adopted configuration's data_dir, then Vector's own
+// default when it already exists and is writable, then a private directory in
+// the agent state directory.
 func hostDataDir(s Settings, dir string) (string, string) {
 	if s.VectorDataDir != "" {
 		return s.VectorDataDir, dataDirHost
+	}
+	if data, err := readArtifact(hostDataDirPath(dir)); err == nil {
+		var choice hostDataDirChoice
+		if json.Unmarshal(data, &choice) == nil && filepath.IsAbs(choice.DataDir) &&
+			(choice.Source == dataDirAdopted || choice.Source == dataDirVectorDefault || choice.Source == dataDirAgentDefault) {
+			return choice.DataDir, choice.Source
+		}
 	}
 	if backup, err := readArtifact(filepath.Join(dir, "adoption-backup.json")); err == nil {
 		if value, ok := topLevelString(backup, "data_dir"); ok && filepath.IsAbs(value) {
@@ -162,6 +179,21 @@ func runtimeOverlay(s Settings, dir string, effective []byte) ([]byte, HostRunti
 	}
 	data, err := json.Marshal(overlay)
 	return data, h, err
+}
+
+// rememberHostDataDir keeps a derived data directory for later activations.
+func rememberHostDataDir(dir string, h HostRuntime) error {
+	if dir == "" || h.DataDirSource == dataDirPipeline || h.DataDirSource == dataDirHost {
+		return nil
+	}
+	if _, err := os.Lstat(hostDataDirPath(dir)); err == nil {
+		return nil
+	}
+	data, err := json.Marshal(hostDataDirChoice{DataDir: h.DataDir, Source: h.DataDirSource})
+	if err != nil {
+		return err
+	}
+	return AtomicWrite(hostDataDirPath(dir), data)
 }
 
 // writeRuntimeOverlay persists the overlay the running Vector process uses.
