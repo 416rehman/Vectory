@@ -21,6 +21,7 @@ import {
   Pause,
   Play,
   Plus,
+  Rocket,
   RotateCcw,
   Trash2,
   Undo2,
@@ -44,9 +45,10 @@ import {
   DateCell,
   ErrorBox,
   Modal,
+  EmptyState,
   PageHeader,
+  PageToolbar,
   Pagination,
-  RefreshButton,
   SearchBox,
   InlineError,
   Skeleton,
@@ -54,7 +56,7 @@ import {
   useNow,
   useResource,
 } from "./ui";
-import { DataTable } from "./DataTable";
+import { DataTable, TableCard } from "./DataTable";
 import AssignmentRemoval from "./AssignmentRemoval";
 import ScheduledAssignmentRefresh from "./ScheduledAssignmentRefresh";
 import { DeploymentRecoveryDialog } from "./DeploymentRecovery";
@@ -200,21 +202,6 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
     </div>
   );
 }
-function Empty({
-  title: heading,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="control-empty">
-      <h2>{heading}</h2>
-      <p>{children}</p>
-    </div>
-  );
-}
-
 export function Deployments({
   scheduled = false,
   user,
@@ -242,8 +229,8 @@ export function Deployments({
   const [search, setSearch] = useState(query.search),
     [localDetailId, setLocalDetailId] = useState<string | null>(null),
     [recentRequestsOpen, setRecentRequestsOpen] = useState(false),
-    [pickerOpen, setPickerOpen] = useState(false),
-    [refreshing, setRefreshing] = useState(false);
+    [pickerOpen, setPickerOpen] = useState(false);
+
   const controlled = selectedDeploymentId !== undefined;
   const detailId = controlled
     ? selectedDeploymentId?.toLowerCase() || null
@@ -303,10 +290,15 @@ export function Deployments({
     params.set("direction", query.direction || "desc");
   }
   if (scheduled) params.set("scheduled", "true");
-  const { data, error, loading, reload } = useResource<DeploymentPage>(
-    detailId ? null : `/deployments/history?${params}`,
-    { items: [], total: 0, page: query.page, page_size: 12 },
-  );
+  const { data, error, loading, reload, refreshing, updatedAt } =
+    useResource<DeploymentPage>(
+      detailId ? null : `/deployments/history?${params}`,
+      { items: [], total: 0, page: query.page, page_size: 12 },
+    );
+  const filteredList = !!search.trim() || query.status !== "all";
+  // Nothing recorded yet: the first-run message replaces the table.
+  const firstRun =
+    !loading && !error && !filteredList && query.page === 1 && !data.total;
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   // The list is not read while a rollout page is open, so its page is kept.
   const correcting = !detailId && !loading && !error && query.page > lastPage;
@@ -334,14 +326,6 @@ export function Deployments({
   function reset() {
     setSearch("");
     setQuery({ search: "", status: "all", page: 1 });
-  }
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await reload();
-    } finally {
-      setRefreshing(false);
-    }
   }
   const originLabel = scheduled ? "Schedules" : "Deployments";
   if (invalidDetail)
@@ -391,6 +375,13 @@ export function Deployments({
             ? `Upcoming and past scheduled changes. Times in ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`
             : "Every change from release to verified on each device."
         }
+        live={{
+          updatedAt,
+          error: error || undefined,
+          loading,
+          refreshing,
+          onRefresh: () => void reload(),
+        }}
       >
         {can(user, "operate") && data.request_history === true && (
           <Button
@@ -404,7 +395,7 @@ export function Deployments({
             Your recent requests
           </Button>
         )}
-        {can(user, "operate") && (
+        {can(user, "operate") && !firstRun && (
           <Button
             icon={Plus}
             onClick={(event) => {
@@ -436,185 +427,228 @@ export function Deployments({
           }}
         />
       )}
-      <div className="control-toolbar deployment-toolbar">
-        <SearchBox
-          value={search}
-          onChange={setSearch}
-          maxLength={200}
-          placeholder={scheduled ? "Search schedules" : "Search deployments"}
-        />
-        <RefreshButton busy={refreshing} onClick={() => void refresh()}>
-          Refresh
-        </RefreshButton>
-      </div>
-      {error && <ErrorBox message={error} retry={reload} />}
-      <div className="control-table">
-        <DataTable<DeploymentSummary>
-          label={scheduled ? "Schedules" : "Deployments"}
-          className="deployment-table"
-          data={error ? [] : data.items}
-          rowKey={(row) => row.id}
-          loading={waiting}
-          manualSorting
-          sort={{
-            column: query.sort || "created_at",
-            direction: query.direction || "desc",
-          }}
-          onSortChange={(sort) =>
-            setQuery(({ sort: _sort, direction: _direction, ...old }) => ({
-              ...old,
-              page: 1,
-              ...(sort
-                ? {
-                    sort: sort.column as DeploymentSort,
-                    direction: sort.direction,
-                  }
-                : {}),
-            }))
-          }
-          columns={[
-            {
-              id: "name",
-              header: "Change",
-              sortable: true,
-              cell: (d) => (
-                <>
-                  <a
-                    className="control-row-title"
-                    data-deployment-link={d.id}
-                    href={`#/${deploymentRoute(scheduled, d.id, query)}`}
-                    onClick={(event) => {
-                      if (
-                        event.button !== 0 ||
-                        event.ctrlKey ||
-                        event.metaKey ||
-                        event.shiftKey ||
-                        event.altKey
-                      )
-                        return;
-                      event.preventDefault();
-                      openDetail(d.id);
-                    }}
-                  >
-                    {title(d)}
-                  </a>
-                  <small>
-                    {subtitle(d)}
-                    {d.rollback_of && (
-                      <span className="deployment-lineage">
-                        {" "}
-                        · Rollback of{" "}
-                        {d.rollback_of_version
-                          ? `v${d.rollback_of_version}`
-                          : "an earlier rollout"}
-                      </span>
-                    )}
-                  </small>
-                </>
-              ),
-            },
-            {
-              id: "status",
-              header: "Status",
-              sortable: true,
-              cell: (d) => <DeploymentStatusCell d={d} />,
-              filter: {
-                value: query.status,
-                emptyValue: "all",
-                allLabel: "All statuses",
-                manual: true,
-                options: statusFilters,
-                onChange: (status) =>
-                  setQuery((old) => ({
-                    ...old,
-                    search: search.trim(),
-                    status,
-                    page: 1,
-                  })),
-              },
-            },
-            {
-              id: "verified",
-              header: "Devices",
-              sortable: true,
-              cell: (d) => <DevicesCell d={d} />,
-            },
-            {
-              id: scheduled ? "scheduled_at" : "created_at",
-              header: scheduled ? "Scheduled for" : "Created",
-              sortable: true,
-              cell: (d) => (
-                <DateCell value={scheduled ? d.scheduled_at : d.created_at} />
-              ),
-            },
-            {
-              id: "actions",
-              header: <span className="sr-only">Actions</span>,
-              label: "Actions",
-              sortable: false,
-              cell: (d) => (
+      {firstRun ? (
+        <TableCard>
+          <EmptyState
+            icon={scheduled ? CalendarClock : Rocket}
+            title={
+              scheduled ? "No scheduled deployments" : "No deployments yet"
+            }
+            action={
+              can(user, "operate") ? (
                 <Button
-                  variant="secondary compact"
-                  onClick={() => openDetail(d.id)}
-                  aria-label={`View details for ${title(d)}`}
+                  icon={Plus}
+                  onClick={(event) => {
+                    pickerOpener.current = event.currentTarget;
+                    setPickerOpen(true);
+                  }}
                 >
-                  Open
+                  {scheduled ? "Schedule a deployment" : "Deploy a pipeline"}
                 </Button>
-              ),
-            },
-          ]}
-          empty={
-            error ? (
-              "Results unavailable."
-            ) : (
-              <Empty
-                title={
-                  search.trim() || query.status !== "all"
-                    ? "No matching deployments"
-                    : scheduled
-                      ? "No scheduled deployments"
-                      : "No deployments yet"
+              ) : undefined
+            }
+          >
+            {scheduled
+              ? "Pick a published pipeline, choose devices, then choose Scheduled."
+              : "Publish a pipeline, then choose the devices that should run it."}
+          </EmptyState>
+        </TableCard>
+      ) : (
+        <>
+          <PageToolbar
+            search={
+              <SearchBox
+                value={search}
+                onChange={setSearch}
+                maxLength={200}
+                placeholder={
+                  scheduled ? "Search schedules" : "Search deployments"
                 }
-              >
-                {search.trim() || query.status !== "all" ? (
-                  <>
-                    <span>Try another search or status.</span>{" "}
+              />
+            }
+            count={
+              updatedAt
+                ? `${data.total.toLocaleString()} ${data.total === 1 ? (scheduled ? "schedule" : "deployment") : scheduled ? "schedules" : "deployments"}`
+                : undefined
+            }
+          />
+          <TableCard className="control-table">
+            <DataTable<DeploymentSummary>
+              label={scheduled ? "Schedules" : "Deployments"}
+              className="deployment-table"
+              data={data.items}
+              rowKey={(row) => row.id}
+              loading={waiting}
+              error={
+                error
+                  ? {
+                      title: updatedAt
+                        ? `Couldn't refresh ${scheduled ? "schedules" : "deployments"}.`
+                        : `Couldn't load ${scheduled ? "schedules" : "deployments"}.`,
+                      message: error,
+                      updatedAt,
+                      retry: () => void reload(),
+                      retrying: refreshing,
+                    }
+                  : null
+              }
+              mobileCard={(d) => {
+                const display = describeDeployment(d);
+                const current = d.target_count - (d.state_counts.removed || 0);
+                return {
+                  title: title(d),
+                  href: `#/${deploymentRoute(scheduled, d.id, query)}`,
+                  status: (
+                    <StatusBadge
+                      domain="deployment"
+                      value={display.state}
+                      label={display.label}
+                    />
+                  ),
+                  meta: [
+                    subtitle(d),
+                    current > 0
+                      ? `${d.verified_count} of ${current} verified`
+                      : null,
+                    display.note,
+                  ],
+                };
+              }}
+              manualSorting
+              sort={{
+                column: query.sort || "created_at",
+                direction: query.direction || "desc",
+              }}
+              onSortChange={(sort) =>
+                setQuery(({ sort: _sort, direction: _direction, ...old }) => ({
+                  ...old,
+                  page: 1,
+                  ...(sort
+                    ? {
+                        sort: sort.column as DeploymentSort,
+                        direction: sort.direction,
+                      }
+                    : {}),
+                }))
+              }
+              columns={[
+                {
+                  id: "name",
+                  header: "Change",
+                  sortable: true,
+                  cell: (d) => (
+                    <>
+                      <a
+                        className="control-row-title"
+                        data-deployment-link={d.id}
+                        href={`#/${deploymentRoute(scheduled, d.id, query)}`}
+                        onClick={(event) => {
+                          if (
+                            event.button !== 0 ||
+                            event.ctrlKey ||
+                            event.metaKey ||
+                            event.shiftKey ||
+                            event.altKey
+                          )
+                            return;
+                          event.preventDefault();
+                          openDetail(d.id);
+                        }}
+                      >
+                        {title(d)}
+                      </a>
+                      <small>
+                        {subtitle(d)}
+                        {d.rollback_of && (
+                          <span className="deployment-lineage">
+                            {" "}
+                            · Rollback of{" "}
+                            {d.rollback_of_version
+                              ? `v${d.rollback_of_version}`
+                              : "an earlier rollout"}
+                          </span>
+                        )}
+                      </small>
+                    </>
+                  ),
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  sortable: true,
+                  cell: (d) => <DeploymentStatusCell d={d} />,
+                  filter: {
+                    value: query.status,
+                    emptyValue: "all",
+                    allLabel: "All statuses",
+                    manual: true,
+                    options: statusFilters,
+                    onChange: (status) =>
+                      setQuery((old) => ({
+                        ...old,
+                        search: search.trim(),
+                        status,
+                        page: 1,
+                      })),
+                  },
+                },
+                {
+                  id: "verified",
+                  header: "Devices",
+                  sortable: true,
+                  cell: (d) => <DevicesCell d={d} />,
+                },
+                {
+                  id: scheduled ? "scheduled_at" : "created_at",
+                  header: scheduled ? "Scheduled for" : "Created",
+                  sortable: true,
+                  cell: (d) => (
+                    <DateCell
+                      value={scheduled ? d.scheduled_at : d.created_at}
+                    />
+                  ),
+                },
+                {
+                  id: "actions",
+                  header: <span className="sr-only">Actions</span>,
+                  label: "Actions",
+                  sortable: false,
+                  cell: (d) => (
+                    <Button
+                      variant="secondary compact"
+                      onClick={() => openDetail(d.id)}
+                      aria-label={`View details for ${title(d)}`}
+                    >
+                      Open
+                    </Button>
+                  ),
+                },
+              ]}
+              empty={
+                <EmptyState
+                  variant="filtered"
+                  title="No matching deployments"
+                  action={
                     <Button variant="secondary" onClick={reset}>
                       Clear filters
                     </Button>
-                  </>
-                ) : (
-                  <>
-                    {scheduled
-                      ? "Pick a published pipeline, choose devices, then choose Scheduled."
-                      : "Publish a pipeline, then choose the devices that should run it."}
-                    {can(user, "operate") && (
-                      <Button
-                        onClick={(event) => {
-                          pickerOpener.current = event.currentTarget;
-                          setPickerOpen(true);
-                        }}
-                      >
-                        {scheduled
-                          ? "Schedule a deployment"
-                          : "Deploy a pipeline"}
-                      </Button>
-                    )}
-                  </>
-                )}
-              </Empty>
-            )
-          }
-        />
-        {!waiting && !error && (
-          <Pagination
-            count={data.total}
-            page={query.page}
-            size={data.page_size}
-            onPage={(page) => setQuery((old) => ({ ...old, page }))}
-          />
-        )}
-      </div>
+                  }
+                >
+                  Try another search or status.
+                </EmptyState>
+              }
+            />
+            {!waiting && !error && (
+              <Pagination
+                count={data.total}
+                page={query.page}
+                size={data.page_size}
+                onPage={(page) => setQuery((old) => ({ ...old, page }))}
+              />
+            )}
+          </TableCard>
+        </>
+      )}
     </div>
   );
 }
@@ -665,11 +699,12 @@ function DeviceResults({
     page: String(query.page),
     page_size: "12",
   });
-  const { data, error, loading, reload } = useResource<DeploymentTargetPage>(
-    `/deployments/${deployment.id}/targets?${params}`,
-    { items: [], total: 0, page: query.page, page_size: 12 },
-    revision,
-  );
+  const { data, error, loading, reload, refreshing, updatedAt } =
+    useResource<DeploymentTargetPage>(
+      `/deployments/${deployment.id}/targets?${params}`,
+      { items: [], total: 0, page: query.page, page_size: 12 },
+      revision,
+    );
   useEffect(() => {
     if (pulse) void reload();
   }, [pulse, reload]);
@@ -699,13 +734,44 @@ function DeviceResults({
           placeholder="Search deployment devices"
         />
       </div>
-      {error && <ErrorBox message={error} retry={reload} />}
       <div className="control-table">
         <DataTable<DeploymentTarget>
           label="Device results"
           className="deployment-targets"
-          data={error ? [] : data.items}
+          data={data.items}
           rowKey={(row) => row.device_id}
+          error={
+            error
+              ? {
+                  title: updatedAt
+                    ? "Couldn't refresh device results."
+                    : "Couldn't load device results.",
+                  message: error,
+                  updatedAt,
+                  retry: () => void reload(),
+                  retrying: refreshing,
+                }
+              : null
+          }
+          mobileCard={(t) => ({
+            title: t.device_name || t.device_id,
+            href: `#/devices/${encodeURIComponent(t.device_id)}`,
+            status: (
+              <StatusBadge
+                domain="target"
+                value={targetState(t.state, {
+                  stopped,
+                  replaced: !!t.replaced_by,
+                })}
+              />
+            ),
+            meta: [
+              stages.get(t.device_id) || null,
+              t.last_seen
+                ? `Checked in ${relativeTime(t.last_seen, now)}`
+                : "Never checked in",
+            ],
+          })}
           loading={loading || correcting || query.search !== search.trim()}
           manualSorting
           sort={{ column: query.sort, direction: query.direction }}
@@ -809,11 +875,9 @@ function DeviceResults({
             },
           ]}
           empty={
-            error
-              ? "Results unavailable."
-              : query.search || query.state !== "all"
-                ? "No devices match these filters."
-                : "No devices were targeted."
+            query.search || query.state !== "all"
+              ? "No devices match these filters."
+              : "No devices were targeted."
           }
         />
         {!loading &&

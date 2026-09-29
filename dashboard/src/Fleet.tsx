@@ -10,7 +10,6 @@ import { roleAllows } from "./roleAccess";
 import {
   Button,
   EmptyState,
-  InlineError,
   PageHeader,
   PageToolbar,
   SearchBox,
@@ -310,19 +309,6 @@ export function Groups({
           </Button>
         )}
       </PageHeader>
-      {groups.error && (
-        <InlineError
-          title={
-            groups.data.length
-              ? "Couldn't refresh groups."
-              : "Couldn't load groups."
-          }
-          error={groups.error}
-          updatedAt={groups.updatedAt}
-          retry={() => void groups.reload()}
-          retrying={groups.refreshing}
-        />
-      )}
       <GroupRecovery
         user={user}
         onRecovered={() => {
@@ -369,7 +355,7 @@ export function Groups({
               />
             }
             count={
-              groups.loading && !groups.updatedAt
+              !groups.updatedAt
                 ? undefined
                 : query.q || query.members
                   ? `${filtered.length} of ${groups.data.length}`
@@ -382,6 +368,19 @@ export function Groups({
               columns={columns}
               rowKey={(group) => group.id}
               label="Groups"
+              error={
+                groups.error
+                  ? {
+                      title: groups.updatedAt
+                        ? "Couldn't refresh groups."
+                        : "Couldn't load groups.",
+                      message: groups.error,
+                      updatedAt: groups.updatedAt,
+                      retry: () => void groups.reload(),
+                      retrying: groups.refreshing,
+                    }
+                  : null
+              }
               className="groups-table"
               loading={groups.loading && !groups.updatedAt}
               sort={sort}

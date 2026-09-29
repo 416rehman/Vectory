@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  completeSeries,
   checklist,
   countLabel,
   fleetTelemetry,
@@ -209,5 +210,40 @@ describe("number formatting", () => {
     expect(niceCeiling(4.2)).toBe(5);
     expect(niceCeiling(12)).toBe(20);
     expect(niceCeiling(2400)).toBe(2500);
+  });
+});
+
+describe("fleet series", () => {
+  const minute = (m: number, devices: number | null = 4) => ({
+    at: new Date(Date.UTC(2026, 8, 29, 8, m)).toISOString(),
+    devices,
+  });
+  const at = (m: number, s = 0) => Date.UTC(2026, 8, 29, 8, m, s);
+
+  it("leaves out the bucket that is still collecting", () => {
+    const series = [minute(24), minute(25), minute(26, 1)];
+    // 08:26:06: the 08:26 bucket has heard from one device of four.
+    expect(completeSeries(series, at(26, 6))).toEqual(series.slice(0, 2));
+  });
+
+  it("keeps a complete newest bucket", () => {
+    const series = [minute(24), minute(25), minute(26)];
+    expect(completeSeries(series, at(27, 1))).toEqual(series);
+  });
+
+  it("waits briefly for late devices, then shows a real drop", () => {
+    const series = [minute(24), minute(25), minute(26, 2)];
+    expect(completeSeries(series, at(27, 10))).toHaveLength(2);
+    // A device that stays silent is a real drop once the grace passes.
+    expect(completeSeries(series, at(28, 1))).toHaveLength(3);
+  });
+
+  it("keeps short or malformed series as they are", () => {
+    expect(completeSeries([minute(26, 1)], at(26, 6))).toHaveLength(1);
+    const bad = [
+      { at: "x", devices: 1 },
+      { at: "y", devices: 1 },
+    ];
+    expect(completeSeries(bad, at(26))).toEqual(bad);
   });
 });

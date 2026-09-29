@@ -1106,7 +1106,10 @@ export function ErrorBox({
     </div>
   );
 }
-/** A failed read that keeps the last good data on screen, with one retry. */
+/**
+ * The one failed-read message: what couldn't load, how old the data on screen
+ * is, the server's reason behind Details, and one retry.
+ */
 export function InlineError({
   title,
   error,
@@ -1126,12 +1129,10 @@ export function InlineError({
       <AlertCircle size={16} aria-hidden="true" />
       <div className="inline-error-copy">
         <strong>{title}</strong>
-        <span>
-          {updatedAt
-            ? ` Showing data from ${relativeTime(updatedAt, now)}.`
-            : ` ${error}`}
-        </span>
-        {updatedAt && error && (
+        {updatedAt ? (
+          <span> Showing data from {relativeTime(updatedAt, now)}.</span>
+        ) : null}
+        {error && (
           <details>
             <summary>Details</summary>
             <span>{error}</span>
@@ -1540,6 +1541,7 @@ export function Pagination({
   sizeOptions,
   onSize,
   noun = "results",
+  alwaysShow = false,
 }: {
   count: number;
   page: number;
@@ -1548,8 +1550,11 @@ export function Pagination({
   sizeOptions?: number[];
   onSize?: (size: number) => void;
   noun?: string;
+  /** Keep the controls when everything fits on one page. */
+  alwaysShow?: boolean;
 }) {
   const pages = Math.max(1, Math.ceil(count / size));
+  if (!alwaysShow && page <= 1 && pages <= 1) return null;
   return (
     <div className="pagination">
       <span>
