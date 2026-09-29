@@ -27,12 +27,14 @@ import {
   Spinner,
   useResource,
 } from "./ui";
+import { countLabel } from "./countLabel";
 import DocLink from "./DocLink";
-import { DataTable, type TableColumn, type TableSort } from "./DataTable";
+import { DataTable, type TableColumn } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
 import { isDataPlaneCode, issueDispositions } from "./status";
+import { useHashQuery } from "./urlState";
 import "./control.css";
 import "./issues.css";
 import NotificationsHint from "./NotificationsHint";
@@ -42,6 +44,21 @@ const issueTime = (value: string | null) =>
   value ? when(value) : "Unavailable";
 type Disposition = Issue["disposition"] | "all";
 type View = "groups" | "list";
+const dispositions: Disposition[] = ["open", "acknowledged", "resolved", "all"];
+const sortColumns = ["code", "disposition", "device", "last_seen", "count"];
+/**
+ * A triage view is a link: `#/issues?q=nginx&state=all&view=list`. Values
+ * that aren't in use stay out of the URL.
+ */
+const issueQuery = {
+  q: "",
+  state: "open",
+  view: "groups",
+  sort: "last_seen",
+  dir: "desc",
+  page: 1,
+  gpage: 1,
+};
 const labels = {
   open: issueDispositions.open.label,
   acknowledged: issueDispositions.acknowledged.label,
@@ -61,8 +78,6 @@ const emptyGroups: IssueGroupPage = {
   page: 1,
   page_size: PAGE_SIZE,
 };
-const plural = (count: number, one: string, many = `${one}s`) =>
-  `${count.toLocaleString()} ${count === 1 ? one : many}`;
 
 type VersionContext = {
   configuration_id?: string | null;
@@ -79,12 +94,12 @@ function versionLabel(context: VersionContext, versionId?: string | null) {
 function attemptsLabel(attempts: number, reports?: number, code?: string) {
   // Delivery issues count openings, and the checks that found the problem.
   if (isDataPlaneCode(code)) {
-    const text = plural(attempts, "occurrence");
-    return reports ? `${text} · seen in ${plural(reports, "check")}` : text;
+    const text = countLabel(attempts, "occurrence");
+    return reports ? `${text} · seen in ${countLabel(reports, "check")}` : text;
   }
-  const text = plural(attempts, "failed attempt");
+  const text = countLabel(attempts, "failed attempt");
   return reports && reports > attempts
-    ? `${text} · reported ${plural(reports, "time")}`
+    ? `${text} · reported ${countLabel(reports, "time")}`
     : text;
 }
 function resolution(issue: Issue) {
@@ -125,17 +140,28 @@ export default function Issues({
   navigate: (path: string) => void;
   deviceId?: string;
 }) {
-  const [search, setSearch] = useState(""),
-    [query, setQuery] = useState(""),
-    [state, setState] = useState<Disposition>("open"),
-    [view, setView] = useState<View>(deviceId ? "list" : "groups"),
-    [sort, setSort] = useState<TableSort | null>({
-      column: "last_seen",
-      direction: "desc",
-    }),
-    [page, setPage] = useState(1),
-    [groupPage, setGroupPage] = useState(1),
-    [dialog, setDialog] = useState<Dialog | null>(null);
+  const [url, update] = useHashQuery(issueQuery);
+  // Anything a hand-edited link gets wrong falls back to the default.
+  const state = (dispositions as string[]).includes(url.state)
+    ? (url.state as Disposition)
+    : "open";
+  // One device's issues are a list; its page has no groups to show.
+  const view: View = deviceId || url.view === "list" ? "list" : "groups";
+  const sort = {
+    column: sortColumns.includes(url.sort) ? url.sort : "last_seen",
+    direction: url.dir === "asc" ? ("asc" as const) : ("desc" as const),
+  };
+  const { page, gpage: groupPage } = url;
+  const query = url.q;
+  // Typing settles for a moment before it becomes the URL's search; a new
+  // search from the URL (Back, a shared link) replaces what the box shows.
+  const [search, setSearch] = useState(url.q);
+  const [urlSearch, setUrlSearch] = useState(url.q);
+  if (urlSearch !== url.q) {
+    setUrlSearch(url.q);
+    if (search.trim() !== url.q) setSearch(url.q);
+  }
+  const [dialog, setDialog] = useState<Dialog | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null),
     container = useRef<HTMLDivElement | null>(null);
   function closeDialog(saved = false) {
@@ -152,24 +178,19 @@ export default function Issues({
   }
   useEffect(() => {
     if (search.trim() === query) return;
-    const timer = window.setTimeout(() => {
-      setQuery(search.trim());
-      setPage(1);
-      setGroupPage(1);
-    }, 250);
+    const timer = window.setTimeout(
+      () => update({ q: search.trim(), page: 1, gpage: 1 }),
+      250,
+    );
     return () => window.clearTimeout(timer);
-  }, [search, query]);
-  useEffect(() => {
-    setPage(1);
-    if (deviceId) setView("list");
-  }, [deviceId]);
+  }, [search, query, update]);
   const listParams = new URLSearchParams({
     search: query,
     state,
     page: String(page),
     page_size: String(PAGE_SIZE),
-    sort: sort?.column || "last_seen",
-    direction: sort?.direction || "desc",
+    sort: sort.column,
+    direction: sort.direction,
   });
   if (deviceId) listParams.set("device_id", deviceId);
   const groupParams = new URLSearchParams({
@@ -187,21 +208,22 @@ export default function Issues({
     emptyGroups,
   );
   const active = view === "list" ? list : groups;
+  // A page past the end (issues resolved meanwhile, an old link) moves back.
+  const lastPage = Math.max(1, Math.ceil(list.data.total / PAGE_SIZE));
+  const lastGroupPage = Math.max(1, Math.ceil(groups.data.total / PAGE_SIZE));
   useEffect(() => {
-    if (!list.loading && !list.error)
-      setPage((current) =>
-        Math.min(current, Math.max(1, Math.ceil(list.data.total / PAGE_SIZE))),
-      );
-  }, [list.loading, list.error, list.data.total]);
+    if (view === "list" && !list.loading && !list.error && page > lastPage)
+      update({ page: lastPage });
+  }, [view, list.loading, list.error, page, lastPage, update]);
   useEffect(() => {
-    if (!groups.loading && !groups.error)
-      setGroupPage((current) =>
-        Math.min(
-          current,
-          Math.max(1, Math.ceil(groups.data.total / PAGE_SIZE)),
-        ),
-      );
-  }, [groups.loading, groups.error, groups.data.total]);
+    if (
+      view === "groups" &&
+      !groups.loading &&
+      !groups.error &&
+      groupPage > lastGroupPage
+    )
+      update({ gpage: lastGroupPage });
+  }, [view, groups.loading, groups.error, groupPage, lastGroupPage, update]);
   function act(kind: Dialog["kind"], issue: Issue, target: HTMLButtonElement) {
     opener.current = target;
     setDialog({ kind, issue });
@@ -251,7 +273,7 @@ export default function Issues({
         <>
           {issue.count.toLocaleString()}
           {issue.reports !== undefined && issue.reports > issue.count && (
-            <small>reported {plural(issue.reports, "time")}</small>
+            <small>reported {countLabel(issue.reports, "time")}</small>
           )}
         </>
       ),
@@ -311,11 +333,7 @@ export default function Issues({
           options={(["open", "acknowledged", "resolved", "all"] as const).map(
             (value) => ({ value, label: labels[value] }),
           )}
-          onChange={(value) => {
-            setState(value);
-            setPage(1);
-            setGroupPage(1);
-          }}
+          onChange={(value) => update({ state: value, page: 1, gpage: 1 })}
         />
         {!deviceId && (
           <SegmentedControl
@@ -325,7 +343,7 @@ export default function Issues({
               { value: "groups", label: "By version and reason" },
               { value: "list", label: "All issues" },
             ]}
-            onChange={setView}
+            onChange={(value) => update({ view: value })}
           />
         )}
       </div>
@@ -364,10 +382,13 @@ export default function Issues({
             loading={list.loading}
             manualSorting
             sort={sort}
-            onSortChange={(value) => {
-              setSort(value);
-              setPage(1);
-            }}
+            onSortChange={(value) =>
+              update({
+                sort: value?.column || "last_seen",
+                dir: value?.direction || "desc",
+                page: 1,
+              })
+            }
             pagination={
               list.error
                 ? undefined
@@ -375,10 +396,21 @@ export default function Issues({
                     page,
                     size: PAGE_SIZE,
                     total: list.data.total,
-                    onPage: setPage,
+                    onPage: (next) => update({ page: next }),
                   }
             }
             empty={emptyState}
+            mobileCard={(issue) => ({
+              title:
+                issue.title || "The device couldn't apply the configuration",
+              status: <DispositionBadge issue={issue} />,
+              meta: [
+                <DeviceLine key="device" issue={issue} />,
+                `Last reported ${issueTime(issue.last_seen)}`,
+                attemptsLabel(issue.count, issue.reports, issue.code),
+              ],
+              actions: actions(issue),
+            })}
           />
         </div>
       ) : (
@@ -391,7 +423,7 @@ export default function Issues({
           retrying={groups.refreshing}
           empty={emptyState}
           actions={actions}
-          onPage={setGroupPage}
+          onPage={(next) => update({ gpage: next })}
         />
       )}
       {dialog?.kind === "disposition" && (
@@ -447,6 +479,19 @@ function DeviceCell({ issue }: { issue: Issue }) {
   );
 }
 
+/** The device an issue came from, as one line of a phone card. */
+function DeviceLine({ issue }: { issue: Issue }) {
+  return (
+    <>
+      <a href={`#/devices/${encodeURIComponent(issue.device_id)}`}>
+        {issue.device_name || "Open device"}
+      </a>
+      {issue.device_revoked && " · access revoked"}
+      {issue.device_revoked === null && " · no longer exists"}
+    </>
+  );
+}
+
 function IssueSummary({ issue }: { issue: Issue }) {
   const fix = leadingDiagnostic(issue.diagnostics)?.hint;
   return (
@@ -454,6 +499,8 @@ function IssueSummary({ issue }: { issue: Issue }) {
       <strong>
         {issue.title || "The device couldn't apply the configuration"}
       </strong>
+      {/* The column sorts by this code, so its order reads at a glance. */}
+      <code className="issue-code">{issue.code}</code>
       <p className="issue-context">
         {issue.desired_version_id && issue.configuration_id ? (
           <a
@@ -766,7 +813,7 @@ function IssueGroupCard({
         </div>
         <p className="issue-group-status">
           {group.issue_count > group.devices.length
-            ? plural(group.issue_count, "issue")
+            ? countLabel(group.issue_count, "issue")
             : counts.map((entry, index) => (
                 <span
                   key={entry.disposition}
@@ -785,7 +832,7 @@ function IssueGroupCard({
         </p>
       )}
       <p className="issue-group-meta">
-        {plural(group.device_count, "device")} ·{" "}
+        {countLabel(group.device_count, "device")} ·{" "}
         {attemptsLabel(group.attempts, group.reports, group.code)}
         {group.first_seen && (
           <> · failing since {issueTime(group.first_seen)}</>

@@ -28,7 +28,7 @@ import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
 import DeviceSecrets from "./DeviceSecrets";
@@ -423,7 +423,7 @@ function DeliveryHealth({ device }: { device: Device }) {
         <p className="device-delivery-foot">
           {since && (
             <>
-              Since <TimeAgo value={since} />.{" "}
+              Started <TimeAgo value={since} />.{" "}
             </>
           )}
           Clears by itself after three clean checks.{" "}
@@ -769,13 +769,17 @@ export default function DeviceDetail({
   notify: Notify;
   navigate: Navigate;
 }) {
+  // Poll faster while a version is applying; the pace follows the last read.
   const [fast, setFast] = useState(false);
-  const resource = useResource<Device | null>(`/devices/${id}`, null, 0, {
-    interval: fast ? 5000 : 15000,
-  });
+  const resource = useResource<Device | null>(
+    `/devices/${encodeURIComponent(id)}`,
+    null,
+    0,
+    { interval: fast ? 5000 : 15000 },
+  );
   const device = resource.data;
   const applying = device?.status === "applying";
-  useEffect(() => setFast(!!applying), [applying]);
+  if (applying !== fast) setFast(applying);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [deployOpen, setDeployOpen] = useState(false);
   const canReviewPolicy =

@@ -167,7 +167,13 @@ describe("durable deployment request registry", () => {
     previous_configuration_id: otherActor,
     previous_configuration_name: "Prior pipeline",
     priority: 6,
-    eligible_devices: [{ device_id: otherActor, device_name: "Included", artifact_sha256: "a".repeat(64) }],
+    eligible_devices: [
+      {
+        device_id: otherActor,
+        device_name: "Included",
+        artifact_sha256: "a".repeat(64),
+      },
+    ],
     excluded_devices: [
       { device_id: actor, device_name: "Excluded", reason: "revoked" },
     ],

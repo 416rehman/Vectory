@@ -601,6 +601,16 @@ try {
         `Vectory recovery codes for ${user.email} on Synthetic isolated fixture`,
       );
       expect(recoveryCodes.every((value) => copied.includes(value))).toBe(true);
+      // The blob URL must outlive the click: revoking it at once can cancel
+      // the save in some browsers.
+      await page.evaluate(() => {
+        const revoke = URL.revokeObjectURL.bind(URL);
+        window.__revokedDownloads = 0;
+        URL.revokeObjectURL = (url) => {
+          window.__revokedDownloads++;
+          revoke(url);
+        };
+      });
       const download = page.waitForEvent("download");
       await recovery
         .getByRole("button", { name: "Download", exact: true })
@@ -609,6 +619,15 @@ try {
       expect(file.suggestedFilename()).toMatch(
         /^vectory-recovery-codes-127\.0\.0\.1-\d+-\d{4}-\d\d-\d\d\.txt$/,
       );
+      const saved = await readFile(await file.path(), "utf8");
+      expect(recoveryCodes.every((value) => saved.includes(value))).toBe(true);
+      expect(
+        await page.evaluate(() => ({
+          revoked: window.__revokedDownloads,
+          links: document.querySelectorAll("a[download]").length,
+        })),
+        "the URL is revoked later and the temporary link is gone",
+      ).toEqual({ revoked: 0, links: 0 });
       expect(state.enabled).toBe(true);
       await recovery
         .getByRole("button", { name: "Close dialog", exact: true })

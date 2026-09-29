@@ -1,4 +1,5 @@
 import type { DeploymentSummary } from "./api";
+import { countLabel } from "./countLabel";
 import { progressSegments } from "./deploymentStatus";
 
 /** A rollout that stopped by itself and still deserves a look. */
@@ -21,9 +22,6 @@ function name(d: DeploymentSummary) {
   if (d.policy) return d.policy_name || "Agent settings";
   const pipeline = d.configuration_name || d.name || "A pipeline";
   return d.version_number ? `${pipeline} v${d.version_number}` : pipeline;
-}
-function plural(count: number, one: string, many = `${one}s`) {
-  return `${count} ${count === 1 ? one : many}`;
 }
 
 /**
@@ -74,12 +72,12 @@ export function stoppedRollouts(
         [
           counts.failed ? `${counts.failed} failed` : "",
           counts.queued ? `${counts.queued} not released` : "",
-          d.verified_count ? `${d.verified_count} verified` : "",
+          d.verified_count ? `${d.verified_count} applied` : "",
         ]
           .filter(Boolean)
-          .join(" · ") || plural(current, "device"),
+          .join(" · ") || countLabel(current, "device"),
       consequence: waiting
-        ? `The rollout stopped; ${plural(waiting, "device")} never received ${version}.`
+        ? `The rollout stopped; ${countLabel(waiting, "device")} never received ${version}.`
         : "The rollout stopped.",
       released: Math.max(0, current - waiting),
     });

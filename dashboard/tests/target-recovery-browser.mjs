@@ -589,9 +589,7 @@ async function preview({ both = true, scheduled = false } = {}) {
       .check();
   if (scheduled) {
     await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
-    await page
-      .getByLabel("Start at", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -1334,21 +1332,37 @@ try {
       });
       // Before anyone is chosen the note says what the version needs.
       await expect(
-        dialog().getByText("This version needs Full Vector mode", { exact: true }),
+        dialog().getByText("This version needs Full Vector mode", {
+          exact: true,
+        }),
       ).toBeVisible();
-      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
+      await expect(
+        dialog().getByText(/API listener outside loopback/),
+      ).toBeVisible();
       await expect(dialog().getByText(/All selected devices/)).toHaveCount(0);
       await page
         .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
         .check();
       await expect(
-        dialog().getByText("This pipeline uses full Vector capabilities", { exact: true }),
+        dialog().getByText("This pipeline uses full Vector capabilities", {
+          exact: true,
+        }),
       ).toBeVisible();
-      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
-      await expect(dialog().getByText(/All selected devices currently report full Vector mode/)).toBeVisible();
-      await expect(dialog().getByText(/have the host operator enable it/)).toHaveCount(0);
+      await expect(
+        dialog().getByText(/API listener outside loopback/),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(
+          /All selected devices currently report full Vector mode/,
+        ),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toHaveCount(0);
       await preview();
-      await expect(dialog().getByRole("button", { name: "Deploy to devices" })).toBeEnabled();
+      await expect(
+        dialog().getByRole("button", { name: "Deploy to devices" }),
+      ).toBeEnabled();
       expect(state.creates).toHaveLength(0);
     },
   );
@@ -1368,7 +1382,10 @@ try {
           },
         },
         devices: [
-          device(1, { configuration_mode: "restricted", vector_version: "0.57.0" }),
+          device(1, {
+            configuration_mode: "restricted",
+            vector_version: "0.57.0",
+          }),
           device(2, { vector_version: "0.57.0" }),
         ],
       });
@@ -1392,27 +1409,47 @@ try {
       ];
       await preview();
       await expect(
-        dialog().getByText("Synthetic alpha runs in restricted mode and will refuse this version", { exact: true }),
+        dialog().getByText(
+          "Synthetic alpha runs in restricted mode and will refuse this version",
+          { exact: true },
+        ),
       ).toBeVisible();
-      await expect(dialog().getByText(/API listener outside loopback/)).toBeVisible();
-      await expect(dialog().getByText(/have the host operator enable it/)).toBeVisible();
       await expect(
-        dialog().getByText("Full Vector mode is required on these devices", { exact: true }),
+        dialog().getByText(/API listener outside loopback/),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toBeVisible();
+      await expect(
+        dialog().getByText("Full Vector mode is required on these devices", {
+          exact: true,
+        }),
       ).toBeVisible();
       await expect(dialog().getByText(fullModeReason)).toBeVisible();
       await expect(
         dialog().getByText("1 affected device: Synthetic alpha."),
       ).toBeVisible();
       await expect(
-        dialog().getByText("These devices have an incompatible Vector version", { exact: true }),
+        dialog().getByText(
+          "These devices have an incompatible Vector version",
+          { exact: true },
+        ),
       ).toBeVisible();
       await expect(dialog().getByText(versionReason)).toBeVisible();
       await expect(
-        dialog().getByText("2 affected devices: Synthetic alpha, Synthetic beta."),
+        dialog().getByText(
+          "2 affected devices: Synthetic alpha, Synthetic beta.",
+        ),
       ).toBeVisible();
-      const alpha = table().locator("tbody tr").filter({ hasText: "Synthetic alpha" });
-      const beta = table().locator("tbody tr").filter({ hasText: "Synthetic beta" });
-      await expect(alpha).toContainText("Blocked: Full Vector mode required; Vector version incompatible");
+      const alpha = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic alpha" });
+      const beta = table()
+        .locator("tbody tr")
+        .filter({ hasText: "Synthetic beta" });
+      await expect(alpha).toContainText(
+        "Blocked: Full Vector mode required; Vector version incompatible",
+      );
       await expect(beta).toContainText("Blocked: Vector version incompatible");
       // A device the server won't release to is "Blocked", never a green "New".
       await expect(alpha.locator(".target-outcome")).toContainText("Blocked");
@@ -1461,8 +1498,12 @@ try {
       await expect(
         page.getByRole("dialog", { name: "Review saved deployment reminder" }),
       ).toBeVisible();
-      await expect(page.getByText(/Browser storage is unavailable/)).toBeVisible();
-      await expect(page.getByRole("button", { name: "Review deployment" })).toHaveCount(0);
+      await expect(
+        page.getByText(/Browser storage is unavailable/),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Review deployment" }),
+      ).toHaveCount(0);
       expect(state.creates).toHaveLength(0);
     },
   );

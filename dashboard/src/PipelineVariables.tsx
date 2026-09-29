@@ -90,7 +90,9 @@ export default function PipelineVariables({
         </ul>
       )}
       {!variables.length && (
-        <p className="pipeline-variable-empty">No device-specific fields yet.</p>
+        <p className="pipeline-variable-empty">
+          No device-specific fields yet.
+        </p>
       )}
       {editable && (
         <div className="pipeline-variable-add">
@@ -123,7 +125,12 @@ export default function PipelineVariables({
               maxLength={64}
             />
           </Field>
-          <Button variant="secondary" icon={Plus} onClick={add} disabled={!available.length || variables.length >= 64}>
+          <Button
+            variant="secondary"
+            icon={Plus}
+            onClick={add}
+            disabled={!available.length || variables.length >= 64}
+          >
             Add variable
           </Button>
           {!available.length && (

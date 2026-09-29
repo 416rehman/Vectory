@@ -122,7 +122,7 @@ The Overview's **Needs you** lists what still needs a person, most urgent first:
 
 [**Activity → Deployments**](/#/deployments) lists every deployment. Search by pipeline, deployment name, version or status, and filter the **Status** column to what needs attention, what's in progress or what finished. [**Scheduled**](/#/schedules) lists upcoming, completed, cancelled and missed schedules, in your browser's time zone.
 
-Inside a deployment, search **Device results** or filter them by progress. Only **Applied and verified** counts as verified. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
+Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering** and counts with the failures. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
 Before a schedule starts, **Update scheduled devices** compares its saved device list with current group membership. Review who is added and removed, then confirm. If anything changes while you review, refresh the review and confirm again.
 

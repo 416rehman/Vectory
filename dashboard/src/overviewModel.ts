@@ -356,8 +356,7 @@ export function checklist(state: ChecklistState): ChecklistStep[] {
 }
 
 /** "1 device", "3 devices". */
-export const countLabel = (count: number, word: string, many = `${word}s`) =>
-  `${count.toLocaleString()} ${count === 1 ? word : many}`;
+export { countLabel } from "./countLabel";
 
 /** One Needs-you row: a device group, possibly with the rollout it stopped. */
 export type NeedsYouRow<G, R> =

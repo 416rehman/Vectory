@@ -302,7 +302,9 @@ try {
       await selected("Pipelines");
       await expect(
         palette().getByRole("option", { name: "Deployments", exact: true }),
-      ).toHaveAccessibleDescription("Rollout progress, assignments and rollback");
+      ).toHaveAccessibleDescription(
+        "Rollout progress, assignments and rollback",
+      );
       await search().press("Escape");
       await expect(palette()).toHaveCount(0);
       await expect(opener).toBeFocused();
@@ -419,6 +421,55 @@ try {
     },
   );
   await check(
+    "Single-key shortcuts turn off in the account menu, stay off after a reload, and Ctrl K keeps working",
+    async () => {
+      await view();
+      const account = page
+        .getByRole("button", { name: "Your account", exact: true })
+        .first();
+      const toggle = () =>
+        page.getByRole("menuitemcheckbox", { name: "Single-key shortcuts" });
+      const sheet = () =>
+        page.getByRole("dialog", { name: "Keyboard shortcuts" });
+      await account.click();
+      await expect(toggle()).toHaveAttribute("aria-checked", "true");
+      await expect(toggle()).toHaveAccessibleDescription(
+        "R, /, ?, [ and G then a letter. Turn off if you use speech input.",
+      );
+      await toggle().click();
+      await expect(toggle()).toHaveAttribute("aria-checked", "false");
+      await page.keyboard.press("Escape");
+      for (const pass of ["now", "after reload"]) {
+        if (pass === "after reload") await view();
+        await page.locator("#main-content").focus();
+        await page.keyboard.press("?");
+        await page.keyboard.press("g");
+        await page.keyboard.press("d");
+        await page.keyboard.press("r");
+        await page.waitForTimeout(300);
+        await expect(sheet(), `? ${pass}`).toHaveCount(0);
+        await expect(page, `G then D ${pass}`).toHaveURL(/#\/overview$/);
+        // Shortcuts with a modifier never switch off.
+        await open();
+        await page.keyboard.press("Escape");
+      }
+      // The sheet says why only modifier shortcuts work.
+      await account.click();
+      await page.getByRole("menuitem", { name: /Keyboard shortcuts/ }).click();
+      await expect(sheet()).toContainText("Single-key shortcuts are off");
+      await page.keyboard.press("Escape");
+      await account.click();
+      await toggle().click();
+      await expect(toggle()).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("Escape");
+      await page.locator("#main-content").focus();
+      await page.keyboard.press("?");
+      await expect(sheet()).toBeVisible();
+      await expect(sheet()).not.toContainText("Single-key shortcuts are off");
+      await page.keyboard.press("Escape");
+    },
+  );
+  await check(
     "No results and IME composition keep the page; help opens in a new tab and the editor draft guard still applies",
     async () => {
       await view(`configurations/${ids.pipeline}`);
@@ -495,9 +546,9 @@ try {
           palette().getByRole("option", { name, exact: true }),
         ).toHaveCount(0);
       await search().fill("Robin");
-      await expect(palette().getByRole("group", { name: "People" })).toHaveCount(
-        0,
-      );
+      await expect(
+        palette().getByRole("group", { name: "People" }),
+      ).toHaveCount(0);
       await search().press("Escape");
       user.role = "admin";
       await view();

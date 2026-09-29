@@ -99,11 +99,12 @@ import {
   withDegraded,
   statusFilters,
   targetFilterStates,
-  verifiedText,
+  appliedText,
   targetLabel,
   targetState,
 } from "./deploymentStatus";
 import { relativeTime } from "./time";
+import { useHashQuery } from "./urlState";
 import {
   DeviceTimeline,
   FailureGroups,
@@ -186,17 +187,13 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
   if (d.rolled_back_by)
     return (
       <div className="deployment-devices-cell">
-        <span className="control-muted">
-          {d.verified_count} of {current} verified, then rolled back
-        </span>
+        <span className="control-muted">{appliedText(d)}</span>
       </div>
     );
   return (
     <div className="deployment-devices-cell">
       <span>
-        {current || d.target_count
-          ? `${d.verified_count} of ${current} verified`
-          : "No devices"}
+        {appliedText(d)}
         {failed > 0 && (
           <strong className="deployment-failed-count">
             {" "}
@@ -281,10 +278,19 @@ export function Deployments({
     onQueryChange?.(query);
   }, [query, onQueryChange]);
   // A rollout page's address is its link to share: keep it canonical (the
-  // lowercase identity and list context only, never an ignored action).
+  // lowercase identity, the list context and the rollout's own device filter,
+  // never an ignored action).
   useEffect(() => {
     if (!controlled || !detailId || invalidDetail) return;
-    const canonical = `#/${deploymentRoute(scheduled, detailId, query)}`;
+    const route = deploymentRoute(scheduled, detailId, query);
+    const current = new URLSearchParams(location.hash.split("?")[1] || "");
+    const filter = new URLSearchParams();
+    for (const key of Object.keys(deviceResultsUrl)) {
+      const value = current.get(key);
+      if (value !== null) filter.set(key, value);
+    }
+    const suffix = filter.toString();
+    const canonical = `#/${route}${suffix ? `${route.includes("?") ? "&" : "?"}${suffix}` : ""}`;
     if (location.hash !== canonical)
       history.replaceState(history.state, "", canonical);
   }, [controlled, detailId, invalidDetail, scheduled, query]);
@@ -344,28 +350,6 @@ export function Deployments({
   }, [detailId, loading]);
   const searching = query.search !== search.trim();
   const waiting = loading || searching || correcting;
-  /** The row's title, shared by the table and the phone cards. */
-  const detailLink = (d: DeploymentSummary) => (
-    <a
-      className="control-row-title"
-      data-deployment-link={d.id}
-      href={`#/${deploymentRoute(scheduled, d.id, query)}`}
-      onClick={(event) => {
-        if (
-          event.button !== 0 ||
-          event.ctrlKey ||
-          event.metaKey ||
-          event.shiftKey ||
-          event.altKey
-        )
-          return;
-        event.preventDefault();
-        openDetail(d.id);
-      }}
-    >
-      {title(d)}
-    </a>
-  );
   function reset() {
     setSearch("");
     setQuery({ search: "", status: "all", page: 1 });
@@ -424,6 +408,7 @@ export function Deployments({
         onBack={closeDetail}
         backHref={`#/${deploymentRoute(scheduled, null, query)}`}
         originLabel={originLabel}
+        linked={controlled}
       />
     );
   return (
@@ -593,9 +578,7 @@ export function Deployments({
                   ),
                   meta: [
                     subtitle(d),
-                    current > 0
-                      ? `${d.verified_count} of ${current} verified`
-                      : null,
+                    current > 0 ? appliedText(d) : null,
                     display.note,
                   ],
                 };
@@ -734,6 +717,39 @@ type DeviceResultsQuery = {
   sort: string;
   direction: "asc" | "desc";
 };
+/**
+ * A rollout's device filter is part of its link (`?rstate=failed&rq=edge`),
+ * beside the list context the route already carries. Defaults stay out.
+ */
+const deviceResultsUrl = {
+  rq: "",
+  rstate: "all",
+  rpage: 1,
+  rsort: "device_name",
+  rdir: "asc",
+};
+type DeviceResultsUrl = typeof deviceResultsUrl;
+function readDeviceResults(url: DeviceResultsUrl): DeviceResultsQuery {
+  return {
+    search: url.rq,
+    // The server names states in snake case; anything else reads as all.
+    state: /^[a-z_]{1,40}$/.test(url.rstate) ? url.rstate : "all",
+    page: url.rpage,
+    sort: url.rsort === "state" ? "state" : "device_name",
+    direction: url.rdir === "desc" ? "desc" : "asc",
+  };
+}
+function deviceResultsPatch(
+  patch: Partial<DeviceResultsQuery>,
+): Partial<DeviceResultsUrl> {
+  return {
+    ...(patch.search !== undefined && { rq: patch.search }),
+    ...(patch.state !== undefined && { rstate: patch.state }),
+    ...(patch.page !== undefined && { rpage: patch.page }),
+    ...(patch.sort !== undefined && { rsort: patch.sort }),
+    ...(patch.direction !== undefined && { rdir: patch.direction }),
+  };
+}
 function DeviceResults({
   deployment,
   revision,
@@ -743,7 +759,7 @@ function DeviceResults({
   search,
   setSearch,
   query,
-  setQuery,
+  onQuery,
 }: {
   deployment: DeploymentSummary;
   revision: number;
@@ -754,21 +770,17 @@ function DeviceResults({
   search: string;
   setSearch(value: string): void;
   query: DeviceResultsQuery;
-  setQuery: React.Dispatch<React.SetStateAction<DeviceResultsQuery>>;
+  onQuery(patch: Partial<DeviceResultsQuery>): void;
 }) {
   const stopped = !isLive(deployment.status);
   useEffect(() => {
+    if (query.search === search.trim()) return;
     const timer = setTimeout(
-      () =>
-        setQuery((old) =>
-          old.search === search.trim()
-            ? old
-            : { ...old, search: search.trim(), page: 1 },
-        ),
+      () => onQuery({ search: search.trim(), page: 1 }),
       250,
     );
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, query.search, onQuery]);
   const params = new URLSearchParams({
     ...query,
     page: String(query.page),
@@ -785,8 +797,8 @@ function DeviceResults({
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correcting = !loading && !error && query.page > lastPage;
   useEffect(() => {
-    if (correcting) setQuery((old) => ({ ...old, page: lastPage }));
-  }, [correcting, lastPage]);
+    if (correcting) onQuery({ page: lastPage });
+  }, [correcting, lastPage, onQuery]);
   /** The device's name, opening its page; the table cell and phone card share it. */
   const deviceLink = (t: DeploymentTarget) => (
     <a
@@ -831,15 +843,13 @@ function DeviceResults({
           <span className="sr-only">Progress</span>
           <select
             value={query.state}
-            onChange={(event) => {
-              const state = event.target.value;
-              setQuery((old) => ({
-                ...old,
+            onChange={(event) =>
+              onQuery({
                 search: search.trim(),
-                state,
+                state: event.target.value,
                 page: 1,
-              }));
-            }}
+              })
+            }
           >
             <option value="all">All devices</option>
             {states.map((value) => (
@@ -906,12 +916,11 @@ function DeviceResults({
           manualSorting
           sort={{ column: query.sort, direction: query.direction }}
           onSortChange={(sort) =>
-            setQuery((old) => ({
-              ...old,
+            onQuery({
               page: 1,
               sort: sort?.column || "device_name",
               direction: sort?.direction || "asc",
-            }))
+            })
           }
           columns={[
             {
@@ -969,12 +978,7 @@ function DeviceResults({
                   label: `${targetLabel(value, { stopped })} (${deployment.state_counts[value] || 0})`,
                 })),
                 onChange: (state) =>
-                  setQuery((old) => ({
-                    ...old,
-                    search: search.trim(),
-                    state,
-                    page: 1,
-                  })),
+                  onQuery({ search: search.trim(), state, page: 1 }),
               },
             },
             {
@@ -1005,7 +1009,7 @@ function DeviceResults({
               count={data.total}
               page={query.page}
               size={data.page_size}
-              onPage={(page) => setQuery((old) => ({ ...old, page }))}
+              onPage={(page) => onQuery({ page })}
             />
           )}
       </div>
@@ -1113,7 +1117,7 @@ function TargetDetails({
             ? `Applies on its next check-in (within ${t.check_in_seconds} s).`
             : "Applies on its next check-in."
           : t.state === "verified_applied"
-            ? `Verified ${exactTime(t.verified_at)}`.trim()
+            ? `Applied ${exactTime(t.verified_at)}`.trim()
             : ["failed", "rolled_back", "incompatible"].includes(t.state)
               ? "No reason reported. Open device for details."
               : "No reported error."}
@@ -1149,6 +1153,7 @@ function RolloutPage({
   onBack,
   backHref,
   originLabel,
+  linked,
 }: {
   id: string;
   user: User;
@@ -1157,11 +1162,13 @@ function RolloutPage({
   onBack(): void;
   backHref: string;
   originLabel: string;
+  /** The URL names this rollout, so its device filter lives there too. */
+  linked: boolean;
 }) {
   // Poll faster while the rollout can still move. Background polls never
   // cancel a slow read in flight, so a loaded server still gets its answer in.
-  // Changing a resource's interval reads it once more, so only the two reads
-  // that decide it follow this state; everything below uses `live` directly.
+  // A new interval only reschedules the next poll; the two reads that decide
+  // it follow this state, and everything below uses `live` directly.
   const [polling, setPolling] = useState(false);
   const pollInterval = polling ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
   const {
@@ -1224,14 +1231,24 @@ function RolloutPage({
     rememberOpener();
     setRetryScope(scope);
   }
-  const [deviceSearch, setDeviceSearch] = useState("");
-  const [deviceQuery, setDeviceQuery] = useState<DeviceResultsQuery>({
-    search: "",
-    state: "all",
-    page: 1,
-    sort: "device_name",
-    direction: "asc",
+  // The device filter is in the URL, so a filtered rollout can be shared and
+  // survives a reload. Typing settles before it reaches the URL; a search
+  // from the URL (Back, a link) replaces what the box shows.
+  const [deviceUrl, updateDeviceUrl] = useHashQuery(deviceResultsUrl, {
+    enabled: linked,
   });
+  const deviceQuery = readDeviceResults(deviceUrl);
+  const updateDeviceQuery = useCallback(
+    (patch: Partial<DeviceResultsQuery>) =>
+      updateDeviceUrl(deviceResultsPatch(patch)),
+    [updateDeviceUrl],
+  );
+  const [deviceSearch, setDeviceSearch] = useState(deviceUrl.rq);
+  const [urlDeviceSearch, setUrlDeviceSearch] = useState(deviceUrl.rq);
+  if (urlDeviceSearch !== deviceUrl.rq) {
+    setUrlDeviceSearch(deviceUrl.rq);
+    if (deviceSearch.trim() !== deviceUrl.rq) setDeviceSearch(deviceUrl.rq);
+  }
   const committing = busy || assignmentCommitting;
   const busyRef = useRef(false),
     uncertainRef = useRef(false),
@@ -1973,7 +1990,7 @@ function RolloutPage({
                         {deployment.verified_count - delivery.moved} of{" "}
                         {currentTargets}
                       </strong>{" "}
-                      {currentTargets === 1 ? "device" : "devices"} verified
+                      {currentTargets === 1 ? "device" : "devices"} applied
                       {deployment.rolled_back_by ? " before the rollback" : ""}
                     </p>
                     <span className="control-muted">
@@ -1983,7 +2000,7 @@ function RolloutPage({
                           : `Stops after ${deployment.rollout.failure_threshold + 1} failures`
                         : deployment.status === "failed"
                           ? "Stopped"
-                          : "Only verified devices count"}
+                          : "Only applied devices count"}
                     </span>
                   </div>
                   <ProgressBar
@@ -2103,7 +2120,7 @@ function RolloutPage({
               search={deviceSearch}
               setSearch={setDeviceSearch}
               query={deviceQuery}
-              setQuery={setDeviceQuery}
+              onQuery={updateDeviceQuery}
             />
             <details className="control-disclosure">
               <summary>Technical details</summary>

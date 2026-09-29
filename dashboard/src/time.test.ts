@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ago } from "./api";
 import { duration, exactUtc, relativeTime, shortLocal } from "./time";
 
 const now = Date.parse("2026-09-29T02:10:00.000Z");
@@ -26,12 +25,6 @@ describe("time formatting", () => {
     // Account pages read as before: minutes and hours, days beyond that.
     expect(relativeTime("2026-09-29T02:05:00.000Z", now)).toBe("5m ago");
     expect(relativeTime("2026-09-26T02:10:00.000Z", now)).toBe("3d ago");
-  });
-
-  it("keeps the older ago helper on the same format", () => {
-    expect(ago(null)).toBe("Never connected");
-    expect(ago(new Date().toISOString())).toBe("Just now");
-    expect(ago(new Date(Date.now() - 4 * 60_000).toISOString())).toBe("4m ago");
   });
 
   it("formats durations for rollout and pause ages", () => {

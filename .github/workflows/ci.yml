@@ -48,6 +48,10 @@ jobs:
       - run: npm ci
         working-directory: help-center
       - run: npm test
+      - name: Check dashboard formatting
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: npx prettier --check src tests e2e
       - name: Check typed variable wire schemas
         timeout-minutes: 10
         if: ${{ !cancelled() }}

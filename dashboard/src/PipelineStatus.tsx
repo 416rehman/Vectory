@@ -1,4 +1,6 @@
-import { ago, type PipelineSummary } from "./api";
+import type { PipelineSummary } from "./api";
+import { countLabel } from "./countLabel";
+import { relativeTime } from "./time";
 
 export type LibraryStatus = {
   primary: string;
@@ -7,14 +9,8 @@ export type LibraryStatus = {
   title?: string;
 };
 
-const published = (at: string) => {
-  const relative = ago(at);
-  return relative === "Just now"
-    ? "Published just now"
-    : `Published ${relative}`;
-};
-
-const plural = (count: number) => (count === 1 ? "device" : "devices");
+const published = (at: string) =>
+  `Published ${relativeTime(at, Date.now(), "at an unknown time")}`;
 
 /**
  * Where the pipeline runs: the versions devices last verified, against how
@@ -31,19 +27,19 @@ function reachDetail(pipeline: PipelineSummary, latest: number) {
       ? undefined
       : assigned === 0
         ? "Not assigned to devices"
-        : `Assigned to ${assigned} ${plural(assigned)}`;
+        : `Assigned to ${countLabel(assigned, "device")}`;
   if (!running.length)
     return !assigned
       ? "Not assigned to devices"
-      : `Assigned to ${assigned} ${plural(assigned)} · not verified running yet`;
+      : `Assigned to ${countLabel(assigned, "device")} · not verified running yet`;
   const total = running.reduce((sum, entry) => sum + entry.devices, 0);
-  const of =
-    assigned !== undefined && assigned >= total
-      ? ` of ${assigned}`
-      : ` ${plural(total)}`;
   const versions =
     running.length === 1
-      ? `Running v${running[0].number} on ${running[0].devices}${of}`
+      ? `Running v${running[0].number} on ${
+          assigned !== undefined && assigned >= total
+            ? `${running[0].devices} of ${assigned}`
+            : countLabel(total, "device")
+        }`
       : `Running ${running
           .map((entry) => `v${entry.number} on ${entry.devices}`)
           .join(

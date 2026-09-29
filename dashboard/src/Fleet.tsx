@@ -32,8 +32,6 @@ import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 
-export { Overview } from "./Overview";
-
 export function Devices({
   user,
   notify,

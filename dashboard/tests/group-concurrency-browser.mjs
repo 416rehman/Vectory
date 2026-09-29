@@ -333,9 +333,7 @@ async function edit(page) {
     .getByRole("button", { name: /Synthetic production group/ })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page
-    .getByRole("tab", { name: /^(Edit members|Members)$/ })
-    .click();
+  await page.getByRole("tab", { name: /^(Edit members|Members)$/ }).click();
 }
 const save = (page) =>
   page.getByRole("button", { name: "Save changes", exact: true }).click();

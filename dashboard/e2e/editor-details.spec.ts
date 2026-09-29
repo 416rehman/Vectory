@@ -186,9 +186,7 @@ test("unfinished field input stays visible and unsafe integers never replace the
     if (request.url().endsWith(`/configurations/${doc.id}/validate`))
       validations.push(request.url());
   });
-  await page
-    .getByRole("button", { name: /^Check pipeline/ })
-    .click();
+  await page.getByRole("button", { name: /^Check pipeline/ }).click();
   await expect(inspector.getByRole("alert")).toContainText(
     "Resolve or apply pending field changes",
   );

@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
   Copy,
   History,
   MoreHorizontal,
-  RefreshCw,
   Plus,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -32,11 +31,11 @@ import {
   PageHeader,
   IconButton,
   SearchBox,
+  Skeleton,
   useResource,
 } from "./ui";
-import PipelineStartChoice, { type StartImport } from "./PipelineStartChoice";
-import { pipelineTemplates } from "./pipelineTemplates";
-import PipelineStatus from "./PipelineStatus";
+import type { StartImport } from "./PipelineStartChoice";
+import PipelineStatus, { libraryStatus } from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
 } from "./PipelineCreationRecovery";
@@ -54,7 +53,16 @@ import {
   type PipelineDestination,
 } from "./pipelineDestination";
 import { useCommand } from "./commands";
+import { ChunkBoundary } from "./PageBoundary";
+import { loadPage } from "./pageLoading";
 import "./pipeline-library.css";
+import type { Notify } from "./toast";
+
+// The create dialog's start options (templates, import) download when the
+// dialog is about to open: on hover or focus of Create, or when it opens.
+const loadStartChoice = () => import("./PipelineStartChoice");
+const PipelineStartChoice = lazy(() => loadPage(loadStartChoice));
+const prefetchStartChoice = () => void loadStartChoice().catch(() => {});
 
 export type PipelineLibraryQuery = {
   search: string;
@@ -89,7 +97,7 @@ export default function PipelineLibrary({
   destination,
 }: {
   user: User;
-  notify(message: string): void;
+  notify: Notify;
   navigate(path: string): void;
   initialDeviceId?: string;
   initialQuery?: PipelineLibraryQuery;
@@ -99,6 +107,7 @@ export default function PipelineLibrary({
   const recovery = usePipelineCreationOperations(user.id),
     recoveryRef = useRef<PipelineCreationRecoveryHandle>(null),
     createOpener = useRef<HTMLButtonElement | null>(null),
+    createButton = useRef<HTMLButtonElement | null>(null),
     nameInput = useRef<HTMLInputElement | null>(null);
   const unresolved =
     recovery.operations.length > 0 || recovery.errors.length > 0;
@@ -126,7 +135,6 @@ export default function PipelineLibrary({
     };
   }, []);
   const [search, setSearch] = useState(initialQuery?.search || "");
-  const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState(
     initialQuery || {
       search: "",
@@ -146,10 +154,13 @@ export default function PipelineLibrary({
     page_size: "12",
   });
   if (query.direction) parameters.set("direction", query.direction);
-  const { data, loading, error, reload } = useResource<PipelineLibraryPage>(
-    `/configurations/library?${parameters}`,
-    { items: [], total: 0, page: query.page, page_size: 12 },
-  );
+  const { data, loading, error, reload, refreshing, updatedAt } =
+    useResource<PipelineLibraryPage>(`/configurations/library?${parameters}`, {
+      items: [],
+      total: 0,
+      page: query.page,
+      page_size: 12,
+    });
   const searching = search.trim() !== query.search;
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correctingPage = !loading && !error && query.page > lastPage;
@@ -182,22 +193,17 @@ export default function PipelineLibrary({
     configuration: PipelineSummary;
     action: PipelineAction;
   } | null>(null);
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await reload();
-    } finally {
-      setRefreshing(false);
-    }
-  }
   // ⌘K and the Overview checklist open the create dialog through this command.
+  // It runs after a route change, when nothing on this page has focus yet, so
+  // the header's Create button stands in as the opener focus returns to.
   useCommand(
     "pipeline.create",
-    () => beginCreate(document.activeElement as HTMLButtonElement | null),
+    () => beginCreate(createButton.current),
     can(user, "edit"),
   );
   function beginCreate(trigger: HTMLButtonElement | null) {
     if (active.current) return;
+    prefetchStartChoice();
     createOpener.current = trigger;
     if (unresolved) {
       recoveryRef.current?.openSaved(
@@ -216,10 +222,9 @@ export default function PipelineLibrary({
     setOpen(true);
   }
   // The name follows what you start from until you type your own.
-  function chooseStart(id: string) {
+  function chooseStart(id: string, templateName: string) {
     setTemplate(id);
-    if (!nameEdited)
-      setName(pipelineTemplates.find((item) => item.id === id)?.title ?? "");
+    if (!nameEdited) setName(templateName);
   }
   function importStart(value: StartImport | null) {
     setImported(value);
@@ -318,7 +323,7 @@ export default function PipelineLibrary({
       }
       active.current = null;
       setOpen(false);
-      notify("Pipeline created.");
+      notify("Pipeline created.", { tone: "success" });
       navigate(pipelineRoute(result.id, initialDeviceId, destination));
     } catch (failure) {
       if (!current()) return;
@@ -348,10 +353,20 @@ export default function PipelineLibrary({
         title="Pipelines"
         help={{ topic: "pipelines", section: "find-and-organize-pipelines" }}
         description="Build, publish, and maintain your event pipelines."
+        live={{
+          updatedAt,
+          error,
+          loading,
+          refreshing,
+          onRefresh: () => void reload(),
+        }}
       >
         {can(user, "edit") && (
           <Button
+            ref={createButton}
             icon={Plus}
+            onPointerEnter={prefetchStartChoice}
+            onFocus={prefetchStartChoice}
             onClick={(event) => beginCreate(event.currentTarget)}
           >
             {unresolved ? "Review saved requests" : "Create pipeline"}
@@ -406,8 +421,8 @@ export default function PipelineLibrary({
           placeholder="Search pipelines"
           maxLength={200}
         />
-        <div className="pipeline-library-toolbar-tools">
-          {can(user, "edit") && (
+        {can(user, "edit") && (
+          <div className="pipeline-library-toolbar-tools">
             <IconButton
               icon={History}
               label="Your pipeline requests"
@@ -415,25 +430,42 @@ export default function PipelineLibrary({
                 recoveryRef.current?.openRecent(event.currentTarget)
               }
             />
-          )}
-          <IconButton
-            icon={RefreshCw}
-            label="Refresh"
-            className={refreshing ? "is-busy" : undefined}
-            aria-busy={refreshing || undefined}
-            onClick={refresh}
-            disabled={loading || searching || refreshing}
-          />
-        </div>
+          </div>
+        )}
       </div>
-      {error && !searching && <ErrorBox message={error} retry={refresh} />}
       <div className="pipeline-library-list">
         <DataTable
           label="Pipeline library"
           className="pipeline-library-table"
-          data={error ? [] : data.items}
+          data={data.items}
           rowKey={(pipeline) => pipeline.id}
           loading={loading || searching || correctingPage}
+          error={
+            error
+              ? {
+                  title: updatedAt
+                    ? "Couldn't refresh pipelines."
+                    : "Couldn't load pipelines.",
+                  message: error,
+                  updatedAt,
+                  retry: () => void reload(),
+                  retrying: refreshing,
+                }
+              : null
+          }
+          mobileCard={(pipeline) => {
+            const status = libraryStatus(pipeline);
+            return {
+              title: pipeline.name,
+              href: `#/${pipelineRoute(pipeline.id, initialDeviceId, destination)}`,
+              status: status.changed ? (
+                <span className="pipeline-status-chip">
+                  Unpublished changes
+                </span>
+              ) : undefined,
+              meta: [status.primary, status.detail],
+            };
+          }}
           manualSorting
           sort={{
             column: query.sort,
@@ -451,7 +483,7 @@ export default function PipelineLibrary({
               });
           }}
           pagination={
-            loading || searching || correctingPage || error
+            loading || searching || correctingPage
               ? undefined
               : {
                   total: data.total,
@@ -461,35 +493,35 @@ export default function PipelineLibrary({
                 }
           }
           empty={
-            error ? (
-              "Pipelines could not be loaded."
-            ) : (
-              <section className="pipeline-library-empty">
-                <h2>
-                  {query.search
-                    ? "No matching pipelines"
-                    : query.state === "archived"
-                      ? "No archived pipelines"
-                      : "Create your first pipeline"}
-                </h2>
-                <p>
-                  {query.search
-                    ? "Try a different name or change the Status column filter."
-                    : query.state === "archived"
-                      ? "Archived pipelines stay available here with their history and published versions."
-                      : "Start with a source and a destination. Add transformations when you need to filter or change events."}
-                </p>
-                {query.search ? (
-                  <Button variant="secondary" onClick={() => setSearch("")}>
-                    Clear search
-                  </Button>
-                ) : query.state === "active" && can(user, "edit") ? (
-                  <Button onClick={(event) => beginCreate(event.currentTarget)}>
-                    {unresolved ? "Review saved requests" : "Create pipeline"}
-                  </Button>
-                ) : null}
-              </section>
-            )
+            <section className="pipeline-library-empty">
+              <h2>
+                {query.search
+                  ? "No matching pipelines"
+                  : query.state === "archived"
+                    ? "No archived pipelines"
+                    : "Create your first pipeline"}
+              </h2>
+              <p>
+                {query.search
+                  ? "Try a different name or change the Status column filter."
+                  : query.state === "archived"
+                    ? "Archived pipelines stay available here with their history and published versions."
+                    : "Start with a source and a destination. Add transformations when you need to filter or change events."}
+              </p>
+              {query.search ? (
+                <Button variant="secondary" onClick={() => setSearch("")}>
+                  Clear search
+                </Button>
+              ) : query.state === "active" && can(user, "edit") ? (
+                <Button
+                  onPointerEnter={prefetchStartChoice}
+                  onFocus={prefetchStartChoice}
+                  onClick={(event) => beginCreate(event.currentTarget)}
+                >
+                  {unresolved ? "Review saved requests" : "Create pipeline"}
+                </Button>
+              ) : null}
+            </section>
           }
           columns={[
             {
@@ -608,13 +640,14 @@ export default function PipelineLibrary({
             const completed = action.action;
             setAction(null);
             if (completed === "duplicate") {
-              notify("Pipeline duplicated.");
+              notify("Pipeline duplicated.", { tone: "success" });
               navigate(pipelineRoute(result.id, initialDeviceId, destination));
             } else {
               notify(
                 completed === "archive"
                   ? "Pipeline archived. Running deployments are unchanged."
                   : "Pipeline unarchived.",
+                { tone: "success" },
               );
               reload();
             }
@@ -624,6 +657,7 @@ export default function PipelineLibrary({
       <Modal
         open={open}
         onClose={() => !active.current && !busy && setOpen(false)}
+        returnFocusRef={createOpener}
         title="Create pipeline"
         description="Create a draft first. Review devices after publishing."
       >
@@ -674,13 +708,21 @@ export default function PipelineLibrary({
                 {nameError}
               </p>
             )}
-            <PipelineStartChoice
-              value={template}
-              disabled={busy || !!notice || unresolved}
-              imported={imported}
-              onChange={chooseStart}
-              onImport={importStart}
-            />
+            <ChunkBoundary
+              fallback={() => (
+                <ErrorBox message="The ways to start didn’t load. Check your connection, then reload the page." />
+              )}
+            >
+              <Suspense fallback={<StartChoiceSkeleton />}>
+                <PipelineStartChoice
+                  value={template}
+                  disabled={busy || !!notice || unresolved}
+                  imported={imported}
+                  onChange={chooseStart}
+                  onImport={importStart}
+                />
+              </Suspense>
+            </ChunkBoundary>
             <Field label="Description (optional)">
               <textarea
                 rows={2}
@@ -715,6 +757,21 @@ export default function PipelineLibrary({
           </div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+/** The start options' shape while their file downloads. */
+function StartChoiceSkeleton() {
+  return (
+    <div className="pipeline-start-loading" aria-busy="true">
+      <span className="sr-only" role="status">
+        Loading the ways to start…
+      </span>
+      <Skeleton width={180} height={14} />
+      {[0, 1, 2].map((index) => (
+        <Skeleton key={index} width="100%" height={52} radius={10} />
+      ))}
     </div>
   );
 }

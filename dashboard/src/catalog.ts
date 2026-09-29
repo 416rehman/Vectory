@@ -34,7 +34,6 @@ function withVrlConditions(schema: Schema): Schema {
   };
 }
 export const vectorSchema: Schema = withVrlConditions(generatedSchema);
-export const vectorCatalogVersion = generatedCatalog.vector_version;
 export type Kind = "sources" | "transforms" | "sinks";
 export type Component = {
   type: string;
@@ -601,17 +600,6 @@ function inferEvents(
       ),
     ];
   return allEvents;
-}
-export function setPath(value: Config, path: string, next: any): Config {
-  const copy = structuredClone(value);
-  const parts = path.split(".");
-  let at = copy;
-  for (const key of parts.slice(0, -1)) {
-    at[key] ??= {};
-    at = at[key];
-  }
-  at[parts.at(-1)!] = next;
-  return copy;
 }
 type PipelineComponent = {
   id: string;

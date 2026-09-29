@@ -10,6 +10,10 @@ import {
 import type { User } from "./api";
 import { primaryNavigation, type NavigationItem } from "./navigation";
 import {
+  singleKeyShortcutsOn,
+  useSingleKeyShortcuts,
+} from "./shortcutPreference";
+import {
   Button,
   EmptyState,
   IconButton,
@@ -81,6 +85,7 @@ export function Sidebar({
   onClose: () => void;
 }) {
   const rail = collapsed && !mobile;
+  const [singleKeys] = useSingleKeyShortcuts();
   const search = (
     <button
       type="button"
@@ -97,83 +102,89 @@ export function Sidebar({
     </button>
   );
   return (
-    <aside
+    <div
       id="main-navigation"
-      ref={navigationRef}
+      ref={navigationRef as RefObject<HTMLDivElement | null>}
       className="sidebar"
       role={mobileOpen ? "dialog" : undefined}
       aria-modal={mobileOpen ? true : undefined}
-      aria-label="Navigation"
+      aria-label={mobileOpen ? "Navigation" : undefined}
     >
-      <div className="sidebar-heading">
-        <a
-          className="brand-link"
-          href="#/overview"
-          aria-label="Vectory overview"
-        >
-          {brand}
-        </a>
-        <IconButton
-          className="sidebar-close"
-          icon={X}
-          label="Close navigation"
-          onClick={onClose}
-        />
-      </div>
-      <Tooltip
-        content="Search"
-        side="right"
-        shortcut={["mod", "K"]}
-        disabled={!rail}
-      >
-        {search}
-      </Tooltip>
-      <nav aria-label="Main navigation">
-        {primaryNavigation.map((item) => (
-          <NavLink
-            key={item.id}
-            item={item}
-            current={section === item.id}
-            collapsed={rail}
-            onNavigate={() => {
-              if (mobile) onClose();
-            }}
-          />
-        ))}
-      </nav>
-      <div className="sidebar-bottom">
-        {!mobile && (
-          <Tooltip
-            content={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            side="right"
-            shortcut={["["]}
+      <nav className="sidebar-frame" aria-label="Main navigation">
+        <div className="sidebar-heading">
+          <a
+            className="brand-link"
+            href="#/overview"
+            aria-label="Vectory overview"
           >
-            <button
-              type="button"
-              className="sidebar-item sidebar-collapse"
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              aria-expanded={!collapsed}
-              aria-controls="main-navigation"
-              aria-keyshortcuts="["
-              onClick={onToggleCollapsed}
+            {brand}
+          </a>
+          <IconButton
+            className="sidebar-close"
+            icon={X}
+            label="Close navigation"
+            onClick={onClose}
+          />
+        </div>
+        <Tooltip
+          content="Search"
+          side="right"
+          shortcut={["mod", "K"]}
+          disabled={!rail}
+        >
+          {search}
+        </Tooltip>
+        <div className="sidebar-links">
+          {primaryNavigation.map((item) => (
+            <NavLink
+              key={item.id}
+              item={item}
+              current={section === item.id}
+              collapsed={rail}
+              onNavigate={() => {
+                if (mobile) onClose();
+              }}
+            />
+          ))}
+        </div>
+        <div className="sidebar-bottom">
+          {!mobile && (
+            <Tooltip
+              content={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              side="right"
+              shortcut={["["]}
             >
-              {collapsed ? (
-                <PanelLeftOpen size={17} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <PanelLeftClose
-                  size={17}
-                  strokeWidth={1.8}
-                  aria-hidden="true"
-                />
-              )}
-              <span className="sidebar-label">Collapse</span>
-              <Kbd keys="[" />
-            </button>
-          </Tooltip>
-        )}
-        {accountMenu}
-      </div>
-    </aside>
+              <button
+                type="button"
+                className="sidebar-item sidebar-collapse"
+                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-expanded={!collapsed}
+                aria-controls="main-navigation"
+                aria-keyshortcuts={singleKeys ? "[" : undefined}
+                onClick={onToggleCollapsed}
+              >
+                {collapsed ? (
+                  <PanelLeftOpen
+                    size={17}
+                    strokeWidth={1.8}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <PanelLeftClose
+                    size={17}
+                    strokeWidth={1.8}
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="sidebar-label">Collapse</span>
+                {singleKeys && <Kbd keys="[" />}
+              </button>
+            </Tooltip>
+          )}
+          {accountMenu}
+        </div>
+      </nav>
+    </div>
   );
 }
 
@@ -278,12 +289,13 @@ export function PageSkeleton({
         className="page-skeleton-editor"
         role="status"
         aria-label="Loading pipeline"
+        data-page-skeleton=""
       >
         <Skeleton width="100%" height="100%" radius={0} />
       </div>
     );
   return (
-    <div role="status" aria-label={`Loading ${title}`}>
+    <div role="status" aria-label={`Loading ${title}`} data-page-skeleton="">
       <PageHeader title={title} />
       <div className="page-skeleton-toolbar">
         <Skeleton width={320} height={32} radius={6} />
@@ -345,6 +357,7 @@ export function KeyboardShortcuts({
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
+  const [singleKeys] = useSingleKeyShortcuts();
   return (
     <Modal
       open={open}
@@ -357,6 +370,12 @@ export function KeyboardShortcuts({
       initialFocus="none"
     >
       <div className="modal-body">
+        {!singleKeys && (
+          <p className="shortcut-sheet-note">
+            Single-key shortcuts are off, so only shortcuts with{" "}
+            {shortcutLabel(["mod"])} work. Turn them on in your account menu.
+          </p>
+        )}
         {shortcutGroups.map((group) => (
           <section key={group.title} className="shortcut-group">
             <h3>{group.title}</h3>
@@ -393,7 +412,8 @@ const typing = (target: EventTarget | null) =>
 
 /**
  * Single-key shortcuts: ? sheet, / search, R refresh, [ sidebar, g + key to go.
- * They never fire while typing, inside the canvas, or while a dialog is open.
+ * They never fire while typing, inside the canvas, or while a dialog is open,
+ * and not at all once the account menu's switch turns them off. ⌘K always works.
  */
 export function useGlobalShortcuts({
   enabled,
@@ -429,6 +449,8 @@ export function useGlobalShortcuts({
         handlers.current.onPalette();
         return;
       }
+      // Speech input and switch users can turn single keys off (WCAG 2.1.4).
+      if (!singleKeyShortcutsOn()) return;
       if (
         event.defaultPrevented ||
         event.ctrlKey ||

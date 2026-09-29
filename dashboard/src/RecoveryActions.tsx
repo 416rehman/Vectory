@@ -57,17 +57,12 @@ export function DeviceRetryAction(props: DeviceRecoveryProps) {
   return <DeviceApplicationRetry key={review} {...props} />;
 }
 /** Identity recovery alone, kept apart from routine sync controls. */
-export function DeviceIdentityRecovery({
-  device,
-  user,
-  onDone,
-}: DeviceRecoveryProps) {
+export function DeviceIdentityRecovery({ device, user }: DeviceRecoveryProps) {
   return (
     <DeviceRecoveryAuthorization
       key={`${user.id}:${user.role}:${device.id}:${device.name}`}
       device={device}
       user={user}
-      onDone={onDone}
     />
   );
 }

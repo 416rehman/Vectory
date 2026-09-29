@@ -16,7 +16,7 @@ import {
   targetLabel,
   timelineSteps,
   withDegraded,
-  verifiedText,
+  appliedText,
 } from "./deploymentStatus";
 
 const base = {
@@ -416,14 +416,14 @@ describe("device counts on rollouts", () => {
     rolled_back_by,
   });
   it("counts only the devices a rollout still follows", () => {
-    expect(verifiedText(counts(3, 2))).toBe("2 of 3 verified");
-    expect(verifiedText(counts(4, 2, 1))).toBe("2 of 3 verified");
+    expect(appliedText(counts(3, 2))).toBe("2 of 3 applied");
+    expect(appliedText(counts(4, 2, 1))).toBe("2 of 3 applied");
   });
   it("says so when nothing follows it, or it was rolled back", () => {
-    expect(verifiedText(counts(2, 0, 2))).toBe("No devices follow this now");
-    expect(verifiedText(counts(0, 0))).toBe("No devices");
-    expect(verifiedText(counts(3, 3, 0, "id"))).toBe(
-      "3 of 3 verified, then rolled back",
+    expect(appliedText(counts(2, 0, 2))).toBe("No devices follow this now");
+    expect(appliedText(counts(0, 0))).toBe("No devices");
+    expect(appliedText(counts(3, 3, 0, "id"))).toBe(
+      "3 of 3 applied, then rolled back",
     );
   });
 });

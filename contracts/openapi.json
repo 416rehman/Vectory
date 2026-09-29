@@ -19388,7 +19388,7 @@
               "issue_count"
             ],
             "additionalProperties": false,
-            "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+            "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
           },
           "secret_names": {
             "type": "array",
@@ -26835,7 +26835,7 @@
               "issue_count"
             ],
             "additionalProperties": false,
-            "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+            "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
           },
           "secret_names": {
             "type": "array",

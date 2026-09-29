@@ -28,7 +28,7 @@ import {
   type FilterChip,
 } from "./ui";
 import { useHashQuery } from "./urlState";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 import { dataPlaneIssues, deviceDisplayStatus } from "./status";
 import { formatRate, healthLabels, type HealthBucket } from "./overviewModel";
 import {

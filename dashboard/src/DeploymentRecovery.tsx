@@ -28,6 +28,7 @@ import {
 import { DeploymentStorageRecoveryDialog } from "./DeploymentStorageRecovery";
 import { Button, ErrorBox, Modal } from "./ui";
 import "./deployment-recovery.css";
+import type { Notify } from "./toast";
 
 export function DeploymentRecoveryDialog({
   operation,
@@ -396,7 +397,7 @@ export default function DeploymentRecoveryCenter({
   notify,
 }: {
   user: User;
-  notify(message: string): void;
+  notify: Notify;
 }) {
   const { pendingOperations, errors, refresh } = useDeploymentOperation(
     user.id,
@@ -539,7 +540,7 @@ export default function DeploymentRecoveryCenter({
               recoveryOpener.current = document.getElementById("main-content");
             setOpened(null);
           }}
-          onRecovered={notify}
+          onRecovered={(message) => notify(message, { tone: "success" })}
         />
       )}
       {visibleIssue && (
@@ -553,7 +554,7 @@ export default function DeploymentRecoveryCenter({
               recoveryOpener.current = document.getElementById("main-content");
             setOpenedIssue(null);
           }}
-          onRecovered={notify}
+          onRecovered={(message) => notify(message, { tone: "success" })}
         />
       )}
     </>

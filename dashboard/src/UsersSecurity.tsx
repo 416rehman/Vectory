@@ -23,6 +23,7 @@ import { roles } from "./roles";
 import type { MfaStatus } from "./mfaActionModel";
 import "./control.css";
 import "./account.css";
+import type { Notify } from "./toast";
 
 const roleIcons: Record<User["role"], LucideIcon> = {
   viewer: Eye,
@@ -56,7 +57,7 @@ export function UsersSecurity({
   onReload,
 }: {
   user: User;
-  notify: (m: string) => void;
+  notify: Notify;
   onUserChanged: (user: User | null) => void;
   onSignIn: () => void;
   onReload: () => void;

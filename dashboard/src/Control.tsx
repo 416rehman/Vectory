@@ -22,12 +22,12 @@ import {
   Button,
   DateCell,
   EmptyState,
-  ErrorBox,
+  InlineError,
   PageHeader,
-  Spinner,
+  Skeleton,
   useResource,
 } from "./ui";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
@@ -456,8 +456,24 @@ function AppliedDevices({ setting }: { setting: SavedPolicyListItem }) {
   );
 }
 
+/** `GET /settings`: what the host configured. Every field may be missing. */
+type InstanceSettings = {
+  instance_name?: string | null;
+  version?: string | null;
+  vector_version?: string | null;
+  heartbeat_seconds?: number | null;
+  telemetry_retention_days?: number | null;
+};
+
 export function Settings() {
-  const { data, error, loading } = useResource<any>("/settings", null);
+  // These only change when the host restarts the server, so read them once.
+  const settings = useResource<InstanceSettings | null>("/settings", null, 0, {
+    interval: 0,
+  });
+  const data = settings.data;
+  const pending = !data && settings.loading;
+  const fact = (text: string | null | undefined) =>
+    pending ? <Skeleton width={112} height={12} /> : text || "Unavailable";
   return (
     <div className="control-page">
       <PageHeader
@@ -465,45 +481,57 @@ export function Settings() {
         help={{ topic: "administer", section: "monitor-the-instance" }}
         description="Instance information and host-managed defaults."
       />
-      {error && <ErrorBox message={error} />}
-      <section className="control-card">
+      {settings.error && (
+        <InlineError
+          title={
+            data
+              ? "Couldn't refresh the instance settings."
+              : "Couldn't load the instance settings."
+          }
+          error={settings.error}
+          updatedAt={settings.updatedAt}
+          retry={() => void settings.reload()}
+          retrying={settings.refreshing}
+        />
+      )}
+      <section className="control-card" aria-busy={pending || undefined}>
         <h2>Instance</h2>
-        {loading ? (
-          <Spinner />
-        ) : (
-          <dl className="control-summary-list">
-            <div>
-              <dt>Name</dt>
-              <dd>{data?.instance_name || "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Vectory version</dt>
-              <dd>{data?.version || "Unavailable"}</dd>
-            </div>
-            <div>
-              <dt>Vector version</dt>
-              <dd>{data?.vector_version || "Unavailable"}</dd>
-            </div>
-          </dl>
-        )}
+        <dl className="control-summary-list">
+          <div>
+            <dt>Name</dt>
+            <dd>{fact(data?.instance_name)}</dd>
+          </div>
+          <div>
+            <dt>Vectory version</dt>
+            <dd>{fact(data?.version)}</dd>
+          </div>
+          <div>
+            <dt>Vector version</dt>
+            <dd>{fact(data?.vector_version)}</dd>
+          </div>
+        </dl>
       </section>
-      <section className="control-card">
+      <section className="control-card" aria-busy={pending || undefined}>
         <h2>Defaults</h2>
         <dl className="control-summary-list">
           <div>
             <dt>Check-in interval</dt>
             <dd>
-              {data?.heartbeat_seconds
-                ? `${data.heartbeat_seconds} seconds`
-                : "Unavailable"}
+              {fact(
+                data?.heartbeat_seconds
+                  ? `${data.heartbeat_seconds} seconds`
+                  : null,
+              )}
             </dd>
           </div>
           <div>
             <dt>Metric retention</dt>
             <dd>
-              {data?.telemetry_retention_days
-                ? `${data.telemetry_retention_days} days`
-                : "Unavailable"}
+              {fact(
+                data?.telemetry_retention_days
+                  ? `${data.telemetry_retention_days} days`
+                  : null,
+              )}
             </dd>
           </div>
         </dl>

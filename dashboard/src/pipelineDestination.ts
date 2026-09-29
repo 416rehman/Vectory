@@ -1,6 +1,11 @@
 export type PipelinePanel = "settings" | "history" | "details" | "tools";
 export type PipelineSection =
-  "general" | "enrichment_tables" | "secret" | "variables" | "tests" | "provider";
+  | "general"
+  | "enrichment_tables"
+  | "secret"
+  | "variables"
+  | "tests"
+  | "provider";
 export type PipelineDestination = {
   panel: PipelinePanel;
   section?: PipelineSection;

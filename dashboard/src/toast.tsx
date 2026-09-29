@@ -12,8 +12,16 @@ export type ToastOptions = {
   duration?: number | null;
 };
 /** What a page's `notify` accepts: the tone is stated, never guessed. */
-export type NotifyOptions = ToastOptions & { tone?: ToastTone };
-export type Notify = (message: string, options?: NotifyOptions) => void;
+export type NotifyOptions = ToastOptions & { tone: ToastTone };
+export type Notify = (message: string, options: NotifyOptions) => void;
+/**
+ * A refused gesture (a connection that can't be made, a drop while a dialog
+ * is open): said as an error, gone after six seconds since nothing is lost.
+ */
+export const refusal = {
+  tone: "error",
+  duration: 6000,
+} as const satisfies NotifyOptions;
 export type ToastItem = {
   id: number;
   tone: ToastTone;
@@ -82,20 +90,10 @@ export const toast = {
     emit();
   },
 };
-/**
- * The app's `notify`. Callers state the tone; a call without one (the
- * pipeline editor still has some) falls back to reading the wording.
- */
-export function notifyToast(message: string, options: NotifyOptions = {}) {
-  const { tone = guessTone(message), ...rest } = options;
+/** The app's `notify`: every caller states the tone. */
+export function notifyToast(message: string, options: NotifyOptions) {
+  const { tone, ...rest } = options;
   return show(tone, message, rest);
-}
-export function guessTone(message: string): ToastTone {
-  return /^(import failed|cannot |could ?n[o']t|failed|unable to)/i.test(
-    message,
-  )
-    ? "error"
-    : "info";
 }
 /** Test-only: the current stack. */
 export const toastSnapshot = () => items;
