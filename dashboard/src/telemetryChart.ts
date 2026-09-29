@@ -68,25 +68,95 @@ export function niceMax(value: number) {
   return nice * magnitude;
 }
 
-/** SVG path commands for one series; missing values break the line. */
+/**
+ * Empty slots a line may cross. A device checks in once per heartbeat, up
+ * to 20% late plus processing time, so a run of empty slots shorter than
+ * that is not a missed report. Longer runs stay visible as gaps.
+ */
+export function bridgeSlots(heartbeatSeconds: number, stepSeconds: number) {
+  if (!(heartbeatSeconds > 0 && stepSeconds > 0)) return 0;
+  return Math.max(
+    0,
+    Math.ceil((heartbeatSeconds * 1.2 + 15) / stepSeconds) - 1,
+  );
+}
+
+/** Empty slots inside a run of at most `bridge` slots between two reports. */
+export function bridgedSlots(reported: boolean[], bridge: number) {
+  const bridged = reported.map(() => false);
+  let last = -1;
+  reported.forEach((here, index) => {
+    if (!here) return;
+    if (last >= 0 && index - last - 1 <= bridge)
+      for (let slot = last + 1; slot < index; slot++) bridged[slot] = true;
+    last = index;
+  });
+  return bridged;
+}
+
+/**
+ * The slot a pointer or key on `index` reads: a bridged empty slot reads
+ * its nearest report (the earlier one on a tie); keys moving in `step`
+ * skip bridged slots entirely.
+ */
+export function readableSlot(
+  index: number,
+  reported: boolean[],
+  bridged: boolean[],
+  step?: -1 | 1,
+) {
+  if (!bridged[index]) return index;
+  if (step) {
+    let slot = index;
+    while (bridged[slot]) slot += step;
+    return slot;
+  }
+  let before = index,
+    after = index;
+  while (!reported[before]) before--;
+  while (!reported[after]) after++;
+  return index - before <= after - index ? before : after;
+}
+
+/**
+ * SVG path commands for one series. Missing values break the line unless
+ * the run of empty slots is at most `bridge` long.
+ */
 export function seriesPath(
   values: (number | null | undefined)[],
   x: (index: number) => number,
   y: (value: number) => number,
+  bridge = 0,
 ) {
-  let drawing = false;
-  return values
-    .map((value, index) => {
-      if (!present(value)) {
-        drawing = false;
-        return "";
-      }
-      const command = `${drawing ? "L" : "M"}${x(index).toFixed(2)},${y(value).toFixed(2)}`;
-      drawing = true;
-      return command;
-    })
-    .filter(Boolean)
-    .join(" ");
+  const commands: string[] = [];
+  let last = -1;
+  values.forEach((value, index) => {
+    if (!present(value)) return;
+    const joined = last >= 0 && index - last - 1 <= bridge;
+    commands.push(
+      `${joined ? "L" : "M"}${x(index).toFixed(2)},${y(value).toFixed(2)}`,
+    );
+    last = index;
+  });
+  return commands.join(" ");
+}
+
+/** Reported values that no line reaches, drawn as their own marks. */
+export function isolatedPoints(
+  values: (number | null | undefined)[],
+  bridge = 0,
+) {
+  const reported = values.flatMap((value, index) =>
+    present(value) ? [index] : [],
+  );
+  return reported.filter((index, position) => {
+    const before = reported[position - 1],
+      after = reported[position + 1];
+    return (
+      (before === undefined || index - before - 1 > bridge) &&
+      (after === undefined || after - index - 1 > bridge)
+    );
+  });
 }
 
 const compact = new Intl.NumberFormat(undefined, {

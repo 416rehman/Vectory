@@ -83,8 +83,19 @@ const samples = [
     errors: 10,
     components,
   },
+  { sampled_at: "2026-09-26T12:04:00Z", errors: 12 },
 ];
-const device = { id: id(100), name: "Synthetic device", telemetry: samples[1] };
+// A 10 s check-in: the empty 12:01 slot is a missed report, drawn as a gap.
+const device = {
+  id: id(100),
+  name: "Synthetic device",
+  effective_policy: {
+    heartbeat_seconds: 10,
+    sync_paused: false,
+    telemetry_enabled: true,
+  },
+  telemetry: samples[1],
+};
 const results = [],
   accessibility = [],
   calls = [],
@@ -246,20 +257,16 @@ try {
           exact: true,
         });
         await expect(table.locator("tbody tr")).toHaveCount(4);
-        const path = f.page.locator("path.metrics-series"),
+        const path = f.page.locator(".telemetry-series.in path").first(),
           original = await path.getAttribute("d");
-        await table
-          .getByRole("button", { name: /^Sort by Events \/ s/ })
-          .click();
+        await table.getByRole("button", { name: /^Sort by Out \/ s/ }).click();
         expect(await rowNames(table)).toEqual([
           "zero",
           "two",
           "ten",
           "missing",
         ]);
-        await table
-          .getByRole("button", { name: /^Sort by Events \/ s/ })
-          .click();
+        await table.getByRole("button", { name: /^Sort by Out \/ s/ }).click();
         expect(await rowNames(table)).toEqual([
           "ten",
           "two",
@@ -267,39 +274,37 @@ try {
           "missing",
         ]);
         await table
-          .getByRole("button", { name: "Filter Events / s", exact: true })
+          .getByRole("button", { name: "Filter Out / s", exact: true })
           .click();
         await f.page
-          .getByRole("textbox", { name: "Filter Events / s", exact: true })
+          .getByRole("textbox", { name: "Filter Out / s", exact: true })
           .fill("0");
         await f.page.keyboard.press("Escape");
         expect(await rowNames(table)).toEqual(["ten", "zero"]);
-        await f.page.getByText("View sample history", { exact: true }).click();
+        await f.page
+          .getByText("View samples as a table", { exact: true })
+          .click();
         const history = f.page.getByRole("table", {
-          name: "Metric sample history",
+          name: "Metric samples",
           exact: true,
         });
         await expect(history.locator("tbody tr")).toHaveCount(3);
-        await history
-          .getByRole("button", { name: /^Sort by Events \/ second/ })
-          .click();
+        await history.getByRole("button", { name: /^Sort by In \/ s/ }).click();
         expect(
           await history.locator("tbody tr td:nth-child(2)").allTextContents(),
         ).toEqual(["0", "10", "—"]);
-        await history
-          .getByRole("button", { name: /^Sort by Events \/ second/ })
-          .click();
+        await history.getByRole("button", { name: /^Sort by In \/ s/ }).click();
         expect(
           await history.locator("tbody tr td:nth-child(2)").allTextContents(),
         ).toEqual(["10", "0", "—"]);
         await expect(path).toHaveAttribute("d", original);
         await f.page
-          .getByRole("img", { name: /Source events per second/ })
+          .getByRole("img", { name: /^Throughput, events \/ second/ })
           .focus();
         await f.page.keyboard.press("ArrowLeft");
-        await expect(f.page.locator(".metrics-chart-readout")).toContainText(
-          "No sample reported",
-        );
+        await expect(
+          f.page.locator(".telemetry-readout").first(),
+        ).toContainText("No report");
         expect(calls.every((call) => call.method === "GET")).toBe(true);
       } finally {
         await f.close();
