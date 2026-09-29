@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -37,18 +38,10 @@ import "./secret-reference.css";
  * Windows. The bindings file replaces a device's bindings, so it names every
  * secret, not just a new one.
  */
-export function SecretBindingSteps({
-  names,
-  idPrefix,
-}: {
-  names: readonly string[];
-  idPrefix?: string;
-}) {
+export function SecretBindingSteps({ names }: { names: readonly string[] }) {
   const [platform, setPlatform] = useState<BindingPlatform>("unix");
   const steps = bindingInstructions(names.length ? names : ["NAME"], platform);
   const first = names[0] || "NAME";
-  const generated = useId();
-  const id = idPrefix || generated;
   return (
     <div className="secret-binding">
       <SegmentedControl
@@ -69,8 +62,9 @@ export function SecretBindingSteps({
         </li>
         <li>
           <div className="secret-binding-step-head">
-            <p id={`${id}-bindings`}>
-              List every secret the device needs. This file replaces its
+            <p>
+              List every secret the device needs in{" "}
+              <code>{steps.bindingsFile}</code>. This file replaces its
               bindings.
             </p>
             <CopyButton
@@ -78,18 +72,22 @@ export function SecretBindingSteps({
               ariaLabel="Copy the bindings file"
             />
           </div>
-          <pre aria-labelledby={`${id}-bindings`}>{steps.bindings}</pre>
+          <pre tabIndex={0} aria-label="Bindings file">
+            <code>{steps.bindings}</code>
+          </pre>
         </li>
         <li>
           <div className="secret-binding-step-head">
-            <p id={`${id}-commands`}>
+            <p>
               {platform === "windows"
                 ? "In an administrator PowerShell, register it with the agent stopped:"
                 : "Register it with the agent stopped:"}
             </p>
             <CopyButton text={steps.commands} ariaLabel="Copy the commands" />
           </div>
-          <pre aria-labelledby={`${id}-commands`}>{steps.commands}</pre>
+          <pre tabIndex={0} aria-label="Commands">
+            <code>{steps.commands}</code>
+          </pre>
         </li>
       </ol>
       <p className="secret-binding-note">
@@ -133,6 +131,7 @@ export default function SecretReferenceField({
   const [mode, setMode] = useState<PickerMode>(initial.mode),
     [text, setText] = useState(initial.text),
     [touched, setTouched] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     setMode(initial.mode);
     setText(initial.text);
@@ -160,6 +159,7 @@ export default function SecretReferenceField({
     setMode(next);
     setText(next === initial.mode ? initial.text : "");
     setTouched(false);
+    inputRef.current?.focus();
   }
   const deviceName = mode === "device" && !result.problem ? text : "";
   const showProblem =
@@ -227,6 +227,7 @@ export default function SecretReferenceField({
             </span>
           )}
           <input
+            ref={inputRef}
             aria-labelledby={labelId}
             aria-describedby={`${describeId} ${statusId}`}
             aria-invalid={showProblem || undefined}
@@ -234,7 +235,7 @@ export default function SecretReferenceField({
             type="text"
             value={text}
             readOnly={!editable}
-            list={mode === "device" && known.length ? listId : undefined}
+            list={mode === "device" ? listId : undefined}
             placeholder={
               mode === "device"
                 ? suggestion || "SECRET_NAME"
@@ -254,7 +255,8 @@ export default function SecretReferenceField({
           ? "Device secret name. Saved as vectory-secret:NAME."
           : "Vector secret or variable reference."}
       </span>
-      {mode === "device" && known.length > 0 && (
+      {/* Always present in device mode, so the input keeps one role while typed in. */}
+      {mode === "device" && (
         <datalist id={listId}>
           {known.map((name) => (
             <option key={name} value={name} />

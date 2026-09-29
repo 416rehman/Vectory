@@ -16,7 +16,10 @@ import {
   secretFindings,
   secretNameProblem,
   secretNamesOf,
+  secretNeeds,
   secretReferences,
+  secretReview,
+  deviceSecretStates,
   suggestedSecretName,
 } from "./secretFields";
 import SecretReferenceField, {
@@ -25,7 +28,11 @@ import SecretReferenceField, {
 import { SecretPathContext, SecretScopeContext } from "./secretFieldContext";
 import { PipelineSchemaControl } from "./PipelineSchemaFields";
 import PipelineSettings from "./PipelineSettings";
+import DeviceSecrets from "./DeviceSecrets";
+import PublishReview from "./PublishReview";
+import type { Device, Version } from "./api";
 import { checkVerdict } from "./pipelineProblems";
+import { pipelineTemplates } from "./pipelineTemplates";
 
 describe("the device-secret field table", () => {
   it("is the generated copy of the agent's and the server's table", () => {
@@ -271,11 +278,27 @@ describe("the secret picker", () => {
       "Use at most 64 characters.",
     );
     // A pasted API key is not a name: it would be stored in the pipeline.
-    expect(looksLikeCredential("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")).toBe(true);
-    expect(looksLikeCredential("DATADOG_API_KEY_2")).toBe(false);
-    expect(pickerValue("device", "a1b2c3d4e5f6a7b8c9d0e1f2").problem).toMatch(
-      /looks like the credential itself/,
-    );
+    for (const pasted of [
+      "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+      "3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c",
+      "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "ghp_R2d2C3po4Bb8Ee5Ff6Gg7Hh8Ii9Jj0Kk",
+      "AKIAIOSFODNN7EXAMPLE",
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ]) {
+      expect(looksLikeCredential(pasted), pasted).toBe(true);
+      expect(pickerValue("device", pasted).problem).toMatch(
+        /^That looks like the credential itself\./,
+      );
+    }
+    for (const name of [
+      "DATADOG_API_KEY_2",
+      "REVIEWED_DEFAULT_API_KEY",
+      "SPLUNK_HEC_TOKEN_PROD_2024",
+      "prod.kafka.password2",
+      "KAFKA.password-2",
+    ])
+      expect(looksLikeCredential(name), name).toBe(false);
     expect(pickerValue("native", "${TOKEN}").value).toBe("${TOKEN}");
     expect(pickerValue("native", "plaintext").value).toBeNull();
     expect(secretNameProblem("KAFKA.password-2")).toBeNull();
@@ -421,6 +444,210 @@ describe("binding steps", () => {
     );
     expect(html).toContain("This file replaces its bindings.");
     expect(html).toContain("configure-secrets --secret-files");
+  });
+});
+
+const secretPipeline = {
+  sources: { in: { type: "demo_logs", format: "json" } },
+  sinks: {
+    dd: {
+      type: "datadog_logs",
+      inputs: ["in"],
+      default_api_key: "vectory-secret:DD_API_KEY",
+    },
+    kafka: {
+      type: "kafka",
+      inputs: ["in"],
+      bootstrap_servers: "kafka:9092",
+      topic: "logs",
+      encoding: { codec: "json" },
+      sasl: {
+        enabled: true,
+        mechanism: "PLAIN",
+        username: "vector",
+        password: "vectory-secret:KAFKA_PASSWORD",
+      },
+    },
+    copy: {
+      type: "datadog_logs",
+      inputs: ["in"],
+      default_api_key: "vectory-secret:DD_API_KEY",
+    },
+  },
+};
+
+describe("where a version's secrets are shown", () => {
+  it("lists each name once with every field that reads it", () => {
+    expect(secretNeeds(secretPipeline)).toEqual([
+      {
+        name: "DD_API_KEY",
+        uses: ["dd.default_api_key", "copy.default_api_key"],
+      },
+      { name: "KAFKA_PASSWORD", uses: ["kafka.sasl.password"] },
+    ]);
+    expect(secretNeeds(null)).toEqual([]);
+  });
+
+  it("marks names the published version doesn't read", () => {
+    const published = { sinks: { dd: secretPipeline.sinks.dd } };
+    expect(
+      secretReview(published, secretPipeline).map(({ name, added }) => [
+        name,
+        added,
+      ]),
+    ).toEqual([
+      ["DD_API_KEY", false],
+      ["KAFKA_PASSWORD", true],
+    ]);
+    // A first version has nothing to compare with.
+    expect(secretReview(null, secretPipeline).some((item) => item.added)).toBe(
+      false,
+    );
+  });
+
+  it("checks each name against the names a device reported", () => {
+    expect(
+      deviceSecretStates(secretPipeline, ["DD_API_KEY", "OLD"]).map(
+        ({ name, bound }) => [name, bound],
+      ),
+    ).toEqual([
+      ["DD_API_KEY", true],
+      ["KAFKA_PASSWORD", false],
+    ]);
+    expect(
+      deviceSecretStates(secretPipeline, undefined).every(
+        (state) => state.bound === null,
+      ),
+    ).toBe(true);
+  });
+
+  const device = (extra: Partial<Device> = {}) =>
+    ({
+      id: "device-1",
+      name: "edge-01",
+      status: "failed",
+      desired_version_id: "version-4",
+      uses_local_secrets: true,
+      ...extra,
+    }) as Device;
+  const version = {
+    id: "version-4",
+    number: 4,
+    config: secretPipeline,
+  } as unknown as Version;
+  const card = (
+    props: Partial<{
+      device: Device;
+      version: Version | null;
+      loading: boolean;
+      failed: boolean;
+    }>,
+  ) =>
+    renderToStaticMarkup(
+      createElement(DeviceSecrets, {
+        device: device(),
+        version,
+        loading: false,
+        failed: false,
+        ...props,
+      }),
+    );
+
+  it("shows on the device page which names are bound, never values", () => {
+    const html = card({
+      device: device({ secret_names: ["DD_API_KEY", "OLD_TOKEN"] }),
+    });
+    expect(html).toContain("Device secrets");
+    expect(html).toContain("v4 reads 2 secrets from this device.");
+    expect(html).toContain(
+      "A missing binding stops the device from applying it.",
+    );
+    expect(html).toContain("1 not bound");
+    expect(html).toMatch(/DD_API_KEY<\/code>.*?Bound</);
+    expect(html).toMatch(/KAFKA_PASSWORD<\/code>.*?Not bound</);
+    expect(html).toContain("<code>kafka.sasl.password</code>");
+    expect(html).toContain("Also bound here: ");
+    expect(html).toContain("<code>OLD_TOKEN</code>");
+    // A missing binding opens the binding steps with every name listed.
+    expect(html).toMatch(/<details[^>]*open=""/);
+    expect(html).toContain("configure-secrets --secret-files");
+    expect(html).toContain(
+      "&quot;KAFKA_PASSWORD&quot;: &quot;/etc/vectory/secrets/KAFKA_PASSWORD&quot;",
+    );
+  });
+
+  it("says when every name is bound, or when the agent doesn't report names", () => {
+    const bound = card({
+      device: device({ secret_names: ["DD_API_KEY", "KAFKA_PASSWORD"] }),
+    });
+    expect(bound).toContain("All bound");
+    expect(bound).not.toContain("Not bound");
+    expect(bound).not.toMatch(/<details[^>]*open=""/);
+    const unknown = card({});
+    expect(unknown).toContain("Not reported");
+    expect(unknown).toContain(
+      "This device hasn&#x27;t reported which secrets it has bound",
+    );
+    expect(unknown).not.toContain("All bound");
+  });
+
+  it("waits for the version, and stays away when no secrets are involved", () => {
+    expect(card({ version: null, loading: true })).toContain(
+      'aria-busy="true"',
+    );
+    expect(card({ version: null, failed: true })).toContain(
+      "The secrets this version reads couldn&#x27;t be loaded.",
+    );
+    expect(
+      card({
+        device: device({ uses_local_secrets: false }),
+        version: { ...version, config: { sources: {} } },
+      }),
+    ).toBe("");
+    expect(
+      card({
+        device: device({
+          uses_local_secrets: false,
+          desired_version_id: undefined,
+          secret_names: ["DD_API_KEY"],
+        }),
+        version: null,
+      }),
+    ).toContain("Bound on this device: ");
+  });
+
+  it("lists the names in the publish review and marks new ones", () => {
+    const html = renderToStaticMarkup(
+      createElement(PublishReview, {
+        config: secretPipeline,
+        published: {
+          id: "version-3",
+          number: 3,
+          config: { sinks: { dd: secretPipeline.sinks.dd } },
+          created_at: new Date().toISOString(),
+        } as unknown as Version,
+        reach: null,
+        status: "device",
+        statusLabel: "Checked",
+        verdict: "Vector 0.58 accepted this pipeline.",
+        problems: [],
+        rejection: null,
+        onGoToProblem: () => {},
+      }),
+    );
+    expect(html).toContain('aria-label="Device secrets"');
+    expect(html).toContain("<code>DD_API_KEY</code>");
+    expect(html).toMatch(/KAFKA_PASSWORD<\/code><span[^>]*>New</);
+    expect(html).not.toMatch(/DD_API_KEY<\/code><span[^>]*>New</);
+    expect(html).toContain("One is new since v3.");
+    expect(html).toContain("How to bind them on a device");
+  });
+});
+
+describe("pipeline templates", () => {
+  it("never put a credential in plain text", () => {
+    for (const template of pipelineTemplates)
+      expect(secretFindings(template.config), template.id).toEqual([]);
   });
 });
 

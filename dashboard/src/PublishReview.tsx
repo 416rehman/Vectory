@@ -11,6 +11,8 @@ import { Button } from "./ui";
 import ProblemText from "./ProblemText";
 import { displayLabel, type Kind } from "./catalog";
 import type { CheckStatus, Problem } from "./pipelineProblems";
+import { SecretBindingSteps } from "./SecretReferenceField";
+import { secretReview } from "./secretFields";
 import {
   groupChanges,
   programDiff,
@@ -163,6 +165,11 @@ export default function PublishReview({
     () => groupChanges(review.components),
     [review.components],
   );
+  const secrets = useMemo(
+    () => secretReview(published?.config || null, config),
+    [published, config],
+  );
+  const newSecrets = secrets.filter((secret) => secret.added).length;
   const empty =
     !review.components.length && !review.settings.length && !review.tests;
   return (
@@ -323,6 +330,40 @@ export default function PublishReview({
           </ul>
         )}
       </section>
+      {secrets.length > 0 && (
+        <section className="publish-review-secrets" aria-label="Device secrets">
+          <h4>Device secrets</h4>
+          <p>
+            Each device reads these from its own files; their values never reach
+            Vectory. Bind them on every device before you deploy: a device
+            missing one keeps what it runs now.
+            {newSecrets > 0 &&
+              ` ${newSecrets === 1 ? "One is" : `${newSecrets} are`} new since v${published?.number}.`}
+          </p>
+          <ul>
+            {secrets.map((secret) => (
+              <li key={secret.name} className="publish-change-row">
+                <code>{secret.name}</code>
+                {secret.added && (
+                  <span
+                    className="publish-secret-new"
+                    title={`Not read by v${published?.number}`}
+                  >
+                    New
+                  </span>
+                )}
+                <span className="publish-change-detail">
+                  in {secret.uses.join(", ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <details className="secret-picker-help">
+            <summary>How to bind them on a device</summary>
+            <SecretBindingSteps names={secrets.map((secret) => secret.name)} />
+          </details>
+        </section>
+      )}
     </div>
   );
 }
