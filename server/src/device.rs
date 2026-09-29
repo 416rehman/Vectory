@@ -316,12 +316,13 @@ async fn enroll_inner(
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id) VALUES(?,?,?,?)",
+        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id,ca_id) VALUES(?,?,?,?,?)",
     )
     .bind(issued.fingerprint)
     .bind(&id)
     .bind(issued.expires)
     .bind(s.keys.active_signing_id())
+    .bind(issued.ca_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query("INSERT INTO enrollments(request_id,key_hash,token_id,response) VALUES(?,?,?,?)")
@@ -385,12 +386,13 @@ pub async fn renew(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id) VALUES(?,?,?,?)",
+        "INSERT INTO credentials(fingerprint,device_id,expires_at,signing_key_id,ca_id) VALUES(?,?,?,?,?)",
     )
     .bind(issued.fingerprint)
     .bind(&id)
     .bind(issued.expires)
     .bind(s.keys.active_signing_id())
+    .bind(issued.ca_id)
     .execute(&mut *tx)
     .await?;
     db::audit(&mut tx, &id, "device.renew", &id, "success").await?;

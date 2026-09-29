@@ -97,6 +97,9 @@ export const auditActions: Record<string, string> = {
   "signing.rotate.prepare": "Signing key rotation prepared",
   "signing.rotate": "Signing key rotated",
   "signing.prune": "Retired signing key removed",
+  "signing.device_ca.rotate.prepare": "Device CA rotation prepared",
+  "signing.device_ca.rotate": "Device CA rotated",
+  "signing.device_ca.retire": "Previous device CA retired",
 };
 
 export const auditFamilies: Record<string, string> = {

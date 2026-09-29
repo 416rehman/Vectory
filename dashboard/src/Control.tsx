@@ -32,6 +32,8 @@ import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
 import AgentSettingsEditor from "./AgentSettingsEditor";
+import { DeviceCertificates } from "./DeviceCertificates";
+import { readDeviceCa } from "./deviceCaStatus";
 import "./control.css";
 import type { Notify } from "./toast";
 
@@ -527,6 +529,7 @@ export function Settings() {
           </div>
         </details>
       </section>
+      <DeviceCertificates status={readDeviceCa(data?.device_ca)} />
     </div>
   );
 }

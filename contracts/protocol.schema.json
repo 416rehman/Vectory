@@ -8149,6 +8149,150 @@
       ],
       "description": "Empty legacy request or strict correlated request. The expected name must exactly match the original source device on first issuance. Same actor/request key cannot be rebound to another device or reviewed name."
     },
+    "DeviceCa": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of the CA certificate DER: the fingerprint operators compare and the issuer recorded on each device credential."
+        },
+        "subject": {
+          "type": "string"
+        },
+        "not_before": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "not_after": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sha256",
+        "subject",
+        "not_before",
+        "not_after"
+      ],
+      "additionalProperties": false
+    },
+    "PreviousDeviceCa": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "not_before": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "not_after": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "devices": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Active devices that still hold an unexpired, unrevoked certificate from this CA (including credentials issued before issuers were recorded). Retiring waits for zero."
+        },
+        "device_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "description": "Up to 20 of those devices by name."
+        },
+        "last_expires_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the last of those certificates expires: retiring succeeds by then at the latest."
+        }
+      },
+      "required": [
+        "sha256",
+        "subject",
+        "not_before",
+        "not_after",
+        "devices",
+        "device_names",
+        "last_expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "Settings": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "vector_version": {
+          "type": "string"
+        },
+        "heartbeat_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "telemetry_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "instance_name": {
+          "type": "string"
+        },
+        "schedule_late_start_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800,
+          "description": "How late a scheduled deployment still activates once (VECTORY_SCHEDULE_LATE_START_SECONDS); later ones become missed."
+        },
+        "device_ca": {
+          "type": "object",
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/DeviceCa"
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PreviousDeviceCa"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The CA a rotation replaced, still trusted for client certificates until vectory-admin retire-device-ca; null when none."
+            }
+          },
+          "required": [
+            "current",
+            "previous"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "vector_version",
+        "heartbeat_seconds",
+        "telemetry_retention_days",
+        "instance_name"
+      ],
+      "additionalProperties": true
+    },
     "AgentInstall": {
       "type": "object",
       "properties": {

@@ -125,6 +125,21 @@ Migrations only move forward. An older server refuses a database that a newer on
 
 Devices check manifests with the server's signing key. To rotate it, back up, stop the server and run [`vectory-admin rotate-signing-key`](vectory-admin.md#rotate-signing-key). Devices move to the new key at their next certificate renewal.
 
+## Rotate the device certificate authority
+
+The server's device certificate authority (CA), `keys/device-ca.pem`, signs every device's certificate. It's valid for 10 years. Rotate it before it expires, or when your policy asks for a new one. Devices keep working throughout.
+
+<!-- steps -->
+1. [Back up](#back-up-the-complete-state), then stop the server.
+2. Run [`vectory-admin rotate-device-ca`](vectory-admin.md#rotate-device-ca). It prints the new and previous CA fingerprints and how many devices hold certificates from the previous CA.
+3. Start the server. Certificates from either CA are accepted. New devices, and devices that renew, get certificates from the new CA.
+4. Watch **Settings → General → Device certificates** until no device uses the previous CA. Devices renew in their certificate's last day, so this takes up to 30 days; a device that renewed keeps its old certificate as a fallback for another 24 hours. To stop waiting for a device that won't come back, revoke it on its device page.
+5. Stop the server and run [`vectory-admin retire-device-ca`](vectory-admin.md#retire-device-ca). It checks, and names any device still on the previous CA. When it says **Ready**, run it again with `--apply`, then start the server.
+
+After retirement the server refuses certificates from the previous CA. A device that missed the move needs [identity recovery](agents.md#recover-a-device-identity).
+
+The CA key alone can't impersonate a device: every request also needs a certificate the server issued and still has on record. If you suspect the CA key leaked, rotate, then revoke any device you don't recognize.
+
 ## Monitor the instance
 
 - **Disk:** watch free space and the database's growth.

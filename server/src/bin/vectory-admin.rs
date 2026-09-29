@@ -22,6 +22,12 @@ Signing keys
   rotate-signing-key              Create a new manifest signing key (history is kept)
   prune-signing-keys              Remove old signing keys no credential still uses
 
+Device certificate authority
+  device-ca-status                Show the device CAs and devices still on the previous one
+  rotate-device-ca                Create a new device CA; the current one stays trusted as previous
+  retire-device-ca [--apply]      Stop trusting the previous device CA once no device uses it
+                                  (check without --apply)
+
 Stop the server first: vectory-admin takes the same exclusive lock on the data directory.
 --data-dir defaults to $VECTORY_DATA_DIR. Changes are audited as local-admin.
 Exit codes: 0 ok, 1 failed, 2 usage error.";
@@ -153,9 +159,18 @@ async fn run(mut args: Vec<String>) -> Result<(), Failure> {
                 apply,
             }
         }
-        "rotate-signing-key" | "prune-signing-keys" | "generation-recovery-state" => {
+        "rotate-signing-key"
+        | "prune-signing-keys"
+        | "generation-recovery-state"
+        | "device-ca-status"
+        | "rotate-device-ca" => {
             no_more(&command, &args)?;
             Operation::Simple(command.clone())
+        }
+        "retire-device-ca" => {
+            let apply = take_flag(&mut args, "--apply");
+            no_more(&command, &args)?;
+            Operation::RetireDeviceCa { apply }
         }
         other => return Err(usage(format!("unknown command '{other}'"))),
     };
@@ -187,7 +202,45 @@ enum Operation {
     DisableMfa { email: String },
     InvalidateRestoredAccess { apply: bool },
     RecoverGenerations { report: PathBuf, apply: bool },
+    RetireDeviceCa { apply: bool },
     Simple(String),
+}
+/// "sha256 <64 hex>" as operators compare it with the certificate itself.
+fn fingerprint(ca: &serde_json::Value) -> String {
+    format!("sha256 {}", ca["sha256"].as_str().unwrap_or(""))
+}
+/// "edge-01, edge-02 and 3 more" for a status or refusal.
+fn names(previous: &serde_json::Value) -> String {
+    let listed: Vec<&str> = previous["device_names"]
+        .as_array()
+        .map(|names| names.iter().filter_map(|n| n.as_str()).collect())
+        .unwrap_or_default();
+    let total = previous["devices"].as_u64().unwrap_or(0) as usize;
+    let more = total.saturating_sub(listed.len());
+    if more > 0 {
+        format!("{} and {more} more", listed.join(", "))
+    } else {
+        listed.join(", ")
+    }
+}
+fn devices(count: u64) -> String {
+    if count == 1 {
+        "1 device".into()
+    } else {
+        format!("{count} devices")
+    }
+}
+/// Why the previous CA can't be retired yet, and when it can be at the latest.
+fn not_yet(previous: &serde_json::Value) -> String {
+    let count = previous["devices"].as_u64().unwrap_or(0);
+    format!(
+        "The previous device CA ({}) can't be retired yet: {} still {} certificates it issued: {}.\nEach moves to the current CA when it renews, in its certificate's last day. The last of these certificates expires {}, so retiring works by then at the latest. To stop waiting for a device, revoke it on its device page.",
+        fingerprint(previous),
+        devices(count),
+        if count == 1 { "holds" } else { "hold" },
+        names(previous),
+        previous["last_expires_at"].as_str().unwrap_or("soon")
+    )
 }
 impl Operation {
     async fn run(self, state: &vectory_server::State) -> Result<(), Failure> {
@@ -255,7 +308,85 @@ impl Operation {
                     serde_json::to_string_pretty(&result).map_err(anyhow::Error::from)?
                 );
             }
+            Operation::RetireDeviceCa { apply } => {
+                let report = vectory_server::device_ca::retire(state, apply).await?;
+                let previous = &report["previous"];
+                if report["ready"] != true {
+                    return Err(Failure::Failed(not_yet(previous)));
+                }
+                if report["retired"] == true {
+                    println!(
+                        "Retired the previous device CA ({}). Start the server again: certificates it issued are refused from now on.",
+                        fingerprint(previous)
+                    );
+                } else {
+                    println!(
+                        "Ready: no active device holds a certificate from the previous device CA ({}).\nRun again with --apply to stop trusting it.",
+                        fingerprint(previous)
+                    );
+                }
+            }
             Operation::Simple(command) => match command.as_str() {
+                "device-ca-status" => {
+                    let mut conn = state.pool.acquire().await.map_err(anyhow::Error::from)?;
+                    let status = vectory_server::device_ca::status(&mut conn, &state.keys)
+                        .await
+                        .map_err(|e| Failure::Failed(e.message))?;
+                    let current = &status["current"];
+                    println!(
+                        "Current device CA   {}\n                    {}, valid until {}",
+                        fingerprint(current),
+                        current["subject"].as_str().unwrap_or(""),
+                        current["not_after"].as_str().unwrap_or("")
+                    );
+                    let previous = &status["previous"];
+                    if previous.is_null() {
+                        println!("Previous device CA  none");
+                    } else {
+                        println!(
+                            "Previous device CA  {}\n                    {}, trusted until you retire it",
+                            fingerprint(previous),
+                            previous["subject"].as_str().unwrap_or("")
+                        );
+                        match previous["devices"].as_u64().unwrap_or(0) {
+                            0 => println!(
+                                "\nNo active device holds a certificate from the previous CA. Run vectory-admin retire-device-ca --apply."
+                            ),
+                            count => println!(
+                                "\n{} still {} certificates from the previous CA: {}. The last expires {}.",
+                                devices(count),
+                                if count == 1 { "holds" } else { "hold" },
+                                names(previous),
+                                previous["last_expires_at"].as_str().unwrap_or("")
+                            ),
+                        }
+                    }
+                }
+                "rotate-device-ca" => {
+                    let report = vectory_server::device_ca::rotate(state).await?;
+                    let (current, previous) = (&report["current"], &report["previous"]);
+                    println!(
+                        "Device CA rotated.\n\n  Current CA   {}\n               valid until {}\n  Previous CA  {}\n               trusted until you retire it\n",
+                        fingerprint(current),
+                        current["not_after"].as_str().unwrap_or(""),
+                        fingerprint(previous)
+                    );
+                    let count = previous["devices"].as_u64().unwrap_or(0);
+                    println!(
+                        "New and renewed device certificates now come from the current CA. Start the server again: enrolled devices keep working with certificates from either CA."
+                    );
+                    if count > 0 {
+                        println!(
+                            "{} {} certificates from the previous CA. Each moves when it renews, in its certificate's last day: all by {} at the latest.",
+                            devices(count),
+                            if count == 1 { "holds" } else { "hold" },
+                            previous["last_expires_at"].as_str().unwrap_or("")
+                        );
+                    }
+                    println!(
+                        "When vectory-admin device-ca-status shows no device on the previous CA, run vectory-admin retire-device-ca --apply."
+                    );
+                }
                 "rotate-signing-key" => {
                     let id = vectory_server::maintenance::rotate_signing_key(state).await?;
                     println!(

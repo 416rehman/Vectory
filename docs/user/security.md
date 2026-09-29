@@ -55,7 +55,7 @@ Within those components, restricted mode also:
 
 1. **Enrollment.** The agent creates its private key on the host and sends a certificate request with a one-time enrollment token. It verifies the server's certificate before sending the token. The server issues a client certificate valid for 30 days and ignores every other field the request asks for.
 2. **Every check-in** uses mutual TLS with that certificate. Enrollment tokens can't authenticate check-ins, downloads or the dashboard.
-3. **Renewal** happens automatically, over the same authenticated channel, in the certificate's last day.
+3. **Renewal** happens automatically, over the same authenticated channel, in the certificate's last day. After the server's device certificate authority is [rotated](administer.md#rotate-the-device-certificate-authority), renewal moves each device to the new one; until the old one is retired, certificates from both are accepted.
 4. **Revocation** in the dashboard blocks the identity's certificates immediately. It also removes the device from its groups and from deployments that follow group membership. It doesn't stop Vector on the host.
 5. **Recovery** replaces a lost identity. It needs an administrator's one-time authorization and a person on the host, and it creates a new device identity. See [Recover a device identity](agents.md#recover-a-device-identity).
 
@@ -99,6 +99,7 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 
 - **Full mode trusts publishers** with the host permissions of Vector.
 - **The server is a high-value system.** Whoever controls it can deploy any configuration each device's local policy allows. Restrict access to it and to its backups.
+- **A certificate authority isn't an identity.** A device must present a certificate the server issued and still has on record, so the device CA's key alone can't impersonate a device.
 - **Backups restore old decisions.** Restoring an old backup brings back old accounts, roles and device access. Follow [Restore a backup](administer.md#restore-a-backup) before reconnecting anyone.
 - **Releases aren't signed yet.** Agent downloads carry SHA-256 checksums. Check them against the values shown in **Add device**.
 
