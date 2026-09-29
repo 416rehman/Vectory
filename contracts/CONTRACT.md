@@ -262,7 +262,7 @@ Device `status` adds `awaiting_first_check_in` for an enrolled device that never
 
 ### Saved settings and group membership previews
 
-`GET /policies` items add `revision`, `updated_at`, `applied_device_count` and up to 20 `applied_devices` (live devices whose winning settings assignment came from the template, or, for assignments made before templates were linked, carries exactly its values). `GET /policies/{id}` reads one; `PUT /policies/{id} {name,policy,revision}` edits under revision CAS (`409 STALE_REVISION`) and audits `policy.update`. Editing never changes a device.
+`GET /policies` items add `revision`, `updated_at`, `applied_device_count`, `outdated_device_count` (devices given the template before its latest edit, still on the earlier values) and up to 20 `applied_devices` (live devices whose winning settings assignment came from the template, or, for assignments made before templates were linked, carries exactly its values). `GET /policies/{id}` reads one; `PUT /policies/{id} {name,policy,revision}` edits under revision CAS (`409 STALE_REVISION`) and audits `policy.update`. Editing never changes a device.
 
 `POST /groups/membership-preview {group_id,device_ids,revision?}` (Operator/Admin, CSRF) simulates the edit with the real resolver inside a rolled-back savepoint. It returns `{group_id,revision,stale,ready,blockers,devices}` where each added or removed device reports, per resource, `changed`, `before`/`after` removal states and a `pending` winning assignment that has not released the device yet. Blockers use the same checks as the save (active-canary overlap, conflicts, compatibility). Nothing is written, released or audited.
 

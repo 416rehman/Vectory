@@ -7888,6 +7888,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "outdated_device_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Applied from this template before its latest edit; they keep the earlier values until it is applied again."
+        },
         "applied_devices": {
           "type": "array",
           "maxItems": 20,
@@ -7918,6 +7923,7 @@
         "created_at",
         "revision",
         "applied_device_count",
+        "outdated_device_count",
         "applied_devices"
       ],
       "additionalProperties": false,

@@ -1115,6 +1115,15 @@ pub async fn action(
                     .bind(&id)
                     .fetch_one(&mut *tx)
                     .await?;
+            // A device-specific artifact is stored per generation; the retry
+            // resends the exact same one under the new generation.
+            let version_id = parsed_version.hyphenated().to_string();
+            if let Some(artifact) =
+                crate::variables::current(&mut tx, &id, current_generation, &version_id).await?
+            {
+                crate::variables::snapshot(&mut tx, &id, generation, &version_id, &artifact)
+                    .await?;
+            }
             if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
                 let changed=sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?.rows_affected()>0;
                 let mut d = db::record(&mut tx, "deployment", &assignment).await?;

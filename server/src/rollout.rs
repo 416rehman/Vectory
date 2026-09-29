@@ -1217,6 +1217,36 @@ async fn replacement_plan(
     }
     Ok(plan)
 }
+/// A retry on an earlier server raised a device's generation without copying its
+/// rendered artifact. The retry resent the exact same bytes, so the newest earlier
+/// snapshot of that version with the digest the device recorded is that artifact.
+/// It is stored under the generation again, which also lets check-ins resume.
+async fn resent_snapshot(
+    db: &mut SqliteConnection,
+    device: &str,
+    generation: i64,
+    version: &str,
+    recorded_sha: Option<&str>,
+) -> Result<Option<crate::variables::Artifact>> {
+    let Some(recorded_sha) = recorded_sha else {
+        return Ok(None);
+    };
+    let sha: Option<String> = sqlx::query_scalar(
+        "SELECT sha256 FROM desired_artifacts WHERE device_id=? AND version_id=? AND generation<? AND sha256=? ORDER BY generation DESC LIMIT 1",
+    )
+    .bind(device)
+    .bind(version)
+    .bind(generation)
+    .bind(recorded_sha)
+    .fetch_optional(&mut *db)
+    .await?;
+    let Some(sha) = sha else {
+        return Ok(None);
+    };
+    let artifact = crate::variables::blob(db, &sha).await?;
+    crate::variables::snapshot(db, device, generation, version, &artifact).await?;
+    Ok(Some(artifact))
+}
 /// Once a replacing deployment releases devices, the assignments it replaces stop
 /// selecting them. Retained rows keep their history; a persistent assignment also
 /// excludes them so later membership changes cannot bring the old one back.
@@ -1555,11 +1585,24 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                         // The existing generation is authoritative. Historical deployment
                         // metadata can no longer change the bytes used for rollback or
                         // deciding whether a same-version redeploy changes the workload.
+                        let recorded_sha = db::parse(row.get("data"))?["desired_artifact_sha256"]
+                            .as_str()
+                            .map(str::to_owned);
                         let previous_artifact = if let Some(stored) =
                             crate::variables::current(db, &device, old_generation, prior_version_id)
                                 .await?
                         {
                             stored
+                        } else if let Some(resent) = resent_snapshot(
+                            db,
+                            &device,
+                            old_generation,
+                            prior_version_id,
+                            recorded_sha.as_deref(),
+                        )
+                        .await?
+                        {
+                            resent
                         } else {
                             let prior_version = db::record(db, "version", prior_version_id).await?;
                             if prior_version["variables"]
@@ -1582,11 +1625,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                             .await?;
                             legacy
                         };
-                        let previous_device_data = db::parse(row.get("data"))?;
-                        let reported_sha = previous_device_data["desired_artifact_sha256"]
-                            .as_str()
-                            .map(str::to_owned);
-                        if reported_sha.is_some_and(|sha| sha != previous_artifact.sha256) {
+                        if recorded_sha.is_some_and(|sha| sha != previous_artifact.sha256) {
                             return Err(ApiError::conflict(
                                 "Previous desired artifact digest disagrees with its snapshot",
                             ));
