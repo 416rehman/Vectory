@@ -4479,6 +4479,11 @@ export default function Editor({
                           : selectedNode.data.kind === "sinks"
                             ? "Destination"
                             : "Transform"}
+                      {!selectedNode.data.enrichmentTable && (
+                        <code className="editor-inspector-type">
+                          {component.type}
+                        </code>
+                      )}
                     </span>
                     <h2>
                       {selectedNode.data.enrichmentTable

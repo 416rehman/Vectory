@@ -9,6 +9,7 @@ import {
 import { ago, type Config, type Version } from "./api";
 import { Button } from "./ui";
 import ProblemText from "./ProblemText";
+import { displayLabel, type Kind } from "./catalog";
 import type { CheckStatus, Problem } from "./pipelineProblems";
 import {
   programDiff,
@@ -38,7 +39,8 @@ const checkerDown = (code: string) =>
   code === "CAPABILITY_DENIED" || code === "WORKER_BUSY";
 
 function describe(component: ComponentChange) {
-  if (component.change !== "changed") return component.type;
+  if (component.change !== "changed")
+    return displayLabel(component.type, component.section as Kind);
   const parts = component.programs.map((program) => `${program.label} changed`);
   if (component.options.length)
     parts.push(
@@ -205,6 +207,11 @@ export default function PublishReview({
                   <code>{component.id}</code>
                   <span className="publish-change-detail">
                     {describe(component)}
+                    {component.change !== "changed" && component.type && (
+                      <code className="publish-change-type">
+                        {component.type}
+                      </code>
+                    )}
                   </span>
                 </div>
                 {component.change === "changed" &&

@@ -39,6 +39,16 @@
   line-height: 14px;
   font-weight: 500;
 }
+.editor-component-panel .editor-inspector-type {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-family: var(--ed-mono, var(--font-mono));
+  font-size: 10.5px;
+  font-weight: 500;
+}
 .editor-component-panel .editor-inspector-identity h2 {
   margin: 2px 0 5px;
   font-size: 18px;
