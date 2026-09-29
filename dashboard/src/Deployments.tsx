@@ -329,6 +329,28 @@ export function Deployments({
     setQuery({ search: "", status: "all", page: 1 });
   }
   const originLabel = scheduled ? "Schedules" : "Deployments";
+  /** The change's name, opening its rollout; the table cell and phone card share it. */
+  const changeLink = (d: DeploymentSummary) => (
+    <a
+      className="control-row-title"
+      data-deployment-link={d.id}
+      href={`#/${deploymentRoute(scheduled, d.id, query)}`}
+      onClick={(event) => {
+        if (
+          event.button !== 0 ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        openDetail(d.id);
+      }}
+    >
+      {title(d)}
+    </a>
+  );
   if (invalidDetail)
     return (
       <div className="control-page deployment-page" ref={container}>
@@ -497,8 +519,7 @@ export function Deployments({
                 const display = describeDeployment(d);
                 const current = d.target_count - (d.state_counts.removed || 0);
                 return {
-                  title: title(d),
-                  href: `#/${deploymentRoute(scheduled, d.id, query)}`,
+                  title: changeLink(d),
                   status: (
                     <StatusBadge
                       domain="deployment"
@@ -539,25 +560,7 @@ export function Deployments({
                   sortable: true,
                   cell: (d) => (
                     <>
-                      <a
-                        className="control-row-title"
-                        data-deployment-link={d.id}
-                        href={`#/${deploymentRoute(scheduled, d.id, query)}`}
-                        onClick={(event) => {
-                          if (
-                            event.button !== 0 ||
-                            event.ctrlKey ||
-                            event.metaKey ||
-                            event.shiftKey ||
-                            event.altKey
-                          )
-                            return;
-                          event.preventDefault();
-                          openDetail(d.id);
-                        }}
-                      >
-                        {title(d)}
-                      </a>
+                      {changeLink(d)}
                       <small>
                         {subtitle(d)}
                         {d.rollback_of && (
@@ -715,6 +718,27 @@ function DeviceResults({
   useEffect(() => {
     if (correcting) setQuery((old) => ({ ...old, page: lastPage }));
   }, [correcting, lastPage]);
+  /** The device's name, opening its page; the table cell and phone card share it. */
+  const deviceLink = (t: DeploymentTarget) => (
+    <a
+      className="control-row-title"
+      href={`#/devices/${encodeURIComponent(t.device_id)}`}
+      onClick={(event) => {
+        if (
+          event.button === 0 &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey &&
+          !event.altKey
+        ) {
+          event.preventDefault();
+          navigate(`devices/${encodeURIComponent(t.device_id)}`);
+        }
+      }}
+    >
+      {t.device_name || t.device_id}
+    </a>
+  );
   const states = [
     ...new Set([
       ...targetFilterStates,
@@ -755,8 +779,7 @@ function DeviceResults({
               : null
           }
           mobileCard={(t) => ({
-            title: t.device_name || t.device_id,
-            href: `#/devices/${encodeURIComponent(t.device_id)}`,
+            title: deviceLink(t),
             status: (
               <StatusBadge
                 domain="target"
@@ -791,24 +814,7 @@ function DeviceResults({
               sortable: true,
               cell: (t) => (
                 <>
-                  <a
-                    className="control-row-title"
-                    href={`#/devices/${encodeURIComponent(t.device_id)}`}
-                    onClick={(event) => {
-                      if (
-                        event.button === 0 &&
-                        !event.ctrlKey &&
-                        !event.metaKey &&
-                        !event.shiftKey &&
-                        !event.altKey
-                      ) {
-                        event.preventDefault();
-                        navigate(`devices/${encodeURIComponent(t.device_id)}`);
-                      }
-                    }}
-                  >
-                    {t.device_name || t.device_id}
-                  </a>
+                  {deviceLink(t)}
                   <small>
                     {stages.get(t.device_id) && (
                       <span className="rollout-stage-tag">
@@ -1069,8 +1075,6 @@ function RolloutSkeleton() {
       role="status"
       aria-label="Loading rollout"
     >
-      <Skeleton width={96} height={12} />
-      <Skeleton width="min(420px, 70%)" height={24} />
       <Skeleton width="min(560px, 90%)" height={14} />
       <div className="rollout-card rollout-skeleton-card">
         <Skeleton width={180} height={14} />
@@ -1513,7 +1517,17 @@ function RolloutPage({
       aria-label="Deployment details"
     >
       {loading && !deployment ? (
-        <RolloutSkeleton />
+        <>
+          <PageHeader
+            title="Loading deployment"
+            loadingTitle
+            documentTitle="Deployment"
+            breadcrumb={[
+              { label: originLabel, href: backHref, onClick: onBack },
+            ]}
+          />
+          <RolloutSkeleton />
+        </>
       ) : !deployment ? (
         error && (
           <>
@@ -1523,23 +1537,21 @@ function RolloutPage({
                 { label: originLabel, href: backHref, onClick: onBack },
               ]}
             />
-            <div className="rollout-unavailable" role="alert">
-              <p>
-                {errorStatus === 404 || errorStatus === 403
+            {/* Only a 404 or 403 may say the rollout is missing or access changed. */}
+            <InlineError
+              title={
+                errorStatus === 404 || errorStatus === 403
                   ? "This deployment could not be opened. It may be missing, or your access may have changed."
-                  : "Vectory couldn't load this rollout right now."}
-              </p>
-              <div className="rollout-unavailable-actions">
-                {errorStatus !== 404 && errorStatus !== 403 && (
-                  <Button variant="secondary" onClick={() => void reload()}>
-                    Retry
-                  </Button>
-                )}
-                <Button variant="ghost" onClick={onBack}>
-                  Return to {originLabel.toLowerCase()}
-                </Button>
-              </div>
-            </div>
+                  : "Vectory couldn't load this rollout right now."
+              }
+              error={error}
+              retry={
+                errorStatus === 404 || errorStatus === 403
+                  ? undefined
+                  : () => void reload()
+              }
+              retrying={refreshing}
+            />
           </>
         )
       ) : (

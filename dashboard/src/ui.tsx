@@ -709,10 +709,13 @@ export function PageHeader({
   titleAside,
   headingRef,
   documentTitle,
+  loadingTitle = false,
 }: {
   title: string;
   /** Beside the title, such as a version chip. */
   titleAside?: ReactNode;
+  /** The title is not known yet: show a placeholder bar (the text stays for screen readers). */
+  loadingTitle?: boolean;
   /** Makes the title focusable for focus moves after navigation. */
   headingRef?: React.Ref<HTMLHeadingElement>;
   /** The browser tab title's leading part, when it differs from the title. */
@@ -791,7 +794,14 @@ export function PageHeader({
               tabIndex={headingRef ? -1 : undefined}
               className={headingRef ? "page-title-focus" : undefined}
             >
-              {title}
+              {loadingTitle ? (
+                <>
+                  <span className="sr-only">{title}</span>
+                  <Skeleton width={220} height={20} />
+                </>
+              ) : (
+                title
+              )}
             </h1>
             {titleAside}
             {help && (

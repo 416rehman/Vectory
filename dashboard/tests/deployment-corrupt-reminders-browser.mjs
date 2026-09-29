@@ -833,7 +833,7 @@ async function reloadApp() {
 async function leaveDetails() {
   await expect(details()).toBeVisible();
   await details()
-    .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+    .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
   await expect(page).toHaveURL(/#\/deployments\?page=1$/);

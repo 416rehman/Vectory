@@ -735,7 +735,7 @@ try {
         await expect(checkSelection()).toBeVisible();
         await closeReview();
         await details()
-          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         await page
           .getByRole("button", {
