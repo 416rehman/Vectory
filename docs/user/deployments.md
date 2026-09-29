@@ -13,6 +13,8 @@ A deployment sends one published version, or a set of agent settings, to the dev
 
 Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
+From a device's page (**Deploy a pipeline**), another pipeline that only this device follows is replaced by default, so the review doesn't stop at a priority choice: it says "Replaces r16-first v1: only this device follows it, so nothing else changes." **Keep r16-first v1 as well** brings the choice back. A pipeline other devices also follow is never replaced this way.
+
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
 ## Review the target set
@@ -30,6 +32,8 @@ The review also blocks devices that can't run the version, and says why:
 
 - **Full mode needed.** The version uses something only full-mode devices allow. Only the host can [switch modes](agents.md#switch-between-restricted-and-full-mode).
 - **Wrong Vector version.** The device doesn't report a Vector 0.58.x release.
+
+When restricted devices must first approve a destination, listener or file root the version uses, the review says which ones, and each row says the host refuses the version until then. **Commands for the host** gives the commands for each host, made from what its agent reports: its state directory, and whether a service or `vectory run` keeps the agent running. They use [`vectory allow`](agents.md#update-restricted-allowances), which adds to what the host already allows.
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 

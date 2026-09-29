@@ -28,23 +28,34 @@ Local settings belong to the host: allowances, mode, the metrics endpoint and se
 
 Options you leave out keep their current values. A command that rejects its input changes nothing.
 
+If the agent is running, a command that needs it stopped says so and names it: for example, `The agent service is running (vectory.service, pid 812), and this command needs the agent stopped.` It also says how to stop it: `service-stop` for the service, or Ctrl-C where `vectory run` runs.
+
 > [!WARNING]
 > **Don't force a settings change**
 > If a command reports that another operation is running, wait for that process to exit. Don't delete `agent.lock`, loosen file permissions, re-enroll or delete state to push a change through.
 
 ### Update restricted allowances
 
-Edit the protected allowance file, then pass it to `install`:
+To let restricted pipelines reach a destination, open a listener or use files under a directory, add it with `vectory allow`. It keeps everything the host already allows:
+
+```sh
+sudo vectory allow --network logs.example.net:443
+sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx
+```
+
+Each flag can be repeated. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. When a restricted device refuses a version, its fix on the device page and in `vectory status` gives the exact `vectory allow` command, and the deploy review writes one for each host.
+
+To replace the lists instead (for example, to remove an entry), edit the protected allowance file and pass it to `install`:
 
 ```sh
 sudo vectory install --capability-policy /etc/vectory/allowances.json
 ```
 
-The file replaces all three lists, so keep every entry the device still needs. `{}` removes them all. The format is in [Configure restricted allowances](installation.md#configure-restricted-allowances).
+The file replaces all three lists, so keep every entry the device still needs. `{}` removes them all. `install` prints what the host allows afterwards. The format is in [Configure restricted allowances](installation.md#configure-restricted-allowances).
 
 Before you remove an allowance, deploy a pipeline that no longer needs it. At startup, the agent refuses a configuration whose resources are no longer allowed.
 
-A changed allowance file lets the device try a version it rejected earlier. It doesn't resume a paused device or turn on full mode.
+A changed allowance lets the device try a version it rejected earlier. It doesn't resume a paused device or turn on full mode.
 
 ### Switch between restricted and full mode
 
@@ -76,10 +87,10 @@ A local pause belongs to the host: the dashboard can't clear it. Resuming clears
 The agent doesn't retry a version that failed, so a broken version can't restart Vector in a loop. After you fix the cause on the host, allow one more attempt:
 
 ```sh
-sudo vectory service-stop
 sudo vectory retry
-sudo vectory service-start
 ```
+
+While the agent runs, `retry` queues the request and the agent tries the failed version again within a few seconds: `Retry queued. The running agent (pid 812) tries the failed version again within a few seconds`. With the agent stopped, it tries at its next start.
 
 From the dashboard, **Retry application** on the device does the same for the version it shows. Deploying a corrected version also works.
 
@@ -87,7 +98,11 @@ From the dashboard, **Retry application** on the device does the same for the ve
 
 An agent upgrade replaces one file. It doesn't change Vector, the device's mode or its identity.
 
-On Linux and macOS, the quickest upgrade is to run the command from **Add device** again on the device. The installer replaces the agent, and setup restarts the service on the new build and waits for its first check-in. It prints, for example, `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. To upgrade by hand instead:
+On Linux and macOS, choose **Upgrade agent** on the device page. If the device already runs this server's build, it says so, for example `edge-01 already runs this build (SHA-256 975c1a33…0e9d19)`. Otherwise it shows one command to run on the device: the **Add device** installer, with no token. The installer checks and replaces the agent, and setup restarts the service on the new build and waits for its first check-in. It prints, for example, `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`.
+
+The command passes `--state-dir` when the device keeps its state elsewhere, and `--service none` when nothing keeps its agent running. Without a service, setup says to stop `vectory run` and start it again on the new build. If the agent is installed outside `/usr/local/bin`, add `--install-dir` with its directory.
+
+To upgrade by hand instead (on Windows, the only way), open **By hand** in the same dialog:
 
 <!-- steps -->
 1. On the device page, choose **Upgrade agent** and download the agent for the device's OS and CPU. Check its SHA-256 against the value shown.

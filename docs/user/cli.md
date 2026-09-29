@@ -33,7 +33,8 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 | [`doctor`](#doctor) | Check local setup and the server connection. | No |
 | [`logs`](#logs) | Show Vector's own log (never your events). | No |
 | [`pause`, `resume`](#pause-and-resume) | Stop or restart applying new versions on this host. | No |
-| [`retry`](#retry) | Allow one more attempt at a rejected version. | Yes |
+| [`retry`](#retry) | Allow one more attempt at a rejected version. | No: queued while it runs |
+| [`allow`](#allow) | Add a destination, listener or file root that restricted pipelines may use. | Yes |
 | [`configure-metrics`](#configure-metrics) | Set or clear the local metrics endpoint. | Yes |
 | [`configure-secrets`](#configure-secrets) | Map `vectory-secret:NAME` references to local files. | Yes |
 | [`re-adopt`](#re-adopt) | Approve a Vector binary you replaced on purpose. | Yes |
@@ -48,8 +49,10 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 Install, enroll, register the service and wait for the first check-in, in one resumable step. The **Add device** installer runs it for you.
 
 ```sh
-sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERPRINT
+sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>
 ```
+
+Copy the whole command from **Add device** rather than typing it: it carries your server's fingerprint.
 
 | Flag | Meaning |
 | --- | --- |
@@ -68,7 +71,17 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 | `--dry-run` | Check everything and show the plan without changing anything. |
 | `--json` | Print the result as JSON for scripts. |
 
-`setup` never adopts a Vector that is already running. If it finds one, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
+If the server's certificates don't match the pin, `setup` stops before sending anything and prints both fingerprints in full, one above the other, with the first byte that differs:
+
+```text
+[!!] Server       The server's certificates don't match the pinned CA:
+                  expected 3F:DD:…:34:05:…
+                  received 3F:DD:…:34:95:…  (first difference at byte 16)
+```
+
+Compare them with the fingerprint on **Add device** and copy the command again. If it still doesn't match, the address may lead to a different server; don't continue. Without a pin, if this host doesn't trust the server's CA, `setup` prints the certificate's fingerprint in the same rows of eight pairs as **Add device**, to compare. It never pins what it was sent.
+
+`setup` never adopts a Vector that is already running. If it finds one, it waits 6 seconds and checks again, so a short test run (such as the server's validator on a shared host) doesn't count. If Vector still runs, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
 
 Before it asks for the token, `setup` checks that the service account can run Vector and the agent. A Vector under a private home folder, such as `/root/.vector/bin/vector`, is refused with the folder that blocks it: install Vector system-wide or pass `--vector-binary`.
 
@@ -77,6 +90,8 @@ Run `setup` again after replacing the agent binary to upgrade: it restarts the s
 Ctrl-C while `setup` waits for the first check-in stops only the wait: the service keeps running, and `setup` exits with code `130`.
 
 Without a service manager (most containers, WSL, Alpine with OpenRC), `--service auto` has nothing to register. Setup checks in once with a full report, then prints `[!!] Service` with the reason and the exact command that keeps the agent running, such as `/usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, and exits with code `3`. With `--service none`, the same command is the plan, and setup exits with `0`. `--create-user` needs a service; without one, setup says it created no account. `--dry-run` shows the same **Service** row, and the agent path where the installer puts it.
+
+Run again beside a running `vectory run`, setup says there is nothing to start. If that agent still runs an older build than the one just installed, it says so and how to restart it on the new one.
 
 ## install
 
@@ -94,7 +109,7 @@ sudo vectory install \
 | `--vector-binary PATH` | The installed Vector 0.58.x binary to adopt (any 0.58 patch release), pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
 | `--managed-config PATH` | The single JSON configuration file the agent manages. Its folder becomes private. |
 | `--adopt` | Confirms the adoption. Required for a new install. |
-| `--capability-policy PATH` | Restricted-mode allowances. Replaces all three lists. |
+| `--capability-policy PATH` | Restricted-mode allowances. Replaces all three lists and prints what the host allows afterwards. To add one entry and keep the rest, use [`allow`](#allow). |
 | `--allow-full-vector-config` | Turn on full Vector mode. Use `--allow-full-vector-config=false` to return to restricted. |
 | `--metrics-url URL` | Loopback Prometheus endpoint to read metrics from, for example `http://127.0.0.1:9598/metrics`. |
 | `--clear-metrics-url` | Remove the saved metrics endpoint. |
@@ -123,7 +138,9 @@ sudo vectory enroll --server https://vectory.example.com:8443 --name web-01
 | `--token VALUE` | Compatibility only. Other users can read it from the process list. |
 | `--ip SERVER`, `--id NAME` | Compatibility aliases for `--server` and `--name`. |
 
-Without a token flag, `enroll` asks for the token with hidden input. The older form `vectory -ip SERVER -id NAME -token TOKEN` still works and means `enroll`.
+Without a token flag, `enroll` asks for the token with hidden input. A token that isn't 64 characters of `0`-`9` and `a`-`f` (a short or mangled paste) is refused before anything is sent. The older form `vectory -ip SERVER -id NAME -token TOKEN` still works and means `enroll`.
+
+A command made on **Add device** for a typed name enrolls only that name. With another `--name`, the server refuses it, and **Recent enrollment attempts** says the command was made for another device name.
 
 If an enrollment is interrupted, run the same command again with the same server, name and token. The agent reuses its pending request, so the server can't enroll the device twice.
 
@@ -137,7 +154,19 @@ sudo vectory run
 
 | Flag | Meaning |
 | --- | --- |
+| `--verbose` | Also log every check-in, not only what changed. |
 | `--once` | (Testing) Check in and reconcile once, then stop. |
+
+The agent logs what changes, once: the version it applied and whether Vector runs it, a refusal in the words of its diagnostic with the code, the reconnection after an outage, and how Vector stopped:
+
+```text
+Applied version b898b48f (generation 2); Vector runs it.
+Reconnected to https://vectory.example.com:8443 after 1 min 12 s.
+Stopping Vector: it finishes in-flight events for up to 60 s.
+Vector stopped after 3.2 s.
+```
+
+When Vector doesn't finish in time, the last line is `Drain limit reached after 60 s; Vector was terminated before it finished its in-flight events.`
 
 ## status
 
@@ -156,6 +185,8 @@ Next       Check that 127.0.0.1:8239 is reachable from this host.
 ```
 
 After a device's first version fails to start, **Next** says that Vector isn't running because there is nothing earlier to go back to, and to deploy a corrected version or retry. It never asks for host recovery then.
+
+**Next** gives the command that starts the agent with its full path (and `--state-dir` when it isn't the default), since an agent installed with `--install-dir` isn't on `PATH`. **Service** says `none · vectory run is running (pid 812), not as a service` for an agent started by hand. After the device is revoked, **Server** says the server no longer accepts this agent, instead of "not answering".
 
 ## doctor
 
@@ -180,6 +211,8 @@ sudo vectory logs --follow
 | `--raw` | Print the log file's lines unchanged. |
 | `--json` | Print one JSON object per line: Vector's records as they are, and the agent's own notes with the same `timestamp`, `target` and `message` keys. |
 
+The agent's notes include changes a host operator made, such as `Host operator allowed destination 127.0.0.1:8239 (vectory allow)`. With a `--state-dir` that holds no agent, `logs` says `No agent is installed at …` instead of waiting for a log.
+
 ## pause and resume
 
 Stop applying new versions on this host, for example while you edit the managed configuration by hand. Vector keeps running. Works while the agent runs.
@@ -193,11 +226,30 @@ sudo vectory resume
 
 ## retry
 
-Allow one more attempt at a version the agent rejected. Run it with the agent stopped, after fixing the cause.
+Allow one more attempt at a version the agent rejected, after fixing the cause.
 
 ```sh
 sudo vectory retry
 ```
+
+While the agent runs, the request is queued and the agent tries the failed version again within a few seconds: `Retry queued. The running agent (pid 812) tries the failed version again within a few seconds`. With the agent stopped, it tries at its next start. **Retry application** on the device page does the same from the dashboard.
+
+## allow
+
+Add to this host's restricted-mode allowances and keep everything already allowed. Run it with the agent stopped; when the agent starts again, a version this host refused is tried again.
+
+```sh
+sudo vectory allow --network logs.example.net:443
+sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--network HOST:PORT` | A destination pipelines may send to, exactly `host:port`. |
+| `--listener ADDR:PORT` | An address pipelines may listen on. |
+| `--file-root PATH` | An absolute directory pipelines may read and write under. |
+
+Repeat a flag for more entries. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. Only a host operator can change allowances; the dashboard can't. To remove an entry, replace the lists with `install --capability-policy`.
 
 ## configure-metrics
 
@@ -268,6 +320,8 @@ sudo vectory recover-enrollment
 | `--service-user NAME` | For `service-install` on Linux and macOS: an existing unprivileged account to run as. Windows always uses `NT SERVICE\Vectory`. |
 
 The service is registered for the state directory you pass to `service-install`. The other service commands always act on that one service and reject `--state-dir`.
+
+On a host without systemd, `service-stop` says there is no Vectory service to stop and how to stop an agent started with `vectory run` (Ctrl-C where it runs; `vectory status` shows its pid).
 
 `vectory service` is the entry point the Windows service runs. You don't run it yourself.
 

@@ -23,14 +23,33 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 
 | Message or situation | Fix |
 | --- | --- |
-| Can't reach the server, or the certificate isn't trusted | Fix the address or trust as in [A device is offline](#a-device-is-offline-or-never-connects), then run the same command again. |
+| Can't reach the server, or the certificate isn't trusted | Fix the address or trust as in [A device is offline](#a-device-is-offline-or-never-connects), then run the same command again. Without a pin, setup prints the fingerprint of the certificate it was sent in rows of eight pairs: compare it with **Add device**, then copy the command from there. Never pin what the host was sent. |
+| `The server's certificates don't match the pinned CA`, with `expected` and `received` fingerprints and the first byte that differs | Compare both with the fingerprint on **Add device** and copy the command again. If it still doesn't match, this address may lead to a different server: don't continue. |
 | Unreadable or invalid CA file | Copy the correct public PEM to a stable path the agent can read, then retry with `--ca-file PATH`. |
+| `that isn't a whole enrollment token` | The pasted token isn't 64 characters, so it was never sent. Copy it again with **Copy token** on **Add device**. |
 | `ENROLLMENT_FAILED` (401) | The server refused the token or name. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**. A token can't take over a name that belongs to another device. |
 | Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
 | Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
 | The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
 
-For security, the server never tells a device why it refused. Administrators see the reason in **Add device** and in the audit log.
+For security, the server never tells a device why it refused. Administrators see the reason in **Add device** (under **Recent enrollment attempts**) and in the audit log:
+
+| Reason | **Add device** says | Fix |
+| --- | --- | --- |
+| `TOKEN_UNKNOWN` | the token wasn't recognized | Check that the whole token was pasted, then run the command again. |
+| `TOKEN_EXPIRED` | the token expired | Create a new command and run it again. |
+| `TOKEN_REVOKED` | the token was revoked | Create a new command and run it again. |
+| `TOKEN_EXHAUSTED` | the token was already used | Create a new command for this device. |
+| `NAME_TAKEN` | that name belongs to an existing device | Run the command again with another `--name`, or authorize recovery from the existing device's page to replace it. |
+| `NAME_PREFIX_MISMATCH` | the token only allows other device names | Use a name the token allows, or create a new command without a name restriction. |
+| `DEVICE_NAME_MISMATCH` | the command was made for another device name | Run it with the `--name` it was made for, or create a new command for this name. A command made for a typed name enrolls only that name. |
+| `RECOVERY_NAME_MISMATCH` | this recovery token is for another device name | Use the recovered device's exact name. |
+| `RECOVERY_TARGET_MISSING` | the device being recovered no longer exists | Create a new command to add it as a new device. |
+| `REQUEST_MISMATCH` | a different key reused an earlier request | Run setup again from the same state directory, or start over with a new command. |
+| `DEVICE_REVOKED` | the device this request enrolled was revoked | Create a new command to add the host again. |
+| `MALFORMED` | the request was incomplete or used an unsupported agent | Use the agent from this server's install command. |
+
+A device that enrolled but "checked in once, but nothing keeps its agent running" has no service manager: start the agent with the command setup printed, as in [A device is offline](#a-device-is-offline-or-never-connects).
 
 ## A pipeline is rejected or rolled back
 
@@ -39,7 +58,7 @@ Open the device and read its issue: it names the stage and the reason.
 | Issue code | What happened | Fix |
 | --- | --- | --- |
 | `VALIDATION_FAILED` | Vector rejected the configuration on the device, or its tests failed. | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
-| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator add the entry the fix names (such as `"127.0.0.1:9"` to `allowed_network_hosts`), or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix. |
+| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it**, and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
@@ -51,9 +70,21 @@ Open the device and read its issue: it names the stage and the reason.
 | `ROLLBACK_FAILED`, `RECOVERY_INVALID` | The new version failed and the last working configuration couldn't be restored. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
 | `MANIFEST_EXPIRED` | The approval expired before the switch. | Nothing: the agent waits for its next check-in. |
 
-The issue, the device page and `sudo vectory status --json` (under `configuration_attempt.error.diagnostics`) show Vector's own message, with secret values removed.
+The issue, the device page and `sudo vectory status --json` (under `configuration_attempt.error.diagnostics`) show Vector's own message, with secret values removed. For the most common findings, the agent adds a fix:
 
-A device doesn't retry a failed version by itself, so a bad version can't restart Vector in a loop. After fixing the cause, use **Retry application** on the device, deploy a corrected version, or run `vectory retry` on the host with the agent stopped. Never delete state, edit counters or re-enroll to force a retry.
+| Finding | Fix the product prints |
+| --- | --- |
+| `DATA_DIR_MISSING` | Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device. See [Vector says the data directory doesn't exist](#vector-says-the-data-directory-doesnt-exist). |
+| `DATA_DIR_NOT_WRITABLE` | Give the Vector service account write access, or remove data_dir from the pipeline to use the device's own data directory. |
+| `ADDRESS_IN_USE` | Stop the other process, or change this component's address. |
+| `PRIVILEGED_PORT` | Use a port from 1024 up, such as 1514, and point senders there. Or allow it: sudo systemctl edit vectory.service, add [Service] AmbientCapabilities=CAP_NET_BIND_SERVICE, then restart. See [A listener on a port below 1024 doesn't start](#a-listener-on-a-port-below-1024-doesnt-start). |
+| `PERMISSION_DENIED` | Give the Vector service account access to the path, or change the path. |
+| `FILE_NOT_FOUND` | Check that the path exists on the device. |
+| `ENV_VAR_MISSING` | Set it in the Vector service's environment on the device, or remove the reference from the pipeline. |
+
+The device page's **Recent Vector errors** shows what Vector logged since it last started or reloaded a configuration, so errors of a version it no longer runs don't appear there.
+
+A device doesn't retry a failed version by itself, so a bad version can't restart Vector in a loop. After fixing the cause, use **Retry application** on the device, deploy a corrected version, or run `vectory retry` on the host (while the agent runs, the retry is queued and taken within seconds). Never delete state, edit counters or re-enroll to force a retry.
 
 ## Vector says the data directory doesn't exist
 
@@ -147,7 +178,16 @@ The agent refuses to run a Vector binary whose SHA-256 changed since adoption. I
 
 ## A command on the device is refused
 
-Stop the agent (`sudo vectory service-stop`) before changing local settings. If the command says another operation is running, wait for it to finish; don't delete `agent.lock` or start a second agent. A command that rejects its input changes nothing, so fix the input and run it again.
+Stop the agent before changing local settings. A command that needs it stopped names what holds the state directory and how to stop it:
+
+| Message | Fix |
+| --- | --- |
+| `The agent service is running (vectory.service, pid 812), and this command needs the agent stopped.` | `sudo vectory service-stop`, run the command again, then `sudo vectory service-start`. |
+| `The agent is running (vectory run, pid 812), and this command needs it stopped.` | Stop it with Ctrl-C where it runs (or `sudo kill 812`), run the command again, then start the agent again. |
+| `Another vectory command is using /var/lib/vectory-agent (vectory install, pid 812).` | Wait for it to finish, then run the command again. |
+| `There is no Vectory service to stop` | The host has no systemd, so the agent runs as `vectory run`: stop it with Ctrl-C where it runs. `vectory status` shows its pid. |
+
+`pause`, `resume` and `retry` work while the agent runs. Don't delete `agent.lock` or start a second agent. A command that rejects its input changes nothing, so fix the input and run it again.
 
 ### A local settings update is refused
 
@@ -198,7 +238,7 @@ The dashboard stops waiting after 30 seconds. Choose **Retry connection**, or **
 ### Credentials or account access are rejected
 
 - **Wrong password:** after several failures, sign-in pauses for that account and the message says when to try again. Ask an administrator for a [reset link](administer.md#help-someone-reset-a-forgotten-password) if you forgot it.
-- **Code rejected:** check that your phone's clock is right, or choose **Use a recovery code instead**. If the code step expires, start again with your email and password.
+- **Code rejected:** check that your phone's clock is right, or choose **Use a recovery code**. If the code step expires, start again with your email and password.
 - **Account disabled:** an administrator must turn access back on under **People & security**.
 - **After a restore:** old sessions and recovery codes no longer work. Sign in with your password and authenticator.
 
