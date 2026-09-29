@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api, withRequestDeadline } from "./api";
 import { Button, ErrorBox, Pagination, SearchBox, Spinner } from "./ui";
-import { type RollbackPreview } from "./rollbackReview";
+import {
+  locallyConfigured,
+  nothingToRollBackTo,
+  type RollbackPreview,
+} from "./rollbackReview";
 import "./rollback-review.css";
 
 const reasons = {
@@ -89,6 +93,18 @@ export default function RollbackReviewPanel({
       </p>
     );
   const query = search.trim().toLocaleLowerCase();
+  const empty = preview ? nothingToRollBackTo(preview) : false;
+  const local = preview ? locallyConfigured(preview) : [];
+  const otherBlockers = preview
+    ? preview.blockers.filter((b) => b.code !== "PRIOR_VERSION_UNKNOWN")
+    : [];
+  const digests = new Set(
+    (preview?.eligible_devices || [])
+      .map((device) => device.artifact_sha256)
+      .filter(Boolean),
+  );
+  const sharedDigest =
+    digests.size === 1 && local.length === 0 ? [...digests][0] : null;
   const rows = preview
     ? (scope === "eligible"
         ? preview.eligible_devices.map((d) => ({ ...d, reason: null }))
@@ -107,7 +123,26 @@ export default function RollbackReviewPanel({
         </p>
       )}
       {error && <ErrorBox message={error} retry={refreshReview} />}
-      {preview && (
+      {preview && empty && (
+        <div className="rollback-nothing" role="status">
+          <strong>Nothing to roll back to</strong>
+          <p>
+            {local.length === preview.eligible_devices.length
+              ? local.length === 1
+                ? "This device ran its local config before this deployment. Remove the assignment to stop managing it; it keeps the config it runs now."
+                : `These ${local.length} devices ran their local config before this deployment. Remove the assignment to stop managing them; they keep the config they run now.`
+              : `${local.length} of ${preview.eligible_devices.length} devices ran their local config before this deployment, so this rollout can't be rolled back as a whole. Remove the assignment, or deploy the version you want.`}
+          </p>
+          <p className="rollback-nothing-devices">
+            {local
+              .slice(0, 6)
+              .map((device) => device.device_name || "Unnamed device")
+              .join(", ")}
+            {local.length > 6 ? ` and ${local.length - 6} more` : ""}
+          </p>
+        </div>
+      )}
+      {preview && !empty && (
         <>
           <div className="rollback-review-heading">
             <div>
@@ -141,25 +176,35 @@ export default function RollbackReviewPanel({
           </div>
           <p className="rollback-review-effect">
             {preview.source_action === "unassign"
-              ? "This removes the original assignment and creates a rollback deployment at the same priority."
-              : "This stops further releases from the original rollout and creates a rollback deployment at a higher priority."}{" "}
-            Each included device must validate and verify its prior exact
-            artifact. The original device history stays intact.
+              ? "Removes this assignment and restores each device's exact previous artifact at the same priority."
+              : "Stops further releases here and restores each device's exact previous artifact at a higher priority."}{" "}
+            Each device verifies it again. This rollout's history stays.
           </p>
           {invalidated && (
             <p role="status" className="rollback-review-stale">
               Refresh review before confirming again.
             </p>
           )}
-          {preview.blockers.length > 0 && (
+          {otherBlockers.length > 0 && (
             <div className="rollback-review-blockers" role="status">
               <strong>Rollback is not ready</strong>
               <ul>
-                {preview.blockers.map((blocker, index) => (
+                {otherBlockers.map((blocker, index) => (
                   <li key={`${blocker.code}-${index}`}>{blocker.reason}</li>
                 ))}
               </ul>
             </div>
+          )}
+          {sharedDigest && (
+            <p className="rollback-shared-digest">
+              {preview.eligible_devices.length === 1
+                ? "Restores its"
+                : `All ${preview.eligible_devices.length} devices restore the same`}{" "}
+              prior artifact · SHA-256{" "}
+              <code title={sharedDigest} data-digest={sharedDigest}>
+                {sharedDigest.slice(0, 8)}…{sharedDigest.slice(-8)}
+              </code>
+            </p>
           )}
           <div
             className="rollback-scope-switch"
@@ -213,10 +258,27 @@ export default function RollbackReviewPanel({
               <li key={device.device_id}>
                 <span>
                   <strong>{device.device_name || "Unnamed device"}</strong>
-                  <code>{device.device_id}</code>
-                  {"artifact_sha256" in device && (
-                    <code>Prior artifact SHA-256: {device.artifact_sha256}</code>
-                  )}
+                  {"artifact_sha256" in device &&
+                    !sharedDigest &&
+                    (device.artifact_sha256 ? (
+                      <small className="rollback-device-digest">
+                        Prior artifact SHA-256{" "}
+                        <code
+                          title={device.artifact_sha256}
+                          data-digest={device.artifact_sha256}
+                        >
+                          {device.artifact_sha256.slice(0, 12)}…
+                          {device.artifact_sha256.slice(-8)}
+                        </code>
+                      </small>
+                    ) : (
+                      <span className="rollback-local">
+                        Ran its local config
+                      </span>
+                    ))}
+                  <small className="rollback-device-id">
+                    Device ID <code>{device.device_id}</code>
+                  </small>
                 </span>
                 {device.reason && (
                   <span className="rollback-exclusion-reason">

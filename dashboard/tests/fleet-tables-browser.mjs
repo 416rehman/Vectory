@@ -35,7 +35,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies}from'/src/Control.tsx';import{Enrollment}from'/src/Enrollment.tsx';import TargetDialog from'/src/TargetDialog.tsx';import{AssignmentActions}from'/src/RecoveryActions.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:AssignmentActions})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Devices,Groups}from'/src/Fleet.tsx';import{Policies}from'/src/Control.tsx';import{Enrollment}from'/src/Enrollment.tsx';import TargetDialog from'/src/TargetDialog.tsx';import ScheduledAssignmentRefresh from'/src/ScheduledAssignmentRefresh.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];root.render(React.createElement(({devices:Devices,groups:Groups,policies:Policies,enrollment:Enrollment,target:TargetDialog,recovery:(p)=>React.createElement(ScheduledAssignmentRefresh,{deploymentId:p.deployment.id,actorId:p.user.id,allowed:true,open:true,onClose:p.onClose,onDone:p.onDone})})[name],{key:++key,userId:'00000000-0000-4000-8000-000000000090',user:{id:'admin',name:'Synthetic administrator',email:'fixture@example.test',role:'admin',enabled:true,revision:1},notify:x=>window.notices.push(x),navigate:x=>window.navigation=x,onDone:x=>window.notices.push(x),onClose:()=>window.closed=true,...props}));};window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
@@ -232,6 +232,8 @@ async function load(name, props = {}) {
         targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0, error: null })),
       });
     }
+    if (method === "POST" && path === "/deployments/binding-suggestions")
+      return route.fulfill({ json: { devices: {}, sources: {} } });
     throw Error(`Unexpected synthetic request ${method} ${path}`);
   });
   await page.goto(origin + "/__fleet-tables");
@@ -494,7 +496,7 @@ try {
       await expect(rows("Deployment review devices")).toHaveCount(1);
       await expect(
         page.getByText(
-          "Column filters only change this view. All 3 reviewed devices remain included.",
+          "Filters only change this view. All 3 reviewed devices stay included.",
           { exact: true },
         ),
       ).toBeVisible();
@@ -512,13 +514,6 @@ try {
       await load("recovery", {
         deployment: { id: id(8000), status: "scheduled" },
       });
-      await page
-        .locator("summary")
-        .filter({ hasText: "Update scheduled devices" })
-        .click();
-      await page
-        .getByRole("button", { name: "Review scheduled devices", exact: true })
-        .click();
       await expect(rows("Scheduled device selection")).toHaveCount(3);
       await textFilter("Device", "Device 0002");
       await expect(rows("Scheduled device selection")).toHaveCount(1);

@@ -473,19 +473,68 @@ export const PublishRequestPageSchema = z
   })
   .strict();
 export type PublishRequestPage = z.infer<typeof PublishRequestPageSchema>;
-export type Assignment = { id: string; priority: number; reason: string };
+export type Assignment = {
+  id: string;
+  priority: number;
+  reason: string;
+  /** Display provenance; absent on older servers. */
+  name?: string | null;
+  target_mode?: string;
+  status?: string;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  created_at?: string | null;
+  created_by_name?: string | null;
+};
+/** Names and numbers for an assignment; never selectors, targets or values. */
+export type AssignmentDescription = {
+  id: string;
+  name: string | null;
+  resource: "configuration" | "policy";
+  priority: number;
+  target_mode: string;
+  status: string;
+  created_at: string | null;
+  version_id: string | null;
+  version_number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
+  policy: Policy | null;
+  policy_id: string | null;
+  policy_name: string | null;
+  created_by_name?: string | null;
+};
 export type DeploymentPreviewOutcome = {
   device_id: string;
   resource: "configuration" | "policy";
-  outcome: "requested" | "higher_priority" | "conflict";
+  outcome: "requested" | "higher_priority" | "conflict" | "replace";
   assignment?: Assignment;
+  winner?: AssignmentDescription;
+  replaces?: AssignmentDescription;
+};
+export type PreviewConflict = {
+  device_id: string;
+  assignment_ids: string[];
+  priority: number;
+  resource: "configuration" | "policy";
+  assignments?: AssignmentDescription[];
+};
+export type PreviewReplacement = {
+  assignment: AssignmentDescription;
+  device_ids: string[];
+  retires_assignment?: boolean;
 };
 export type DeploymentPreview = {
   request_correlation?: boolean;
   devices: Device[];
-  conflicts: unknown[];
+  conflicts: PreviewConflict[];
   warnings: string[];
   outcomes?: DeploymentPreviewOutcome[];
+  replacements?: PreviewReplacement[];
+  suggested_replaces?: PreviewReplacement[];
+  suggested_priority?: number | null;
+  winning_priority?: number | null;
+  paused_device_ids?: string[];
   create_idempotency?: boolean;
   artifact_previews?: {
     device_id: string;
@@ -536,6 +585,17 @@ export type Device = {
   assignment?: Assignment;
   policy_assignment?: Assignment;
   created_at: string;
+  /** Current check-in interval; the longer one until a change is acknowledged. */
+  check_in_seconds?: number;
+  desired_version?: VersionLabel | null;
+  /** Last verified managed version; null means the adopted local config. */
+  running_version?: (VersionLabel & { generation?: number }) | null;
+};
+export type VersionLabel = {
+  id: string;
+  number: number | null;
+  configuration_id: string | null;
+  configuration_name: string | null;
 };
 export type Group = {
   id: string;
@@ -848,6 +908,29 @@ export type DeploymentSummary = Omit<
   verified_count: number;
   state_counts: Record<string, number>;
   canary_gate?: unknown;
+  created_by_name?: string | null;
+  policy_id?: string | null;
+  policy_name?: string | null;
+  rollback_available?: boolean;
+  completed_at?: string | null;
+  failed_at?: string | null;
+  failure_reason?: string | null;
+  cancelled_at?: string | null;
+  removed_at?: string | null;
+  status_before_removal?: string | null;
+  status_before_rollback?: string | null;
+  rolled_back_at?: string | null;
+  rolled_back_by?: string | null;
+  rolled_back_to_version?: number | null;
+  rollback_of?: string | null;
+  rollback_of_version?: number | null;
+  replaced_by?: {
+    deployment_id: string;
+    device_count: number;
+    at: string;
+    version_number: number | null;
+  }[];
+  replaces?: { deployment_id: string; version_number: number | null }[];
 };
 export type DeploymentPage = {
   request_history?: boolean;
@@ -904,6 +987,126 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   device_name: string | null;
   error: string | null;
   original: boolean;
+  released_at?: string | null;
+  verified_at?: string | null;
+  last_seen?: string | null;
+  replaced_by?: string | null;
+  diagnostic?: string | null;
+  check_in_seconds?: number | null;
+  timeline?: { state: string; at: string }[];
+};
+export type RolloutLane = {
+  kind: "canary" | "batch" | "all" | "added" | "not_released";
+  index: number;
+  state: "verified" | "in_progress" | "failed" | "queued" | "stopped";
+  released_at: string | null;
+  verified_at: string | null;
+  size: number;
+  counts: Record<string, number>;
+  devices: { device_id: string; device_name: string | null; state: string }[];
+  more: number;
+};
+export type RolloutFailure = {
+  state: string;
+  message: string | null;
+  diagnostic: string | null;
+  count: number;
+  /** Every device in the group (bounded); `devices` names the first few. */
+  device_ids?: string[];
+  devices: { device_id: string; device_name: string | null }[];
+};
+export type RolloutLanes = {
+  deployment_id: string;
+  status: string;
+  evaluated_at: string;
+  stages: RolloutLane[];
+  failures: RolloutFailure[];
+  removed_count: number;
+  check_in_seconds: number | null;
+  next_admission_at: string | null;
+};
+export type SavedPolicyListItem = SavedPolicy & {
+  revision?: number;
+  updated_at?: string;
+  applied_device_count?: number;
+  /** Given this template before its latest edit; still on the earlier values. */
+  outdated_device_count?: number;
+  applied_devices?: { id: string; name: string }[];
+};
+export type GroupMembershipState = {
+  assignment_id: string | null;
+  assignment_name: string | null;
+  version_id: string | null;
+  configuration_name: string | null;
+  version_number: number | null;
+  generation: number;
+  policy: Policy | null;
+} | null;
+export type GroupMembershipPreview = {
+  group_id: string;
+  revision: number;
+  stale: boolean;
+  ready: boolean;
+  blockers: { code: string; reason: string }[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    change: "added" | "removed";
+    configuration: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+    policy: {
+      changed: boolean;
+      before: GroupMembershipState;
+      after: GroupMembershipState;
+      pending: AssignmentDescription | null;
+    };
+  }[];
+};
+const membershipState = z
+  .object({ assignment_id: z.string().nullable() })
+  .passthrough()
+  .nullable();
+const membershipPart = z
+  .object({
+    changed: z.boolean(),
+    before: membershipState,
+    after: membershipState,
+    pending: z.object({ id: z.string() }).passthrough().nullable(),
+  })
+  .passthrough();
+const GroupMembershipPreviewSchema = z
+  .object({
+    group_id: z.string(),
+    revision: z.number().int().nonnegative(),
+    stale: z.boolean(),
+    ready: z.boolean(),
+    blockers: z.array(z.object({ code: z.string(), reason: z.string() })),
+    devices: z
+      .array(
+        z
+          .object({
+            device_id: z.string(),
+            device_name: z.string().nullable(),
+            change: z.enum(["added", "removed"]),
+            configuration: membershipPart,
+            policy: membershipPart,
+          })
+          .passthrough(),
+      )
+      .max(10000),
+  })
+  .passthrough() as unknown as z.ZodType<GroupMembershipPreview>;
+/** Values each device already uses for a new version of the same pipeline. */
+export type BindingSuggestions = {
+  devices: Record<string, Record<string, string | number | boolean>>;
+  sources: Record<
+    string,
+    { deployment_id: string; version_number: number | null }
+  >;
 };
 export type DeploymentTargetPage = {
   items: DeploymentTarget[];
@@ -1263,6 +1466,7 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     policy_assignment: z
       .object({
@@ -1270,6 +1474,7 @@ export const DeviceSchema = z
         priority: z.number().int(),
         reason: z.string(),
       })
+      .passthrough()
       .optional(),
     name: z.string(),
     status: z.string(),
@@ -1448,6 +1653,8 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return GroupRequestLookupSchema;
   if (path === "/groups")
     return method === "POST" ? GroupSchema : z.array(GroupSchema);
+  if (path === "/groups/membership-preview" && method === "POST")
+    return GroupMembershipPreviewSchema;
   if (/^\/groups\/[^/]+$/.test(path)) return GroupSchema;
   if (path === "/login") return LoginSchema;
   if (path === "/mfa" && method === "GET") return MfaStatusSchema;

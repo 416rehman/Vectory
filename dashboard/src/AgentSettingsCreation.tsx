@@ -43,7 +43,11 @@ import {
 import "./agent-settings-creation.css";
 
 export type AgentSettingsCreationHandle = {
-  openCreate(opener: HTMLElement): void;
+  /** Opens the create form, optionally prefilled (for Duplicate). */
+  openCreate(
+    opener: HTMLElement,
+    initial?: { name: string; policy: Policy },
+  ): void;
   openRecent(opener: HTMLElement): void;
   openSaved(opener: HTMLElement): void;
 };
@@ -196,7 +200,15 @@ const CreationCenter = forwardRef<
     setScreen(next);
   }
   useImperativeHandle(ref, () => ({
-    openCreate: (target) => open("create", target),
+    openCreate: (target, initial) => {
+      if (initial && !active.current && allowed()) {
+        setName(initial.name);
+        setHeartbeat(String(initial.policy.heartbeat_seconds));
+        setPaused(initial.policy.sync_paused);
+        setTelemetry(initial.policy.telemetry_enabled);
+      }
+      open("create", target);
+    },
     openRecent: (target) => open("recent", target),
     openSaved: (target) => open("local", target),
   }));
@@ -473,7 +485,9 @@ const CreationCenter = forwardRef<
                 ? "Find settings saved by your account, including requests from other tabs and devices."
                 : screen === "local"
                   ? "Confirm saved requests before creating another set of agent settings."
-                  : "Check whether your settings were saved before trying again."
+                  : found
+                    ? "Saved. No devices change until you apply these settings."
+                    : "Check whether your settings were saved before trying again."
           }
         >
           {screen === "create" ? (
@@ -703,10 +717,6 @@ const CreationCenter = forwardRef<
                         <h3 ref={receiptFocus} tabIndex={-1}>
                           {found.name}
                         </h3>
-                        <p>
-                          These agent settings are saved. No devices have been
-                          changed by saving this template.
-                        </p>
                         <PolicyValues policy={found.policy} />
                         <details>
                           <summary>Settings details</summary>

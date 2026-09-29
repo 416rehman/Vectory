@@ -234,7 +234,7 @@ async fn preview_reports_pending_canary_winner_instead_of_current_policy_binding
     assert!(preview["warnings"].as_array().unwrap().iter().any(|w| {
         w.as_str()
             .unwrap()
-            .contains("may change before scheduled activation")
+            .contains("checked again when the schedule starts")
     }));
     assert_eq!(snapshot(&mut tx).await, before);
     rollout::resolve(&mut tx).await.unwrap();

@@ -60,7 +60,7 @@ impl Assessment {
 }
 // SQL extracts only proof metadata. No telemetry, error diagnostics, raw device
 // extension data, configuration body, or artifact enters these queries.
-const ROWS: &str = "SELECT t.device_id,t.state,t.generation,a.version_id AS artifact_version_id,a.sha256 AS artifact_sha256,d.id AS existing_id,d.revoked,d.desired_version_id,d.desired_generation,d.assignment_id,d.policy_generation,d.policy_assignment_id,d.policy,json_object('last_seen',substr(json_extract(d.data,'$.last_seen'),1,64),'apply_state',substr(json_extract(d.data,'$.apply_state'),1,32),'reported_apply_state',substr(json_extract(d.data,'$.reported_apply_state'),1,32),'reported_generation',json_extract(d.data,'$.reported_generation'),'policy_generation',json_extract(d.data,'$.policy_generation'),'local_paused',json_extract(d.data,'$.local_paused'),'pause_acknowledged',json_extract(d.data,'$.pause_acknowledged'),'desired_artifact_sha256',substr(json_extract(d.data,'$.desired_artifact_sha256'),1,65),'actual_sha256',substr(json_extract(d.data,'$.actual_sha256'),1,65),'applied_template_sha256',substr(json_extract(d.data,'$.applied_template_sha256'),1,65),'secret_revision',json_extract(d.data,'$.secret_revision'),'verified_secret_revision',json_extract(d.data,'$.verified_secret_revision'),'verified_effective_sha256',substr(json_extract(d.data,'$.verified_effective_sha256'),1,65)) AS evidence FROM deployment_targets t LEFT JOIN desired_artifacts a ON a.device_id=t.device_id AND a.generation=t.generation LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=";
+const ROWS: &str = "SELECT t.device_id,t.state,t.generation,a.version_id AS artifact_version_id,a.sha256 AS artifact_sha256,d.id AS existing_id,d.revoked,d.desired_version_id,d.desired_generation,d.assignment_id,d.policy_generation,d.policy_assignment_id,d.policy,json_object('last_seen',substr(json_extract(d.data,'$.last_seen'),1,64),'apply_state',substr(json_extract(d.data,'$.apply_state'),1,32),'reported_apply_state',substr(json_extract(d.data,'$.reported_apply_state'),1,32),'reported_generation',json_extract(d.data,'$.reported_generation'),'policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds'),'local_paused',json_extract(d.data,'$.local_paused'),'pause_acknowledged',json_extract(d.data,'$.pause_acknowledged'),'desired_artifact_sha256',substr(json_extract(d.data,'$.desired_artifact_sha256'),1,65),'actual_sha256',substr(json_extract(d.data,'$.actual_sha256'),1,65),'applied_template_sha256',substr(json_extract(d.data,'$.applied_template_sha256'),1,65),'secret_revision',json_extract(d.data,'$.secret_revision'),'verified_secret_revision',json_extract(d.data,'$.verified_secret_revision'),'verified_effective_sha256',substr(json_extract(d.data,'$.verified_effective_sha256'),1,65)) AS evidence FROM deployment_targets t LEFT JOIN desired_artifacts a ON a.device_id=t.device_id AND a.generation=t.generation LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=";
 pub async fn evaluate(
     db: &mut SqliteConnection,
     d: &Value,
@@ -162,12 +162,17 @@ pub async fn evaluate(
                 .map(|s| db::parse(&s))
                 .transpose()?
                 .unwrap_or(Value::Null);
+            let interval = crate::rollout::check_in_seconds(
+                &policy,
+                &evidence,
+                row.get::<Option<i64>, _>("policy_generation").unwrap_or(0),
+            );
             let fresh = evidence["last_seen"]
                 .as_str()
                 .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
                 .is_some_and(|at| {
                     let age = now.signed_duration_since(at).num_seconds();
-                    age >= 0 && age <= policy["heartbeat_seconds"].as_i64().unwrap_or(60) * 3
+                    age >= 0 && age <= interval * 3
                 });
             let owner = row.get::<Option<String>, _>(if config {
                 "assignment_id"
