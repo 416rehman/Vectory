@@ -204,6 +204,60 @@ async fn fleet_summary_reports_fresh_totals_with_coverage_and_null_when_missing(
         get(&f, "/api/v1/telemetry/summary?extra=1").await.0,
         StatusCode::BAD_REQUEST
     );
+
+    // The series counts the same population as the totals: a revoked device
+    // leaves both at once.
+    sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
+        .bind(EDGE)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let (_, summary) = get(&f, "/api/v1/telemetry/summary?range=1h").await;
+    assert_eq!(summary["devices_total"], 2);
+    let last = summary["series"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(last["devices_reporting"], 1);
+    assert_eq!(last["events_in_per_second"], 10.0);
+}
+
+#[tokio::test]
+async fn retention_prunes_by_time_through_the_bucket_index() {
+    let f = fixture().await;
+    seed(&f).await;
+    let old = chrono::Utc::now().timestamp() / 60 - 60 * 24 * 8;
+    sqlx::query("INSERT INTO telemetry(device_id,bucket,data) VALUES(?,?,'{}')")
+        .bind(WEB)
+        .bind(old)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    vectory_server::rollout::prune(&f.s).await.unwrap();
+    let remaining: Vec<i64> = sqlx::query_scalar("SELECT bucket FROM telemetry ORDER BY bucket")
+        .fetch_all(&f.s.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 4);
+    assert!(!remaining.contains(&old));
+    for sql in [
+        "EXPLAIN QUERY PLAN DELETE FROM telemetry WHERE bucket<1",
+        "EXPLAIN QUERY PLAN SELECT bucket/5,device_id,count(*) FROM telemetry WHERE bucket>=1 AND device_id IN (SELECT id FROM devices WHERE revoked=0) GROUP BY 1,2",
+    ] {
+        let plan = sqlx::query(sql)
+            .fetch_all(&f.s.pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| sqlx::Row::get::<String, _>(row, "detail"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Either index bounds the read by time; neither query scans the table.
+        assert!(!plan.contains("SCAN telemetry"), "{sql}\n{plan}");
+        assert!(plan.contains("bucket"), "{sql}\n{plan}");
+    }
 }
 
 #[tokio::test]

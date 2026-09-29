@@ -2018,6 +2018,14 @@ pub async fn tick(s: &State) -> Result<()> {
         advance(&mut tx, &mut d).await?;
     }
     resolve(&mut tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+/// Retention: drop telemetry older than the retention window and expired
+/// sessions. Runs about once a minute, apart from the rollout tick, so
+/// heartbeats never queue behind it every two seconds.
+pub async fn prune(s: &State) -> Result<()> {
+    let (_guard, mut tx) = crate::db::write_tx(s).await?;
     let cutoff =
         (Utc::now() - chrono::Duration::days(db::telemetry_retention_days())).timestamp() / 60;
     sqlx::query("DELETE FROM telemetry WHERE bucket<?")
