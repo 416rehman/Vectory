@@ -8,8 +8,10 @@ maintainer: Vectory maintainers
 description: Standalone outbound configuration management agent for Vector
 license: Apache-2.0
 contents:
+  # expand: nfpm substitutes ${VERSION} and ${GOARCH} in src only when asked.
   - src: ../artifacts/releases/vectory-${VERSION}-linux-${GOARCH}
     dst: /usr/bin/vectory
+    expand: true
     file_info:
       mode: 0755
   - src: systemd/vectory.service
