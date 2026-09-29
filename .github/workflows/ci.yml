@@ -665,3 +665,137 @@ jobs:
           name: end-to-end
           path: artifacts/end-to-end
           if-no-files-found: warn
+  # The Compose quickstart as a first-time operator runs it (docs/user/install-server.md):
+  # a private CA, protected secret files, deploy/.env, build, start, first
+  # administrator, a device enrolled through the published agent port with the
+  # agent bundled in the image, and the validator's isolation, probed from inside.
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+      - name: Create a private CA, the certificate chain and the bootstrap secret
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          go run ../packaging/dev-pki/main.go --out "$RUNNER_TEMP/pki" --hosts localhost,127.0.0.1
+          (umask 077 && openssl rand -hex 32 > "$RUNNER_TEMP/bootstrap")
+          # Readable by the containers' group (10001) only, as the install guide says.
+          sudo install -d -m 0750 -g 10001 /etc/vectory
+          cat "$RUNNER_TEMP/pki/server.pem" "$RUNNER_TEMP/pki/ca.pem" | sudo install -m 0440 -g 10001 /dev/stdin /etc/vectory/server.pem
+          sudo install -m 0440 -g 10001 "$RUNNER_TEMP/pki/server-key.pem" /etc/vectory/server-key.pem
+          sudo install -m 0440 -g 10001 "$RUNNER_TEMP/bootstrap" /etc/vectory/bootstrap
+          cp .env.example .env
+          sed -i -e 's#^VECTORY_HOSTNAME=.*#VECTORY_HOSTNAME=localhost#' \
+            -e 's#^VECTORY_BIND_IP=.*#VECTORY_BIND_IP=127.0.0.1#' \
+            -e 's#^VECTORY_TLS_CERT_FILE=.*#VECTORY_TLS_CERT_FILE=/etc/vectory/server.pem#' \
+            -e 's#^VECTORY_TLS_KEY_FILE=.*#VECTORY_TLS_KEY_FILE=/etc/vectory/server-key.pem#' \
+            -e 's#^VECTORY_BOOTSTRAP_SECRET_FILE=.*#VECTORY_BOOTSTRAP_SECRET_FILE=/etc/vectory/bootstrap#' .env
+      - name: Check the resolved configuration isolates the validator
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          docker compose config --quiet
+          docker compose config --format json > "$RUNNER_TEMP/compose.json"
+          jq -e '
+            .networks.validation.internal == true
+            and (.services.validator.networks | keys) == ["validation"]
+            and ((.services.validator.ports // []) | length) == 0
+            and ((.services.validator.secrets // []) | length) == 0
+            and ((.services.validator.volumes // []) | length) == 0
+            and .services.validator.read_only == true
+            and .services.validator.cap_drop == ["ALL"]
+            and .services.validator.user == "10002:10002"
+            and .services.server.depends_on.validator.condition == "service_healthy"
+          ' "$RUNNER_TEMP/compose.json"
+      - name: Build the server and validator images
+        timeout-minutes: 10
+        run: docker compose build
+      - name: Start the stack and wait until every service is healthy
+        id: stack
+        timeout-minutes: 10
+        run: |
+          docker compose up -d --wait --wait-timeout 300
+          docker compose ps
+      - name: The instance answers through the TLS proxy and is not set up yet
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          curl -fsS --cacert "$RUNNER_TEMP/pki/ca.pem" https://localhost/api/v1/status | tee "$RUNNER_TEMP/status-before.json"
+          echo
+          jq -e '.initialized == false' "$RUNNER_TEMP/status-before.json"
+      - name: Provide the pinned Vector 0.58.0 for the enrolled device
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          [[ "$("$binary" --version)" == "vector 0.58.0 "* ]]
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Create the first administrator and enroll a device with the Add device installer
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: .
+        env:
+          VECTORY_URL: https://localhost
+          VECTORY_CA_FILE: ${{ runner.temp }}/pki/ca.pem
+          VECTORY_CREDENTIALS: ${{ runner.temp }}/credentials.json
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ runner.temp }}/bootstrap
+        run: |
+          node scripts/check-installer.mjs --output artifacts/compose
+          curl -fsS --cacert "$VECTORY_CA_FILE" https://localhost/api/v1/status | jq -e '.initialized == true'
+      - name: The validator cannot reach the internet
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          # A failed probe proves nothing unless the probe itself runs.
+          docker compose exec -T validator bash -c 'echo probe ready'
+          if docker compose exec -T server timeout 10 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'; then
+            echo "Control: the server container, on the proxy network, reaches 1.1.1.1:443."
+          else
+            echo "::warning::The server container cannot reach 1.1.1.1:443 either, so only the internal network in the resolved configuration backs the result below."
+          fi
+          if docker compose exec -T validator timeout 10 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'; then
+            echo "::error::The validator opened a connection to 1.1.1.1:443."
+            exit 1
+          fi
+          if docker compose exec -T validator timeout 10 getent hosts github.com; then
+            echo "::error::The validator resolved a public name (github.com)."
+            exit 1
+          fi
+          echo "PASS: the validator can neither connect to 1.1.1.1:443 nor resolve github.com."
+      - name: Collect the logs and remove the stack and its volumes
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          mkdir -p ../artifacts/compose
+          docker compose ps -a > ../artifacts/compose/ps.txt 2>&1
+          docker compose logs --no-color --timestamps > ../artifacts/compose/compose.log 2>&1
+          docker compose down -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: compose
+          path: artifacts/compose
+          if-no-files-found: warn
