@@ -125,7 +125,7 @@ If an enrollment is interrupted, run the same command again with the same server
 
 ## run
 
-Run the agent in the foreground. It starts Vector, applies versions and checks in until you stop it with Ctrl-C, which also stops Vector.
+Run the agent in the foreground. It starts Vector, applies versions and checks in until you stop it with Ctrl-C. Vector then finishes its in-flight events (up to `--graceful-shutdown-seconds`, 60 by default) before both exit.
 
 ```sh
 sudo vectory run
