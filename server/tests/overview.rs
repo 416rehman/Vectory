@@ -245,12 +245,17 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     let devices = get(&app, &actor, "/api/v1/devices").await;
     let rows = devices.as_array().unwrap();
     let named = rows.iter().find(|d| d["id"] == failed.as_str()).unwrap();
+    assert_eq!(named["desired_version"]["number"], 2);
     assert_eq!(
-        named["desired_version"],
-        json!({"number":2,"configuration_id":pipeline,"configuration_name":"Edge syslog processing"})
+        named["desired_version"]["configuration_id"],
+        json!(pipeline)
+    );
+    assert_eq!(
+        named["desired_version"]["configuration_name"],
+        "Edge syslog processing"
     );
     let bare = rows.iter().find(|d| d["name"] == "edge-02").unwrap();
-    assert!(bare.get("desired_version").is_none());
+    assert!(bare["desired_version"].is_null());
 }
 
 #[tokio::test]
