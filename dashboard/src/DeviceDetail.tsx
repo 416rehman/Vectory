@@ -71,6 +71,7 @@ import { pipelineRoute } from "./SelectedDevice";
 import {
   failedApplyStep,
   failureStagePhrase,
+  pickupText,
   type ApplyStep,
 } from "./deploymentStatus";
 import "./devices.css";
@@ -270,6 +271,20 @@ export function failedRunningText(
     text: adopted ? adoptedConfiguration(device, false) : "Nothing running yet",
     note,
   };
+}
+/**
+ * While a released version waits for the agent (no attempt for this
+ * generation yet) and the agent holds a wait open, it arrives within
+ * seconds: say so. Null otherwise, and the application explanation stands.
+ */
+export function pickupExplanation(device: Device, version?: Version | null) {
+  const waiting =
+    device.status === "applying" &&
+    device.reported_generation < device.desired_generation &&
+    !currentConfigurationAttempt(device, version);
+  return waiting && device.wake?.listening
+    ? `${pickupText(device)} Its last verified configuration is tracked separately.`
+    : null;
 }
 function RunningLine({ device, number }: { device: Device; number?: number }) {
   const v = number ? `v${number}` : "the assigned version";
@@ -1152,7 +1167,8 @@ export default function DeviceDetail({
             <DeliveryMeasurement device={device} pipelineId={pipelineId} />
             <p className="device-explanation">
               {device.desired_version_id
-                ? deviceApplicationExplanation(device, version.data)
+                ? (pickupExplanation(device, version.data) ??
+                  deviceApplicationExplanation(device, version.data))
                 : device.actual_sha256
                   ? "No published pipeline is assigned. The configuration adopted at setup stays in place until you deploy one."
                   : "No published pipeline is assigned. The agent checks in and waits; Vector starts with the first version you deploy."}

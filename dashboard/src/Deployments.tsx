@@ -87,6 +87,7 @@ import {
   explainError,
   exactTime,
   isLive,
+  pickupText,
   progressSegments,
   withDegraded,
   statusFilters,
@@ -1085,9 +1086,7 @@ function TargetDetails({
           ? "The rollout stopped before this device was released."
           : "Waits for its stage to be released."
         : t.state === "desired"
-          ? t.check_in_seconds
-            ? `Applies on its next check-in (within ${t.check_in_seconds} s).`
-            : "Applies on its next check-in."
+          ? pickupText(t)
           : t.state === "verified_applied"
             ? `Verified ${exactTime(t.verified_at)}`.trim()
             : ["failed", "rolled_back", "incompatible"].includes(t.state)
