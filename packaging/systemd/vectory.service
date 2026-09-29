@@ -12,7 +12,10 @@ Restart=on-failure
 RestartSec=5s
 # 78: not installed or not enrolled yet. Run `sudo vectory setup` first.
 RestartPreventExitStatus=78
-KillMode=control-group
+# Stop signals only the agent; it asks Vector for one graceful drain and waits.
+# Processes still left at the timeout are killed. (control-group would signal
+# Vector directly as well, and Vector treats a second signal as "quit now".)
+KillMode=mixed
 # Longer than Vector's longest graceful drain (--graceful-shutdown-seconds, at most 300).
 TimeoutStopSec=330s
 NoNewPrivileges=true

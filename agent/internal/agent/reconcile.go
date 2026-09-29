@@ -615,6 +615,9 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		}
 	}()
 	defer func() {
+		if e.Driver.Alive() {
+			report(fmt.Sprintf("Stopping Vector: it finishes in-flight events for up to %d s.", e.Settings.gracefulShutdownSeconds()))
+		}
 		_ = e.Driver.Stop()
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"

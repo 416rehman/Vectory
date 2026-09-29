@@ -39,7 +39,7 @@ func ServiceInstall(dir, account string) error {
 // managed configuration directories, while Vector's own data and output
 // directories elsewhere stay writable.
 func systemdUnitFile(exe, dir, managedDir, account, group string) string {
-	return "[Unit]\nDescription=Vectory outbound configuration agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=" + account + "\nGroup=" + group + "\nExecStart=" + unitArg(exe) + " run --state-dir " + unitArg(dir) + "\nRestart=on-failure\nRestartSec=5s\nRestartPreventExitStatus=78\nKillMode=control-group\nTimeoutStopSec=330s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nProtectHome=read-only\nReadWritePaths=" + unitArg("-"+dir) + " " + unitArg("-"+managedDir) + "\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n"
+	return "[Unit]\nDescription=Vectory outbound configuration agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=" + account + "\nGroup=" + group + "\nExecStart=" + unitArg(exe) + " run --state-dir " + unitArg(dir) + "\nRestart=on-failure\nRestartSec=5s\nRestartPreventExitStatus=78\nKillMode=mixed\nTimeoutStopSec=330s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nProtectHome=read-only\nReadWritePaths=" + unitArg("-"+dir) + " " + unitArg("-"+managedDir) + "\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 
 // ServiceInstallFor registers exe as the agent service for dir, owned by account.

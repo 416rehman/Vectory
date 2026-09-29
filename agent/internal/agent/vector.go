@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -389,6 +391,11 @@ func (d *VectorDriver) restart(ctx context.Context, path, overlay string) error 
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
+	supervisorPlatformOptions(cmd)
+	// Where no parent-death signal exists (macOS), a Vector orphaned by a
+	// killed supervisor keeps the log pipe open; stop waiting for it so the
+	// driver sees the exit instead of hanging.
+	cmd.WaitDelay = 2 * time.Second
 	in, e := cmd.StdinPipe()
 	if e != nil {
 		return e
@@ -449,6 +456,17 @@ func VectorHostMain(args []string) int {
 	if len(args) != 3 && len(args) != 5 {
 		return 2
 	}
+	// The supervisor is controlled only through stdin. Termination signals
+	// meant for the agent (a stray kill, a terminal's Ctrl-C) must neither kill
+	// it (which SIGKILLs Vector) nor make it signal Vector a second time, which
+	// Vector treats as "quit now, skip the drain". Handled, not ignored:
+	// ignored signals would be inherited by Vector across exec.
+	discard := make(chan os.Signal, 4)
+	signal.Notify(discard, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		for range discard {
+		}
+	}()
 	if args[2] != "restricted" && args[2] != "full" {
 		return 2
 	}
