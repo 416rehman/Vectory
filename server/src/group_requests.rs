@@ -154,6 +154,11 @@ struct MembershipPreviewRequest {
 /// What a reviewed membership edit would change on each added or removed
 /// device, simulated with the real resolver inside a savepoint that is always
 /// rolled back. Nothing is written, released or audited here.
+///
+/// The simulation needs the writer lock, and the dashboard asks for one on
+/// every debounced edit. It never waits for the lock: while a heartbeat or
+/// the scheduler writes, it answers 429 `CAPACITY_BUSY` and the dashboard
+/// retries a second later, so writers never queue behind previews either.
 pub async fn membership_preview(
     AppState(s): AppState<State>,
     h: HeaderMap,
@@ -171,7 +176,14 @@ pub async fn membership_preview(
     if request.device_ids.len() > 10_000 {
         return Err(ApiError::invalid("Too many group members"));
     }
-    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
+    let Ok(_guard) = s.writer.try_lock() else {
+        return Err(ApiError::throttled(
+            "CAPACITY_BUSY",
+            "Preview busy, retrying",
+            1,
+        ));
+    };
+    let mut tx = db::begin_write(&s.pool).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     sqlx::query("SAVEPOINT group_membership_preview")
         .execute(&mut *tx)
