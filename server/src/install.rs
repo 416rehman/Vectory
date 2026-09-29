@@ -932,7 +932,12 @@ vectory_install() {
 			if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
 			if [ -n "$ca_sha256" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 			status=0
-			"$tmp/vectory" setup --server "$server" ${1+"$@"} || status=$?
+			# --agent-path names where the real run would put the agent, so the
+			# plan shows the --install-dir the person chose.
+			"$tmp/vectory" setup --server "$server" --agent-path "$target" ${1+"$@"} || status=$?
+			if [ "$status" = 126 ]; then
+				fail Agent "This host doesn't allow running programs from $tmp." "Run the dry run again with TMPDIR set to a directory that does, for example TMPDIR=/var/tmp. A real install doesn't need it."
+			fi
 			exit "$status"
 		fi
 		if ! mkdir -p "$install_dir" 2>/dev/null || [ ! -w "$install_dir" ]; then

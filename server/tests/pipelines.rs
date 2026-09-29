@@ -655,6 +655,12 @@ async fn public_validation_and_test_routes_forward_only_sanitized_diagnostics() 
                 let has_tests = input["config"]["tests"]
                     .as_array()
                     .is_some_and(|tests| !tests.is_empty());
+                // The real worker skips the tests of a program that calls
+                // http_request and says why, with a warning.
+                if input["config"].to_string().contains("http_request!(") {
+                    return Json(json!({"worker_protocol":2,"tests_run":false,"vector_version":"0.58.0","placeholders":[],"tests":[],
+                        "diagnostics":[{"severity":"warning","code":"vrl_function_unavailable","message":"This program calls http_request, which sends network requests. The server never sends requests from samples or tests."}]}));
+                }
                 Json(json!({"worker_protocol":2,"tests_run":has_tests,"vector_version":"0.58.0","errors":[hostile],"warnings":[hostile],"output":hostile,"placeholders":[],"diagnostics":[],
                     "tests":[{"name":"synthetic","passed":false,"message":"assertion failed","smuggled":hostile}]}))
             }),
@@ -756,6 +762,30 @@ async fn public_validation_and_test_routes_forward_only_sanitized_diagnostics() 
         partial["errors"]
             .to_string()
             .contains("1 of 2 pipeline tests failed; 1 did not run.")
+    );
+
+    // Tests the worker skipped, and said why, are not an error to retry: retrying
+    // never helps, and a device runs them for real.
+    let mut calls_out = with_tests.clone();
+    calls_out["transforms"] = json!({"call":{"type":"remap","inputs":["sample"],"source":"http_request!(\"http://example.test\")"}});
+    let (status, skipped) = call(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config":calls_out}),
+        Some(&actor),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{skipped}");
+    assert_eq!(skipped["tests_run"], false);
+    assert_eq!(skipped["valid"], true, "{skipped}");
+    assert_eq!(skipped["errors"], json!([]), "{skipped}");
+    assert!(!skipped.to_string().contains("Try again"), "{skipped}");
+    assert!(
+        skipped["warnings"]
+            .to_string()
+            .contains("never sends requests"),
+        "{skipped}"
     );
 
     let (status, empty) = call(

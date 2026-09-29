@@ -767,7 +767,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\ncp \"$ca\" \"$FAKE_CURL_CA\" || exit 60\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
     );
     let download = root.join("download");
-    let run = |bytes: &[u8], install_dir: &Path| {
+    let run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
         std::fs::write(&download, bytes).unwrap();
         // A hardened host's root umask must not hide the agent from the
         // service account.
@@ -777,6 +777,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             .args(["--install-dir"])
             .arg(install_dir)
             .args(["--name", "edge 42", "--service", "none"])
+            .args(extra)
             .env(
                 "PATH",
                 format!(
@@ -793,6 +794,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             .output()
             .unwrap()
     };
+    let run = |bytes: &[u8], install_dir: &Path| run_with(bytes, install_dir, &[]);
     // A download that doesn't match the embedded SHA-256 installs nothing.
     let rejected = root.join("rejected");
     let output = run(b"#!/bin/sh\necho tampered\n", &rejected);
@@ -852,6 +854,21 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             "none",
         ]
     );
+    // A dry run installs nothing and plans for the directory that was chosen,
+    // not the default one.
+    let planned = root.join("planned");
+    let output = run_with(&d.mirror_linux, &planned, &["--dry-run"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!planned.join("vectory").exists());
+    let dry = std::fs::read_to_string(root.join("agent-args")).unwrap();
+    let dry: Vec<&str> = dry.lines().collect();
+    let planned_path = planned.join("vectory").display().to_string();
+    assert!(
+        dry.windows(2)
+            .any(|pair| pair == ["--agent-path", planned_path.as_str()]),
+        "{dry:?}"
+    );
+    assert!(dry.contains(&"--dry-run"), "{dry:?}");
     // Running it again verifies the installed agent instead of downloading.
     std::fs::remove_file(root.join("curl-url")).unwrap();
     let output = run(b"unused", &installed);
