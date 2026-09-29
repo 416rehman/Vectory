@@ -16,9 +16,21 @@ export class APIError extends Error {
     message: string,
     public status: number,
     public serverRejection = false,
+    /** Seconds from a 429 response's Retry-After header. */
+    public retryAfter?: number,
+    /** GET /session 401 only: why this browser's session ended. */
+    public reason?: string,
   ) {
     super(message);
   }
+}
+/** A protected read or write stopped because the browser session ended. */
+export function isSessionInterruption(error: unknown) {
+  return (
+    error instanceof APIError &&
+    (error.code === "SESSION_ENDED" ||
+      (error.status === 401 && error.code === "UNAUTHENTICATED"))
+  );
 }
 // Shape validation cannot establish which record a singleton response belongs
 // to. Check the raw envelope even when a caller supplies a projection schema.
@@ -140,6 +152,8 @@ export async function api<T = unknown>(
     "/login/mfa",
     "/bootstrap",
     "/password-reset",
+    "/invite/preview",
+    "/invite/accept",
   ].includes(route);
   if (!publicRoute && !sessionValid) throw sessionFailure();
   const sentCSRF = csrf;
@@ -192,21 +206,29 @@ export async function api<T = unknown>(
         data?.error?.code === "UNAUTHENTICATED" &&
         sentCSRF &&
         sentCSRF === csrf &&
-        !["/login", "/login/mfa", "/bootstrap", "/password-reset"].includes(
-          route,
-        )
+        ![
+          "/login",
+          "/login/mfa",
+          "/bootstrap",
+          "/password-reset",
+          "/invite/preview",
+          "/invite/accept",
+        ].includes(route)
       ) {
         // Keep this request's authoritative401 error, while interrupting every
         // other protected request, including work stalled in response.text().
         sessionInterruptions.delete(interrupt);
         invalidateSession();
       }
+      const retryAfter = Number(response.headers.get("retry-after"));
       throw new APIError(
         data?.error?.code || "REQUEST_FAILED",
         data?.error?.message || `Request failed (${response.status}).`,
         response.status,
         typeof data?.error?.code === "string" &&
           typeof data?.error?.message === "string",
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+        typeof data?.error?.reason === "string" ? data.error.reason : undefined,
       );
     }
     const expected = schema || responseSchema(path, method);
@@ -297,6 +319,8 @@ export const UserSchema = z.object({
 export const SessionSchema = z.object({
   user: UserSchema,
   csrf_token: z.string(),
+  /** When this sign-in ends; absent from older servers. */
+  expires_at: z.string().optional(),
 });
 export const LoginChallengeSchema = z.object({
   mfa_required: z.literal(true),

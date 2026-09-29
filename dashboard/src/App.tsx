@@ -60,6 +60,7 @@ import { readAuditQuery, type AuditQuery } from "./auditModel";
 import Issues from "./Issues";
 import { UsersSecurity } from "./UsersSecurity";
 import Auth from "./AuthScreen";
+import SessionRenewal from "./SessionRenewal";
 import type { PipelineLibraryQuery } from "./PipelineLibrary";
 import { readPipelineDestination } from "./pipelineDestination";
 const primary = [
@@ -670,25 +671,18 @@ export default function App() {
       </aside>
       <div className="app-main" inert={mobileMenuOpen}>
         {sessionEnded && (
-          <div className="session-ended" role="alert">
-            <span>Your session ended. Sign in again to continue.</span>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                if (
-                  !window.dispatchEvent(
-                    new Event("vectory:before-navigate", { cancelable: true }),
-                  )
-                )
-                  return;
-                setCSRF("");
-                setUser(null);
-                setAccountOpen(false);
-              }}
-            >
-              Sign in again
-            </Button>
-          </div>
+          <SessionRenewal
+            user={user}
+            onRenewed={(next) => {
+              setSessionEnded(false);
+              setUser(next);
+            }}
+            onSignInAgain={() => {
+              setCSRF("");
+              setUser(null);
+              setAccountOpen(false);
+            }}
+          />
         )}
         <header className="mobile-header">
           <button

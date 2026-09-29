@@ -19,7 +19,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { api, APIError, when, withRequestDeadline } from "./api";
+import {
+  api,
+  APIError,
+  isSessionInterruption,
+  isSessionValid,
+  when,
+  withRequestDeadline,
+} from "./api";
 import { HelpLink, type HelpDescriptor } from "./DocLink";
 
 export function useResource<T>(path: string | null, initial: T, refresh = 0) {
@@ -63,6 +70,9 @@ export function useResource<T>(path: string | null, initial: T, refresh = 0) {
           return result;
         }
       } catch (e) {
+        // The re-sign-in dialog explains an ended session; keep this page as it
+        // was and read again when the session resumes.
+        if (isSessionInterruption(e)) return;
         if (current())
           setState((previous) => ({
             path,
@@ -105,6 +115,13 @@ export function useResource<T>(path: string | null, initial: T, refresh = 0) {
       clearInterval(timer);
     };
   }, [path, refresh, load]);
+  useEffect(() => {
+    const resumed = () => {
+      if (isSessionValid()) void load();
+    };
+    window.addEventListener("vectory:session-changed", resumed);
+    return () => window.removeEventListener("vectory:session-changed", resumed);
+  }, [load]);
   // Hide old-resource data during the render before the new path's effect runs.
   const visible =
     state.path === path ? state : { data: initial, loading: !!path, error: "" };

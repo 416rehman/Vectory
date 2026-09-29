@@ -203,7 +203,7 @@ async function fixture({ mfa = true } = {}) {
   });
   await page.goto("http://127.0.0.1:5202/__staged-login#/users");
   await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
+    page.getByRole("heading", { name: /^Sign in to / }),
   ).toBeVisible();
   return {
     context,
@@ -232,7 +232,7 @@ async function check(name, run) {
 }
 async function pending(f) {
   await expect(
-    f.page.getByRole("heading", { name: "Verify your identity", exact: true }),
+    f.page.getByRole("heading", { name: "Two-factor authentication", exact: true }),
   ).toBeVisible();
   await expect(f.page.getByLabel("Password", { exact: true })).toHaveCount(0);
   expect(f.state.authenticated).toBe(false);
@@ -250,7 +250,7 @@ try {
           f.page.getByLabel("Authenticator code", { exact: true }),
         ).toHaveCount(0);
         await expect(
-          f.page.getByRole("button", { name: "Use a recovery code instead" }),
+          f.page.getByRole("button", { name: "Use a recovery code" }),
         ).toHaveCount(0);
         await f.credentials("incorrect-password");
         await expect(f.page.getByRole("alert")).toBeVisible();
@@ -272,12 +272,7 @@ try {
         await f.page
           .getByLabel("Authenticator code", { exact: true })
           .fill("111111");
-        await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
-          .click();
-        await expect(f.page.getByRole("alert")).toContainText(
-          /code is invalid|new code/i,
-        );
+        await expect(f.page.getByText(/code didn't work/i)).toBeVisible();
         await pending(f);
         await expect(
           f.page.getByLabel("Authenticator code", { exact: true }),
@@ -288,9 +283,6 @@ try {
         await f.page
           .getByLabel("Authenticator code", { exact: true })
           .fill("246810");
-        await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
-          .click();
         await expect(
           f.page.getByRole("heading", {
             name: "People & security",
@@ -316,10 +308,10 @@ try {
         const first = f.state.challenge;
         await f.page
           .getByLabel("Authenticator code", { exact: true })
-          .fill("123456");
+          .fill("12345");
         await f.page
           .getByRole("button", {
-            name: "Use a recovery code instead",
+            name: "Use a recovery code",
             exact: true,
           })
           .click();
@@ -334,7 +326,7 @@ try {
           .fill("synthetic-unused");
         await f.page
           .getByRole("button", {
-            name: "Use an authenticator code",
+            name: "Use your authenticator app",
             exact: true,
           })
           .click();
@@ -342,7 +334,7 @@ try {
           f.page.getByLabel("Authenticator code", { exact: true }),
         ).toHaveValue("");
         await f.page
-          .getByRole("button", { name: "Back to sign in", exact: true })
+          .getByRole("button", { name: "Back", exact: true })
           .click();
         await expect(
           f.page.getByLabel("Email address", { exact: true }),
@@ -355,7 +347,7 @@ try {
         expect(f.state.challenge === first).toBe(false);
         await f.page.reload();
         await expect(
-          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+          f.page.getByRole("heading", { name: /^Sign in to / }),
         ).toBeVisible();
         await expect(
           f.page.getByLabel("Password", { exact: true }),
@@ -367,7 +359,7 @@ try {
         await pending(f);
         await f.page
           .getByRole("button", {
-            name: "Use a recovery code instead",
+            name: "Use a recovery code",
             exact: true,
           })
           .click();
@@ -375,11 +367,11 @@ try {
           .getByLabel("Recovery code", { exact: true })
           .fill("synthetic-used-recovery-code");
         await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .getByRole("button", { name: "Verify", exact: true })
           .click();
-        await expect(f.page.getByRole("alert")).toContainText(
-          /recovery code is invalid/i,
-        );
+        await expect(
+          f.page.getByText(/recovery code didn't work/i),
+        ).toBeVisible();
         await expect(
           f.page.getByLabel("Recovery code", { exact: true }),
         ).toHaveValue("");
@@ -390,7 +382,7 @@ try {
           .getByLabel("Recovery code", { exact: true })
           .fill("synthetic-recovery-code");
         await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .getByRole("button", { name: "Verify", exact: true })
           .click();
         await expect(
           f.page.getByRole("heading", {
@@ -424,11 +416,8 @@ try {
         await f.page
           .getByLabel("Authenticator code", { exact: true })
           .fill("246810");
-        await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
-          .click();
         await expect(
-          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+          f.page.getByRole("heading", { name: /^Sign in to / }),
         ).toBeVisible();
         await expect(
           f.page.getByLabel("Password", { exact: true }),
@@ -446,19 +435,16 @@ try {
         await f.page
           .getByLabel("Authenticator code", { exact: true })
           .fill("246810");
-        await f.page
-          .getByRole("button", { name: "Verify and sign in", exact: true })
-          .click();
         await expect.poll(() => f.state.held.length).toBe(1);
         await expect(
           f.page.getByLabel("Authenticator code", { exact: true }),
         ).toBeDisabled();
         await expect(
-          f.page.getByRole("button", { name: "Back to sign in", exact: true }),
+          f.page.getByRole("button", { name: "Back", exact: true }),
         ).toBeDisabled();
         await expect(
           f.page.getByRole("button", {
-            name: "Use a recovery code instead",
+            name: "Use a recovery code",
             exact: true,
           }),
         ).toBeDisabled();
