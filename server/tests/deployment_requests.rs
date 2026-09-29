@@ -1839,7 +1839,9 @@ async fn upgrading_existing_create_registry_preserves_key_and_digest() {
         .execute(&s.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version>=15")
+    // Rewind exactly the migrations reconstructed above; later, unrelated
+    // migrations stay applied and must not run twice.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version BETWEEN 15 AND 27")
         .execute(&s.pool)
         .await
         .unwrap();
