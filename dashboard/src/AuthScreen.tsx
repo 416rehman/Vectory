@@ -1388,36 +1388,37 @@ export default function AuthScreen({
               />
             )}
           </AuthField>
-          <PasswordField
-            label="Password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={setPassword}
-            inputRef={passwordInput}
-            labelAction={
-              <a className="auth-field-link" href="#/reset">
-                Forgot password?
-              </a>
-            }
-          />
-          <Button
-            type="submit"
-            busy={busy}
-            disabled={throttled}
-            className="signin-submit"
-          >
-            {throttled ? (
-              <>
-                Try again in{" "}
-                <span className="signin-countdown">
-                  {formatCountdown(throttle ?? 0)}
-                </span>
-              </>
-            ) : (
-              "Sign in"
-            )}
-          </Button>
+          <div className="signin-password">
+            <PasswordField
+              label="Password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={setPassword}
+              inputRef={passwordInput}
+            />
+            <Button
+              type="submit"
+              busy={busy}
+              disabled={throttled}
+              className="signin-submit"
+            >
+              {throttled ? (
+                <>
+                  Try again in{" "}
+                  <span className="signin-countdown">
+                    {formatCountdown(throttle ?? 0)}
+                  </span>
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+            {/* Shown beside the Password label, reached after Sign in. */}
+            <a className="auth-field-link signin-forgot" href="#/reset">
+              Forgot password?
+            </a>
+          </div>
         </fieldset>
       </form>
     </>,
