@@ -14,12 +14,14 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:deployment-routing-fixture";
+// A worker running beside others binds its own port.
+const port = Number(process.env.VECTORY_DEPLOYMENT_ROUTING_PORT) || 5199;
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5199,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -54,7 +56,7 @@ const browser = await chromium.launch(),
   results = [],
   errors = [],
   unexpected = [];
-const origin = "http://127.0.0.1:5199/__deployment-routing";
+const origin = `http://127.0.0.1:${port}/__deployment-routing`;
 // The first load bundles the app's dependencies, which outlasts one action's
 // timeout while Vite's cache is cold (a fresh checkout or runner).
 const warmup = await browser.newPage();
@@ -417,7 +419,7 @@ try {
     },
   );
   await check(
-    "direct sign-in and schedule links keep identity, copy exact URL, open a new tab and expose truthful clipboard fallback",
+    "direct sign-in and schedule links keep identity; the rollout page's own URL is its exact link and opens the same schedule in a new tab",
     async () => {
       const f = await fixture({ signedIn: false });
       try {
@@ -446,51 +448,25 @@ try {
             exact: true,
           }),
         ).toBeVisible();
-        await dialog(f.page)
-          .getByRole("button", { name: "Copy deployment link", exact: true })
-          .click();
+        // The page is routed: its canonical URL is the link to share, so it
+        // needs no copy-link row (and a URL never requests an action).
+        const link = origin + "#/schedules/" + id(14) + "?page=1";
+        await expect(f.page).toHaveURL(link);
         await expect(
-          dialog(f.page)
-            .getByRole("status")
-            .filter({ hasText: "Deployment link copied." }),
-        ).toBeVisible();
-        const link = await f.page.evaluate(() =>
-          navigator.clipboard.readText(),
-        );
-        expect(link).toBe(origin + "#/schedules/" + id(14) + "?page=1");
-        const popupPromise = f.context.waitForEvent("page");
-        await dialog(f.page)
-          .getByRole("link", { name: "Open in new tab", exact: true })
-          .click();
-        const popup = await popupPromise;
+          dialog(f.page).getByRole("button", { name: "Copy deployment link" }),
+        ).toHaveCount(0);
         await expect(
-          dialog(popup).getByRole("heading", {
+          dialog(f.page).getByRole("link", { name: "Open in new tab" }),
+        ).toHaveCount(0);
+        const tab = await f.context.newPage();
+        await tab.goto(link);
+        await expect(
+          dialog(tab).getByRole("heading", {
             name: "Synthetic scheduled 14",
             exact: true,
           }),
         ).toBeVisible();
-        await popup.close();
-        await f.page.evaluate(() =>
-          Object.defineProperty(navigator, "clipboard", {
-            configurable: true,
-            value: { writeText: () => Promise.reject(Error("Denied")) },
-          }),
-        );
-        await dialog(f.page)
-          .getByRole("button", { name: "Copy deployment link", exact: true })
-          .click();
-        const fallback = dialog(f.page).getByLabel("Deployment link", {
-          exact: true,
-        });
-        await expect(fallback).toHaveValue(link);
-        await expect(fallback).toBeFocused();
-        expect(
-          await fallback.evaluate(
-            (input) =>
-              input.selectionStart === 0 &&
-              input.selectionEnd === input.value.length,
-          ),
-        ).toBe(true);
+        await tab.close();
         await back(f.page).click();
         await expect(f.page).toHaveURL(origin + "#/schedules?page=1");
         expect(
@@ -634,9 +610,16 @@ try {
       const f = await fixture({ role: "admin" });
       try {
         await f.page.goto(origin + "#/deployments/" + id(4) + "?page=1");
-        await dialog(f.page)
-          .getByRole("button", { name: "Pause", exact: true })
-          .click();
+        // Pause, Cancel, Roll back and Remove assignment share one menu.
+        const stop = async (action) => {
+          await dialog(f.page)
+            .getByRole("button", { name: "Stop rollout", exact: true })
+            .click();
+          await f.page
+            .getByRole("menuitem", { name: action, exact: true })
+            .click();
+        };
+        await stop("Pause");
         f.state.holdMutation = "pause";
         await f.page
           .getByRole("dialog", { name: "Pause rollout", exact: true })
@@ -663,9 +646,7 @@ try {
             exact: true,
           }),
         ).toBeVisible();
-        await dialog(f.page)
-          .getByRole("button", { name: "Remove assignment", exact: true })
-          .click();
+        await stop("Remove assignment");
         const removal = f.page.getByRole("dialog", {
           name: "Remove assignment",
           exact: true,

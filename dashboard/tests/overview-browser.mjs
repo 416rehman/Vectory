@@ -372,7 +372,7 @@ async function open(options = {}) {
     overview: overview(),
     summary: null,
     releases: [],
-    // Deployment history by status, for stopped and rolled-back rollouts.
+    // Deployment history by status, for rollouts that stopped by themselves.
     history: {},
     ...options,
   };
@@ -519,6 +519,160 @@ try {
       await expect(
         rollouts.nth(1).locator(".overview-rollout-meta"),
       ).toContainText(/Starts in (2h 5\dm|3h)/);
+      await context.close();
+    },
+  );
+  await check(
+    "Needs you ranks data loss first, reads a device problem and the rollout it stopped as one item, and offers Roll back and a remembered Dismiss",
+    async () => {
+      const stoppedId = uuid(90),
+        otherId = uuid(91),
+        failedRollout = uuid(92);
+      const stopped = (id, number, extra = {}) => ({
+        id,
+        name: null,
+        version_id: uuid(number + 100),
+        policy: null,
+        scheduled_at: null,
+        configuration_id: pipeline,
+        configuration_name: "Orders",
+        version_number: number,
+        status: "failed",
+        failure_reason: "data_plane",
+        failed_at: new Date(Date.now() - 60000).toISOString(),
+        created_at: new Date(Date.now() - 120000).toISOString(),
+        target_count: 3,
+        verified_count: 1,
+        state_counts: { verified_applied: 1, pending: 2 },
+        priority: 100,
+        target_mode: "snapshot",
+        rollout: {
+          kind: "canary",
+          canary_size: 1,
+          batch_size: 1,
+          observation_seconds: 60,
+          failure_threshold: 0,
+        },
+        ...extra,
+      });
+      const base = overview();
+      const { context, page } = await open({
+        overview: {
+          ...base,
+          attention: [
+            {
+              ...base.attention[0],
+              deployment_id: failedRollout,
+              rollback_available: true,
+            },
+            base.attention[1],
+            {
+              cause: "degraded",
+              severity: "danger",
+              count: 1,
+              device_ids: [uuid(5)],
+              device_names: ["edge-nyc-02"],
+              version_id: uuid(104),
+              version_number: 4,
+              configuration_id: pipeline,
+              configuration_name: "Orders",
+              state: "verified_applied",
+              since: null,
+              reason: "4 failed requests/min: connection refused",
+              title: "orders_sink can't deliver events",
+              fix: "Check the destination address and that it is up.",
+              code: "DATA_PLANE_SINK_ERRORS",
+              component_id: "orders_sink",
+              deployment_id: stoppedId.toUpperCase(),
+              rollback_available: true,
+            },
+            base.attention[2],
+          ],
+        },
+        history: {
+          failed: [
+            stopped(stoppedId, 4),
+            stopped(otherId, 2, { failure_reason: "threshold" }),
+          ],
+        },
+      });
+      const items = page.locator(".needs-you .overview-attention-item");
+      await expect(items).toHaveCount(5);
+      // Data loss first, merged with the rollout it stopped.
+      await expect(items.nth(0)).toContainText(
+        "edge-nyc-02 isn't delivering Orders v4",
+      );
+      await expect(items.nth(0)).toContainText(
+        "The rollout stopped; 2 devices never received v4.",
+      );
+      await expect(
+        items.nth(0).getByRole("link", {
+          name: "Roll back edge-nyc-02",
+          exact: true,
+        }),
+      ).toHaveAttribute("href", `#/deployments/${stoppedId.toUpperCase()}`);
+      await expect(
+        items.nth(0).getByRole("link", { name: "Open rollout", exact: true }),
+      ).toBeVisible();
+      // Then the failed apply: its reason is a sentence, not a code box.
+      await expect(items.nth(1)).toContainText("Orders v3 failed on 1 device");
+      await expect(
+        items.nth(1).locator(".overview-attention-reason"),
+      ).toHaveCSS("font-family", /^(?!.*mono)/i);
+      await expect(
+        items.nth(1).getByRole("link", { name: "Roll back", exact: true }),
+      ).toHaveAttribute("href", `#/deployments/${failedRollout}`);
+      // Then the stopped rollout no device group names, then the rest.
+      await expect(items.nth(2)).toContainText(
+        "Orders v2 stopped after failures",
+      );
+      await expect(items.nth(3)).toContainText("1 device offline");
+      await expect(page.locator(".needs-you")).toContainText(
+        "2 rollouts stopped",
+      );
+      // Rolled-back rollouts are resolved and never read.
+      expect(
+        requests.some((request) => request.path.includes("rolled_back")),
+      ).toBe(false);
+      await items
+        .nth(2)
+        .getByRole("button", {
+          name: "Dismiss: Orders v2 stopped after failures",
+          exact: true,
+        })
+        .click();
+      await expect(items).toHaveCount(4);
+      await expect(page.locator(".needs-you")).toContainText(
+        "1 rollout stopped",
+      );
+      // Remembered for this person in this browser.
+      await page.reload();
+      await expect(items).toHaveCount(4);
+      await expect(page.locator(".needs-you")).not.toContainText(
+        "Orders v2 stopped",
+      );
+      // A new failure of the same rollout comes back.
+      state.history.failed[1] = stopped(otherId, 2, {
+        failure_reason: "threshold",
+        failed_at: new Date().toISOString(),
+      });
+      await page.reload();
+      await expect(items).toHaveCount(5);
+      await page.setViewportSize({ width: 390, height: 900 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+        }, theme);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        await page.locator(".needs-you").screenshot({
+          path: resolve(output, `needs-you-390-${theme}.png`),
+          animations: "disabled",
+        });
+      }
       await context.close();
     },
   );

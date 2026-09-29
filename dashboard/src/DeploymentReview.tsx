@@ -5,7 +5,7 @@ import { Button, CopyButton, StatusBadge } from "./ui";
 import { deploymentRoute } from "./deploymentRouting";
 import type { StatusIcon, StatusTone } from "./status";
 import {
-  assignmentName,
+  boundName,
   localInputValue,
   startsIn,
   usesCanary,
@@ -313,6 +313,7 @@ export function ConflictTable({
   requestLabel,
   priority,
   winningPriority,
+  replaceAll,
   busy,
   onUsePriority,
   onReplace,
@@ -321,6 +322,8 @@ export function ConflictTable({
   requestLabel: string;
   priority: number;
   winningPriority: number | null;
+  /** Every assignment, at any tier, that keeps a reviewed device away. */
+  replaceAll?: string[];
   busy: boolean;
   onUsePriority(priority: number): void;
   onReplace(assignmentIds: string[]): void;
@@ -328,9 +331,17 @@ export function ConflictTable({
   if (!rows.length) return null;
   const conflicts = rows.filter((row) => row.kind === "conflict").length;
   const outranked = rows.length - conflicts;
-  const all = [
-    ...new Set(rows.flatMap((row) => row.assignments.map((a) => a.id))),
-  ];
+  // One Replace resolves every tier: a rollback one priority up as well as
+  // the cancelled rollout still bound at yours.
+  const all = replaceAll?.length
+    ? replaceAll
+    : [...new Set(rows.flatMap((row) => row.replace))];
+  const tier = (assignment: { priority: number }) =>
+    assignment.priority > priority
+      ? " · higher"
+      : assignment.priority === priority
+        ? " · same as yours"
+        : "";
   return (
     <section
       className="target-conflicts"
@@ -391,28 +402,38 @@ export function ConflictTable({
               <tr key={row.device_id}>
                 <th scope="row">{row.device_name}</th>
                 <td>
-                  {row.assignments.length ? (
-                    row.assignments.map((assignment) => (
-                      <span
-                        key={assignment.id}
-                        className="target-conflict-winner"
-                      >
-                        <AssignmentLink
-                          id={assignment.id}
-                          label={assignmentName(assignment)}
-                          disabled={busy}
-                        />
-                        <small>
-                          Priority {assignment.priority}
-                          {row.kind === "conflict"
-                            ? " · same as yours"
-                            : " · higher"}
-                        </small>
-                      </span>
-                    ))
+                  {row.winner ? (
+                    <span className="target-conflict-winner">
+                      <AssignmentLink
+                        id={row.winner.id}
+                        label={boundName(row.winner)}
+                        disabled={busy}
+                      />
+                      <small>
+                        Priority {row.winner.priority}
+                        {tier(row.winner)}
+                      </small>
+                    </span>
                   ) : (
                     <span className="control-muted">Another assignment</span>
                   )}
+                  {row.alsoBound.map((assignment) => (
+                    <span
+                      key={assignment.id}
+                      className="target-conflict-winner"
+                    >
+                      <small>
+                        Also bound:{" "}
+                        <AssignmentLink
+                          id={assignment.id}
+                          label={boundName(assignment)}
+                          disabled={busy}
+                        />{" "}
+                        · priority {assignment.priority}
+                        {tier(assignment)}
+                      </small>
+                    </span>
+                  ))}
                 </td>
                 <td>
                   {requestLabel}
@@ -430,18 +451,16 @@ export function ConflictTable({
                         Use priority {winningPriority}
                       </button>
                     )}
-                    {row.assignments.length > 0 && (
+                    {row.replace.length > 0 && (
                       <button
                         type="button"
                         className="target-link-button"
                         disabled={busy}
-                        onClick={() =>
-                          onReplace(row.assignments.map((a) => a.id))
-                        }
+                        onClick={() => onReplace(row.replace)}
                       >
                         Replace{" "}
-                        {row.assignments.length === 1
-                          ? assignmentName(row.assignments[0])
+                        {row.replace.length === 1 && row.winner
+                          ? boundName(row.winner)
                           : "them"}
                       </button>
                     )}

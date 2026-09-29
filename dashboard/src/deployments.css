@@ -141,89 +141,63 @@ a.control-row-title {
   justify-content: flex-end;
   gap: 8px;
 }
-.rollout-link {
-  display: grid;
-  justify-items: end;
-  gap: 6px;
-  max-width: 320px;
-}
-.rollout-link-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px 12px;
-  font-size: 12px;
-}
-.rollout-link-actions a {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  font-weight: 550;
-  text-decoration: none;
-}
-.rollout-link-actions a:hover {
-  color: var(--ink);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.rollout-link-fallback {
-  display: grid;
-  gap: 5px;
-  width: 100%;
-  font-size: 12px;
-}
-.rollout-link-fallback input {
-  width: 100%;
-  min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-}
-.rollout-link-fallback p {
-  margin: 0;
-}
 .button.is-unavailable {
   opacity: 0.55;
   cursor: help;
 }
-.rollout-hint {
-  position: relative;
-  display: inline-flex;
+a.rollout-fix-link {
+  text-decoration: none;
 }
-.rollout-hint::after {
-  content: attr(data-hint);
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 20;
+.rollout-menu-trigger > svg:last-child {
+  margin-left: 2px;
+  color: var(--muted);
+}
+/* Stop rollout: each way to stop or undo it, with what it does. */
+.rollout-menu {
+  z-index: 2200;
   width: max-content;
-  max-width: 260px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--ink);
-  color: var(--bg);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.45;
-  text-align: left;
-  white-space: normal;
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 24px));
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
   box-shadow: var(--shadow);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition:
-    opacity 120ms var(--ease),
-    transform 120ms var(--ease);
 }
-.rollout-hint:hover::after,
-.rollout-hint:focus-within::after {
-  opacity: 1;
-  transform: none;
+.rollout-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 5px;
+  outline: none;
+  cursor: pointer;
+}
+.rollout-menu-item[data-highlighted] {
+  background: var(--surface-soft);
+}
+.rollout-menu-item > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.rollout-menu-item > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.rollout-menu-item strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.rollout-menu-item small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.rollout-menu-item[data-unavailable] strong {
+  color: var(--muted);
 }
 .rollout-card {
   padding: 18px 20px 20px;
@@ -372,16 +346,6 @@ a.control-row-title {
 }
 .rollout-diagnostic > * {
   min-width: 0;
-  overflow-wrap: anywhere;
-}
-.rollout-diagnostic > code {
-  display: block;
-  padding: 6px 8px;
-  border-radius: 5px;
-  background: var(--surface-soft);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .rollout-diagnostic small,
@@ -576,10 +540,7 @@ a.control-row-title {
     gap: 10px;
     flex-wrap: wrap;
   }
-  .rollout-action-row,
-  .rollout-link,
-  .rollout-link-actions {
-    justify-items: start;
+  .rollout-action-row {
     justify-content: flex-start;
   }
   .rollout-card {

@@ -414,6 +414,33 @@ async fn attention(
             since: None,
         });
     }
+    // The rollout a failing group's devices share, and whether it can be rolled
+    // back, so Needs you offers Roll back only where the server would allow it.
+    let shared = |devices: &[&Value]| -> Option<String> {
+        let mut ids = devices.iter().map(|d| d["assignment"]["id"].as_str());
+        let first = ids.next().flatten()?;
+        ids.all(|id| id == Some(first)).then(|| first.to_owned())
+    };
+    let wanted: HashSet<String> = groups
+        .iter()
+        .filter(|group| matches!(group.cause, "failed" | "degraded"))
+        .filter_map(|group| shared(&group.devices))
+        .collect();
+    let available: HashSet<String> = if wanted.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar(
+            "SELECT d.id FROM json_each(?) j JOIN records d ON d.kind='deployment' AND d.id=j.value
+             WHERE json_type(d.data,'$.rolled_back_by') IS NULL AND json_type(d.data,'$.version_id')='text'
+               AND json_extract(d.data,'$.status') IN ('active','paused','completed','cancelled','failed')
+               AND EXISTS(SELECT 1 FROM deployment_targets t WHERE t.deployment_id=d.id AND t.generation>0 AND t.state<>'removed' AND t.previous_version_id IS NOT NULL)",
+        )
+        .bind(json!(wanted).to_string())
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .collect()
+    };
     Ok(groups
         .into_iter()
         .map(|group| {
@@ -421,6 +448,9 @@ async fn attention(
                 .version_id
                 .map(|id| versions[id].clone())
                 .unwrap_or(Value::Null);
+            let deployment = matches!(group.cause, "failed" | "degraded")
+                .then(|| shared(&group.devices))
+                .flatten();
             let mut item = json!({
                 "cause": group.cause,
                 "severity": group.severity,
@@ -434,6 +464,8 @@ async fn attention(
                 "state": group.state,
                 "since": group.since,
                 "reason": if group.cause == "failed" { reason(&group.devices) } else { None },
+                "rollback_available": deployment.as_ref().is_some_and(|id| available.contains(id)),
+                "deployment_id": deployment,
             });
             if group.cause == "degraded" {
                 if let Some(issue) = delivery(&group.devices) {
@@ -615,12 +647,22 @@ async fn enrich(conn: &mut SqliteConnection, items: &mut [Value]) -> Result<()> 
         .into_iter()
         .collect();
     let mut context: HashMap<String, Value> = HashMap::new();
+    // Devices a rollback returned, for "rolled back r15-demo v3 on edge-02".
+    let mut rolled_back_names: HashMap<String, Vec<String>> = HashMap::new();
     if !deployments.is_empty() {
+        // A rollback's own pipeline and version are the prior one: lineage
+        // names both sides so sentences never point the wrong way.
         let rows = sqlx::query(
             "SELECT d.id,json_extract(c.data,'$.name') AS name,json_extract(v.data,'$.number') AS number,
                     json_type(d.data,'$.policy')='object' AS policy,json_extract(d.data,'$.rollout.kind') AS kind,
                     json_extract(d.data,'$.priority') AS priority,
-                    (SELECT count(*) FROM deployment_targets t WHERE t.deployment_id=d.id) AS targets
+                    (SELECT count(*) FROM deployment_targets t WHERE t.deployment_id=d.id) AS targets,
+                    CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN json_extract(d.data,'$.rolled_back_by') END AS rolled_back_by,
+                    (SELECT CASE WHEN json_type(bc.data,'$.name')='text' THEN substr(json_extract(bc.data,'$.name'),1,240) END FROM records b JOIN records bv ON bv.kind='version' AND bv.id=json_extract(b.data,'$.version_id') JOIN records bc ON bc.kind='configuration' AND bc.id=json_extract(bv.data,'$.configuration_id') WHERE b.kind='deployment' AND b.id=json_extract(d.data,'$.rolled_back_by')) AS rolled_back_to_name,
+                    (SELECT CASE WHEN json_type(bv.data,'$.number')='integer' THEN json_extract(bv.data,'$.number') END FROM records b JOIN records bv ON bv.kind='version' AND bv.id=json_extract(b.data,'$.version_id') WHERE b.kind='deployment' AND b.id=json_extract(d.data,'$.rolled_back_by')) AS rolled_back_to_number,
+                    (SELECT count(*) FROM deployment_targets bt WHERE bt.deployment_id=json_extract(d.data,'$.rolled_back_by')) AS rolled_back_devices,
+                    (SELECT CASE WHEN json_type(oc.data,'$.name')='text' THEN substr(json_extract(oc.data,'$.name'),1,240) END FROM records o JOIN records ov ON ov.kind='version' AND ov.id=json_extract(o.data,'$.version_id') JOIN records oc ON oc.kind='configuration' AND oc.id=json_extract(ov.data,'$.configuration_id') WHERE o.kind='deployment' AND o.id=json_extract(d.data,'$.rollback_of')) AS rollback_of_name,
+                    (SELECT CASE WHEN json_type(ov.data,'$.number')='integer' THEN json_extract(ov.data,'$.number') END FROM records o JOIN records ov ON ov.kind='version' AND ov.id=json_extract(o.data,'$.version_id') WHERE o.kind='deployment' AND o.id=json_extract(d.data,'$.rollback_of')) AS rollback_of_number
              FROM records d
              LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id')
              LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')
@@ -630,6 +672,7 @@ async fn enrich(conn: &mut SqliteConnection, items: &mut [Value]) -> Result<()> 
         .fetch_all(&mut *conn)
         .await?;
         for row in rows {
+            let rolled_back_by: Option<String> = row.get("rolled_back_by");
             context.insert(
                 row.get::<String, _>("id"),
                 json!({
@@ -639,8 +682,23 @@ async fn enrich(conn: &mut SqliteConnection, items: &mut [Value]) -> Result<()> 
                     "rollout_kind": row.get::<Option<String>, _>("kind"),
                     "priority": row.get::<Option<i64>, _>("priority"),
                     "target_count": row.get::<i64, _>("targets"),
+                    "rolled_back_to_configuration_name": row.get::<Option<String>, _>("rolled_back_to_name"),
+                    "rolled_back_to_version_number": row.get::<Option<i64>, _>("rolled_back_to_number"),
+                    "rolled_back_device_count": rolled_back_by.as_ref().map(|_| row.get::<i64, _>("rolled_back_devices")),
+                    "rollback_of_configuration_name": row.get::<Option<String>, _>("rollback_of_name"),
+                    "rollback_of_version_number": row.get::<Option<i64>, _>("rollback_of_number"),
                 }),
             );
+            if let Some(rollback) = rolled_back_by {
+                let names: Vec<String> = sqlx::query_scalar(
+                    "SELECT substr(d.name,1,240) FROM deployment_targets t JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? ORDER BY d.name LIMIT ?",
+                )
+                .bind(&rollback)
+                .bind(NAMES_PER_GROUP as i64)
+                .fetch_all(&mut *conn)
+                .await?;
+                rolled_back_names.insert(row.get::<String, _>("id"), names);
+            }
         }
     }
     let mut numbers: HashMap<String, i64> = HashMap::new();
@@ -665,6 +723,14 @@ async fn enrich(conn: &mut SqliteConnection, items: &mut [Value]) -> Result<()> 
             .and_then(|id| context.get(id))
         {
             item["deployment"] = found.clone();
+        }
+        if item["action"] == "deployment.rollback" {
+            if let Some(names) = item["target_id"]
+                .as_str()
+                .and_then(|id| rolled_back_names.get(id))
+            {
+                item["device_names"] = json!(names);
+            }
         }
         if item["action"] == "configuration.publish" {
             if let Some(number) = item["target"].as_str().and_then(|id| numbers.get(id)) {

@@ -98,6 +98,10 @@ const ORDER: &str = "d.created_at DESC,d.id ASC";
 const NAME: &str = "COALESCE(NULLIF(CASE WHEN json_type(d.data,'$.name')='text' THEN substr(json_extract(d.data,'$.name'),1,120) END,''),CASE WHEN json_type(d.data,'$.policy')='object' THEN 'Agent settings' ELSE COALESCE(NULLIF(json_extract(c.data,'$.name'),''),'Pipeline deployment') END)";
 const STATUS_LABEL: &str = "CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN 'Rolled back' WHEN json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.replaced_by')='array' THEN 'Replaced' ELSE CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Failed' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE json_extract(d.data,'$.status') END END";
 const ROLLED_BACK: &str = "json_type(d.data,'$.rolled_back_by')='text'";
+/// The bounded pipeline name of deployment `n`'s version, so lineage says
+/// "Rollback of r15-demo v3" rather than a bare number from another pipeline.
+/// Callers add the `WHERE` that picks `n`.
+const PIPELINE_NAME: &str = "CASE WHEN json_type(nc.data,'$.name')='text' THEN substr(json_extract(nc.data,'$.name'),1,240) END FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') JOIN records nc ON nc.kind='configuration' AND nc.id=json_extract(nv.data,'$.configuration_id')";
 const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st WHERE st.deployment_id=d.id AND st.state='verified_applied')";
 /// Devices of deployment `d` that applied its version but aren't delivering
 /// it: `verified_applied` targets whose device has an open data-plane issue
@@ -229,10 +233,18 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
         'rolled_back_at',CASE WHEN json_type(d.data,'$.rolled_back_at')='text' THEN json_extract(d.data,'$.rolled_back_at') END,\
         'rolled_back_by',CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN json_extract(d.data,'$.rolled_back_by') END,\
         'rolled_back_to_version',(SELECT json_extract(lv.data,'$.number') FROM records lb JOIN records lv ON lv.kind='version' AND lv.id=json_extract(lb.data,'$.version_id') WHERE lb.kind='deployment' AND lb.id=json_extract(d.data,'$.rolled_back_by')),\
+        'rolled_back_to_configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(d.data,'$.rolled_back_by')),\
         'rollback_of',CASE WHEN json_type(d.data,'$.rollback_of')='text' THEN json_extract(d.data,'$.rollback_of') END,\
         'rollback_of_version',(SELECT json_extract(lv.data,'$.number') FROM records lb JOIN records lv ON lv.kind='version' AND lv.id=json_extract(lb.data,'$.version_id') WHERE lb.kind='deployment' AND lb.id=json_extract(d.data,'$.rollback_of')),\
-        'replaced_by',json(COALESCE((SELECT json_group_array(json_object('deployment_id',json_extract(e.value,'$.deployment_id'),'device_count',json_extract(e.value,'$.device_count'),'at',json_extract(e.value,'$.at'),'version_number',(SELECT json_extract(nv.data,'$.number') FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')))) FROM json_each(d.data,'$.replaced_by') e WHERE json_type(d.data,'$.replaced_by')='array'),'[]')),\
-        'replaces',json(COALESCE((SELECT json_group_array(json_object('deployment_id',r.value,'version_number',(SELECT json_extract(rv.data,'$.number') FROM records rd JOIN records rv ON rv.kind='version' AND rv.id=json_extract(rd.data,'$.version_id') WHERE rd.kind='deployment' AND rd.id=r.value))) FROM json_each(d.data,'$.replaces') r WHERE json_type(d.data,'$.replaces')='array'),'[]'))) FROM page d");
+        'rollback_of_configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(d.data,'$.rollback_of')),\
+        'replaced_by',json(COALESCE((SELECT json_group_array(json_object('deployment_id',json_extract(e.value,'$.deployment_id'),'device_count',json_extract(e.value,'$.device_count'),'at',json_extract(e.value,'$.at'),'version_number',(SELECT json_extract(nv.data,'$.number') FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')),'configuration_name',(SELECT ");
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')))) FROM json_each(d.data,'$.replaced_by') e WHERE json_type(d.data,'$.replaced_by')='array'),'[]')),\
+        'replaces',json(COALESCE((SELECT json_group_array(json_object('deployment_id',r.value,'version_number',(SELECT json_extract(rv.data,'$.number') FROM records rd JOIN records rv ON rv.kind='version' AND rv.id=json_extract(rd.data,'$.version_id') WHERE rd.kind='deployment' AND rd.id=r.value),'configuration_name',(SELECT ");
+    // `rollback` tells a rollback's snapshot apart from the assignment it
+    // restored: both run the same pipeline version.
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=r.value),'rollback',json(CASE WHEN EXISTS(SELECT 1 FROM records rr WHERE rr.kind='deployment' AND rr.id=r.value AND json_type(rr.data,'$.rollback_of')='text') THEN 'true' ELSE 'false' END))) FROM json_each(d.data,'$.replaces') r WHERE json_type(d.data,'$.replaces')='array'),'[]'))) FROM page d");
     q.push(JOINS).push(" ORDER BY ").push(order);
 }
 fn page_query(
@@ -492,6 +504,39 @@ fn diagnostic(attempt: &Value, generation: &Value) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.chars().take(500).collect())
 }
+/// Code, component and field of that same leading diagnostic, when the agent
+/// reported them, so a rollout can tell a failure the pipeline must fix
+/// (a port in use, a VRL error) from one a retry might clear.
+fn diagnostic_origin(attempt: &Value, generation: &Value) -> Option<Value> {
+    if !attempt.is_object() || attempt["generation"] != *generation {
+        return None;
+    }
+    let first = attempt["error"]["diagnostics"]
+        .as_array()
+        .and_then(|list| list.first())?;
+    let token = |key: &str, max: usize, extra: &[u8]| {
+        first[key]
+            .as_str()
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= max
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+            })
+            .map(str::to_owned)
+    };
+    let code = first["code"].as_str().filter(|code| {
+        !code.is_empty()
+            && code.len() <= 48
+            && code
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    })?;
+    Some(
+        json!({"code":code,"component_id":token("component_id",100,b"_.-"),"field":token("field",128,b"_.-[]")}),
+    )
+}
 /// The apply step that failed for this exact candidate ("validation",
 /// "reload", …), so the rollout names the same step as the device page.
 fn failure_stage(attempt: &Value, generation: &Value) -> Option<String> {
@@ -626,7 +671,8 @@ pub async fn rollout(
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
         '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
-        '_data_plane',CASE WHEN t.state='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END) \
+        '_data_plane',CASE WHEN t.state='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END,\
+        '_buffer',(SELECT json_extract(c.value,'$.buffer_utilization') FROM json_each(d.data,'$.telemetry.components') c WHERE json_type(c.value,'$.id')='text' AND json_extract(c.value,'$.id')=json_extract(d.data,'$.data_plane.issues[0].component_id') LIMIT 1)) \
         FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001")
         .bind(context["version_id"].as_str())
         .bind(&id)
@@ -642,6 +688,27 @@ pub async fn rollout(
         .map(|row| db::parse(row))
         .collect::<Result<Vec<_>>>()?;
     for target in &mut targets {
+        let generation = target["generation"].clone();
+        let origin = diagnostic_origin(&target["_terminal"], &generation)
+            .or_else(|| diagnostic_origin(&target["_attempt"], &generation));
+        let component = target["_data_plane"]["component_id"]
+            .as_str()
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 100
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+            })
+            .map(str::to_owned);
+        // The current fill of that component's buffer, as the device last
+        // reported it; no trend is claimed.
+        let buffer = target
+            .as_object_mut()
+            .unwrap()
+            .remove("_buffer")
+            .and_then(|fill| fill.as_f64())
+            .filter(|fill| (0.0..=1.0).contains(fill));
         finish_target(target);
         // Lanes and failure groups count a device that isn't delivering as
         // failed, with the issue's title, measured reason and fix.
@@ -650,6 +717,9 @@ pub async fn rollout(
             target["error"] = delivery["title"].clone();
             target["diagnostic"] = delivery["message"].clone();
             target["fix"] = delivery["hint"].clone();
+            target["_origin"] = json!({"code":delivery["code"],"component_id":component,"field":null,"buffer_utilization":buffer});
+        } else if let Some(origin) = origin {
+            target["_origin"] = origin;
         }
     }
     let status = context["status"].as_str().unwrap_or("");
@@ -764,10 +834,14 @@ pub async fn rollout(
             diagnostic.clone().or(message.clone()).unwrap_or_default(),
         );
         let fix = target["fix"].as_str().map(str::to_owned);
+        let origin = &target["_origin"];
         failures
             .entry(key)
             .or_insert_with(|| {
-                let mut group = json!({"state":state,"message":message,"diagnostic":diagnostic});
+                // Where the leading finding points: its code (a port in use,
+                // a VRL error, a delivery problem), component and field.
+                let mut group = json!({"state":state,"message":message,"diagnostic":diagnostic,
+                    "code":origin["code"],"component_id":origin["component_id"],"field":origin["field"],"buffer_utilization":origin["buffer_utilization"]});
                 if fix.is_some() {
                     group["fix"] = json!(fix);
                 }

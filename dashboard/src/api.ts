@@ -535,6 +535,8 @@ export type AssignmentDescription = {
   policy_id: string | null;
   policy_name: string | null;
   created_by_name?: string | null;
+  /** A rollback: the deployment it rolled back. */
+  rollback_of?: string | null;
 };
 export type DeploymentPreviewOutcome = {
   device_id: string;
@@ -567,6 +569,8 @@ export type DeploymentPreview = {
   replacements?: PreviewReplacement[];
   suggested_replaces?: PreviewReplacement[];
   suggested_priority?: number | null;
+  /** Everything, at any tier, that keeps a reviewed device from the request. */
+  replacements_needed?: PreviewReplacement[];
   winning_priority?: number | null;
   paused_device_ids?: string[];
   create_idempotency?: boolean;
@@ -973,15 +977,25 @@ export type DeploymentSummary = Omit<
   rolled_back_at?: string | null;
   rolled_back_by?: string | null;
   rolled_back_to_version?: number | null;
+  /** The pipeline the rollback restored; often not this deployment's own. */
+  rolled_back_to_configuration_name?: string | null;
   rollback_of?: string | null;
   rollback_of_version?: number | null;
+  rollback_of_configuration_name?: string | null;
   replaced_by?: {
     deployment_id: string;
     device_count: number;
     at: string;
     version_number: number | null;
+    configuration_name?: string | null;
   }[];
-  replaces?: { deployment_id: string; version_number: number | null }[];
+  replaces?: {
+    deployment_id: string;
+    version_number: number | null;
+    configuration_name?: string | null;
+    /** The replaced assignment is itself a rollback, running what it restored. */
+    rollback?: boolean;
+  }[];
 };
 export type DeploymentPage = {
   request_history?: boolean;
@@ -1072,6 +1086,13 @@ export type RolloutFailure = {
   diagnostic: string | null;
   /** Degraded groups: what to do about the delivery problem. */
   fix?: string | null;
+  /** The leading finding's code (ADDRESS_IN_USE, VRL_E100, DATA_PLANE_…). */
+  code?: string | null;
+  /** The component and field it names, when it names them. */
+  component_id?: string | null;
+  field?: string | null;
+  /** Degraded groups: that component's buffer fill (0–1), when reported. */
+  buffer_utilization?: number | null;
   count: number;
   /** Every device in the group (bounded); `devices` names the first few. */
   device_ids?: string[];

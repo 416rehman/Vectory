@@ -19,8 +19,10 @@ const credentials = JSON.parse(
     "utf8",
   ),
 );
+// The preview's port, as scripts/preview.sh chooses it; a full URL overrides it.
 const base =
-  process.env.VECTORY_CONTRACT_BASE || "http://127.0.0.1:8080/api/v1";
+  process.env.VECTORY_CONTRACT_BASE ||
+  `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}/api/v1`;
 const login = await fetch(base + "/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -43,6 +45,8 @@ try {
     return r.json();
   }
   validate("Status", await get("/status"));
+  // Needs you, Rollouts and Recent changes, with rollback lineage.
+  validate("Overview", await get("/overview"));
   const prepared = await get("/audit/exports");
   if (!Array.isArray(prepared) || prepared.length > 2)
     throw Error("Unexpected prepared export list");
@@ -76,14 +80,29 @@ try {
     const history = await get(`/deployments/history?page_size=12${suffix}`);
     validate("DeploymentHistoryPage", history);
     for (const deployment of history.items) {
-      validate(
-        "DeploymentSummary",
-        await get(`/deployments/${deployment.id}/summary`),
-      );
+      const summary = await get(`/deployments/${deployment.id}/summary`);
+      validate("DeploymentSummary", summary);
       validate(
         "DeploymentTargetPage",
         await get(`/deployments/${deployment.id}/targets?page_size=12`),
       );
+      validate(
+        "RolloutLanes",
+        await get(`/deployments/${deployment.id}/rollout`),
+      );
+      // What a rollback would do, for every rollout that can still take one.
+      if (
+        summary.rollback_review === true &&
+        summary.version_id &&
+        !summary.rolled_back_by &&
+        ["active", "paused", "completed", "cancelled", "failed"].includes(
+          summary.status,
+        )
+      )
+        validate(
+          "RollbackPreview",
+          await get(`/deployments/${deployment.id}/rollback-preview`),
+        );
     }
   }
   for (const state of ["active", "archived", "all"])

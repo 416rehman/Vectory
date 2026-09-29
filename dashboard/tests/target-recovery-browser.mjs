@@ -616,8 +616,20 @@ const operation = () =>
       .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
       .map(([key, value]) => ({ key, value: JSON.parse(value) })),
   );
+// When an assignment outranks some reviewed devices, the dialog names the
+// devices it changes ("Apply to 1 of 2 devices") and asks first what stays.
 async function send(name = "Apply settings") {
-  await page.getByRole("button", { name, exact: true }).click();
+  const kept = page.locator(".target-left-behind input[type=checkbox]");
+  if (await kept.count()) {
+    await kept.check();
+    if (name !== "Schedule deployment")
+      name = new RegExp(
+        `^${name === "Apply settings" ? "Apply" : "Deploy"} to \\d+ of \\d+ devices$`,
+      );
+  }
+  await page
+    .getByRole("button", { name, exact: typeof name === "string" })
+    .click();
 }
 async function lost({
   kind = "policy",
@@ -1173,8 +1185,11 @@ try {
         await expect(page.getByRole("dialog")).toContainText(
           "Update the server",
         );
+        // Synthetic alpha's own settings outrank these when outcomes exist.
         await expect(
-          page.getByRole("button", { name: "Apply settings", exact: true }),
+          page.getByRole("button", {
+            name: /^Apply (settings|to 1 of 2 devices)$/,
+          }),
         ).toBeDisabled();
         expect(state.creates).toHaveLength(0);
         expect(state.lookups).toHaveLength(0);
