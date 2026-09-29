@@ -68,7 +68,9 @@ func TestVectorLogSummariesGroupRedactAndBound(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		fmt.Fprintln(l, logLine("WARN", "HTTP error.", "web", "error trying to connect: tcp connect error: Connection refused (os error 111)"))
 	}
-	fmt.Fprintln(l, `{"level":"WARN","message":"Internal log [HTTP error.] has been suppressed 5 times.","target":"vector::internal_events::http_client","spans":[{"component_id":"web","component_kind":"sink","component_type":"http"}],"error_type":"request_failed","stage":"processing"}`)
+	// Vector's rate-limit summary carries no error type or stage; it still
+	// counts toward the original group.
+	fmt.Fprintln(l, `{"level":"WARN","message":"Internal log [HTTP error.] has been suppressed 5 times.","target":"vector::internal_events::http_client","spans":[{"component_id":"web","component_kind":"sink","component_type":"http"}]}`)
 	fmt.Fprintln(l, `{"level":"WARN","message":"Internal log [HTTP error.] is being suppressed to avoid flooding.","spans":[{"component_id":"web","component_kind":"sink","component_type":"http"}]}`)
 	fmt.Fprintln(l, logLine("ERROR", "Failed to send.", "web", "token hunter2-resolved-secret rejected by https://10.1.2.3:9200"))
 	fmt.Fprintln(l, logLine("INFO", "Healthcheck passed.", "web", ""))

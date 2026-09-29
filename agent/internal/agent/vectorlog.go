@@ -285,7 +285,10 @@ func (l *vectorLog) summarize(rec vectorRecord) {
 		rec.Error = ""
 	}
 	reason := classifyNetwork(rec.Error)
-	sum := sha256.Sum256([]byte(strings.Join([]string{rec.Level, rec.ComponentID, rec.ComponentType, message, rec.ErrorType, rec.Stage}, "\x00")))
+	// Vector's rate-limit summaries ("has been suppressed N times") carry only
+	// the message and component, so the error type and stage stay out of the
+	// fingerprint: suppressed repeats count toward their original group.
+	sum := sha256.Sum256([]byte(strings.Join([]string{rec.Level, rec.ComponentID, rec.ComponentType, message}, "\x00")))
 	fingerprint := hex.EncodeToString(sum[:8])
 	now := l.now().UTC()
 	entry := l.entries[fingerprint]
@@ -308,6 +311,12 @@ func (l *vectorLog) summarize(rec vectorRecord) {
 	}
 	if reason != "" {
 		entry.summary.Reason = reason
+	}
+	if entry.summary.ErrorType == "" {
+		entry.summary.ErrorType = rec.ErrorType
+	}
+	if entry.summary.Stage == "" {
+		entry.summary.Stage = rec.Stage
 	}
 	entry.summary.Count += add
 	entry.summary.LastSeen = now
