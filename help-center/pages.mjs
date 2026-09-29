@@ -23,7 +23,13 @@ export const groups = [
     ],
   },
   { label: "Deploy", pages: [["deployments", "rocket"]] },
-  { label: "Observe", pages: [["telemetry", "activity"]] },
+  {
+    label: "Observe",
+    pages: [
+      ["telemetry", "activity"],
+      ["notifications", "zap"],
+    ],
+  },
   {
     label: "Operate & secure",
     pages: [

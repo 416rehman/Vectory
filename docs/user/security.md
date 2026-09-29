@@ -78,6 +78,7 @@ Enrollment tokens can be limited by use count, expiry and device-name prefix. A 
 - **Native Vector secrets and environment variables** (full mode only) are resolved by Vector on the host. The server never sees their values.
 - **Events** never pass through Vectory. Operational metrics come only from a Prometheus exporter in your own pipeline, are bounded in size, and never include event contents.
 - **The validator** receives the pipeline you check, runs as its own user with no network route and no secrets, and returns only bounded results.
+- **Notification channels** keep their webhook URLs, signing secrets, header values and SMTP passwords write-only: encrypted at rest, never returned by the API, never written to the audit log or server logs. The server sends notifications only to public addresses, unless an administrator allows private ones for a channel, and never to link-local or cloud metadata addresses. See [Alerts and notifications](notifications.md#private-networks-and-blocked-addresses).
 
 > [!WARNING]
 > **Protect device files and backups**
