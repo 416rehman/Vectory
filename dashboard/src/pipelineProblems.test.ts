@@ -3,6 +3,8 @@ import { APIError } from "./api";
 import { cleanSummary } from "./ProblemsPanel";
 import {
   applyFix,
+  editDistance,
+  fixLooksIntended,
   checkFailureMessage,
   checkLabel,
   checkProblems,
@@ -604,5 +606,45 @@ describe("pipeline problems", () => {
         errors: 0,
       }),
     ).toBe("unavailable");
+  });
+
+  it("offers a did-you-mean fix only for a near miss", () => {
+    const fix = (replacement: string) => ({
+      label: `Change to \`${replacement}\``,
+      replacement,
+      scope: "span" as const,
+    });
+    expect(editDistance("parse_timestmp", "parse_timestamp")).toBe(1);
+    // A near miss reads as a typo.
+    expect(
+      fixLooksIntended(".ts = parse_timestmp!(.t)", {
+        line: 1,
+        column: 7,
+        length: 14,
+        fix: fix("parse_timestamp"),
+      }),
+    ).toBe(true);
+    // Half-typed, the closest suggestion is far off and would only be noise.
+    expect(
+      fixLooksIntended(".ts = parse_tim", {
+        line: 1,
+        column: 7,
+        length: 9,
+        fix: fix("false"),
+      }),
+    ).toBe(false);
+    // Exact fixes are always offered.
+    expect(
+      fixLooksIntended(".a = to_int(.b)", {
+        line: 1,
+        column: 6,
+        length: 9,
+        fix: {
+          label: "Add `!`",
+          replacement: "to_int!(.b)",
+          scope: "span",
+        },
+      }),
+    ).toBe(true);
   });
 });
