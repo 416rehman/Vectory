@@ -218,7 +218,8 @@ try {
     const result = dialog
       .getByRole("listitem")
       .filter({ hasText: "Roll back deliberately" });
-    await expect(result.locator("mark")).toContainText(/rollback/i);
+    // A snippet can highlight the term more than once; the first is enough.
+    await expect(result.locator("mark").first()).toContainText(/rollback/i);
     const snippet = await result.locator("p").last().innerText();
     expect(snippet.length).toBeGreaterThan(35);
     evidence.search = {
