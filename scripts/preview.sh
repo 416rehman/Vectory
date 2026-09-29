@@ -85,7 +85,7 @@ if [[ -n "$vector_bin" && -x "$validator_bin" ]]; then
   VECTORY_VALIDATOR_ISOLATED=true \
   VECTORY_VECTOR_BINARY="$vector_bin" \
   VECTORY_VALIDATOR_ADDR="127.0.0.1:$validator_port" \
-    nohup "$validator_bin" >"$preview/validator.log" 2>&1 &
+    NO_COLOR=1 nohup "$validator_bin" >>"$preview/validator.log" 2>&1 &
   echo $! > "$preview/validator.pid"
   validation_url="http://127.0.0.1:$validator_port"
 else
@@ -108,7 +108,7 @@ export VECTORY_RELEASES_DIR="${VECTORY_RELEASES_DIR:-$preview/release-mirror}"
 export VECTORY_INSTANCE_NAME="${VECTORY_INSTANCE_NAME:-Local preview}"
 [[ -n "$validation_url" ]] && export VECTORY_VALIDATION_URL="$validation_url"
 mkdir -p "$VECTORY_RELEASES_DIR"
-nohup "$server_bin" >"$preview/server.log" 2>&1 &
+NO_COLOR=1 nohup "$server_bin" >>"$preview/server.log" 2>&1 &
 echo $! > "$preview/server.pid"
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$web_port/api/v1/status" >/dev/null 2>&1; then
