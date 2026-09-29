@@ -40,7 +40,8 @@
   color: var(--text);
   text-decoration: none;
 }
-.sidebar-close {
+/* Scoped so the shared .icon-button display rule never reveals it on desktop. */
+.sidebar .sidebar-close {
   display: none;
 }
 .sidebar-search {
@@ -246,10 +247,10 @@
     visibility: visible;
     transition: transform var(--dur-slow) var(--ease);
   }
-  .sidebar-close {
+  .sidebar .sidebar-close {
     display: inline-flex;
   }
-  .sidebar-collapse {
+  .sidebar .sidebar-collapse {
     display: none;
   }
   .sidebar-scrim {

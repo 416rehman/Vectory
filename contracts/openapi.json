@@ -12145,6 +12145,11 @@
             "minimum": 0,
             "description": "Managed devices verified on their desired version (status verified)."
           },
+          "versions_total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Published pipeline versions."
+          },
           "versions": {
             "type": "object",
             "description": "Pipeline name and number for each desired version referenced by a device.",
@@ -12230,6 +12235,7 @@
           "recent_activity",
           "devices_managed",
           "devices_on_desired",
+          "versions_total",
           "versions",
           "rollouts",
           "attention",
