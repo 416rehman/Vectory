@@ -76,7 +76,9 @@ type Heartbeat struct {
 	SecretRevision          uint64                `json:"secret_revision,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 	HostRuntime             *HostRuntime          `json:"host_runtime,omitempty"`
-	VectorLogSummary        []LogSummary          `json:"vector_log_summary,omitempty"`
+	// VectorLogSummary is nil for servers without the feature; an empty list
+	// tells a supporting server there is nothing to report.
+	VectorLogSummary *[]LogSummary `json:"vector_log_summary,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated

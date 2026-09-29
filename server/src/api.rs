@@ -91,6 +91,7 @@ pub fn router(s: State) -> Router {
         )
         .route("/api/v1/audit/{id}", get(crate::audit::detail))
         .route("/api/v1/issues/history", get(crate::issues::history))
+        .route("/api/v1/issues/groups", get(crate::issues::groups))
         .route("/api/v1/issues/{id}", get(crate::issues::detail))
         .route(
             "/api/v1/issues/{id}/acknowledge",

@@ -267,6 +267,109 @@ pub async fn renew(
     tx.commit().await?;
     Ok(Json(issued.response))
 }
+/// Additive heartbeat fields this server accepts; agents send them only when
+/// the signed manifest lists them, so older servers keep working.
+pub const HEARTBEAT_FEATURES: &[&str] = &[
+    "diagnostics",
+    "host_runtime",
+    "vector_log_summary",
+    "telemetry_v2",
+];
+
+fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
+    value.as_str().is_some_and(|s| {
+        !s.is_empty()
+            && s.len() <= max
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+    })
+}
+fn plain(value: &Value, max: usize) -> bool {
+    value.as_str().is_some_and(|s| {
+        !s.is_empty() && s.chars().count() <= max && !s.chars().any(char::is_control)
+    })
+}
+
+/// The host's own runtime contribution: data directory, drain limit, metrics
+/// endpoint and activation method. Every field is allowlisted and bounded.
+fn host_runtime(v: &Value) -> Result<Value> {
+    if v.is_null() {
+        return Ok(Value::Null);
+    }
+    let invalid = || ApiError::invalid("Invalid host_runtime");
+    let fields = v.as_object().ok_or_else(invalid)?;
+    for (key, value) in fields {
+        let ok = match key.as_str() {
+            "data_dir" => plain(value, 4096),
+            "data_dir_source" => matches!(
+                value.as_str(),
+                Some("pipeline" | "host" | "adopted" | "vector_default" | "agent_default")
+            ),
+            "graceful_shutdown_seconds" => value.as_u64().is_some_and(|n| (1..=3600).contains(&n)),
+            "metrics_source" => matches!(value.as_str(), Some("explicit" | "discovered" | "none")),
+            "metrics_address" => token(value, 64, b".:[]"),
+            "activation" => matches!(value.as_str(), Some("reload" | "restart")),
+            _ => false,
+        };
+        if !ok {
+            return Err(invalid());
+        }
+    }
+    Ok(v.clone())
+}
+
+/// Redacted groups of recent Vector warnings and errors (at most 20).
+fn log_summary(v: &Value) -> Result<Value> {
+    let invalid = || ApiError::invalid("Invalid vector_log_summary");
+    let items = v.as_array().filter(|a| a.len() <= 20).ok_or_else(invalid)?;
+    let time = |value: &Value| {
+        value
+            .as_str()
+            .filter(|t| t.len() <= 64)
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .is_some()
+    };
+    for item in items {
+        let fields = item.as_object().ok_or_else(invalid)?;
+        for (key, value) in fields {
+            let ok = match key.as_str() {
+                "fingerprint" => value.as_str().is_some_and(|f| {
+                    f.len() == 16
+                        && f.bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                }),
+                "level" => matches!(value.as_str(), Some("error" | "warn")),
+                "component_id" => token(value, 100, b"_.-"),
+                "component_kind" => matches!(value.as_str(), Some("source" | "transform" | "sink")),
+                "component_type" | "error_type" | "stage" => token(value, 64, b"_"),
+                "reason" => token(value, 32, b"_"),
+                "message" => plain(value, 300),
+                "count" => value
+                    .as_u64()
+                    .is_some_and(|n| (1..=9_007_199_254_740_991).contains(&n)),
+                "first_seen" | "last_seen" => time(value),
+                _ => false,
+            };
+            if !ok {
+                return Err(invalid());
+            }
+        }
+        for required in [
+            "fingerprint",
+            "level",
+            "message",
+            "count",
+            "first_seen",
+            "last_seen",
+        ] {
+            if !fields.contains_key(required) {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(v.clone())
+}
+
 pub async fn heartbeat(
     AppState(s): AppState<State>,
     Extension(peer): Extension<PeerCertificate>,
@@ -347,6 +450,14 @@ pub async fn heartbeat(
     }
     let sample = crate::telemetry::validate(&v["telemetry"])?;
     let attempt = crate::configuration_attempt::parse(&v)?;
+    if let Some(list) = v["error"].get("diagnostics") {
+        crate::configuration_attempt::diagnostics(list)?;
+    }
+    let runtime = host_runtime(&v["host_runtime"])?;
+    let logs = match v.get("vector_log_summary") {
+        Some(list) => Some(log_summary(list)?),
+        None => None,
+    };
     let mut tx = s.pool.begin().await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)
@@ -503,7 +614,10 @@ pub async fn heartbeat(
     };
     device["secret_revision"] = json!(secret_revision);
     device["uses_local_secrets"] = json!(uses_local_secrets);
-    let verified = exact && state == "verified_applied" && verified_claim;
+    // A paused agent keeps running its verified workload (a stopped process
+    // is reported as verification_unknown instead), so pause alone never
+    // degrades verified evidence or the deployment target.
+    let verified = exact && (state == "verified_applied" || state == "paused") && verified_claim;
     if verified {
         device["verified_effective_sha256"] = json!(sha);
         device["verified_secret_revision"] = json!(secret_revision);
@@ -531,7 +645,11 @@ pub async fn heartbeat(
         } else {
             stage
         }
-    } else if !desired.is_null() && (attempt.is_some() || reported != generation) {
+    } else if desired.is_null() {
+        // Without an assignment the device keeps its local workload; a report
+        // still in flight for a removed assignment is not a failure.
+        "unmanaged"
+    } else if attempt.is_some() || reported != generation {
         "desired"
     } else if state == "verified_applied" && !exact {
         "failed"
@@ -567,6 +685,23 @@ pub async fn heartbeat(
         device["telemetry"] = sample.clone();
     } else {
         device["telemetry"] = Value::Null;
+    }
+    let fields = device.as_object_mut().unwrap();
+    if runtime.is_null() {
+        fields.remove("host_runtime");
+    } else {
+        fields.insert("host_runtime".into(), runtime);
+    }
+    match logs {
+        Some(items) => {
+            fields.insert(
+                "vector_log_summary".into(),
+                json!({"reported_at":db::now(),"items":items}),
+            );
+        }
+        None => {
+            fields.remove("vector_log_summary");
+        }
     }
     sqlx::query("UPDATE devices SET data=? WHERE id=?")
         .bind(device.to_string())
@@ -634,55 +769,48 @@ pub async fn heartbeat(
         })
         .map(|a| &a["error"]);
     let issue_error = candidate_error.unwrap_or(&v["error"]);
-    if !issue_error.is_null() || device["apply_state"] == "failed" {
+    if desired.is_null() {
+        crate::issues::resolve_device(&mut tx, &id, "unassigned").await?;
+    } else if !issue_error.is_null() || device["apply_state"] == "failed" {
         let safe = crate::configuration_attempt::safe_error(issue_error);
-        let code = text(&safe, "code");
-        let stage = text(&safe, "stage");
-        let issue_id = db::hash(format!("{id}:{code}:{stage}"));
-        let (mut issue, new) = match db::record(&mut tx, "issue", &issue_id).await {
-            Ok(v) => (v, false),
-            Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => (
-                json!({"id":issue_id,"device_id":id,"code":code,"stage":stage,"message":crate::issues::MESSAGE,"count":0,"first_seen":db::now(),"resolved":false,"revision":1}),
-                true,
+        // A candidate failure belongs to its exact attempt. A workload error
+        // belongs to the desired version once the device reports reaching it
+        // (without a stale attempt), else to the version it is still verified
+        // to run, else to no version.
+        let reached = reported == generation
+            && attempt.as_ref().is_none_or(|a| {
+                crate::configuration_attempt::identity_matches(a, generation, &desired)
+            });
+        let (version, identity) = match (candidate_error, current_attempt.as_ref()) {
+            (Some(_), Some(a)) => (
+                desired_version.as_deref(),
+                json!({"generation":a["generation"],"secret_revision":a["secret_revision"].as_i64().unwrap_or(0)}),
             ),
-            Err(e) => return Err(e),
+            _ if reached => (
+                desired_version.as_deref(),
+                json!({"generation":generation,"secret_revision":secret_revision}),
+            ),
+            _ => (
+                crate::telemetry::running_version(&device),
+                json!({"generation":reported,"secret_revision":secret_revision}),
+            ),
         };
-        if !new {
-            crate::issues::advance_revision(&mut issue)?;
-        }
-        crate::issues::clear_acknowledgement(&mut issue);
-        issue["count"] = json!(
-            issue["count"]
-                .as_u64()
-                .unwrap_or(0)
-                .checked_add(1)
-                .filter(|n| *n <= 9_007_199_254_740_991)
-                .ok_or_else(|| ApiError::conflict("Issue occurrence count is exhausted"))?
-        );
-        issue["last_seen"] = json!(db::now());
-        issue["resolved"] = json!(false);
-        issue["desired_version_id"] =
-            if candidate_error.is_some() || attempt.is_none() && reported == generation {
-                json!(desired_version)
-            } else {
-                Value::Null
-            };
-        if new {
-            db::insert(&mut tx, "issue", &issue).await?
-        } else {
-            db::update(&mut tx, "issue", &issue).await?
-        }
+        crate::issues::record_failure(
+            &mut tx,
+            crate::issues::Failure {
+                device_id: &id,
+                error: &safe,
+                version_id: version,
+                attempt: identity,
+                deployment_id: row.get("assignment_id"),
+            },
+        )
+        .await?;
     } else if device["apply_state"] == "verified_applied" {
-        let own_issues=sqlx::query("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0").bind(&id).fetch_all(&mut *tx).await?;
-        for row in own_issues {
-            let mut issue = db::parse(row.get("data"))?;
-            crate::issues::advance_revision(&mut issue)?;
-            issue["resolved"] = json!(true);
-            db::update(&mut tx, "issue", &issue).await?;
-        }
+        crate::issues::resolve_device(&mut tx, &id, "verified").await?;
     }
     let issued = Utc::now();
-    let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired});
+    let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":HEARTBEAT_FEATURES});
     let signing_id: Option<String> =
         sqlx::query_scalar("SELECT signing_key_id FROM credentials WHERE fingerprint=?")
             .bind(peer.0.as_deref().unwrap_or(""))

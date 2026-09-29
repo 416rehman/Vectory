@@ -250,6 +250,12 @@ fn fresh_sample<'a>(device: &'a Value, policy: &Value, now: DateTime<Utc>) -> Op
 pub struct RangeQuery {
     range: Option<String>,
 }
+/// The device history endpoint predates query parameters and keeps ignoring
+/// unknown ones; the record is always selected by the path alone.
+#[derive(Default, Deserialize)]
+pub struct DeviceRangeQuery {
+    range: Option<String>,
+}
 /// (minutes covered, step minutes). Steps keep every response at most 360 points.
 fn range(value: &str) -> Result<(i64, i64)> {
     let (minutes, step) = match value {
@@ -325,7 +331,7 @@ pub async fn device_history(
     h: HeaderMap,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
-    parsed: std::result::Result<Query<RangeQuery>, QueryRejection>,
+    parsed: std::result::Result<Query<DeviceRangeQuery>, QueryRejection>,
 ) -> Result<Json<Value>> {
     auth::authorize(&s, &h, &[], false).await?;
     let input = crate::deployment_history::query(raw.as_deref(), parsed)?;

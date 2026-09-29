@@ -297,6 +297,9 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 		d.Message = capitalize(d.Message)
 	}
 	d.Hint = truncateText(r.text(d.Hint), maxDiagnosticHint)
+	if d.Hint == "" {
+		d.Hint = codeHints[d.Code]
+	}
 	d.Field = truncateText(d.Field, 128)
 	if d.Message == "" {
 		d.Message = "Vector reported an error."
@@ -316,6 +319,30 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 			return d
 		}
 	}
+}
+
+// codeHints are fixed, secret-free fixes for findings Vector reports without
+// a suggestion of its own. Each is at most maxDiagnosticHint characters.
+var codeHints = map[string]string{
+	"DATA_DIR_MISSING":       "Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device.",
+	"DATA_DIR_NOT_WRITABLE":  "Give the Vector service account write access, or remove data_dir from the pipeline to use the device's own data directory.",
+	"DATA_DIR_CONFLICT":      "Remove data_dir from the pipeline to use the device's own data directory.",
+	"HEALTHCHECK_FAILED":     "Vector still starts and retries delivery. Check the destination address, credentials and network access from the device.",
+	"HEALTHCHECK_REQUIRED":   "Fix the failing sink, or remove healthchecks.require_healthy so Vector starts while a destination is down.",
+	"ADDRESS_IN_USE":         "Stop the other process, or change this component's address.",
+	"INVALID_ADDRESS":        "Use host:port, for example 127.0.0.1:9598.",
+	"ENV_VAR_MISSING":        "Set it in the Vector service's environment on the device, or remove the reference from the pipeline.",
+	"INPUT_NOT_FOUND":        "Change inputs to the ID of an existing source or transform.",
+	"EVENT_TYPE_MISMATCH":    "Connect a component that emits the accepted event type, or convert events first (for example with log_to_metric).",
+	"TLS_FILE_UNREADABLE":    "Check that the certificate and key files exist on the device and that the Vector service account can read them.",
+	"FILE_NOT_FOUND":         "Check that the path exists on the device.",
+	"PERMISSION_DENIED":      "Give the Vector service account access to the path, or change the path.",
+	"UNKNOWN_FIELD":          "Remove the field or correct its name; check the component's reference for Vector " + VectorVersion + ".",
+	"UNKNOWN_COMPONENT_TYPE": "Use a component type that Vector " + VectorVersion + " supports.",
+	"MISSING_FIELD":          "Add the required field to this component.",
+	"VRL_E100":               "Handle the error case, for example with a fallback: to_int(.status) ?? 0.",
+	"OUTPUT_UNUSED":          "Connect it to a sink or transform, or remove it if unneeded.",
+	"TEST_FAILED":            "Fix the transform, or update the test's expected values.",
 }
 
 // diagnosticSet dedupes, orders (errors first) and bounds diagnostics.

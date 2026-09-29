@@ -68,7 +68,7 @@ func TestValidateOutputBecomesStructuredDiagnostics(t *testing.T) {
 		absent          []string
 	}{
 		{"datadir_missing.validate.txt", `{"sources":{"app":{"type":"demo_logs","format":"syslog"}},"sinks":{"out":{"type":"blackhole","inputs":["app"]}}}`,
-			[]want{{code: "DATA_DIR_MISSING", field: "data_dir", message: []string{`"/var/lib/vector/" does not exist on this device`}}}, nil},
+			[]want{{code: "DATA_DIR_MISSING", field: "data_dir", message: []string{`"/var/lib/vector/" does not exist on this device`}, hint: []string{"Remove data_dir from the pipeline"}}}, nil},
 		{"datadir_readonly.validate.txt", `{"data_dir":"/srv/vector/readonly","sources":{}}`,
 			[]want{{code: "DATA_DIR_NOT_WRITABLE", field: "data_dir", message: []string{`"/srv/vector/readonly"`}}}, nil},
 		{"datadir_readonly.validate.txt", `{"sources":{}}`,
@@ -78,7 +78,7 @@ func TestValidateOutputBecomesStructuredDiagnostics(t *testing.T) {
 				message: []string{"Unhandled fallible assignment", "this expression is fallible"}, hint: []string{"Try: .status_code, err = to_int(.status)"}}}, nil},
 		{"route_fallible.validate.txt", `{"transforms":{"by_severity":{"type":"route","inputs":["app"],"route":{"errors":".status >= 500"}}}}`,
 			[]want{
-				{code: "VRL_E100", kind: "transform", id: "by_severity", route: "errors", field: "route.errors", line: 1, column: 1, message: []string{"Unhandled error", "expression can result in runtime error"}},
+				{code: "VRL_E100", kind: "transform", id: "by_severity", route: "errors", field: "route.errors", line: 1, column: 1, message: []string{"Unhandled error", "expression can result in runtime error"}, hint: []string{"Handle the error case", "?? 0"}},
 				{code: "OUTPUT_UNUSED", severity: "warning", id: "by_severity", route: "_unmatched", message: []string{"Nothing reads the _unmatched output of by_severity."}},
 			}, nil},
 		{"filter_bad.validate.txt", `{"transforms":{"keep":{"type":"filter","inputs":["app"],"condition":"parse_json(.message).level == \"error\""}}}`,
@@ -100,7 +100,7 @@ func TestValidateOutputBecomesStructuredDiagnostics(t *testing.T) {
 		{"env_missing.validate.txt", `{"sinks":{"web":{"type":"http","uri":"http://${NO_SUCH_VECTORY_VAR}/ingest"}}}`,
 			[]want{{code: "ENV_VAR_MISSING", message: []string{`"NO_SUCH_VECTORY_VAR"`}}}, nil},
 		{"es_health.validate.txt", `{"sinks":{"es":{"type":"elasticsearch","endpoints":["http://127.0.0.1:1"]}}}`,
-			[]want{{code: "HEALTHCHECK_FAILED", severity: "warning", kind: "sink", id: "es", reason: "connection_refused", message: []string{"Health check failed: the destination refused the connection."}}}, nil},
+			[]want{{code: "HEALTHCHECK_FAILED", severity: "warning", kind: "sink", id: "es", reason: "connection_refused", message: []string{"Health check failed: the destination refused the connection."}, hint: []string{"Vector still starts"}}}, nil},
 		{"loki_dns.validate.txt", `{"sinks":{"lk":{"type":"loki","endpoint":"http://no-such-host.invalid:3100"}}}`,
 			[]want{{code: "HEALTHCHECK_FAILED", severity: "warning", id: "lk", reason: "dns"}}, nil},
 	}
