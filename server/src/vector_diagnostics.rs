@@ -574,7 +574,9 @@ fn vrl_block(lines: &[&str]) -> Option<Diagnostic> {
         {
             diagnostic.fix = Some(Fix {
                 label: "Treat errors as no match".into(),
-                replacement: format!("({span}) ?? false"),
+                // Parenthesize the whole rewrite: `??` binds looser than `&&`/`||`,
+                // so `(a) ?? false && b` would parse as `(a) ?? (false && b)`.
+                replacement: format!("(({span}) ?? false)"),
                 scope: "span",
             });
         }
@@ -1062,7 +1064,7 @@ mod tests {
         assert_eq!(condition.field.as_deref(), Some("route.server_errors"));
         assert_eq!(
             condition.fix.as_ref().unwrap().replacement,
-            "(.status >= 500) ?? false"
+            "((.status >= 500) ?? false)"
         );
     }
 

@@ -246,7 +246,7 @@ async fn real_vector_worker_reports_precise_diagnostics() {
         conditions
             .iter()
             .any(|d| d["route_output"] == "server_errors"
-                && d["fix"]["replacement"] == "(.status >= 500) ?? false")
+                && d["fix"]["replacement"] == "((.status >= 500) ?? false)")
     );
     assert!(conditions.iter().all(|d| d["code"] == "E100"));
     let mut fixed = nginx.clone();
@@ -331,6 +331,107 @@ async fn real_vector_worker_reports_precise_diagnostics() {
     assert!(!deferred.to_string().contains("SHOULD_NEVER"));
     let tests = post(&client, &url, "tests", json!({"config":local})).await;
     assert_eq!(tests["tests_run"], false);
+    child.kill().await.unwrap();
+}
+
+/// Apply every "Treat errors as no match" fix the way the editor does (one
+/// span at a time, checking again after each), then run the result natively.
+#[tokio::test]
+async fn condition_quick_fixes_keep_the_original_meaning() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; condition fix semantics unverified");
+        return;
+    };
+    let (mut child, url, _client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let mut config = json!({
+        "sources":{"in":{"type":"demo_logs","format":"json"}},
+        "transforms":{"by_status":{"type":"route","inputs":["in"],"route":{
+            "server_errors":".status >= 500",
+            "client_errors":".status >= 400 && .status < 500"
+        }}},
+        "sinks":{
+            "server":{"type":"blackhole","inputs":["by_status.server_errors"]},
+            "client":{"type":"blackhole","inputs":["by_status.client_errors"]},
+            "rest":{"type":"blackhole","inputs":["by_status._unmatched"]}
+        }
+    });
+    let mut applied = 0;
+    loop {
+        let result = vectory_server::validation::validate_isolated(&state, &config)
+            .await
+            .unwrap();
+        let Some(fix) = result["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["fix"]["label"] == "Treat errors as no match")
+            .cloned()
+        else {
+            assert_eq!(result["valid"], true, "{result}");
+            break;
+        };
+        assert_eq!(fix["fix"]["scope"], "span");
+        let output = fix["route_output"].as_str().unwrap();
+        let condition = config["transforms"]["by_status"]["route"][output]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let start = fix["column"].as_u64().unwrap() as usize - 1;
+        let end = start + fix["length"].as_u64().unwrap() as usize;
+        let rewritten = format!(
+            "{}{}{}",
+            &condition[..start],
+            fix["fix"]["replacement"].as_str().unwrap(),
+            &condition[end..]
+        );
+        config["transforms"]["by_status"]["route"][output] = json!(rewritten);
+        applied += 1;
+        assert!(applied <= 3, "fixes did not converge: {config}");
+    }
+    assert_eq!(applied, 3, "{config}");
+    let route = &config["transforms"]["by_status"]["route"];
+    assert_eq!(
+        route["client_errors"],
+        "((.status >= 400) ?? false) && ((.status < 500) ?? false)"
+    );
+    let client = reqwest::Client::new();
+    let routed = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({
+            "transform":{"type":"route","route":route},
+            "samples":[{"status":200},{"status":404},{"status":503},{"status":"not a number"},{}]
+        }),
+    )
+    .await;
+    let ports: Vec<Vec<&str>> = routed["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{routed}"))
+        .iter()
+        .map(|result| {
+            let mut ports: Vec<&str> = result["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|output| output["port"].as_str().unwrap())
+                .collect();
+            ports.sort();
+            ports
+        })
+        .collect();
+    assert_eq!(
+        ports,
+        vec![
+            vec!["_unmatched"],
+            vec!["client_errors"],
+            vec!["server_errors"],
+            vec!["_unmatched"],
+            vec!["_unmatched"],
+        ],
+        "{routed}"
+    );
     child.kill().await.unwrap();
 }
 
