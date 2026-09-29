@@ -361,24 +361,31 @@ function localSchemaIssues(
   return issues;
 }
 
-export function diagnoseConfigurationSource(
-  text: string,
-  format: ConfigurationFormat | string,
-): ConfigurationSourceDiagnosis {
-  let config: Config;
-  try {
-    config = parseSource(text, format);
-  } catch (error) {
-    return {
-      diagnostics:
-        error instanceof ConfigurationSourceError
-          ? error.diagnostics
-          : [syntaxDiagnostic(text, error)],
-      locallyValid: false,
-      runtimeValidationRequired: true,
-    };
+// Schema findings by component path and content: while one step is edited the
+// others are not re-walked. Bounded and content-keyed, so in-place changes by
+// a caller still produce fresh findings.
+const componentIssueCache = new Map<string, string[]>();
+function cachedIssues(
+  value: object,
+  path: string,
+  compute: () => string[],
+): string[] {
+  const key = `${path}\n${JSON.stringify(value)}`;
+  let issues = componentIssueCache.get(key);
+  if (!issues) {
+    if (componentIssueCache.size > 4000) componentIssueCache.clear();
+    componentIssueCache.set(key, (issues = compute()));
   }
+  return issues;
+}
+
+/** Local findings for a parsed configuration; `text` only positions them. */
+function diagnoseParsed(
+  config: Config,
+  text: string | null,
+): ConfigurationDiagnostic[] {
   const diagnostics: ConfigurationDiagnostic[] = [];
+  const seen = new Set<string>();
   const add = (
     message: string,
     severity: "error" | "warning",
@@ -386,18 +393,16 @@ export function diagnoseConfigurationSource(
     componentId?: string,
     enrichmentTableId?: string,
   ) => {
-    if (
-      !diagnostics.some(
-        (item) => item.message === message && item.severity === severity,
-      )
-    )
-      diagnostics.push({
-        ...location(text, field),
-        severity,
-        message,
-        ...(componentId ? { componentId } : {}),
-        ...(enrichmentTableId ? { enrichmentTableId } : {}),
-      });
+    const key = `${severity}\n${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    diagnostics.push({
+      ...(text === null ? { from: 0, to: 0 } : location(text, field)),
+      severity,
+      message,
+      ...(componentId ? { componentId } : {}),
+      ...(enrichmentTableId ? { enrichmentTableId } : {}),
+    });
   };
   try {
     for (const issue of pipelineIssues(config))
@@ -414,13 +419,21 @@ export function diagnoseConfigurationSource(
         );
         // Attribute table-local errors to both graph roles that edit this
         // same table. Map-level errors stay global below.
-        for (const [tableId, table] of Object.entries(value))
-          for (const message of localSchemaIssues(
-            table,
-            mapValueSchema(tables, tableId),
-            `${key}.${tableId}`,
-          ))
+        for (const [tableId, table] of Object.entries(value)) {
+          const path = `${key}.${tableId}`;
+          const issues =
+            table && typeof table === "object"
+              ? cachedIssues(table, path, () =>
+                  localSchemaIssues(
+                    table,
+                    mapValueSchema(tables, tableId),
+                    path,
+                  ),
+                )
+              : localSchemaIssues(table, mapValueSchema(tables, tableId), path);
+          for (const message of issues)
             add(message, "error", tableId, undefined, tableId);
+        }
       }
       for (const message of localSchemaIssues(
         value,
@@ -443,12 +456,8 @@ export function diagnoseConfigurationSource(
         );
         const schema = definition && componentSchema(definition);
         if (schema)
-          for (const message of localSchemaIssues(
-            component,
-            schema,
-            `${kind}.${id}`,
-            0,
-            false,
+          for (const message of cachedIssues(component, `${kind}.${id}`, () =>
+            localSchemaIssues(component, schema, `${kind}.${id}`, 0, false),
           ))
             add(message, "error", id, id);
         else if (typeof component.type === "string")
@@ -468,6 +477,7 @@ export function diagnoseConfigurationSource(
   }
   let deferred = !!config.provider || !!config.secret;
   function visit(value: unknown, key?: string) {
+    if (deferred) return;
     if (
       nativeReference(value) ||
       (key === "inputs" &&
@@ -483,12 +493,33 @@ export function diagnoseConfigurationSource(
   visit(config);
   if (deferred)
     diagnostics.push({
-      ...range(text),
+      ...(text === null ? { from: 0, to: 0 } : range(text)),
       severity: "warning",
       code: "deferred",
       message:
         "Each device resolves secrets, environment variables, providers and input patterns before applying.",
     });
+  return diagnostics;
+}
+
+export function diagnoseConfigurationSource(
+  text: string,
+  format: ConfigurationFormat | string,
+): ConfigurationSourceDiagnosis {
+  let config: Config;
+  try {
+    config = parseSource(text, format);
+  } catch (error) {
+    return {
+      diagnostics:
+        error instanceof ConfigurationSourceError
+          ? error.diagnostics
+          : [syntaxDiagnostic(text, error)],
+      locallyValid: false,
+      runtimeValidationRequired: true,
+    };
+  }
+  const diagnostics = diagnoseParsed(config, text);
   return {
     config,
     diagnostics,
@@ -497,30 +528,45 @@ export function diagnoseConfigurationSource(
   };
 }
 
-/** Use the same local constraints for graph nodes, Check and Code imports. */
+/**
+ * The same local checks for the editor's draft object, without a text round
+ * trip: unchanged components keep their identity and their cached findings.
+ */
 export function diagnoseConfiguration(
   config: Config,
 ): ConfigurationSourceDiagnosis {
+  const failed = (message: string): ConfigurationSourceDiagnosis => ({
+    diagnostics: [{ from: 0, to: 0, severity: "error", message }],
+    locallyValid: false,
+    runtimeValidationRequired: true,
+  });
   try {
-    return diagnoseConfigurationSource(
-      stringifyConfiguration(config, "json"),
-      "json",
-    );
-  } catch (error) {
+    const text = stringifyConfiguration(config, "json");
+    if (
+      text.length * 3 > MAX_CONFIGURATION_BYTES &&
+      new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES
+    )
+      return failed("The configuration exceeds the 1 MiB file limit.");
+    if (!record(config)) return failed("The configuration must be an object.");
+    for (const section of sections) {
+      if (!own(config, section)) continue;
+      if (!record(config[section]))
+        return failed(`${section}: the component section must be an object.`);
+      for (const [id, component] of Object.entries(config[section]))
+        if (!record(component))
+          return failed(`${section}.${id}: each component must be an object.`);
+    }
+    const diagnostics = diagnoseParsed(config, null);
     return {
-      diagnostics: [
-        {
-          from: 0,
-          to: 0,
-          severity: "error",
-          message:
-            (error as Error).message ||
-            "The pipeline could not be checked locally.",
-        },
-      ],
-      locallyValid: false,
+      config,
+      diagnostics,
+      locallyValid: !diagnostics.some((item) => item.severity === "error"),
       runtimeValidationRequired: true,
     };
+  } catch (error) {
+    return failed(
+      (error as Error).message || "The pipeline could not be checked locally.",
+    );
   }
 }
 
