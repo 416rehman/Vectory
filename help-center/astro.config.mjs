@@ -1,7 +1,11 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import { groups } from "./pages.mjs";
+import { pageTitles } from "./scripts/prepare.mjs";
 
-const topic = (label, slug, icon) => ({
+// Sidebar labels are the pages' own titles, so the two can never disagree.
+const titles = await pageTitles();
+const link = (label, slug, icon) => ({
   label,
   slug,
   attrs: { class: `help-nav-link help-nav-${icon}` },
@@ -26,38 +30,11 @@ export default defineConfig({
       },
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
       sidebar: [
-        topic("Help center", "index", "book-open"),
-        {
-          label: "Start here",
-          items: [
-            topic("Your first pipeline", "getting-started", "route"),
-            topic("Connect a device", "installation", "server"),
-          ],
-        },
-        {
-          label: "Use Vectory",
-          items: [
-            topic("Build a pipeline", "pipelines", "workflow"),
-            topic("Secrets, enrichment & tests", "resources", "blocks"),
-            topic("Deploy and roll back", "deployments", "rocket"),
-            topic("Monitor devices", "telemetry", "activity"),
-          ],
-        },
-        {
-          label: "Operate & troubleshoot",
-          items: [
-            topic("Troubleshooting", "troubleshooting", "wrench"),
-            topic("Administer Vectory", "administer", "shield-check"),
-            topic("Compatibility", "compatibility", "monitor-check"),
-          ],
-        },
-        {
-          label: "Reference",
-          items: [
-            topic("Terms & concepts", "glossary", "book"),
-            topic("API reference", "api", "braces"),
-          ],
-        },
+        link("Help center", "index", "book-open"),
+        ...groups.map((group) => ({
+          label: group.label,
+          items: group.pages.map(([slug, icon]) => link(titles[slug], slug, icon)),
+        })),
       ],
       expressiveCode: {
         themes: ["github-light", "github-dark"],

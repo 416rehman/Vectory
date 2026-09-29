@@ -1,0 +1,26 @@
+---
+// The rollout states a device moves through. Labels match the dashboard; each
+// outcome also carries a text label and an icon, never color alone.
+const steps = ["Pending", "Downloaded", "Validated", "Applying", "Starting Vector"];
+const outcomes = [
+  { label: "Applied", tone: "ok", icon: "✓", note: "running the new version" },
+  { label: "Apply failed", tone: "error", icon: "✕", note: "previous configuration keeps running" },
+  { label: "Rolled back", tone: "error", icon: "↺", note: "last working configuration restored" },
+  { label: "Check required", tone: "warning", icon: "!", note: "couldn’t confirm what is running" },
+];
+---
+<figure class="apply-states not-content">
+  <ol class="apply-steps" aria-label="States while a version rolls out">
+    {steps.map((step) => <li>{step}</li>)}
+  </ol>
+  <ul class="apply-outcomes" aria-label="How a rollout ends on a device">
+    {outcomes.map(({ label, tone, icon, note }) => (
+      <li class={`apply-${tone}`}>
+        <span class="apply-icon" aria-hidden="true">{icon}</span>
+        <strong>{label}</strong>
+        <span class="apply-note">{note}</span>
+      </li>
+    ))}
+  </ul>
+  <figcaption>A device moves left to right, then ends in exactly one outcome.</figcaption>
+</figure>
