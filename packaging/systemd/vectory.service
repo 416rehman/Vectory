@@ -13,7 +13,8 @@ RestartSec=5s
 # 78: not installed or not enrolled yet. Run `sudo vectory setup` first.
 RestartPreventExitStatus=78
 KillMode=control-group
-TimeoutStopSec=20s
+# Longer than Vector's longest graceful drain (--graceful-shutdown-seconds, at most 300).
+TimeoutStopSec=330s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
