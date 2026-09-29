@@ -5,6 +5,7 @@ Engineering history and test evidence, kept for review and audit. These document
 | Document | What it records |
 | --- | --- |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | Executed evidence and remaining release gates. |
+| [CI.md](CI.md) | What each CI job proves and does not, and the checks CI leaves out. |
 | [HANDOFF.md](HANDOFF.md) | Implementation handoff notes. |
 | [CAPACITY.md](CAPACITY.md) | Protocol load measurements and their limits. |
 | [DEPENDENCY-AUDIT.md](DEPENDENCY-AUDIT.md) | Dependency vulnerability scans. |
