@@ -381,7 +381,8 @@ try {
             "?page=1&action=cancel",
         );
         await expect(
-          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+          // The heading names the instance: "Sign in to <instance>".
+          f.page.getByRole("heading", { name: /^Sign in to / }),
         ).toBeVisible();
         await f.page
           .getByLabel("Email address", { exact: true })

@@ -327,7 +327,9 @@ try {
           [
             "curl -fsSLk https://vectory.example.test:8443/agent/v1/install.sh -o vectory-install.sh",
             `echo '${installerSha}  vectory-install.sh' | sha256sum -c - &&`,
-            "  sudo sh vectory-install.sh --mode restricted --create-user",
+            "  sudo sh vectory-install.sh \\",
+            "    --mode restricted \\",
+            "    --create-user",
           ].join("\n"),
         );
         await expect(f.page.locator("body")).not.toContainText(secret);
@@ -336,7 +338,10 @@ try {
         expect(await commandText(f.page)).not.toContain(secret);
         const receipt = f.page.getByRole("definition");
         await expect(receipt.nth(0)).toContainText("c0f4e1b7…9d19ab");
-        await expect(receipt.nth(1)).toContainText("1F:3C:...:9A:B0");
+        // The whole pin, grouped for comparing by eye, never a 4-byte excerpt.
+        await expect(receipt.nth(1)).toContainText("1F:3C:00:00:00:00:00:00");
+        await expect(receipt.nth(1)).toContainText("00:00:00:00:00:00:9A:B0");
+        await expect(receipt.nth(1)).not.toContainText("...");
         await expect(receipt.nth(1)).toContainText("Synthetic agent CA");
         await expect(receipt.nth(2)).toContainText("Works once");
         // Choices change the command, never the token.
@@ -347,7 +352,7 @@ try {
           .getByLabel("Run the agent as a systemd service", { exact: true })
           .uncheck();
         expect(await commandText(f.page)).toContain(
-          "sudo sh vectory-install.sh --mode full --name edge-42 --service none",
+          "sudo sh vectory-install.sh \\\n    --mode full \\\n    --name edge-42 \\\n    --service none",
         );
         expect(f.state.posts).toBe(1);
         await f.page
@@ -358,7 +363,14 @@ try {
           .filter({ hasText: "I already have the agent" })
           .click();
         await expect(f.page.locator(".enroll-command pre").nth(1)).toHaveText(
-          `sudo vectory setup --server https://vectory.example.test:8443 --ca-sha256 ${pin} --mode full --name edge-42 --service none`,
+          [
+            "sudo vectory setup \\",
+            "  --server https://vectory.example.test:8443 \\",
+            `  --ca-sha256 ${pin} \\`,
+            "  --mode full \\",
+            "  --name edge-42 \\",
+            "  --service none",
+          ].join("\n"),
         );
         await expect(f.page.locator(".enroll-builds")).toContainText(
           "Operator mirror",
@@ -503,7 +515,7 @@ try {
         ).toBeChecked();
         await f.createCommand();
         expect(await commandText(f.page)).toContain(
-          "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh --mode restricted --create-user",
+          "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh \\\n    --mode restricted \\\n    --create-user",
         );
         await f.page
           .getByRole("radio", { name: "Windows", exact: true })
@@ -625,10 +637,19 @@ try {
       });
       try {
         await f.chooseMode();
-        await f.create.click();
-        await expect(f.page.locator(".enroll-page")).toContainText(
-          "Agent downloads for devices are turned off on this server.",
+        // Nothing to download: say so before a token exists, and issue the
+        // setup command rather than an installer that would fail on the host.
+        await expect(f.page.locator(".enroll-no-build")).toContainText(
+          "Agent downloads are off on this server.",
         );
+        await expect(f.create).toHaveCount(0);
+        await f.page
+          .getByRole("button", { name: "Create setup command", exact: true })
+          .click();
+        await expect(
+          f.page.getByLabel("Setup command", { exact: true }).first(),
+        ).toContainText("sudo vectory setup \\");
+        expect(await commandText(f.page)).not.toContain("vectory-install.sh");
         await f.page
           .locator("summary")
           .filter({ hasText: "I already have the agent" })
@@ -643,8 +664,31 @@ try {
           .getByRole("radio", { name: "Windows", exact: true })
           .check();
         await expect(f.page.locator(".enroll-page")).toContainText(
-          "This server has no Windows agent build.",
+          "Copy vectory.exe to the host",
         );
+        expect(await commandText(f.page)).toContain(".\\vectory.exe setup");
+      } finally {
+        await f.context.close();
+      }
+      // A platform without a build is named up front, before any token.
+      f = await fixture({
+        install: agentInstall({
+          releases: [release("linux", "amd64", "a".repeat(64))],
+        }),
+      });
+      try {
+        await f.page.getByRole("radio", { name: "macOS", exact: true }).check();
+        await f.chooseMode();
+        await expect(f.page.locator(".enroll-no-build")).toContainText(
+          "This server has no macOS agent build yet.",
+        );
+        await expect(
+          f.page.getByRole("button", {
+            name: "Create setup command",
+            exact: true,
+          }),
+        ).toBeEnabled();
+        expect(f.state.posts).toBe(0);
       } finally {
         await f.context.close();
       }

@@ -100,6 +100,30 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.enroll-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.enroll-fingerprint code {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  overflow-wrap: normal;
+}
+.enroll-fingerprint .button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
 @media (max-width: 640px) {
   .enroll-mode-options {
     grid-template-columns: minmax(0, 1fr);
