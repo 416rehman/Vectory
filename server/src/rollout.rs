@@ -918,6 +918,20 @@ pub(crate) fn winners_among<'a>(
     candidates: impl IntoIterator<Item = &'a Candidate>,
     scope: Option<&BTreeSet<String>>,
 ) -> BTreeMap<(String, String), Value> {
+    winning(candidates, scope)
+        .into_iter()
+        .map(|(key, d)| (key, d.clone()))
+        .collect()
+}
+/// The same choice, borrowing each winning record instead of copying it for
+/// every device it wins. A record carries its selector and reviewed target
+/// list, so a copy per device grows with the square of the fleet: at 10,000
+/// listed devices the copies of one deployment took about 8 GB, and every
+/// scheduler tick made them again under the writer lock.
+fn winning<'a>(
+    candidates: impl IntoIterator<Item = &'a Candidate>,
+    scope: Option<&BTreeSet<String>>,
+) -> BTreeMap<(String, String), &'a Value> {
     let mut winners: BTreeMap<(String, String), &Value> = BTreeMap::new();
     for candidate in candidates {
         let d = &candidate.deployment;
@@ -936,9 +950,6 @@ pub(crate) fn winners_among<'a>(
         }
     }
     winners
-        .into_iter()
-        .map(|(key, d)| (key, d.clone()))
-        .collect()
 }
 pub async fn conflicts(db: &mut SqliteConnection, extra: Option<&Value>) -> Result<Vec<Value>> {
     let set = candidates(
@@ -1923,7 +1934,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
             "Inconsistent assignment state; preserving last valid desired state",
         ));
     }
-    let winners = winners_among(&set, None);
+    let winners = winning(&set, None);
     // The winners' released targets, in one read rather than one per device
     // and resource: a winner reaches a device only once its rollout has
     // admitted it there.
@@ -2907,6 +2918,37 @@ mod tests {
             "transforms": {"t": {"type": "remap", "inputs": ["in"], "source": source}},
             "sinks": {"out": {"type": "blackhole", "inputs": ["t"]}},
         })
+    }
+
+    #[test]
+    fn resolution_borrows_each_winning_record_instead_of_copying_it_per_device() {
+        use super::{Candidate, winners_among, winning};
+        let fleet: std::collections::BTreeSet<String> =
+            (0..500).map(|n| format!("device-{n:03}")).collect();
+        // A deployment that lists its whole fleet, and an older, lower one.
+        let listed = Candidate {
+            deployment: json!({"id":"b","priority":10,"version_id":"v2","selector":{"device_ids":fleet,"group_ids":[],"exclude_ids":[]},"expected_device_ids":fleet}),
+            devices: fleet.clone(),
+        };
+        let lower = Candidate {
+            deployment: json!({"id":"a","priority":5,"version_id":"v1","selector":{"device_ids":[],"group_ids":["g"],"exclude_ids":[]}}),
+            devices: fleet.iter().take(20).cloned().collect(),
+        };
+        let set = [lower, listed];
+        let borrowed = winning(&set, None);
+        assert_eq!(borrowed.len(), fleet.len());
+        assert!(
+            borrowed
+                .values()
+                .all(|winner| std::ptr::eq(*winner, &set[1].deployment)),
+            "every device's winner is the one stored record"
+        );
+        // The copying form callers outside resolution use chooses the same.
+        let copied = winners_among(&set, None);
+        assert_eq!(copied.len(), borrowed.len());
+        assert!(copied.iter().all(|(key, winner)| winner == borrowed[key]));
+        let scope = fleet.iter().take(3).cloned().collect();
+        assert_eq!(winning(&set, Some(&scope)).len(), 3);
     }
 
     #[test]
