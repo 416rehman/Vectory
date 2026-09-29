@@ -35,7 +35,7 @@ From the specification audit and the round-2 reviews, each re-checked against `a
 | Sev. | Defect | Where |
 | --- | --- | --- |
 | P0 | For a server with a private CA, the generated Linux and macOS install command downloads the installer with `curl -k`. The page's SHA-256 check protects the bytes, but the specification forbids skipping certificate verification. | `dashboard/src/enrollmentCommands.ts` |
-| P0 | The specification asks Add device for an explicit system-trust or CA-file choice with `--ca-file=`. The dashboard instead pins the server's CA automatically with `--ca-sha256`; the choice needs an owner decision (ADR 0010, proposed). | `dashboard/src/enrollmentCommands.ts` |
+| P0 | The specification asks Add device for an explicit system-trust or CA-file choice with `--ca-file=`. The dashboard instead pins the server's CA automatically with `--ca-sha256`; the choice needs an owner decision ([ADR 0010](../adr/0010-automatic-server-ca-pinning.md), proposed). | `dashboard/src/enrollmentCommands.ts` |
 | P0 | Rollback is refused while a canary is in progress (`UNSAFE_SOURCE_REMOVAL`); the operator has to cancel the rollout first. | `server/src/rollback_review.rs` |
 | P1 | The clean-install workflow (download, enroll, edit, publish, assign, activate, observe) is not automated; `tests/native-workflow.mjs` runs by hand. Compose has never been started by a workflow. `release-candidate.yml` has never run, so no package is built or installed by a workflow. | CI |
 | P1 | Fault injection is missing for disk exhaustion, an interrupted download, a validation timeout, the proxy path and a real process kill at each journal boundary. | `agent/internal/agent` |
