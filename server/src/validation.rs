@@ -147,6 +147,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     }
     let mut reasons = BTreeSet::new();
     walk(config, &mut Vec::new(), &mut reasons);
+    if !local_secret_scan(config).0.is_empty() {
+        reasons.insert("device secrets".into());
+    }
     if let Some(sources) = config["sources"].as_object() {
         for source in sources.values() {
             let component = source["type"].as_str().unwrap_or("");
@@ -158,10 +161,9 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     }
     reasons.into_iter().collect()
 }
-pub fn is_local_secret(value: &str) -> bool {
-    let Some(name) = value.strip_prefix("vectory-secret:") else {
-        return false;
-    };
+/// A valid local secret name: a letter, then at most 63 letters, digits, `_`,
+/// `.` or `-`.
+pub fn is_secret_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name.as_bytes()[0].is_ascii_alphabetic()
@@ -169,63 +171,298 @@ pub fn is_local_secret(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
-pub fn local_secret_references(config: &Value) -> (bool, Vec<String>) {
-    fn walk(
-        root: &Value,
-        value: &Value,
-        path: &mut Vec<String>,
-        found: &mut bool,
-        errors: &mut Vec<String>,
-    ) {
-        match value {
-            Value::String(text) if text.contains("vectory-secret:") => {
-                let valid = path.len() == 4
-                    && path[0] == "sinks"
-                    && path[2] == "auth"
-                    && ["user", "password", "token"].contains(&path[3].as_str())
-                    && ["http", "loki", "elasticsearch"]
-                        .contains(&root["sinks"][&path[1]]["type"].as_str().unwrap_or(""))
-                    && is_local_secret(text);
-                if valid {
-                    *found = true
-                } else {
-                    errors.push("Local secret references must be exact vectory-secret:NAME values in approved http/loki/elasticsearch sink auth fields".into())
+pub fn is_local_secret(value: &str) -> bool {
+    value
+        .strip_prefix("vectory-secret:")
+        .is_some_and(is_secret_name)
+}
+
+// The generated device-secret field table, kept beside this module.
+#[path = "secret_fields.rs"]
+pub mod secret_fields;
+
+/// The fix for a plaintext credential in a device-secret field.
+pub const DEVICE_SECRET_FIX: &str = "Use a device secret: vectory-secret:NAME, then bind it on each device with `vectory configure-secrets`.";
+
+/// One step of a configuration path: an object field or a list item. Keeping
+/// them apart means an object key named `[]` is never taken for a list item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PathStep {
+    Field(String),
+    Item,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FieldPattern {
+    Field(&'static str),
+    AnyKey,
+    Item,
+}
+
+/// The table's paths per `(section, component type)`: `a.b` for fields, a
+/// `[]` suffix for list items, `*` for any map key.
+fn secret_field_patterns() -> &'static BTreeMap<(&'static str, &'static str), Vec<Vec<FieldPattern>>>
+{
+    static TABLE: OnceLock<BTreeMap<(&'static str, &'static str), Vec<Vec<FieldPattern>>>> =
+        OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for (section, component_type, path) in secret_fields::SECRET_FIELDS {
+            let mut steps = Vec::new();
+            for field in path.split('.') {
+                let name = field.trim_end_matches("[]");
+                steps.push(match name {
+                    "*" => FieldPattern::AnyKey,
+                    name => FieldPattern::Field(name),
+                });
+                for _ in 0..(field.len() - name.len()) / 2 {
+                    steps.push(FieldPattern::Item);
                 }
             }
-            Value::String(text)
-                if path.len() == 4
-                    && path[0] == "sinks"
-                    && path[2] == "auth"
-                    && ["user", "password", "token"].contains(&path[3].as_str())
-                    && !text.is_empty()
-                    && !is_native_secret_reference(text) =>
-            {
-                errors.push(
-                    "Plaintext credentials cannot be stored in sink authentication fields; use approved device-local secret references"
-                        .into(),
-                );
-            }
-            Value::Object(fields) => {
-                for (key, value) in fields {
-                    path.push(key.clone());
-                    walk(root, value, path, found, errors);
-                    path.pop();
+            table
+                .entry((*section, *component_type))
+                .or_default()
+                .push(steps);
+        }
+        table
+    })
+}
+
+/// Whether a path inside a component is one of the device-secret fields of
+/// its section and type.
+pub fn is_secret_field(section: &str, component_type: &str, path: &[PathStep]) -> bool {
+    secret_field_patterns()
+        .get(&(section, component_type))
+        .is_some_and(|fields| {
+            fields.iter().any(|pattern| {
+                pattern.len() == path.len()
+                    && pattern
+                        .iter()
+                        .zip(path)
+                        .all(|(want, got)| match (want, got) {
+                            (FieldPattern::Field(name), PathStep::Field(key)) => name == key,
+                            (FieldPattern::AnyKey, PathStep::Field(_)) => true,
+                            (FieldPattern::Item, PathStep::Item) => true,
+                            _ => false,
+                        })
+            })
+        })
+}
+
+/// Where a configuration value sits: the component that owns it, if any, and
+/// the field inside it.
+struct FieldLocation<'a> {
+    section: &'a str,
+    component: &'a str,
+    component_type: Option<&'a str>,
+    field: &'a [PathStep],
+}
+
+fn locate<'a>(config: &'a Value, path: &'a [PathStep]) -> Option<FieldLocation<'a>> {
+    let [
+        PathStep::Field(section),
+        PathStep::Field(component),
+        field @ ..,
+    ] = path
+    else {
+        return None;
+    };
+    if !["sources", "transforms", "sinks"].contains(&section.as_str()) || field.is_empty() {
+        return None;
+    }
+    let item = config[section.as_str()].get(component.as_str())?;
+    item.is_object().then(|| FieldLocation {
+        section,
+        component,
+        component_type: item["type"].as_str(),
+        field,
+    })
+}
+
+impl FieldLocation<'_> {
+    /// A device-secret field of the agent's table.
+    fn secret_field(&self) -> bool {
+        self.component_type
+            .is_some_and(|kind| is_secret_field(self.section, kind, self.field))
+    }
+    /// `auth.user`, `auth.password` and `auth.token` of any sink: credentials
+    /// before the table existed, whatever the sink type.
+    fn legacy_sink_auth(&self) -> bool {
+        self.section == "sinks"
+            && matches!(self.field, [PathStep::Field(auth), PathStep::Field(key)]
+                if auth == "auth" && ["user", "password", "token"].contains(&key.as_str()))
+    }
+}
+
+/// A path for people: `auth.token`, `valid_tokens[1]`.
+fn display_path(path: &[PathStep], indexes: &[usize]) -> String {
+    let mut out = String::new();
+    let mut items = indexes.iter();
+    for step in path {
+        match step {
+            PathStep::Field(key) => {
+                if !out.is_empty() {
+                    out.push('.');
                 }
+                out.push_str(key);
             }
-            Value::Array(items) => {
-                for (index, value) in items.iter().enumerate() {
-                    path.push(index.to_string());
-                    walk(root, value, path, found, errors);
-                    path.pop();
-                }
-            }
-            _ => {}
+            PathStep::Item => out.push_str(&format!("[{}]", items.next().copied().unwrap_or(0))),
         }
     }
-    let mut found = false;
+    out
+}
+
+/// Visit every string with its path from the root and the index of each list
+/// item on that path.
+fn visit_strings(
+    value: &Value,
+    path: &mut Vec<PathStep>,
+    indexes: &mut Vec<usize>,
+    visit: &mut dyn FnMut(&str, &[PathStep], &[usize]),
+) {
+    match value {
+        Value::String(text) => visit(text, path, indexes),
+        Value::Object(fields) => {
+            for (key, child) in fields {
+                path.push(PathStep::Field(key.clone()));
+                visit_strings(child, path, indexes, visit);
+                path.pop();
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                path.push(PathStep::Item);
+                indexes.push(index);
+                visit_strings(child, path, indexes, visit);
+                indexes.pop();
+                path.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A `vectory-secret:NAME` reference at a device-secret field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalSecretReference {
+    pub section: String,
+    pub component: String,
+    pub field: String,
+    pub name: String,
+}
+
+/// Device-secret references and the problems with them: a reference outside
+/// the table's fields, a malformed one, or plain text in a credential field.
+/// Native `SECRET[...]`, `$NAME` and `${NAME}` references stay valid there.
+pub fn local_secret_scan(config: &Value) -> (Vec<LocalSecretReference>, Vec<String>) {
+    let mut references = Vec::new();
     let mut errors = Vec::new();
-    walk(config, config, &mut Vec::new(), &mut found, &mut errors);
-    (found, errors)
+    visit_strings(
+        config,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut |text, path, indexes| {
+            let location = locate(config, path);
+            let secret_field = location.as_ref().is_some_and(FieldLocation::secret_field);
+            let (prefix, field) = match &location {
+                Some(at) => {
+                    let items = at.field.iter().filter(|s| **s == PathStep::Item).count();
+                    (
+                        format!("{}: ", at.component),
+                        display_path(at.field, &indexes[indexes.len() - items..]),
+                    )
+                }
+                None => (String::new(), display_path(path, indexes)),
+            };
+            if text.contains("vectory-secret:") {
+                match (&location, secret_field, text.strip_prefix("vectory-secret:")) {
+                    (Some(at), true, Some(name)) if is_secret_name(name) => {
+                        references.push(LocalSecretReference {
+                            section: at.section.to_owned(),
+                            component: at.component.to_owned(),
+                            field,
+                            name: name.to_owned(),
+                        })
+                    }
+                    (_, true, _) => errors.push(format!(
+                        "{prefix}`{field}` must be exactly `vectory-secret:NAME`, where NAME is a letter followed by up to 63 letters, digits, dots, dashes or underscores."
+                    )),
+                    _ => errors.push(format!(
+                        "{prefix}Only credential fields can hold a device secret, and `{field}` isn't one."
+                    )),
+                }
+            } else if !text.is_empty() && !is_native_secret_reference(text) {
+                if secret_field {
+                    errors.push(format!(
+                        "{prefix}Plaintext credentials cannot be stored in `{field}`. {DEVICE_SECRET_FIX}"
+                    ));
+                } else if location
+                    .as_ref()
+                    .is_some_and(FieldLocation::legacy_sink_auth)
+                {
+                    errors.push(format!(
+                        "{prefix}Plaintext credentials cannot be stored in `{field}`. Use a native secret or environment reference, such as SECRET[backend.key]."
+                    ));
+                }
+            }
+        },
+    );
+    (references, errors)
+}
+
+/// Whether a configuration uses device secrets, and the problems with its
+/// references (see [`local_secret_scan`]).
+pub fn local_secret_references(config: &Value) -> (bool, Vec<String>) {
+    let (references, errors) = local_secret_scan(config);
+    (!references.is_empty(), errors)
+}
+
+/// The secret names a device reports in its heartbeat: at most 64 distinct
+/// valid names, never files or values. Returned sorted.
+pub fn reported_secret_names(value: &Value) -> Option<Value> {
+    let items = value.as_array().filter(|items| items.len() <= 64)?;
+    let mut names = BTreeSet::new();
+    for item in items {
+        let name = item.as_str().filter(|name| is_secret_name(name))?;
+        if !names.insert(name) {
+            return None;
+        }
+    }
+    Some(json!(names))
+}
+
+/// A device secret reference becomes a placeholder in the validation copy, as
+/// a native reference does: its value exists only on devices. Only exact
+/// references at device-secret fields are replaced.
+fn replace_local_secrets(candidate: &mut Value, found: &mut BTreeSet<String>) {
+    let mut targets = Vec::new();
+    let view: &Value = candidate;
+    visit_strings(
+        view,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut |text, path, indexes| {
+            if is_local_secret(text) && locate(view, path).is_some_and(|at| at.secret_field()) {
+                let mut items = indexes.iter();
+                let pointer: String = path
+                    .iter()
+                    .map(|step| match step {
+                        PathStep::Field(key) => {
+                            format!("/{}", key.replace('~', "~0").replace('/', "~1"))
+                        }
+                        PathStep::Item => format!("/{}", items.next().copied().unwrap_or(0)),
+                    })
+                    .collect();
+                targets.push((pointer, text.to_owned()));
+            }
+        },
+    );
+    for (pointer, reference) in targets {
+        if let Some(slot) = candidate.pointer_mut(&pointer) {
+            *slot = json!(PLACEHOLDER);
+            found.insert(reference);
+        }
+    }
 }
 
 fn known_component(section: &str, component_type: &str) -> bool {
@@ -554,6 +791,7 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
         root.remove("provider");
     }
     let mut placeholders = BTreeSet::new();
+    replace_local_secrets(&mut candidate, &mut placeholders);
     walk(&mut candidate, "", &mut placeholders);
     let mut stubbed = BTreeMap::new();
     for section in ["sources", "transforms", "sinks"] {
@@ -781,6 +1019,25 @@ pub fn soften_placeholder(mut diagnostic: Diagnostic) -> Diagnostic {
     diagnostic
 }
 
+/// The code and field of a device-secret problem from `local_secret_scan`.
+fn secret_problem(message: &str) -> Option<(&'static str, &str)> {
+    fn field(rest: &str) -> Option<&str> {
+        rest.split_once('`').map(|(field, _)| field)
+    }
+    if let Some(rest) = message.strip_prefix("Plaintext credentials cannot be stored in `") {
+        return Some(("plaintext_credential", field(rest)?));
+    }
+    if let Some(rest) =
+        message.strip_prefix("Only credential fields can hold a device secret, and `")
+    {
+        return Some(("secret_reference_refused", field(rest)?));
+    }
+    let rest = message.strip_prefix('`')?;
+    rest.contains("` must be exactly `vectory-secret:NAME`")
+        .then(|| field(rest).map(|field| ("secret_reference_invalid", field)))
+        .flatten()
+}
+
 /// Convert server structural errors and warnings into diagnostics.
 pub fn structural_diagnostics(config: &Value, result: &Value) -> Vec<Diagnostic> {
     let mut out = Vec::new();
@@ -821,6 +1078,9 @@ pub fn structural_diagnostics(config: &Value, result: &Value) -> Vec<Diagnostic>
                         "Connect a step that produces the event type this component accepts."
                             .into(),
                     );
+                } else if let Some((code, field)) = secret_problem(rest) {
+                    diagnostic.code = Some(code.into());
+                    diagnostic.field = Some(field.into());
                 } else if rest.contains("input") || rest.contains("output") {
                     diagnostic.field = Some("inputs".into());
                 }
@@ -846,7 +1106,9 @@ fn reason_phrase(reasons: &[String]) -> String {
         .iter()
         .map(|reason| match reason.as_str() {
             "environment variables" => "environment variables".into(),
-            "native secret references" | "native secret providers" => "secrets".into(),
+            "native secret references" | "native secret providers" | "device secrets" => {
+                "secrets".into()
+            }
             "VRL access to device resources" => "VRL that reads device resources".into(),
             "native configuration provider" => "the configuration provider".into(),
             "device enrichment data" => "enrichment data files".into(),
@@ -2274,73 +2536,69 @@ pub fn validate(config: &Value) -> Value {
             break;
         }
     }
-    fn security(v: &Value, errors: &mut Vec<String>) {
-        match v {
-            Value::Object(o) => {
-                for (k, v) in o {
-                    let normalized = k.to_ascii_lowercase().replace(['-', '.'], "_");
+    // Credential-looking fields anywhere, including components this catalog
+    // doesn't know. Device-secret fields and the sink auth fields are checked
+    // by `local_secret_scan`, which names the fix.
+    fn security(config: &Value, errors: &mut Vec<String>) {
+        visit_strings(
+            config,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut |text, path, _| {
+                if text.split_once("://").is_some_and(|(_, tail)| {
+                    tail.split('/')
+                        .next()
+                        .unwrap_or("")
+                        .split_once('@')
+                        .is_some_and(|(credentials, _)| {
+                            !credentials.split(':').all(is_native_secret_reference)
+                        })
+                }) {
+                    errors.push(
+                        "Plaintext credentials cannot be stored in configuration history".into(),
+                    );
+                }
+                if text.is_empty()
+                    || is_local_secret(text)
+                    || is_native_secret_reference(text)
+                    || locate(config, path)
+                        .is_some_and(|at| at.secret_field() || at.legacy_sink_auth())
+                {
+                    return;
+                }
+                let normalized = |key: &str| key.to_ascii_lowercase().replace(['-', '.'], "_");
+                let credential = match path {
                     // Native nullable credential lists retain field context while
                     // inspecting elements. JSON Schema marks these SensitiveString.
-                    if ["valid_tokens", "access_keys"].contains(&normalized.as_str())
-                        && v.as_array().is_some_and(|items| {
-                            items.iter().any(|item| {
-                                item.as_str().is_some_and(|text| {
-                                    !text.is_empty() && !is_native_secret_reference(text)
-                                })
-                            })
-                        })
-                    {
-                        errors.push("Plaintext credentials cannot be stored in configuration history; use native secret or environment references".into());
+                    [.., PathStep::Field(key), PathStep::Item] => {
+                        ["valid_tokens", "access_keys"].contains(&normalized(key).as_str())
                     }
-                    let credential_field = [
-                        "password",
-                        "passwd",
-                        "api_key",
-                        "apikey",
-                        "access_key_id",
-                        "secret_access_key",
-                        "token",
-                        "bearer",
-                        "authorization",
-                        "proxy_authorization",
-                        "client_secret",
-                        "private_key",
-                    ]
-                    .iter()
-                    .any(|name| normalized == *name || normalized.ends_with(&format!("_{name}")));
-                    if credential_field
-                        && v.as_str().is_some_and(|s| {
-                            !s.is_empty() && !is_local_secret(s) && !is_native_secret_reference(s)
-                        })
-                    {
-                        errors.push("Plaintext credentials cannot be stored in configuration history; use native secret or environment references".into())
+                    [.., PathStep::Field(key)] => {
+                        let key = normalized(key);
+                        [
+                            "password",
+                            "passwd",
+                            "api_key",
+                            "apikey",
+                            "access_key_id",
+                            "secret_access_key",
+                            "token",
+                            "bearer",
+                            "authorization",
+                            "proxy_authorization",
+                            "client_secret",
+                            "private_key",
+                        ]
+                        .iter()
+                        .any(|name| key == *name || key.ends_with(&format!("_{name}")))
                     }
-                    if v.as_str().is_some_and(|s| {
-                        s.split_once("://").is_some_and(|(_, tail)| {
-                            tail.split('/')
-                                .next()
-                                .unwrap_or("")
-                                .split_once('@')
-                                .is_some_and(|(credentials, _)| {
-                                    !credentials.split(':').all(is_native_secret_reference)
-                                })
-                        })
-                    }) {
-                        errors.push(
-                            "Plaintext credentials cannot be stored in configuration history"
-                                .into(),
-                        )
-                    }
-                    security(v, errors)
+                    _ => false,
+                };
+                if credential {
+                    errors.push("Plaintext credentials cannot be stored in configuration history; use native secret or environment references".into());
                 }
-            }
-            Value::Array(a) => {
-                for v in a {
-                    security(v, errors)
-                }
-            }
-            _ => {}
-        }
+            },
+        );
     }
     event_type_mismatches(config, &dependencies, &mut errors);
     security(config, &mut errors);
@@ -2701,6 +2959,286 @@ mod tests {
         altered["sinks"]["out"]["auth"]["user"] = json!("plaintext-user");
         assert_eq!(validate(&altered)["valid"], false);
     }
+
+    /// A component with `value` at a table path: a list for `[]`, a one-key
+    /// map for `*`.
+    fn at_secret_field(section: &str, kind: &str, field: &str, value: Value) -> Value {
+        let mut value = value;
+        for step in field.split('.').rev() {
+            let name = step.trim_end_matches("[]");
+            for _ in 0..(step.len() - name.len()) / 2 {
+                value = json!([value]);
+            }
+            value = if name == "*" {
+                json!({ "x": value })
+            } else {
+                json!({ name: value })
+            };
+        }
+        value["type"] = json!(kind);
+        json!({ section: { "c": value } })
+    }
+
+    #[test]
+    fn every_device_secret_field_takes_a_reference_and_refuses_plain_text() {
+        for (section, kind, field) in secret_fields::SECRET_FIELDS {
+            let reference = at_secret_field(section, kind, field, json!("vectory-secret:KEY"));
+            let (references, errors) = local_secret_scan(&reference);
+            assert!(errors.is_empty(), "{kind} {field}: {errors:?}");
+            assert_eq!(references.len(), 1, "{kind} {field}");
+            assert_eq!(references[0].name, "KEY");
+            assert_eq!(
+                references[0].field,
+                field.replace("[]", "[0]").replace('*', "x")
+            );
+            // Native references stay valid where they were valid.
+            for native in ["SECRET[vault.key]", "${API_KEY}", "$API_KEY", ""] {
+                let config = at_secret_field(section, kind, field, json!(native));
+                assert_eq!(
+                    local_secret_scan(&config).1,
+                    Vec::<String>::new(),
+                    "{native}"
+                );
+            }
+            let plain = at_secret_field(section, kind, field, json!("hunter2-plaintext"));
+            let (_, errors) = local_secret_scan(&plain);
+            assert_eq!(errors.len(), 1, "{kind} {field}: {errors:?}");
+            assert!(errors[0].starts_with("c: Plaintext credentials cannot be stored in `"));
+            assert!(errors[0].ends_with(DEVICE_SECRET_FIX), "{}", errors[0]);
+            assert!(!errors[0].contains("hunter2"));
+        }
+    }
+
+    #[test]
+    fn plain_text_credentials_are_refused_at_publish_with_the_fix() {
+        let mut config = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json"}},
+            "sinks":{
+                "dd":{"type":"datadog_logs","inputs":["in"],"default_api_key":"dd-plaintext-key"},
+                "queue":{"type":"kafka","inputs":["in"],"bootstrap_servers":"kafka.example:9092","topic":"logs","encoding":{"codec":"json"},
+                    "sasl":{"enabled":true,"mechanism":"PLAIN","username":"svc","password":"kafka-plaintext"},
+                    "tls":{"enabled":true,"key_file":"/etc/tls/key.pem","key_pass":"tls-plaintext"}}
+            }
+        });
+        let result = validate(&config);
+        assert_eq!(result["valid"], false);
+        let errors: Vec<&str> = result["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        // One error per field, with the fix, never the value.
+        assert_eq!(
+            errors,
+            [
+                format!(
+                    "dd: Plaintext credentials cannot be stored in `default_api_key`. {DEVICE_SECRET_FIX}"
+                ),
+                format!(
+                    "queue: Plaintext credentials cannot be stored in `sasl.password`. {DEVICE_SECRET_FIX}"
+                ),
+                format!(
+                    "queue: Plaintext credentials cannot be stored in `tls.key_pass`. {DEVICE_SECRET_FIX}"
+                ),
+            ]
+        );
+        assert!(!result.to_string().contains("plaintext"));
+        // A user name Vector doesn't treat as a credential stays in the pipeline.
+        assert!(!result.to_string().contains("sasl.username"));
+        let diagnostics = structural_diagnostics(&config, &result);
+        let dd = diagnostics
+            .iter()
+            .find(|d| d.component.as_deref() == Some("dd"))
+            .unwrap();
+        assert_eq!(dd.code.as_deref(), Some("plaintext_credential"));
+        assert_eq!(dd.field.as_deref(), Some("default_api_key"));
+        assert!(dd.summary().ends_with(DEVICE_SECRET_FIX));
+        config["sinks"]["dd"]["default_api_key"] = json!("vectory-secret:DD_API_KEY");
+        config["sinks"]["queue"]["sasl"]["password"] = json!("SECRET[vault.kafka]");
+        config["sinks"]["queue"]["tls"]["key_pass"] = json!("${TLS_KEY_PASS}");
+        let fixed = validate(&config);
+        assert_eq!(fixed["valid"], true, "{fixed}");
+        assert_eq!(local_secret_references(&config), (true, vec![]));
+        assert!(
+            device_context_reasons(&config).contains(&"device secrets".to_owned()),
+            "device secrets are resolved on each device"
+        );
+        assert_eq!(
+            reason_phrase(&["device secrets".into(), "native secret references".into()]),
+            "secrets"
+        );
+    }
+
+    #[test]
+    fn references_outside_credential_fields_are_refused_by_field() {
+        let base = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json"},"cmd":{"type":"exec","mode":"scheduled","command":["echo"]}},
+            "transforms":{"t":{"type":"remap","inputs":["in"],"source":"."}},
+            "sinks":{"out":{"type":"http","inputs":["t"],"uri":"https://sink.example/","encoding":{"codec":"json"},"request":{}},
+                "file":{"type":"file","inputs":["t"],"path":"/tmp/out.log","encoding":{"codec":"json"}},
+                "es":{"type":"elasticsearch","inputs":["t"],"endpoints":["https://es.example:9200"]},
+                "hec":{"type":"splunk_hec_logs","inputs":["t"],"endpoint":"https://hec.example:8088","default_token":"vectory-secret:HEC","encoding":{"codec":"json"}}}
+        });
+        for (pointer, field, component) in [
+            ("/sinks/out/uri", "uri", "out"),
+            ("/sinks/out/request", "request.headers.Authorization", "out"),
+            ("/sinks/file/path", "path", "file"),
+            ("/sinks/es/endpoints", "endpoints[0]", "es"),
+            ("/sinks/hec/endpoint", "endpoint", "hec"),
+            ("/sources/cmd/command", "command[1]", "cmd"),
+            ("/transforms/t/source", "source", "t"),
+        ] {
+            let mut config = base.clone();
+            let value = config.pointer_mut(pointer).unwrap();
+            *value = match field {
+                "request.headers.Authorization" => {
+                    json!({"headers":{"Authorization":"vectory-secret:TOKEN"}})
+                }
+                "endpoints[0]" => json!(["vectory-secret:TOKEN"]),
+                "command[1]" => json!(["echo", "vectory-secret:TOKEN"]),
+                "source" => json!(".token = \"vectory-secret:TOKEN\""),
+                _ => json!("vectory-secret:TOKEN"),
+            };
+            let result = validate(&config);
+            assert_eq!(result["valid"], false, "{field}");
+            let message = format!(
+                "{component}: Only credential fields can hold a device secret, and `{field}` isn't one."
+            );
+            assert!(
+                result["errors"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(message)),
+                "{field}: {result}"
+            );
+            let diagnostic = structural_diagnostics(&config, &result)
+                .into_iter()
+                .find(|d| d.code.as_deref() == Some("secret_reference_refused"))
+                .unwrap();
+            assert_eq!(diagnostic.field.as_deref(), Some(field));
+            // The validation copy never turns a refused reference into a placeholder.
+            assert_eq!(
+                static_candidate(&config, |_, _| true).placeholders,
+                vec!["vectory-secret:HEC"]
+            );
+        }
+        let outside = validate(
+            &json!({"api":{"enabled":true,"address":"vectory-secret:ADDR"},"tests":[{"name":"t","inputs":[{"insert_at":"t","type":"log","log_fields":{"message":"vectory-secret:T"}}]}]}),
+        );
+        for message in [
+            "Only credential fields can hold a device secret, and `api.address` isn't one.",
+            "Only credential fields can hold a device secret, and `tests[0].inputs[0].log_fields.message` isn't one.",
+        ] {
+            assert!(
+                outside["errors"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(message)),
+                "{outside}"
+            );
+        }
+        for malformed in [
+            "prefix-vectory-secret:KEY",
+            "vectory-secret:0bad",
+            "Bearer vectory-secret:KEY",
+        ] {
+            let config =
+                at_secret_field("sinks", "datadog_logs", "default_api_key", json!(malformed));
+            let (references, errors) = local_secret_scan(&config);
+            assert!(references.is_empty());
+            assert!(
+                errors[0].starts_with("c: `default_api_key` must be exactly `vectory-secret:NAME`"),
+                "{errors:?}"
+            );
+        }
+        // An object key named `[]` is not a list item.
+        let key = json!({"sources":{"hec":{"type":"splunk_hec","valid_tokens":{"[]":"vectory-secret:T"}}}});
+        assert_eq!(local_secret_scan(&key).1.len(), 1);
+        // Unknown and missing types have no credential fields.
+        for kind in [json!("not_a_vector_sink"), Value::Null] {
+            let config = json!({"sinks":{"out":{"type":kind,"auth":{"token":"vectory-secret:T"}}}});
+            assert!(!local_secret_scan(&config).1.is_empty());
+        }
+    }
+
+    #[test]
+    fn sink_auth_and_credential_names_outside_the_table_stay_protected() {
+        // Before the table, sink auth fields refused plain text for any sink.
+        let custom = json!({"sinks":{"out":{"type":"custom_future_sink","auth":{"user":"svc"}}}});
+        let errors = local_secret_scan(&custom).1;
+        assert_eq!(
+            errors,
+            [
+                "out: Plaintext credentials cannot be stored in `auth.user`. Use a native secret or environment reference, such as SECRET[backend.key]."
+            ]
+        );
+        // Credential-looking names anywhere else keep the generic refusal, once.
+        let named = validate(
+            &json!({"sources":{"in":{"type":"custom_source","client_secret":"x","endpoints":["https://user:pass@es.example:9200"]}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}),
+        );
+        assert_eq!(named["valid"], false);
+        let errors = named["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 2, "{named}");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.as_str().unwrap().starts_with("Plaintext credentials"))
+        );
+    }
+
+    #[test]
+    fn device_secrets_become_placeholders_in_the_validation_copy() {
+        let config = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json"}},
+            "sinks":{
+                "dd":{"type":"datadog_logs","inputs":["in"],"default_api_key":"vectory-secret:DD_API_KEY"},
+                "rw":{"type":"prometheus_remote_write","inputs":["in"],"endpoint":"https://rw.example/api/v1/write",
+                    "auth":{"strategy":"basic","user":"vectory-secret:RW_USER","password":"vectory-secret:RW_PASSWORD"}}
+            }
+        });
+        let candidate = static_candidate(&config, |_, _| true);
+        assert_eq!(
+            candidate.config["sinks"]["dd"]["default_api_key"],
+            PLACEHOLDER
+        );
+        assert_eq!(candidate.config["sinks"]["rw"]["auth"]["user"], PLACEHOLDER);
+        assert_eq!(
+            candidate.config["sinks"]["rw"]["auth"]["password"],
+            PLACEHOLDER
+        );
+        assert_eq!(
+            candidate.placeholders,
+            vec![
+                "vectory-secret:DD_API_KEY",
+                "vectory-secret:RW_PASSWORD",
+                "vectory-secret:RW_USER"
+            ]
+        );
+        assert!(!candidate.config.to_string().contains("vectory-secret:"));
+    }
+
+    #[test]
+    fn reported_secret_names_are_names_only_and_bounded() {
+        assert_eq!(
+            reported_secret_names(&json!(["ZETA", "ALPHA"])),
+            Some(json!(["ALPHA", "ZETA"]))
+        );
+        assert_eq!(reported_secret_names(&json!([])), Some(json!([])));
+        let many: Vec<String> = (0..65).map(|i| format!("N{i}")).collect();
+        for invalid in [
+            json!(["A", "A"]),
+            json!(["/etc/vectory/secret"]),
+            json!(["0bad"]),
+            json!([1]),
+            json!("A"),
+            json!(many),
+            json!([Value::Null]),
+        ] {
+            assert_eq!(reported_secret_names(&invalid), None, "{invalid}");
+        }
+    }
+
     #[test]
     fn named_route_and_hash_are_stable() {
         let v = json!({"sources":{"in":{"type":"demo_logs"}},"transforms":{"route":{"type":"route","inputs":["in"],"route":{"ok":"true"}}},"sinks":{"out":{"type":"console","inputs":["route.ok"],"encoding":{"codec":"json"}}}});
