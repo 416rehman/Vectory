@@ -562,6 +562,13 @@ try {
         item.getByRole("link", { name: "Open rollout", exact: true }),
       ).toHaveAttribute("href", `#/deployments/${stoppedId}`);
       await expect(page.locator(".overview-kpis")).toContainText("1 stopped");
+      // The card never claims nothing is failing above a stopped rollout.
+      await expect(page.locator(".needs-you")).toContainText(
+        "1 rollout stopped",
+      );
+      await expect(page.locator(".needs-you")).not.toContainText(
+        "Nothing is failing",
+      );
       await context.close();
     },
   );
