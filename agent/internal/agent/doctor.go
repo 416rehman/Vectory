@@ -141,7 +141,11 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 		if enrolled {
 			credentials = &cred
 		}
-		report.Checks = append(report.Checks, networkChecks(ctx, server, caFile, credentials, key)...)
+		var lastAnswered *time.Time
+		if enrolled && stateErr == nil {
+			lastAnswered = st.LastHeartbeat
+		}
+		report.Checks = append(report.Checks, networkChecks(ctx, server, caFile, credentials, key, lastAnswered)...)
 	}
 
 	svc := ServiceStatus(ctx)
@@ -211,13 +215,16 @@ func byteSize(n int64) string {
 
 // networkChecks runs DNS, TCP, TLS, clock and credential checks. It sends one
 // read-only request; with credentials it proves the server still accepts them.
-func networkChecks(ctx context.Context, server, caFile string, credentials *Credentials, key []byte) []DoctorCheck {
+func networkChecks(ctx context.Context, server, caFile string, credentials *Credentials, key []byte, lastAnswered *time.Time) []DoctorCheck {
 	var checks []DoctorCheck
 	add := func(id, status, title, detail, fix string) {
 		checks = append(checks, DoctorCheck{ID: id, Status: status, Title: title, Detail: detail, Fix: fix})
 	}
 	fail := func(id, title string, err error) {
 		if ce, ok := AsConnectionError(err); ok {
+			if lastAnswered != nil {
+				ce = ce.forKnownServer(*lastAnswered, time.Now())
+			}
 			add(id, "fail", title, ce.Message, ce.Fix)
 		} else {
 			add(id, "fail", title, sentence(err.Error()), "")

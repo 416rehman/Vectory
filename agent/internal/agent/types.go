@@ -225,6 +225,15 @@ type State struct {
 	// Agent is the build of the agent process that last saved this state.
 	// Setup compares it with the installed file to restart an outdated service.
 	Agent *AgentBuild `json:"agent,omitempty"`
+	// CheckInFailure is the latest failed check-in since the last success.
+	CheckInFailure *CheckInFailure `json:"check_in_failure,omitempty"`
+}
+
+// CheckInFailure records why the agent couldn't check in. The message is a
+// classified, secret-free explanation.
+type CheckInFailure struct {
+	Since   time.Time `json:"since"`
+	Message string    `json:"message"`
 }
 
 // AgentBuild identifies an agent executable.

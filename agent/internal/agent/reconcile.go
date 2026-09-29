@@ -656,19 +656,33 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 			e.Settings.VectorVersion = version
 		}
 	}
-	failures := 0
+	failures, followed := 0, false
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
+		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
 		err = supervisor.poll(ctx, e, report)
 		if err != nil {
 			failures++
-			report(err.Error())
+			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
+			report(message)
+			if _, network := AsConnectionError(err); network {
+				failure := CheckInFailure{Since: e.now(), Message: message}
+				if previous := e.State.CheckInFailure; previous != nil {
+					failure.Since = previous.Since
+				}
+				e.State.CheckInFailure = &failure
+				_ = e.save()
+			}
 		} else {
 			failures = 0
+			if e.State.CheckInFailure != nil {
+				e.State.CheckInFailure = nil
+				_ = e.save()
+			}
 			report("heartbeat: " + e.State.ApplyState)
 		}
 		if once {
@@ -687,6 +701,12 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		var b [1]byte
 		_, _ = rand.Read(b[:])
 		delay := time.Duration(float64(seconds) * (0.8 + float64(b[0])/255*0.4) * float64(time.Second))
+		// Never two follow-ups in a row: a flapping outcome can't speed up
+		// the check-in cadence.
+		followed = err == nil && !followed && followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration})
+		if followed {
+			delay = followUpDelay
+		}
 		if delay < e.Client.RetryAfter {
 			delay = e.Client.RetryAfter
 		}
@@ -695,6 +715,28 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		}
 	}
 }
+
+// appliedOutcome is what a heartbeat tells the server about the last apply.
+type appliedOutcome struct {
+	state      string
+	generation uint64
+}
+
+// followUpDelay brings an apply's outcome to the dashboard within seconds
+// instead of a full check-in interval.
+const followUpDelay = 2 * time.Second
+
+// followUp reports whether this poll finished an apply the last heartbeat
+// didn't report. The follow-up heartbeat reports it, so the next poll sees
+// no change and returns to the normal interval: one follow-up per outcome.
+func followUp(reported, now appliedOutcome) bool {
+	switch now.state {
+	case "verified_applied", "failed", "rolled_back":
+		return now != reported
+	}
+	return false
+}
+
 func StateSummary(dir string) (map[string]any, error) {
 	st, err := LoadState(dir)
 	if err != nil {

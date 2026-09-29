@@ -101,6 +101,15 @@ func (v *StatusView) heartbeatLimit() time.Duration {
 	return 3 * time.Duration(seconds) * time.Second
 }
 
+// checkInFailure is the current outage, if check-ins fail since the last success.
+func (v *StatusView) checkInFailure() *CheckInFailure {
+	failure := v.State.CheckInFailure
+	if failure == nil || v.DeviceID == "" || v.State.LastHeartbeat != nil && !failure.Since.After(*v.State.LastHeartbeat) {
+		return nil
+	}
+	return failure
+}
+
 func (v *StatusView) nextStep(now time.Time) string {
 	dir := quoteArg(v.StateDir)
 	switch {
@@ -122,6 +131,8 @@ func (v *StatusView) nextStep(now time.Time) string {
 		return "Configuration sync is paused on this host. Resume it with: sudo vectory resume --state-dir " + dir
 	case v.State.LastHeartbeat == nil:
 		return "Waiting for the first check-in. If it doesn't arrive within a minute, run `sudo vectory doctor`."
+	case v.checkInFailure() != nil && v.running():
+		return v.checkInFailure().Message
 	case now.Sub(*v.State.LastHeartbeat) > v.heartbeatLimit():
 		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `sudo vectory doctor` to check the connection."
 	case v.State.Error != nil:
@@ -204,6 +215,9 @@ func RenderStatus(v *StatusView, now time.Time) string {
 			server += " · last check-in " + ago(now, *v.State.LastHeartbeat)
 		} else {
 			server += " · no check-in yet"
+		}
+		if failure := v.checkInFailure(); failure != nil {
+			server += " · not answering since " + failure.Since.Local().Format("15:04:05")
 		}
 		if !v.CertExpiry.IsZero() && v.CertExpiry.Sub(now) < 72*time.Hour {
 			server += " · credential expires " + v.CertExpiry.Local().Format("Jan 2 15:04")
