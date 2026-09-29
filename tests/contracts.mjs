@@ -19,7 +19,8 @@ const credentials = JSON.parse(
     "utf8",
   ),
 );
-const base = process.env.VECTORY_CONTRACT_BASE || "http://127.0.0.1:8080/api/v1";
+const base =
+  process.env.VECTORY_CONTRACT_BASE || "http://127.0.0.1:8080/api/v1";
 const login = await fetch(base + "/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -143,10 +144,7 @@ try {
     const page = await get(`/devices/inventory${query}`);
     validate("DeviceInventoryPage", page);
     for (const device of page.items)
-      validate(
-        "Device",
-        await get(`/devices/${device.id}?include=groups`),
-      );
+      validate("Device", await get(`/devices/${device.id}?include=groups`));
   }
   validate("DeviceInventoryIds", await get("/devices/inventory/ids"));
   for (const group of await get("/groups?slim=1")) {

@@ -6,7 +6,7 @@ Engineering history and test evidence, kept for review and audit. These document
 | --- | --- |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | Executed evidence and remaining release gates. |
 | [HANDOFF.md](HANDOFF.md) | Implementation handoff notes. |
-| [CAPACITY.md](CAPACITY.md) | Protocol load measurements and their limits. |
+| [CAPACITY.md](CAPACITY.md) | Protocol load and fleet-read measurements, and their limits. |
 | [DEPENDENCY-AUDIT.md](DEPENDENCY-AUDIT.md) | Dependency vulnerability scans. |
 | [TYPE-SYSTEM-REVIEW.md](TYPE-SYSTEM-REVIEW.md) | Review of the Vector reference and configuration types. |
 | [HELP-CENTER-EVIDENCE.md](HELP-CENTER-EVIDENCE.md) | Earlier Help center verification. |
