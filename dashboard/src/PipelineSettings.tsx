@@ -15,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { Config } from "./api";
@@ -38,8 +39,8 @@ import ProblemText from "./ProblemText";
 import { VrlFieldContext, type VrlFieldServices } from "./vrlFieldContext";
 import {
   SecretNamesContext,
-  SecretPathContext,
   SecretScopeContext,
+  type SecretScope,
 } from "./secretFieldContext";
 import { secretReferences } from "./secretFields";
 import {
@@ -320,6 +321,33 @@ function withoutStep(issue: string, id: string) {
     !/\s/.test(issue.slice(id.length + 1, colon))
     ? issue.slice(colon + 2)
     : issue;
+}
+
+/**
+ * What every field of one step shares: VRL services, the step itself (for
+ * credential fields that can take a device secret) and the pipeline's secret
+ * names (for reuse).
+ */
+function StepContexts({
+  services,
+  scope,
+  secretNames,
+  children,
+}: {
+  services: VrlFieldServices;
+  scope: SecretScope;
+  secretNames: readonly string[];
+  children: ReactNode;
+}) {
+  return (
+    <VrlFieldContext.Provider value={services}>
+      <SecretScopeContext.Provider value={scope}>
+        <SecretNamesContext.Provider value={secretNames}>
+          {children}
+        </SecretNamesContext.Provider>
+      </SecretScopeContext.Provider>
+    </VrlFieldContext.Provider>
+  );
 }
 
 /** The heading over Vector's findings for one step: problems, or notes. */
@@ -617,292 +645,282 @@ export default function PipelineSettings({
       problem.origin === "vector" && !(problem.field && vrlPath(problem.field)),
   );
   return (
-    <VrlFieldContext.Provider value={services}>
-      <SecretScopeContext.Provider value={secretScope}>
-        <SecretNamesContext.Provider value={knownSecrets}>
-          <FieldProblemsContext.Provider value={optionProblems}>
-            <div className="pipeline-settings" ref={root}>
-              {!!definition?.platforms?.length && (
-                <div className="pipeline-capability-hint">
-                  <SchemaFieldHelp
-                    title="Platform availability"
-                    className="pipeline-capability-trigger"
-                    triggerContent={
-                      <>
-                        <CircleHelp size={14} aria-hidden="true" />
-                        <span>Platform availability</span>
-                      </>
-                    }
-                  >
-                    <p>
-                      Available on {definition.platforms.join(", ")}. The
-                      device’s Vector build must include this component.
-                    </p>
-                  </SchemaFieldHelp>
-                </div>
-              )}
-              {definition?.device_capability !== "allowed" && (
-                <div className="pipeline-capability-hint">
-                  <SchemaFieldHelp
-                    title="Full Vector mode required"
-                    className="pipeline-capability-trigger"
-                    triggerContent={
-                      <>
-                        <CircleHelp size={14} aria-hidden="true" />
-                        <span>Full Vector mode required</span>
-                      </>
-                    }
-                  >
-                    <p>
-                      Before deploying, the device owner must enable full Vector
-                      mode locally. The device’s Vector build must also include
-                      this component.
-                    </p>
-                    <p>
-                      <DocLink
-                        topic="installation"
-                        section="choose-configuration-capabilities"
-                      >
-                        How to enable full mode
-                      </DocLink>
-                    </p>
-                  </SchemaFieldHelp>
-                </div>
-              )}
-              {secrets.length > 0 && (
-                <div className="pipeline-secret-note">
-                  <ShieldCheck size={15} aria-hidden="true" />
-                  <p>
-                    <strong>Credentials stay on each device.</strong> This step
-                    reads{" "}
-                    {secrets.map((name, index) => (
-                      <span key={name}>
-                        {index > 0 &&
-                          (index === secrets.length - 1 ? " and " : ", ")}
-                        <code>{name}</code>
-                      </span>
-                    ))}{" "}
-                    from {secrets.length === 1 ? "a file" : "files"} bound on
-                    each device.{" "}
-                    <DocLink
-                      topic="resources"
-                      section="keep-credentials-on-the-device"
-                    >
-                      Device secrets
-                    </DocLink>
-                  </p>
-                </div>
-              )}
-              {issues.length > 0 && (
-                <div className="pipeline-field-errors" role="status">
-                  <strong>Finish this step</strong>
-                  <ul>
-                    {issues.map((issue) => (
-                      <li key={issue}>
-                        <ProblemText text={withoutStep(issue, id)} />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {inputPatterns.length > 0 && (
-                <div className="pipeline-input-patterns" role="status">
-                  <strong>Wildcard inputs</strong>
-                  <ul>
-                    {inputPatterns.map((input) => (
-                      <li key={input.pattern}>
-                        <code>{input.pattern}</code>{" "}
-                        <span>
-                          {patternSummary(input).slice(
-                            input.pattern.length + 1,
-                          )}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <small>Edit inputs in Code view.</small>
-                </div>
-              )}
-              {summary.length > 0 && (
-                <div className="pipeline-vector-problems" role="status">
-                  <strong>{summaryHeading(summary)}</strong>
-                  <ul>
-                    {summary.map((problem) => (
-                      <li
-                        key={problem.key}
-                        data-severity={problem.severity}
-                        data-stale={problem.stale || undefined}
-                      >
-                        <span>
-                          {problem.field && problem.field !== "inputs" && (
-                            <code>{problem.field}</code>
-                          )}
-                          <ProblemText text={problem.message} />
-                        </span>
-                        {problem.hint && (
-                          <small>
-                            <ProblemText text={problem.hint.split("\n")[0]} />
-                          </small>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {definition && (
-                <PipelineSchemaFields
-                  schema={settingsSchema}
-                  root={vectorSchema}
-                  component={component}
-                  fieldPickerTarget={fieldPickerTarget}
-                  fieldSections={sections}
-                  editable={editable}
-                  onChange={onChange}
-                  onPendingChange={reportPending}
-                  exclude={[...(hasRouteEditor ? ["route"] : [])]}
-                />
-              )}
-              {hasRouteEditor && (
-                <section className="pipeline-settings-section">
-                  <div className="pipeline-settings-section-heading">
-                    <h3>Named outputs</h3>
-                    <SchemaFieldHelp title="Named outputs">
-                      <p>
-                        Each condition creates an output that destinations can
-                        select. Events matching no condition use{" "}
-                        <code>_unmatched</code>.
-                      </p>
-                    </SchemaFieldHelp>
-                  </div>
-                  {Object.entries(component.route || {}).map(
-                    ([name, condition]) => (
-                      <div className="pipeline-route" key={name}>
-                        <OutputName
-                          name={name}
-                          names={Object.keys(component.route || {})}
-                          editable={editable}
-                          onRename={onRouteRename}
-                          onPendingChange={reportPending}
-                        />
-                        <FieldPathScope path={`route.${name}`}>
-                          <SecretPathContext.Provider value={["route", name]}>
-                            <PipelineSchemaControl
-                              name="condition"
-                              segment={null}
-                              label={`Condition for ${name}`}
-                              schema={{
-                                $ref: "#/definitions/vector::conditions::AnyCondition",
-                              }}
-                              root={vectorSchema}
-                              value={condition}
-                              editable={editable}
-                              onPendingChange={reportPending}
-                              onChange={(value) =>
-                                onChange({
-                                  ...component,
-                                  route: { ...component.route, [name]: value },
-                                })
-                              }
-                            />
-                          </SecretPathContext.Provider>
-                        </FieldPathScope>
-                        {editable && (
-                          <Button
-                            variant="ghost compact"
-                            onClick={() => onRouteRemove(name)}
-                          >
-                            Remove output
-                          </Button>
-                        )}
-                      </div>
-                    ),
-                  )}
-                  {editable && (
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        let name = "branch",
-                          number = 2;
-                        while (component.route?.[name])
-                          name = `branch_${number++}`;
-                        onChange({
-                          ...component,
-                          route: { ...component.route, [name]: "true" },
-                        });
-                      }}
-                    >
-                      Add named output
-                    </Button>
-                  )}
-                </section>
-              )}
-              {testable && !testerField && !studio && tester()}
-              {!definition && (
-                <>
-                  <div className="pipeline-capability-hint">
-                    <SchemaFieldHelp
-                      title="Custom component"
-                      className="pipeline-capability-trigger"
-                      triggerContent={
-                        <>
-                          <CircleHelp size={14} aria-hidden="true" />
-                          <span>Custom component</span>
-                        </>
-                      }
-                    >
-                      <p>
-                        Imported fields are preserved and validated by Vector on
-                        the device.
-                      </p>
-                    </SchemaFieldHelp>
-                  </div>
-                  <PipelineSchemaFields
-                    schema={{ type: "object", additionalProperties: true }}
-                    root={vectorSchema}
-                    component={component}
-                    fieldPickerTarget={fieldPickerTarget}
-                    fieldSections={sections}
-                    onChange={onChange}
-                    editable={editable}
-                    onPendingChange={reportPending}
-                  />
-                </>
-              )}
-              <Modal
-                open={!!studio}
-                onClose={() => setStudio(null)}
-                wide
-                className="vrl-studio"
-                title={`${id} · ${studio && studio.startsWith("route.") ? `Condition for ${studio.split(".")[1]}` : studio === "condition" ? "Condition" : "VRL program"}`}
-                description="Edit the program with more room and test it against your samples."
+    <StepContexts
+      services={services}
+      scope={secretScope}
+      secretNames={knownSecrets}
+    >
+      <FieldProblemsContext.Provider value={optionProblems}>
+        <div className="pipeline-settings" ref={root}>
+          {!!definition?.platforms?.length && (
+            <div className="pipeline-capability-hint">
+              <SchemaFieldHelp
+                title="Platform availability"
+                className="pipeline-capability-trigger"
+                triggerContent={
+                  <>
+                    <CircleHelp size={14} aria-hidden="true" />
+                    <span>Platform availability</span>
+                  </>
+                }
               >
-                {studio && (
-                  <div className="vrl-studio-body">
-                    <div className="vrl-studio-program">
-                      <VrlField
-                        path={studio}
-                        title={`${id} ${studio}`}
-                        text={vrlValue(component, canonicalPath(studio))}
-                        readOnly={!editable}
-                        onInput={(text) =>
-                          onChange(
-                            withVrlValue(
-                              component,
-                              canonicalPath(studio),
-                              text,
-                            ),
-                          )
+                <p>
+                  Available on {definition.platforms.join(", ")}. The device’s
+                  Vector build must include this component.
+                </p>
+              </SchemaFieldHelp>
+            </div>
+          )}
+          {definition?.device_capability !== "allowed" && (
+            <div className="pipeline-capability-hint">
+              <SchemaFieldHelp
+                title="Full Vector mode required"
+                className="pipeline-capability-trigger"
+                triggerContent={
+                  <>
+                    <CircleHelp size={14} aria-hidden="true" />
+                    <span>Full Vector mode required</span>
+                  </>
+                }
+              >
+                <p>
+                  Before deploying, the device owner must enable full Vector
+                  mode locally. The device’s Vector build must also include this
+                  component.
+                </p>
+                <p>
+                  <DocLink
+                    topic="installation"
+                    section="choose-configuration-capabilities"
+                  >
+                    How to enable full mode
+                  </DocLink>
+                </p>
+              </SchemaFieldHelp>
+            </div>
+          )}
+          {secrets.length > 0 && (
+            <div className="pipeline-secret-note">
+              <ShieldCheck size={15} aria-hidden="true" />
+              <p>
+                <strong>Credentials stay on each device.</strong> This step
+                reads{" "}
+                {secrets.map((name, index) => (
+                  <span key={name}>
+                    {index > 0 &&
+                      (index === secrets.length - 1 ? " and " : ", ")}
+                    <code>{name}</code>
+                  </span>
+                ))}{" "}
+                from {secrets.length === 1 ? "a file" : "files"} bound on each
+                device.{" "}
+                <DocLink
+                  topic="resources"
+                  section="keep-credentials-on-the-device"
+                >
+                  Device secrets
+                </DocLink>
+              </p>
+            </div>
+          )}
+          {issues.length > 0 && (
+            <div className="pipeline-field-errors" role="status">
+              <strong>Finish this step</strong>
+              <ul>
+                {issues.map((issue) => (
+                  <li key={issue}>
+                    <ProblemText text={withoutStep(issue, id)} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {inputPatterns.length > 0 && (
+            <div className="pipeline-input-patterns" role="status">
+              <strong>Wildcard inputs</strong>
+              <ul>
+                {inputPatterns.map((input) => (
+                  <li key={input.pattern}>
+                    <code>{input.pattern}</code>{" "}
+                    <span>
+                      {patternSummary(input).slice(input.pattern.length + 1)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <small>Edit inputs in Code view.</small>
+            </div>
+          )}
+          {summary.length > 0 && (
+            <div className="pipeline-vector-problems" role="status">
+              <strong>{summaryHeading(summary)}</strong>
+              <ul>
+                {summary.map((problem) => (
+                  <li
+                    key={problem.key}
+                    data-severity={problem.severity}
+                    data-stale={problem.stale || undefined}
+                  >
+                    <span>
+                      {problem.field && problem.field !== "inputs" && (
+                        <code>{problem.field}</code>
+                      )}
+                      <ProblemText text={problem.message} />
+                    </span>
+                    {problem.hint && (
+                      <small>
+                        <ProblemText text={problem.hint.split("\n")[0]} />
+                      </small>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {definition && (
+            <PipelineSchemaFields
+              schema={settingsSchema}
+              root={vectorSchema}
+              component={component}
+              fieldPickerTarget={fieldPickerTarget}
+              fieldSections={sections}
+              editable={editable}
+              onChange={onChange}
+              onPendingChange={reportPending}
+              exclude={[...(hasRouteEditor ? ["route"] : [])]}
+            />
+          )}
+          {hasRouteEditor && (
+            <section className="pipeline-settings-section">
+              <div className="pipeline-settings-section-heading">
+                <h3>Named outputs</h3>
+                <SchemaFieldHelp title="Named outputs">
+                  <p>
+                    Each condition creates an output that destinations can
+                    select. Events matching no condition use{" "}
+                    <code>_unmatched</code>.
+                  </p>
+                </SchemaFieldHelp>
+              </div>
+              {Object.entries(component.route || {}).map(
+                ([name, condition]) => (
+                  <div className="pipeline-route" key={name}>
+                    <OutputName
+                      name={name}
+                      names={Object.keys(component.route || {})}
+                      editable={editable}
+                      onRename={onRouteRename}
+                      onPendingChange={reportPending}
+                    />
+                    <FieldPathScope path={`route.${name}`}>
+                      <PipelineSchemaControl
+                        name="condition"
+                        label={`Condition for ${name}`}
+                        schema={{
+                          $ref: "#/definitions/vector::conditions::AnyCondition",
+                        }}
+                        root={vectorSchema}
+                        value={condition}
+                        editable={editable}
+                        onPendingChange={reportPending}
+                        onChange={(value) =>
+                          onChange({
+                            ...component,
+                            route: { ...component.route, [name]: value },
+                          })
                         }
                       />
-                    </div>
-                    <div className="vrl-studio-samples">{tester(true)}</div>
+                    </FieldPathScope>
+                    {editable && (
+                      <Button
+                        variant="ghost compact"
+                        onClick={() => onRouteRemove(name)}
+                      >
+                        Remove output
+                      </Button>
+                    )}
                   </div>
-                )}
-              </Modal>
-            </div>
-          </FieldProblemsContext.Provider>
-        </SecretNamesContext.Provider>
-      </SecretScopeContext.Provider>
-    </VrlFieldContext.Provider>
+                ),
+              )}
+              {editable && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    let name = "branch",
+                      number = 2;
+                    while (component.route?.[name]) name = `branch_${number++}`;
+                    onChange({
+                      ...component,
+                      route: { ...component.route, [name]: "true" },
+                    });
+                  }}
+                >
+                  Add named output
+                </Button>
+              )}
+            </section>
+          )}
+          {testable && !testerField && !studio && tester()}
+          {!definition && (
+            <>
+              <div className="pipeline-capability-hint">
+                <SchemaFieldHelp
+                  title="Custom component"
+                  className="pipeline-capability-trigger"
+                  triggerContent={
+                    <>
+                      <CircleHelp size={14} aria-hidden="true" />
+                      <span>Custom component</span>
+                    </>
+                  }
+                >
+                  <p>
+                    Imported fields are preserved and validated by Vector on the
+                    device.
+                  </p>
+                </SchemaFieldHelp>
+              </div>
+              <PipelineSchemaFields
+                schema={{ type: "object", additionalProperties: true }}
+                root={vectorSchema}
+                component={component}
+                fieldPickerTarget={fieldPickerTarget}
+                fieldSections={sections}
+                onChange={onChange}
+                editable={editable}
+                onPendingChange={reportPending}
+              />
+            </>
+          )}
+          <Modal
+            open={!!studio}
+            onClose={() => setStudio(null)}
+            wide
+            className="vrl-studio"
+            title={`${id} · ${studio && studio.startsWith("route.") ? `Condition for ${studio.split(".")[1]}` : studio === "condition" ? "Condition" : "VRL program"}`}
+            description="Edit the program with more room and test it against your samples."
+          >
+            {studio && (
+              <div className="vrl-studio-body">
+                <div className="vrl-studio-program">
+                  <VrlField
+                    path={studio}
+                    title={`${id} ${studio}`}
+                    text={vrlValue(component, canonicalPath(studio))}
+                    readOnly={!editable}
+                    onInput={(text) =>
+                      onChange(
+                        withVrlValue(component, canonicalPath(studio), text),
+                      )
+                    }
+                  />
+                </div>
+                <div className="vrl-studio-samples">{tester(true)}</div>
+              </div>
+            )}
+          </Modal>
+        </div>
+      </FieldProblemsContext.Provider>
+    </StepContexts>
   );
 }
