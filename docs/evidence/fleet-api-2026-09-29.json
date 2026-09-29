@@ -1,0 +1,360 @@
+{
+  "recorded_at": "2026-09-29T19:49:41.639Z",
+  "scope": "Isolated synthetic fleet seeded directly in SQLite (tests/load/fleet-fixture.mjs) and served by two real server builds on loopback. No enrollment, agent, Vector process or production data; verified_applied is fixture input. Debug builds on a shared development host: compare the two builds with each other, not with any capacity target.",
+  "host": {
+    "platform": "linux",
+    "release": "6.18.44-fc-v37",
+    "cpus": 4,
+    "memory_bytes": 16877547520,
+    "load_average_start": [
+      11.23,
+      6.9,
+      5.73
+    ],
+    "node": "v22.22.2"
+  },
+  "builds": {
+    "before": {
+      "label": "9434fef",
+      "sha256": "1224817308adac16c7d5a6e461a94f654414d5fc2e4be09c08c9dbb40638f671"
+    },
+    "after": {
+      "label": "e08cf8e",
+      "sha256": "0be8d0739c84c9c7cf1d7ea3737aa250367823bec9104ee04217e0f72bd6048c"
+    }
+  },
+  "samples": 5,
+  "cold_wait_ms": 2300,
+  "results": [
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "devices",
+      "method": "GET",
+      "route": "/devices",
+      "bytes": 10357901,
+      "gzip_bytes": 308100,
+      "rows": 5000,
+      "ms": {
+        "median": 2898,
+        "min": 2483.2,
+        "max": 3429.4
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "groups",
+      "method": "GET",
+      "route": "/groups",
+      "bytes": 927544,
+      "gzip_bytes": 432279,
+      "rows": 500,
+      "ms": {
+        "median": 81.9,
+        "min": 68.1,
+        "max": 91.6
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "overview_slim_param",
+      "method": "GET",
+      "route": "/overview?slim=1",
+      "bytes": 10377261,
+      "gzip_bytes": 317194,
+      "rows": 5000,
+      "ms": {
+        "median": 3335.2,
+        "min": 2337.6,
+        "max": 3536.5
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "overview",
+      "method": "GET",
+      "route": "/overview",
+      "bytes": 10377261,
+      "gzip_bytes": 317194,
+      "rows": 5000,
+      "ms": {
+        "median": 2922.5,
+        "min": 2515.8,
+        "max": 3749.7
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "device",
+      "method": "GET",
+      "route": "/devices/{device}",
+      "bytes": 6922,
+      "gzip_bytes": 1240,
+      "ms": {
+        "median": 2077.1,
+        "min": 1663.8,
+        "max": 2405.3
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "before",
+      "build": "9434fef",
+      "name": "membership_preview",
+      "method": "POST",
+      "route": "/groups/membership-preview",
+      "bytes": 12411,
+      "gzip_bytes": 1086,
+      "rows": 10,
+      "ms": {
+        "median": 130,
+        "min": 88.2,
+        "max": 184.5
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "inventory_page_1",
+      "method": "GET",
+      "route": "/devices/inventory",
+      "bytes": 111354,
+      "gzip_bytes": 8155,
+      "rows": 50,
+      "ms": {
+        "median": 1459,
+        "min": 1221.3,
+        "max": 1717.8
+      },
+      "warm_ms": {
+        "median": 37.8,
+        "min": 31.7,
+        "max": 76.4
+      }
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "inventory_q",
+      "method": "GET",
+      "route": "/devices/inventory?q=web-01",
+      "bytes": 127792,
+      "gzip_bytes": 8475,
+      "rows": 50,
+      "ms": {
+        "median": 1563.1,
+        "min": 1030.8,
+        "max": 1726.8
+      },
+      "warm_ms": {
+        "median": 50.6,
+        "min": 27.3,
+        "max": 85.9
+      }
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "overview_slim",
+      "method": "GET",
+      "route": "/overview?slim=1",
+      "bytes": 35465,
+      "gzip_bytes": 10636,
+      "ms": {
+        "median": 1465.9,
+        "min": 1077.6,
+        "max": 1657.5
+      },
+      "warm_ms": {
+        "median": 107.7,
+        "min": 63.5,
+        "max": 160.3
+      }
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "overview",
+      "method": "GET",
+      "route": "/overview",
+      "bytes": 10393377,
+      "gzip_bytes": 318641,
+      "rows": 5000,
+      "ms": {
+        "median": 2117.6,
+        "min": 1915.6,
+        "max": 2764.3
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "device",
+      "method": "GET",
+      "route": "/devices/{device}",
+      "bytes": 6922,
+      "gzip_bytes": 1240,
+      "ms": {
+        "median": 5.5,
+        "min": 4.4,
+        "max": 16.4
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "device_with_groups",
+      "method": "GET",
+      "route": "/devices/{device}?include=groups",
+      "bytes": 7283,
+      "gzip_bytes": 1442,
+      "ms": {
+        "median": 18.1,
+        "min": 13.1,
+        "max": 46.4
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "group_members",
+      "method": "GET",
+      "route": "/groups/{all servers}/members",
+      "bytes": 4311,
+      "gzip_bytes": 1361,
+      "rows": 50,
+      "ms": {
+        "median": 1235.6,
+        "min": 963.1,
+        "max": 1801.1
+      },
+      "warm_ms": {
+        "median": 108.2,
+        "min": 90.6,
+        "max": 142.8
+      }
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "groups_slim",
+      "method": "GET",
+      "route": "/groups?slim=1",
+      "bytes": 88480,
+      "gzip_bytes": 14052,
+      "rows": 500,
+      "ms": {
+        "median": 42.5,
+        "min": 20.5,
+        "max": 117.7
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "groups",
+      "method": "GET",
+      "route": "/groups",
+      "bytes": 936471,
+      "gzip_bytes": 434500,
+      "rows": 500,
+      "ms": {
+        "median": 132.9,
+        "min": 75.3,
+        "max": 217.2
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "devices",
+      "method": "GET",
+      "route": "/devices",
+      "bytes": 10357901,
+      "gzip_bytes": 308100,
+      "rows": 5000,
+      "ms": {
+        "median": 1720.3,
+        "min": 1459.7,
+        "max": 2571.7
+      },
+      "warm_ms": null
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "inventory_ids",
+      "method": "GET",
+      "route": "/devices/inventory/ids",
+      "bytes": 185290,
+      "gzip_bytes": 98713,
+      "rows": 4750,
+      "ms": {
+        "median": 1479.2,
+        "min": 936.8,
+        "max": 1669.8
+      },
+      "warm_ms": {
+        "median": 26.2,
+        "min": 23.8,
+        "max": 36.5
+      }
+    },
+    {
+      "server": "after",
+      "build": "e08cf8e",
+      "name": "membership_preview",
+      "method": "POST",
+      "route": "/groups/membership-preview",
+      "bytes": 12411,
+      "gzip_bytes": 1086,
+      "rows": 10,
+      "ms": {
+        "median": 85,
+        "min": 74,
+        "max": 147.7
+      },
+      "warm_ms": null,
+      "busy_retries": 7
+    }
+  ],
+  "checks": [
+    "both builds list every device, revoked included",
+    "the fleet was checked in while it was measured",
+    "the slim Overview leaves out only devices",
+    "the inventory pages the live fleet",
+    "a device reads the same on both builds",
+    "both builds preview the same membership change"
+  ],
+  "fixture": {
+    "devices": 5000,
+    "live": 4750,
+    "groups": 500,
+    "memberships": 21551,
+    "largest_group": 4750,
+    "targets": 4500,
+    "device_bytes": 27507936,
+    "seed_ms": 936
+  },
+  "load_average_end": [
+    8.37,
+    8.32,
+    6.85
+  ],
+  "before_log_errors": 0,
+  "after_log_errors": 0
+}
