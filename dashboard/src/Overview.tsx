@@ -44,6 +44,7 @@ import {
   completeSeries,
   healthOrder,
   monitoringTarget,
+  needsYouRows,
   niceCeiling,
   present,
   quietSummary,
@@ -65,8 +66,13 @@ import {
 } from "./activityModel";
 import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
-import { StoppedRolloutItems, useStoppedRollouts } from "./StoppedRollouts";
-import type { StoppedRollout } from "./stoppedRollouts";
+import { StoppedRolloutItem, useStoppedRollouts } from "./StoppedRollouts";
+import {
+  dismissStoppedRollout,
+  readDismissed,
+  type StoppedRollout,
+} from "./stoppedRollouts";
+import { requestRollbackReview } from "./deploymentStatus";
 import NotificationsHint from "./NotificationsHint";
 import "./overview.css";
 
@@ -99,6 +105,10 @@ export type AttentionGroup = {
   fix?: string | null;
   code?: string | null;
   component_id?: string | null;
+  /** Failed and degraded groups: the rollout all their devices share. */
+  deployment_id?: string | null;
+  /** True only when the server can review that rollout's rollback now. */
+  rollback_available?: boolean;
 };
 export type RolloutSummary = {
   id: string;
@@ -889,8 +899,8 @@ function attentionCopy(
       return {
         title:
           group.count === 1 && group.device_names[0]
-            ? `${group.device_names[0]} stopped delivering ${pipeline}`
-            : `${pipeline} stopped delivering on ${devices}`,
+            ? `${group.device_names[0]} isn't delivering ${pipeline}`
+            : `${pipeline} isn't delivering on ${devices}`,
         detail: [group.title, group.reason].filter(Boolean).join(". ") || null,
       };
     case "check_required":
@@ -956,16 +966,27 @@ function NeedsYou({
   stopped: StoppedRollout[];
 }) {
   const groups = data.attention || [];
+  // Dismissed stopped rollouts, for whoever is signed in.
+  const [remembered, setRemembered] = useState(() => ({
+    user: user.id,
+    keys: readDismissed(user.id),
+  }));
+  const dismissed =
+    remembered.user === user.id ? remembered.keys : readDismissed(user.id);
+  const rows = needsYouRows(groups, stopped, dismissed);
   const affected = groups
     .filter((group) => group.severity !== "neutral")
     .reduce((sum, group) => sum + group.count, 0);
-  // A stopped or rolled-back rollout is listed below, so never say
-  // "Nothing is failing" above it.
+  const stoppedCount = stopped.filter(
+    (rollout) => !dismissed.has(rollout.key),
+  ).length;
+  // A stopped rollout is listed below, so never say "Nothing is failing"
+  // above it.
   const summary = [
     affected
       ? `${countLabel(affected, "device")} ${affected === 1 ? "needs" : "need"} attention`
       : "",
-    stopped.length ? `${countLabel(stopped.length, "rollout")} stopped` : "",
+    stoppedCount ? `${countLabel(stoppedCount, "rollout")} stopped` : "",
   ]
     .filter(Boolean)
     .join(", ");
@@ -986,88 +1007,35 @@ function NeedsYou({
         ) : undefined
       }
     >
-      {groups.length || stopped.length ? (
+      {rows.length ? (
         <ul className="overview-attention-list">
-          <StoppedRolloutItems items={stopped} />
-          {groups.map((group) => {
-            const Icon = severityIcons[group.cause];
-            const { title, detail } = attentionCopy(group, now, unmanaged)!;
-            const bucket = causeBucket[group.cause];
-            const filter = new URLSearchParams();
-            if (bucket) filter.set("status", bucket);
-            if (group.version_id) filter.set("version", group.version_id);
-            return (
-              <li
-                key={`${group.cause}:${group.state}:${group.version_id}`}
-                className="overview-attention-item"
-                data-severity={group.severity}
-              >
-                <span className="overview-attention-icon" aria-hidden="true">
-                  <Icon size={16} />
-                </span>
-                <div className="overview-attention-copy">
-                  <p className="overview-attention-title">{title}</p>
-                  {group.reason && group.cause !== "degraded" && (
-                    <p
-                      className="overview-attention-reason"
-                      title={group.reason}
-                    >
-                      {group.reason}
-                    </p>
-                  )}
-                  {detail && (
-                    <p className="overview-attention-detail">{detail}</p>
-                  )}
-                  {group.cause === "degraded" && group.fix && (
-                    <p className="overview-attention-fix">
-                      <strong>Fix</strong> {group.fix}
-                    </p>
-                  )}
-                  <p className="overview-attention-devices">
-                    {nameList(group.device_names, group.count)}
-                  </p>
-                </div>
-                <div className="overview-attention-actions">
-                  {group.cause === "unmanaged" &&
-                  roleAllows(user, "operate") ? (
-                    <a
-                      className="button secondary compact"
-                      href="#/configurations"
-                    >
-                      Deploy a pipeline
-                    </a>
-                  ) : (
-                    <a
-                      className="button secondary compact"
-                      href={`#/devices?${filter}`}
-                    >
-                      Review devices
-                    </a>
-                  )}
-                  {group.configuration_id &&
-                    ["failed", "degraded", "check_required"].includes(
-                      group.cause,
-                    ) && (
-                      <a
-                        className="overview-inline-link"
-                        href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}
-                      >
-                        Open pipeline
-                      </a>
-                    )}
-                  {group.cause === "offline" && (
-                    <DocLink
-                      topic="troubleshooting"
-                      section="a-device-is-offline-or-never-connects"
-                      className="overview-inline-link"
-                    >
-                      Troubleshoot
-                    </DocLink>
-                  )}
-                </div>
-              </li>
-            );
-          })}
+          {rows.map((row) =>
+            row.kind === "rollout" ? (
+              <StoppedRolloutItem
+                key={`rollout:${row.rollout.key}`}
+                item={row.rollout}
+                onDismiss={() =>
+                  setRemembered({
+                    user: user.id,
+                    keys: dismissStoppedRollout(
+                      user.id,
+                      row.rollout.key,
+                      dismissed,
+                    ),
+                  })
+                }
+              />
+            ) : (
+              <AttentionItem
+                key={`${row.group.cause}:${row.group.state}:${row.group.version_id}`}
+                group={row.group}
+                rollout={row.rollout}
+                user={user}
+                now={now}
+                unmanaged={unmanaged}
+              />
+            ),
+          )}
         </ul>
       ) : (
         <div className="overview-all-clear">
@@ -1086,6 +1054,127 @@ function NeedsYou({
       )}
       <NotificationsHint user={user} placement="card" />
     </Card>
+  );
+}
+
+/**
+ * A device group. Devices losing data or failing lead with Roll back when the
+ * server can review that rollback; the rollout page opens with the review,
+ * which still asks before changing anything.
+ */
+function AttentionItem({
+  group,
+  rollout,
+  user,
+  now,
+  unmanaged,
+}: {
+  group: AttentionGroup;
+  rollout: StoppedRollout | null;
+  user: User;
+  now: number;
+  /** What runs on devices without a pipeline (unmanagedDetail). */
+  unmanaged: string;
+}) {
+  const Icon = severityIcons[group.cause];
+  const { title, detail } = attentionCopy(group, now, unmanaged)!;
+  const bucket = causeBucket[group.cause];
+  const filter = new URLSearchParams();
+  if (bucket) filter.set("status", bucket);
+  if (group.version_id) filter.set("version", group.version_id);
+  const deployment = group.deployment_id || null;
+  const rolloutHref = deployment
+    ? `#/deployments/${encodeURIComponent(deployment)}`
+    : null;
+  const canRollBack =
+    !!rolloutHref &&
+    group.rollback_available === true &&
+    (group.cause === "degraded" || group.cause === "failed") &&
+    roleAllows(user, "operate");
+  // Name the device only when it is all the rollback returns.
+  const only =
+    group.count === 1 && rollout?.released === 1
+      ? group.device_names[0] || null
+      : null;
+  return (
+    <li className="overview-attention-item" data-severity={group.severity}>
+      <span className="overview-attention-icon" aria-hidden="true">
+        <Icon size={16} />
+      </span>
+      <div className="overview-attention-copy">
+        <p className="overview-attention-title">{title}</p>
+        {group.reason && group.cause !== "degraded" && (
+          <p className="overview-attention-reason" title={group.reason}>
+            {group.reason}
+          </p>
+        )}
+        {detail && <p className="overview-attention-detail">{detail}</p>}
+        {group.cause === "degraded" && group.fix && (
+          <p className="overview-attention-fix">
+            <strong>Fix</strong> {group.fix}
+          </p>
+        )}
+        {rollout && (
+          <p className="overview-attention-detail">{rollout.consequence}</p>
+        )}
+        <p className="overview-attention-devices">
+          {nameList(group.device_names, group.count)}
+        </p>
+      </div>
+      <div className="overview-attention-actions">
+        {canRollBack && (
+          <a
+            className="button compact"
+            href={rolloutHref!}
+            onClick={(event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              requestRollbackReview(deployment!);
+            }}
+          >
+            {only ? `Roll back ${only}` : "Roll back"}
+          </a>
+        )}
+        {group.cause === "unmanaged" && roleAllows(user, "operate") ? (
+          <a className="button secondary compact" href="#/configurations">
+            Deploy a pipeline
+          </a>
+        ) : rolloutHref &&
+          (group.cause === "degraded" || group.cause === "failed") ? (
+          <a className="button secondary compact" href={rolloutHref}>
+            Open rollout
+          </a>
+        ) : (
+          <a className="button secondary compact" href={`#/devices?${filter}`}>
+            Review devices
+          </a>
+        )}
+        {group.configuration_id &&
+          ["failed", "degraded", "check_required"].includes(group.cause) && (
+            <a
+              className="overview-inline-link"
+              href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}
+            >
+              Open pipeline
+            </a>
+          )}
+        {group.cause === "offline" && (
+          <DocLink
+            topic="troubleshooting"
+            section="a-device-is-offline-or-never-connects"
+            className="overview-inline-link"
+          >
+            Troubleshoot
+          </DocLink>
+        )}
+      </div>
+    </li>
   );
 }
 

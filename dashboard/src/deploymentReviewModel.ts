@@ -247,16 +247,31 @@ export type ConflictRow = {
   /** The assignments that keep this device from taking the request. */
   assignments: AssignmentDescription[];
   priority: number | null;
+  /** What the device follows today, which may outrank the conflict. */
+  winner: AssignmentDescription | null;
+  /** Other assignments still bound to it at the request's priority. */
+  alsoBound: AssignmentDescription[];
+  /** Every assignment, at any tier, one replace must cover for this device. */
+  replace: string[];
 };
 
 /**
  * Devices where the request would not win, with the assignment in the way.
- * Equal priority with a different payload is a conflict; a higher priority wins.
+ * Equal priority with a different payload is a conflict; a higher priority
+ * wins. The current winner is the one the device follows today (a rollback
+ * one priority up, say), not the equal-priority assignment it conflicts with.
  */
 export function conflictRows(
-  preview: Pick<DeploymentPreview, "outcomes" | "conflicts" | "devices">,
+  preview: Pick<DeploymentPreview, "outcomes" | "conflicts" | "devices"> &
+    Partial<Pick<DeploymentPreview, "replacements_needed">>,
   resource: "configuration" | "policy",
 ): ConflictRow[] {
+  const needed = (deviceId: string, fallback: AssignmentDescription[]) => {
+    const ids = (preview.replacements_needed || [])
+      .filter((entry) => entry.device_ids.includes(deviceId))
+      .map((entry) => entry.assignment.id);
+    return [...new Set(ids.length ? ids : fallback.map((a) => a.id))];
+  };
   const names = new Map(
     preview.devices.map((device) => [device.id, device.name]),
   );
@@ -272,12 +287,17 @@ export function conflictRows(
       for (const issue of issues)
         for (const described of issue.assignments || [])
           assignments.set(described.id, described);
+      const bound = [...assignments.values()];
+      const winner = outcome.winner || bound[0] || null;
       rows.push({
         device_id: outcome.device_id,
         device_name: names.get(outcome.device_id) || outcome.device_id,
         kind: "conflict",
-        assignments: [...assignments.values()],
+        assignments: bound,
         priority: issues[0]?.priority ?? null,
+        winner,
+        alsoBound: bound.filter((a) => a.id !== winner?.id),
+        replace: needed(outcome.device_id, winner ? [winner, ...bound] : bound),
       });
     } else if (outcome.outcome === "higher_priority" && outcome.assignment) {
       const described: AssignmentDescription =
@@ -305,10 +325,47 @@ export function conflictRows(
         kind: "higher_priority",
         assignments: [described],
         priority: outcome.assignment.priority,
+        winner: outcome.winner || described,
+        alsoBound: [],
+        replace: needed(outcome.device_id, [described]),
       });
     }
   }
   return rows;
+}
+
+/** "r15-demo v1 (cancelled)": an assignment with a status worth saying. */
+export function boundName(assignment: AssignmentDescription) {
+  const status = ["cancelled", "failed", "paused"].includes(assignment.status)
+    ? assignment.status
+    : null;
+  return `${assignment.rollback_of ? "Rollback to " : ""}${assignmentName(assignment)}${status ? ` (${status})` : ""}`;
+}
+
+/**
+ * What stays behind when some reviewed devices keep their current
+ * assignment: "edge-nyc-02 keeps Edge syslog processing v1 (priority 101
+ * rollback)". The name is what the device runs today.
+ */
+export function keptLine(
+  device: Pick<Device, "name" | "running_version"> & {
+    actual_sha256?: string | null;
+  },
+  outranking: Pick<AssignmentDescription, "priority" | "rollback_of"> | null,
+  resource: "configuration" | "policy" = "configuration",
+) {
+  const detail = outranking
+    ? ` (priority ${outranking.priority}${outranking.rollback_of ? " rollback" : ""})`
+    : "";
+  const running =
+    resource === "policy"
+      ? "its current agent settings"
+      : device.running_version
+        ? runningName(device)
+        : device.actual_sha256
+          ? "its local config"
+          : "what it runs now";
+  return `${device.name} keeps ${running}${detail}`;
 }
 
 /** Local datetime-input value for a timestamp. */

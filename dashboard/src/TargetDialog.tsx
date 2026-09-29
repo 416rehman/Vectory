@@ -53,6 +53,7 @@ import {
   conflictRows,
   defaultRelease,
   devicesText,
+  keptLine,
   inferPipelineName,
   localInputValue,
   pauseSource,
@@ -313,7 +314,12 @@ export default function TargetDialog({
       status: string;
     } | null>(null),
     [error, setError] = useState(""),
-    [preview, setPreview] = useState<Reviewed | null>(null);
+    [preview, setPreview] = useState<Reviewed | null>(null),
+    // The review whose devices-left-behind the person accepted; any new
+    // review asks again.
+    [leftBehindAccepted, setLeftBehindAccepted] = useState<Reviewed | null>(
+      null,
+    );
   // Callers such as the editor don't pass the pipeline's name; the reviewed
   // preview carries it, so the review never shows a bare "Version 1".
   const knownPipelineName =
@@ -853,14 +859,16 @@ export default function TargetDialog({
         takes: true,
       };
     if (outcome.outcome === "conflict") {
-      const other = conflictRows(
+      const row = conflictRows(
         {
           outcomes: [outcome],
           conflicts: preview?.conflicts || [],
           devices: [device],
         },
         resource,
-      )[0]?.assignments[0];
+      )[0];
+      // The one it follows today, which may outrank the conflict.
+      const other = row?.winner || row?.assignments[0];
       return {
         label: "Conflict",
         tone: "danger",
@@ -999,6 +1007,24 @@ export default function TargetDialog({
     })}${relative ? ` (${relative})` : ""}`;
   };
   const conflictList = preview ? conflictRows(preview, resource) : [];
+  // Devices an existing assignment outranks keep what they run: sending then
+  // changes only the others, and says so.
+  const kept = preview
+    ? preview.devices.filter(
+        (device) => outcomeFor(device)?.label === "Keeps current",
+      )
+    : [];
+  const keptLines = kept.slice(0, 3).map((device) => {
+    const outcome = outcomes.get(device.id);
+    const outranking =
+      outcome?.winner && outcome.winner.id === outcome.assignment?.id
+        ? outcome.winner
+        : outcome?.assignment
+          ? { priority: outcome.assignment.priority, rollback_of: null }
+          : null;
+    return keptLine(device, outranking, resource);
+  });
+  const leftBehind = kept.length > 0 && leftBehindAccepted !== preview;
   const replacements = preview?.replacements || [];
   const headline = preview
     ? reviewHeadline(preview, change, preview.devices.length)
@@ -1117,9 +1143,11 @@ export default function TargetDialog({
   const sendLabel = preview
     ? scheduled
       ? "Schedule deployment"
-      : policy
-        ? "Apply settings"
-        : "Deploy to devices"
+      : kept.length
+        ? `${policy ? "Apply to" : "Deploy to"} ${preview.devices.length - kept.length} of ${devicesText(preview.devices.length)}`
+        : policy
+          ? "Apply settings"
+          : "Deploy to devices"
     : "Review deployment";
   return (
     <Modal
@@ -1445,6 +1473,9 @@ export default function TargetDialog({
                     <span>
                       <span>
                         Replaces{" "}
+                        {replacement.assignment.rollback_of
+                          ? "the rollback to "
+                          : ""}
                         <AssignmentLink
                           id={replacement.assignment.id}
                           label={shortName(replacement.assignment)}
@@ -1472,7 +1503,11 @@ export default function TargetDialog({
                       : adoption.assignments.some((a) => a.policy?.sync_paused)
                         ? "Replaces the pause, so it can't win again later."
                         : `Replaces the settings ${single ? "this device follows" : "these devices follow"} now.`
-                    : `A new version replaces the one ${single ? "this device runs" : "these devices run"} now.`}{" "}
+                    : adoption.assignments.some((a) => a.rollback_of)
+                      ? // After a rollback: the fix replaces both, so every
+                        // device takes it in one review.
+                        `Replaces the rollback to ${shortName(adoption.assignments.find((a) => a.rollback_of)!)} and the rollout it stopped, so ${single ? "this device takes" : "every device takes"} this version.`
+                      : `A new version replaces the one ${single ? "this device runs" : "these devices run"} now.`}{" "}
                   Priority stays {priority}
                   {mode === "persistent" && !scheduled
                     ? " and it follows the same groups"
@@ -1594,6 +1629,9 @@ export default function TargetDialog({
                 setPriorityTouched(true);
                 void review({ ...inputs, priority: next });
               }}
+              replaceAll={(preview.replacements_needed || []).map(
+                (entry) => entry.assignment.id,
+              )}
               onReplace={(ids) =>
                 void review({
                   ...inputs,
@@ -1601,6 +1639,39 @@ export default function TargetDialog({
                 })
               }
             />
+            {kept.length > 0 && (
+              <label className="control-note target-left-behind">
+                <input
+                  type="checkbox"
+                  checked={leftBehindAccepted === preview}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setLeftBehindAccepted(
+                      event.currentTarget.checked ? preview : null,
+                    )
+                  }
+                />
+                <span>
+                  <strong>
+                    {keptLines.join(". ")}
+                    {kept.length > 3
+                      ? `. ${kept.length - 3} more keep what they run`
+                      : ""}
+                    .
+                  </strong>
+                  <small>
+                    {preview.devices.length - kept.length === 1
+                      ? "Only the other device changes."
+                      : preview.devices.length === kept.length
+                        ? "No device changes now."
+                        : `Only the other ${devicesText(preview.devices.length - kept.length)} change.`}{" "}
+                    Replace or outrank what{" "}
+                    {kept.length === 1 ? "it follows" : "they follow"} to
+                    include {kept.length === 1 ? "it" : "them"}.
+                  </small>
+                </span>
+              </label>
+            )}
             {pausedDevices.length > 0 && (
               <div className="control-note target-paused" role="status">
                 <strong>
@@ -1860,6 +1931,7 @@ export default function TargetDialog({
                 preview.request_correlation !== true)) ||
             (!!preview && !!settingsMismatch.length) ||
             !!preview?.conflicts?.length ||
+            (!!preview && leftBehind) ||
             blockers.length > 0 ||
             (!preview &&
               bindingAttempted &&

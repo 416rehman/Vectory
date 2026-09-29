@@ -139,8 +139,8 @@ describe("reviewed assignment removal", () => {
     };
     const parsed = assertAssignmentRemovalPreview(id(1), value);
     expect(parsed.devices[0].after).toEqual(parsed.devices[0].before);
-    expect(removalEffectLabel(parsed.devices[0])).toBe(
-      "Keep current state while rollout waits",
+    expect(removalEffectLabel(parsed.devices[0])).toMatch(
+      /^Keeps .+ until the next rollout reaches it$/,
     );
     value.devices[0].after!.assignment_name = "Friendly renamed assignment";
     expect(AssignmentRemovalPreviewSchema.safeParse(value).success).toBe(true);
@@ -219,7 +219,9 @@ describe("reviewed assignment removal", () => {
         generation: 8,
       }),
     };
-    expect(removalEffectLabel(unmanaged)).toBe("Keep the local configuration");
+    expect(removalEffectLabel(unmanaged)).toBe(
+      "Keeps its last working config, unmanaged",
+    );
     expect(removalStateLabel(unmanaged.after, "configuration")).toBe(
       "No managed configuration",
     );
@@ -252,6 +254,32 @@ describe("reviewed assignment removal", () => {
     );
     expect(removalStateLabel(policyState, "policy")).toBe(
       "Default agent policy",
+    );
+  });
+  // Round-2 operator review P3: say what each device runs afterwards.
+  it("says what each device keeps or switches to, by name", () => {
+    const [device] = review().devices;
+    expect(removalEffectLabel(device)).toBe("Switches to Log delivery v1");
+    const kept = {
+      ...device,
+      effect: "unchanged" as const,
+      before: state({
+        configuration_name: "Edge syslog processing",
+        version_number: 1,
+      }),
+      after: state({
+        configuration_name: "Edge syslog processing",
+        version_number: 1,
+      }),
+    };
+    expect(removalEffectLabel(kept)).toBe(
+      "Keeps Edge syslog processing v1 (no change)",
+    );
+    expect(removalEffectLabel({ ...kept, effect: "not_targeted" })).toBe(
+      "Keeps Edge syslog processing v1 (no change)",
+    );
+    expect(removalStateLabel(kept.after, "configuration")).toBe(
+      "Edge syslog processing v1",
     );
   });
   it("retains missing and revoked identities without inventing state", () => {

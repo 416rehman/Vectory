@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyStepTable,
   countdown,
   describeDeployment,
   explainError,
   failedApplyStep,
   failureStagePhrase,
+  failureText,
+  lineageLabel,
+  pipelineFixable,
   progressSegments,
   releasePlan,
+  requestRollbackReview,
+  takeRollbackReview,
   targetLabel,
   timelineSteps,
   withDegraded,
@@ -262,8 +268,17 @@ describe("device timeline", () => {
       ["released", "done", "2026-09-29T02:00:00Z"],
       ["downloaded", "done", null],
       ["validated", "done", "2026-09-29T02:00:40Z"],
-      ["applied", "done", null],
+      ["written", "done", null],
+      ["reloaded", "done", null],
       ["verified", "done", "2026-09-29T02:01:10Z"],
+    ]);
+    expect(steps.map((s) => s.label)).toEqual([
+      "Released",
+      "Downloaded",
+      "Validated",
+      "Written",
+      "Vector reloaded",
+      "Applied",
     ]);
   });
   it("marks the step after the last reached one as failed", () => {
@@ -281,6 +296,7 @@ describe("device timeline", () => {
       "done",
       "done",
       "failed",
+      "waiting",
       "waiting",
       "waiting",
     ]);
@@ -303,6 +319,7 @@ describe("device timeline", () => {
       "waiting",
       "waiting",
       "waiting",
+      "waiting",
     ]);
     expect(
       timelineSteps({
@@ -310,7 +327,14 @@ describe("device timeline", () => {
         released_at: null,
         verified_at: null,
       }).map((s) => s.state),
-    ).toEqual(["waiting", "waiting", "waiting", "waiting", "waiting"]);
+    ).toEqual([
+      "waiting",
+      "waiting",
+      "waiting",
+      "waiting",
+      "waiting",
+      "waiting",
+    ]);
   });
   it("blames the stage the agent reported, not the step after the last check-in", () => {
     // A 15 s heartbeat recorded nothing between release and the rollback.
@@ -325,7 +349,8 @@ describe("device timeline", () => {
       ["released", "done"],
       ["downloaded", "done"],
       ["validated", "done"],
-      ["applied", "failed"],
+      ["written", "done"],
+      ["reloaded", "failed"],
       ["verified", "waiting"],
     ]);
     expect(
@@ -336,9 +361,29 @@ describe("device timeline", () => {
         verified_at: null,
         timeline: [{ state: "desired", at: "2026-09-29T08:13:02Z" }],
       }).map((s) => s.state),
-    ).toEqual(["done", "done", "failed", "waiting", "waiting"]);
+    ).toEqual(["done", "done", "failed", "waiting", "waiting", "waiting"]);
   });
-  it("places a rollback without a reported stage at Applied", () => {
+  it("marks Vector reloaded, not Written, when the reload fails (a port clash)", () => {
+    const steps = timelineSteps({
+      state: "rolled_back",
+      failure_stage: "reload",
+      released_at: "2026-09-29T16:54:04Z",
+      verified_at: null,
+      timeline: [
+        { state: "desired", at: "2026-09-29T16:54:05Z" },
+        { state: "written", at: "2026-09-29T16:54:07Z" },
+        { state: "rolled_back", at: "2026-09-29T16:54:09Z" },
+      ],
+    });
+    expect(steps.find((s) => s.state === "failed")?.label).toBe(
+      "Vector reloaded",
+    );
+    expect(steps.find((s) => s.key === "written")).toMatchObject({
+      state: "done",
+      at: "2026-09-29T16:54:07Z",
+    });
+  });
+  it("places a rollback without a reported stage at Vector reloaded", () => {
     expect(
       timelineSteps({
         state: "rolled_back",
@@ -346,7 +391,7 @@ describe("device timeline", () => {
         verified_at: null,
         timeline: [],
       }).map((s) => s.state),
-    ).toEqual(["done", "done", "done", "failed", "waiting"]);
+    ).toEqual(["done", "done", "done", "done", "failed", "waiting"]);
   });
   it("maps agent stages to one apply step shared with the device page", () => {
     expect(failedApplyStep("validation")).toBe("validated");
@@ -397,6 +442,38 @@ describe("failure reasons", () => {
     expect(explainError("UNKNOWN_CODE (apply)")?.code).toBeNull();
     expect(explainError(null)).toBeNull();
   });
+  it("prints the reason once: the diagnostic, then what happened if it differs", () => {
+    // A port clash: the diagnostic is the cause, the code says what happened.
+    expect(
+      failureText(
+        "Another process is already listening on this component's address.",
+        "APPLY_ROLLED_BACK (reload)",
+      ),
+    ).toEqual({
+      reason:
+        "Another process is already listening on this component's address.",
+      effect:
+        "Vector didn't come up healthy with this version, so the agent restored the last working config.",
+      code: "APPLY_ROLLED_BACK (reload)",
+    });
+    // The error repeats the diagnostic: one sentence, not two.
+    expect(failureText("Port 9598 is in use", "Port 9598 is in use.")).toEqual({
+      reason: "Port 9598 is in use",
+      effect: null,
+      code: null,
+    });
+    // Without a diagnostic, the code's explanation is the reason.
+    expect(failureText(null, "WRITE_FAILED")).toEqual({
+      reason: "The agent couldn't write the configuration file.",
+      effect: null,
+      code: "WRITE_FAILED",
+    });
+    expect(failureText("  ", null)).toEqual({
+      reason: null,
+      effect: null,
+      code: null,
+    });
+  });
 });
 
 describe("time formatting", () => {
@@ -405,5 +482,119 @@ describe("time formatting", () => {
     expect(countdown(185_400)).toBe("3:06");
     expect(countdown(3_723_000)).toBe("1:02:03");
     expect(countdown(-5)).toBe("0:00");
+  });
+});
+
+describe("lineage names the pipeline whenever it crosses to another", () => {
+  it("prints the version alone within the page's own pipeline", () => {
+    expect(
+      lineageLabel(
+        { configuration_name: "r15-demo", version_number: 3 },
+        "r15-demo",
+      ),
+    ).toBe("v3");
+    expect(
+      lineageLabel(
+        { configuration_name: "Edge syslog processing", version_number: 1 },
+        "r15-demo",
+      ),
+    ).toBe("Edge syslog processing v1");
+    // Older servers send only the number: it stays a number.
+    expect(lineageLabel({ version_number: 2 }, "r15-demo")).toBe("v2");
+    expect(lineageLabel({}, "r15-demo")).toBe("another version");
+    expect(lineageLabel({}, "r15-demo", "an earlier rollout")).toBe(
+      "an earlier rollout",
+    );
+  });
+  it("says where a rolled-back rollout returned its devices, by name", () => {
+    const rolledBack = {
+      ...base,
+      status: "cancelled",
+      status_before_rollback: "active",
+      rolled_back_by: "00000000-0000-4000-8000-000000000001",
+      rolled_back_to_version: 1,
+      configuration_name: "r15-demo",
+      rolled_back_to_configuration_name: "Edge syslog processing",
+    };
+    expect(describeDeployment(rolledBack).note).toBe(
+      "To Edge syslog processing v1",
+    );
+    expect(
+      describeDeployment({
+        ...rolledBack,
+        rolled_back_to_configuration_name: "r15-demo",
+        status_before_rollback: "failed",
+      }).note,
+    ).toBe("To v1 after failing");
+  });
+  it("names the replacing pipeline when it differs", () => {
+    expect(
+      describeDeployment({
+        ...base,
+        status: "unassigned",
+        status_before_removal: "completed",
+        configuration_name: "Edge syslog processing",
+        replaced_by: [
+          {
+            deployment_id: "00000000-0000-4000-8000-000000000002",
+            device_count: 1,
+            at: "2026-09-29T02:00:00Z",
+            version_number: 3,
+            configuration_name: "r15-demo",
+          },
+        ],
+      }).note,
+    ).toBe("By r15-demo v3");
+  });
+});
+
+describe("failures only a pipeline change can clear", () => {
+  it("recognises a port in use, VRL errors and invalid options", () => {
+    for (const code of [
+      "ADDRESS_IN_USE",
+      "VRL_E100",
+      "INVALID_ADDRESS",
+      "UNKNOWN_FIELD",
+      "INPUT_NOT_FOUND",
+    ])
+      expect(pipelineFixable(code), code).toBe(true);
+    for (const code of [
+      "DATA_DIR_MISSING",
+      "PERMISSION_DENIED",
+      "DATA_PLANE_SINK_ERRORS",
+      "",
+      null,
+      undefined,
+    ])
+      expect(pipelineFixable(code), String(code)).toBe(false);
+  });
+});
+
+describe("opening the rollback review from elsewhere", () => {
+  it("opens once, for the named rollout, and only soon after the request", () => {
+    const id = "00000000-0000-4000-8000-00000000000A";
+    requestRollbackReview(id, 1000);
+    expect(takeRollbackReview(id.toLowerCase(), 2000)).toBe(true);
+    expect(takeRollbackReview(id, 2001)).toBe(false);
+    requestRollbackReview(id, 1000);
+    expect(
+      takeRollbackReview("00000000-0000-4000-8000-00000000000b", 1001),
+    ).toBe(false);
+    expect(takeRollbackReview(id, 1002)).toBe(false);
+    requestRollbackReview(id, 1000);
+    expect(takeRollbackReview(id, 31_001)).toBe(false);
+  });
+});
+
+describe("one apply table for the device page and the rollout page", () => {
+  it("lists six steps with the state that reaches each", () => {
+    expect(applyStepTable.map((step) => [step.label, step.state])).toEqual([
+      ["Released", "desired"],
+      ["Downloaded", "downloaded"],
+      ["Validated", "validated"],
+      ["Written", "written"],
+      ["Vector reloaded", "reload_requested"],
+      ["Applied", "verified_applied"],
+    ]);
   });
 });

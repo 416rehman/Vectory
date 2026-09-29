@@ -811,10 +811,15 @@ const operations = () =>
       .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
       .map(([key, value]) => ({ key, value: JSON.parse(value) })),
   );
-async function beginRollback() {
+// Roll back lives in the header's Stop rollout / Roll back or remove menu.
+async function chooseRollBack() {
   await details()
-    .getByRole("button", { name: "Roll back", exact: true })
+    .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
     .click();
+  await page.getByRole("menuitem", { name: "Roll back", exact: true }).click();
+}
+async function beginRollback() {
+  await chooseRollBack();
   await expect(rollbackConfirm()).toBeVisible();
 }
 async function sendRollback() {
@@ -1107,9 +1112,7 @@ try {
               .getByRole("button", { name: "Choose devices", exact: true })
               .click();
           } else {
-            await details()
-              .getByRole("button", { name: "Roll back", exact: true })
-              .click();
+            await chooseRollBack();
           }
           await expect(storageDialog()).toBeVisible();
           await expect(page.getByRole("dialog")).toHaveCount(1);
@@ -1386,10 +1389,7 @@ try {
             await page
               .getByRole("button", { name: "Choose devices", exact: true })
               .click();
-          else if (entry === "rollback")
-            await details()
-              .getByRole("button", { name: "Roll back", exact: true })
-              .click();
+          else if (entry === "rollback") await chooseRollBack();
           else await openIssue();
           await expect(storageDialog()).toBeVisible();
           await expect.poll(() => state.holds.length).toBe(1);
@@ -1600,9 +1600,7 @@ try {
           };
           window.dispatchEvent(new Event("vectory:deployment-request"));
         }, key);
-        await details()
-          .getByRole("button", { name: "Roll back", exact: true })
-          .click();
+        await chooseRollBack();
         await expect(storageDialog()).toContainText(
           "Browser storage is unavailable",
         );

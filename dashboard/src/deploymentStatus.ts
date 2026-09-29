@@ -61,11 +61,33 @@ type Lineage = Pick<
   | "failure_reason"
 > &
   Partial<
-    Pick<DeploymentSummary, "verified_count" | "target_count" | "state_counts">
+    Pick<
+      DeploymentSummary,
+      | "verified_count"
+      | "target_count"
+      | "state_counts"
+      | "configuration_name"
+      | "rolled_back_to_configuration_name"
+    >
   >;
 
-function version(number: number | null | undefined) {
-  return number ? `v${number}` : "another version";
+/**
+ * A lineage link's version as a person reads it: "v3" within the page's own
+ * pipeline, "Edge syslog processing v1" when the link crosses to another
+ * one (a rollback usually does). Never a bare number from another pipeline.
+ */
+export function lineageLabel(
+  entry: {
+    configuration_name?: string | null;
+    version_number?: number | null;
+  },
+  ownPipeline: string | null | undefined,
+  fallback = "another version",
+) {
+  const name = entry.configuration_name || null;
+  const number = entry.version_number || null;
+  if (name && name !== ownPipeline) return number ? `${name} v${number}` : name;
+  return number ? `v${number}` : fallback;
 }
 
 export function describeDeployment(d: Lineage): DeploymentDisplay {
@@ -77,8 +99,14 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
       ...display("rolled_back"),
       note:
         [
-          d.rolled_back_to_version
-            ? `To ${version(d.rolled_back_to_version)}`
+          d.rolled_back_to_version || d.rolled_back_to_configuration_name
+            ? `To ${lineageLabel(
+                {
+                  configuration_name: d.rolled_back_to_configuration_name,
+                  version_number: d.rolled_back_to_version,
+                },
+                d.configuration_name,
+              )}`
             : null,
           before === "completed"
             ? "after completing"
@@ -99,7 +127,7 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
     return {
       ...display(latest ? "replaced" : base || "unassigned"),
       note: latest
-        ? `By ${version(latest.version_number)}`
+        ? `By ${lineageLabel(latest, d.configuration_name)}`
         : base
           ? "Assignment removed"
           : null,
@@ -120,7 +148,7 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
       note: "Stopped after a failure; every device verified since",
     };
   const note = latest
-    ? `Replaced on ${replaced.reduce((sum, entry) => sum + entry.device_count, 0)} ${replaced.reduce((sum, entry) => sum + entry.device_count, 0) === 1 ? "device" : "devices"} by ${version(latest.version_number)}`
+    ? `Replaced on ${replaced.reduce((sum, entry) => sum + entry.device_count, 0)} ${replaced.reduce((sum, entry) => sum + entry.device_count, 0) === 1 ? "device" : "devices"} by ${lineageLabel(latest, d.configuration_name)}`
     : d.status === "failed" && d.failure_reason === "threshold"
       ? "Stopped after device failures"
       : d.status === "failed" && d.failure_reason === "data_plane"
@@ -338,29 +366,43 @@ export function releasePlan(options: {
   };
 }
 
+/** The apply step an agent's failure stage belongs to. */
+export type ApplyStep =
+  "downloaded" | "validated" | "written" | "reloaded" | "verified";
+/**
+ * The six apply steps, one table for the device page and the rollout page:
+ * each step's label and the apply state that marks reaching it.
+ */
+export const applyStepTable: {
+  key: "released" | ApplyStep;
+  label: string;
+  state: string;
+}[] = [
+  { key: "released", label: applyStepLabels.released, state: "desired" },
+  {
+    key: "downloaded",
+    label: applyStepLabels.downloaded,
+    state: "downloaded",
+  },
+  { key: "validated", label: applyStepLabels.validated, state: "validated" },
+  { key: "written", label: applyStepLabels.written, state: "written" },
+  {
+    key: "reloaded",
+    label: applyStepLabels.reloaded,
+    state: "reload_requested",
+  },
+  {
+    key: "verified",
+    label: applyStepLabels.applied,
+    state: "verified_applied",
+  },
+];
 export type TimelineStep = {
-  key: "released" | "downloaded" | "validated" | "applied" | "verified";
+  key: (typeof applyStepTable)[number]["key"];
   label: string;
   at: string | null;
   state: "done" | "current" | "failed" | "waiting";
 };
-const stepStates: Record<TimelineStep["key"], string[]> = {
-  released: [],
-  downloaded: ["downloaded"],
-  validated: ["validated"],
-  applied: ["written", "reload_requested"],
-  verified: ["verified_applied"],
-};
-const stepLabels: Record<TimelineStep["key"], string> = {
-  released: applyStepLabels.released,
-  downloaded: applyStepLabels.downloaded,
-  validated: applyStepLabels.validated,
-  applied: applyStepLabels.written,
-  verified: applyStepLabels.applied,
-};
-/** The apply step an agent's failure stage belongs to. */
-export type ApplyStep =
-  "downloaded" | "validated" | "written" | "reloaded" | "verified";
 const failureStageSteps: Record<string, ApplyStep> = {
   fetch: "downloaded",
   download: "downloaded",
@@ -412,21 +454,14 @@ export function failureStagePhrase(stage: string | null | undefined) {
   const step = failedApplyStep(stage);
   return step ? stagePhrases[step] : "";
 }
-const timelineStepFor: Record<ApplyStep, TimelineStep["key"]> = {
-  downloaded: "downloaded",
-  validated: "validated",
-  written: "applied",
-  reloaded: "applied",
-  verified: "verified",
-};
-
 /**
- * Released → downloaded → validated → applied → verified for one device, from
- * persisted release/verification times and recorded apply-state changes. A
- * step a check-in skipped is done without a time; nothing is invented. A
- * failure is placed at the stage the agent reported; without one, a rollback
- * means Vector didn't come up (Applied), and anything else falls after the
- * last recorded step.
+ * Released → Downloaded → Validated → Written → Vector reloaded → Applied for
+ * one device, from persisted release/verification times and recorded
+ * apply-state changes. A step a check-in skipped is done without a time;
+ * nothing is invented. A failure is placed at the stage the agent reported
+ * (a reload failure marks Vector reloaded, as the device page does); without
+ * one, a rollback means Vector didn't come up after the reload, and anything
+ * else falls after the last recorded step.
  */
 export function timelineSteps(
   target: Pick<
@@ -434,7 +469,14 @@ export function timelineSteps(
     "state" | "released_at" | "verified_at" | "timeline"
   > & { failure_stage?: string | null },
 ): TimelineStep[] {
-  const keys = Object.keys(stepStates) as TimelineStep["key"][];
+  const keys = applyStepTable.map((step) => step.key);
+  const labelOf = (key: TimelineStep["key"]) =>
+    applyStepTable.find((step) => step.key === key)!.label;
+  // Released is read from the release time, not from a recorded state.
+  const statesOf = (key: TimelineStep["key"]) =>
+    key === "released"
+      ? []
+      : [applyStepTable.find((step) => step.key === key)!.state];
   const events = target.timeline || [];
   // A retry starts a new attempt: only read events after the last "desired".
   const restart = events.map((event) => event.state).lastIndexOf("desired");
@@ -445,8 +487,8 @@ export function timelineSteps(
     key === "released"
       ? !!target.released_at
       : key === "verified"
-        ? target.state === "verified_applied" || !!firstAt(stepStates.verified)
-        : !!firstAt(stepStates[key]),
+        ? target.state === "verified_applied" || !!firstAt(statesOf("verified"))
+        : !!firstAt(statesOf(key)),
   );
   let last = -1;
   reached.forEach((value, index) => {
@@ -458,11 +500,7 @@ export function timelineSteps(
   const reported = failed ? failedApplyStep(target.failure_stage) : null;
   const failedKey: TimelineStep["key"] | null = !failed
     ? null
-    : reported
-      ? timelineStepFor[reported]
-      : target.state === "rolled_back"
-        ? "applied"
-        : null;
+    : (reported ?? (target.state === "rolled_back" ? "reloaded" : null));
   if (failedKey) {
     const failedAt = keys.indexOf(failedKey);
     return keys.map((key, index) => {
@@ -471,12 +509,12 @@ export function timelineSteps(
           ? target.released_at || null
           : key === "verified"
             ? null
-            : firstAt(stepStates[key]);
+            : firstAt(statesOf(key));
       const state: TimelineStep["state"] =
         index < failedAt ? "done" : index === failedAt ? "failed" : "waiting";
       return {
         key,
-        label: stepLabels[key],
+        label: labelOf(key),
         at: state === "done" ? at : null,
         state,
       };
@@ -487,11 +525,11 @@ export function timelineSteps(
       key === "released"
         ? target.released_at || null
         : key === "verified"
-          ? firstAt(stepStates.verified) ||
+          ? firstAt(statesOf("verified")) ||
             (target.state === "verified_applied"
               ? target.verified_at || null
               : null)
-          : firstAt(stepStates[key]);
+          : firstAt(statesOf(key));
     const state: TimelineStep["state"] =
       index <= last
         ? "done"
@@ -504,11 +542,51 @@ export function timelineSteps(
           : "waiting";
     return {
       key,
-      label: stepLabels[key],
+      label: labelOf(key),
       at: state === "done" ? at : null,
       state,
     };
   });
+}
+
+/**
+ * Agent findings that only a pipeline change can clear: retrying the same
+ * version meets the same port in use, VRL error or invalid option. Host
+ * problems (a missing directory, a permission) are not among them.
+ */
+export function pipelineFixable(code: string | null | undefined) {
+  if (!code) return false;
+  return (
+    [
+      "ADDRESS_IN_USE",
+      "INPUT_NOT_FOUND",
+      "EVENT_TYPE_MISMATCH",
+      "UNKNOWN_FIELD",
+      "UNKNOWN_COMPONENT_TYPE",
+      "MISSING_FIELD",
+    ].includes(code) ||
+    code.startsWith("VRL_") ||
+    code.startsWith("INVALID_")
+  );
+}
+
+// A request to open a rollout's rollback review once its page loads (the
+// Overview's Roll back). In memory and short-lived only: a URL can never
+// request an action, and the review still needs an explicit confirmation.
+let rollbackIntent: { id: string; at: number } | null = null;
+export function requestRollbackReview(deploymentId: string, now = Date.now()) {
+  rollbackIntent = { id: deploymentId.toLowerCase(), at: now };
+}
+/** True once, within 30 s, for the rollout the request named. */
+export function takeRollbackReview(deploymentId: string, now = Date.now()) {
+  const intent = rollbackIntent;
+  rollbackIntent = null;
+  return (
+    !!intent &&
+    intent.id === deploymentId.toLowerCase() &&
+    now - intent.at >= 0 &&
+    now - intent.at < 30_000
+  );
 }
 
 /** "0:21", "3:05", "1:02:03" for a live countdown. */
@@ -576,6 +654,36 @@ export function explainError(error: string | null | undefined) {
   if (code && errorExplanations[code])
     return { summary: errorExplanations[code], code: error.trim() };
   return { summary: error, code: null };
+}
+
+const sentence = (text: string) =>
+  text
+    .trim()
+    .replace(/[.\s]+$/, "")
+    .toLocaleLowerCase();
+/**
+ * What a failure says, once. The reason is the agent's leading diagnostic
+ * when it sent one (the specific cause), otherwise the plain explanation of
+ * its error. `effect` keeps a known error code's explanation (what happened
+ * on the device) only beside a diagnostic that says something else; `code`
+ * is the agent's code, for support.
+ */
+export function failureText(
+  diagnostic: string | null | undefined,
+  error: string | null | undefined,
+) {
+  const explained = explainError(error);
+  const cause = diagnostic?.trim() || null;
+  return {
+    reason: cause || explained?.summary || null,
+    effect:
+      cause &&
+      explained?.code &&
+      sentence(explained.summary) !== sentence(cause)
+        ? explained.summary
+        : null,
+    code: explained?.code || null,
+  };
 }
 
 /** Second-precision local time for rollout timing, with the date only when not today. */

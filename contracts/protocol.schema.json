@@ -3167,6 +3167,22 @@
             }
           ],
           "description": "Degraded groups only: the component it names, if any."
+        },
+        "deployment_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failed and degraded groups: the deployment every device in the group is assigned, when they share one; null otherwise."
+        },
+        "rollback_available": {
+          "type": "boolean",
+          "description": "Failed and degraded groups: that deployment is a configuration rollout the server can review for rollback now (not rolled back, a candidate status, and a released current target with a previously managed version). False otherwise."
         }
       },
       "required": [
@@ -3181,7 +3197,9 @@
         "configuration_name",
         "state",
         "since",
-        "reason"
+        "reason",
+        "deployment_id",
+        "rollback_available"
       ],
       "additionalProperties": true
     },
@@ -3270,6 +3288,68 @@
                 "target_count": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "rolled_back_to_configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a rolled-back deployment: the pipeline its rollback restored."
+                },
+                "rolled_back_to_version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a rolled-back deployment: the version its rollback restored."
+                },
+                "rolled_back_device_count": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a rolled-back deployment: the devices its rollback targets."
+                },
+                "rollback_of_configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a rollback deployment: the pipeline of the deployment it rolled back."
+                },
+                "rollback_of_version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a rollback deployment: the version it rolled back."
                 }
               },
               "required": [
@@ -3286,7 +3366,8 @@
           "required": [],
           "additionalProperties": true
         }
-      ]
+      ],
+      "description": "deployment.rollback rows name the rolled-back deployment (target) and carry device_names: up to five devices its rollback returned, by name."
     },
     "Revision": {
       "type": "object",
@@ -5495,25 +5576,12 @@
               "at": {
                 "type": "string",
                 "format": "date-time"
-              },
-              "version_number": {
-                "anyOf": [
-                  {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 9007199254740991
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               }
             },
             "required": [
               "deployment_id",
               "device_count",
-              "at",
-              "version_number"
+              "at"
             ],
             "additionalProperties": false
           }
@@ -5861,6 +5929,18 @@
             }
           ]
         },
+        "rolled_back_to_configuration_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 240
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The pipeline the rollback restored, which may differ from this deployment's own."
+        },
         "rollback_of": {
           "anyOf": [
             {
@@ -5883,6 +5963,18 @@
               "type": "null"
             }
           ]
+        },
+        "rollback_of_configuration_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 240
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The pipeline of the deployment this one rolled back."
         },
         "replaced_by": {
           "type": "array",
@@ -5912,13 +6004,25 @@
                     "type": "null"
                   }
                 ]
+              },
+              "configuration_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "deployment_id",
               "device_count",
               "at",
-              "version_number"
+              "version_number",
+              "configuration_name"
             ],
             "additionalProperties": false
           }
@@ -5943,11 +6047,28 @@
                     "type": "null"
                   }
                 ]
+              },
+              "configuration_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rollback": {
+                "type": "boolean",
+                "description": "The replaced assignment is itself a rollback, so it runs the version it restored."
               }
             },
             "required": [
               "deployment_id",
-              "version_number"
+              "version_number",
+              "configuration_name",
+              "rollback"
             ],
             "additionalProperties": false
           }
@@ -6988,7 +7109,31 @@
             ],
             "additionalProperties": false
           },
-          "description": "Current winners of the same pipeline (or any agent settings) with a different payload, which a reviewed deployment would normally replace."
+          "description": "Current winners of the same pipeline (or any agent settings) with a different payload, which a reviewed deployment would normally replace, plus every assignment of the pipeline's lineage that still binds a reviewed device at or above the requested priority: its own cancelled or rolled-back deployments and their rollbacks (rollback_of chains)."
+        },
+        "replacements_needed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "assignment": {
+                "$ref": "#/$defs/AssignmentDescription"
+              },
+              "device_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "required": [
+              "assignment",
+              "device_ids"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Every existing assignment, at any priority at or above the request, whose different payload keeps a reviewed device from taking it (conflict or higher_priority outcomes). Replacing all of them resolves the review in one step. Omitted by older servers."
         },
         "suggested_priority": {
           "anyOf": [
@@ -9469,6 +9614,104 @@
                   "not_released",
                   "missing"
                 ]
+              },
+              "effect": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "unchanged",
+                      "retained_pending",
+                      "fallback",
+                      "unmanaged"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the device is set to run once the rollback stops the rollout: unchanged (it keeps it), retained_pending (it keeps it until another rollout releases it, see next), fallback (it would switch to next; blocks with UNSAFE_SOURCE_REMOVAL) or unmanaged (it would lose its pipeline; blocks). Null for revoked or missing devices, or when current assignments conflict."
+              },
+              "current": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "configuration_name": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 240
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "version_number": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "configuration_name",
+                      "version_number"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The version the device is set to run now."
+              },
+              "next": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "configuration_name": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 240
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "version_number": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "configuration_name",
+                      "version_number"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "fallback: the version it would switch to; retained_pending: the version of the rollout still waiting to release it."
               }
             },
             "required": [
@@ -9528,7 +9771,7 @@
         "ready"
       ],
       "additionalProperties": false,
-      "description": "Complete metadata-only historical scope, bounded to 10000 distinct device UUIDs across both lists. Ready requires at least one eligible device, a common previous version and no blockers. Each eligible target exposes the exact prior artifact digest, never its bytes or binding values. Names are display-only. The token binds source, exact eligible/excluded identities and reasons, prior version, prior target artifact digests and generations, admission and current assignment state."
+      "description": "Complete metadata-only historical scope, bounded to 10000 distinct device UUIDs across both lists. Ready requires at least one eligible device, a common previous version and no blockers. Each eligible target exposes the exact prior artifact digest, never its bytes or binding values. Names are display-only. Confirming stops the rollout (cancelled, or unassigned at the priority ceiling) in the same transaction; each excluded device states what it runs afterwards, simulated with the real resolver, and only one that would switch to an unreviewed version or lose its pipeline blocks, by name. The token binds source, exact eligible/excluded identities and reasons, prior version, prior target artifact digests and generations, admission, current assignment state and what each excluded device runs once the rollout stops."
     },
     "RemovalState": {
       "type": "object",
@@ -11591,6 +11834,18 @@
               "type": "null"
             }
           ]
+        },
+        "rollback_of": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a rollback: the deployment it rolled back."
         }
       },
       "required": [
@@ -11761,6 +12016,55 @@
           ],
           "description": "Degraded groups only: the issue's fix."
         },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z0-9_]{1,48}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The leading finding's code: the agent diagnostic (ADDRESS_IN_USE, VRL_E100, …) for this exact candidate, or the DATA_PLANE_* issue of a degraded group. A code the pipeline must fix means retrying the same version gives the same result."
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The component that finding names, when it names one."
+        },
+        "field": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.\\[\\]-]{1,128}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The field of that component, when the agent reported one."
+        },
+        "buffer_utilization": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups: how full that component's buffer was in the first device's latest telemetry sample, when reported. No trend is implied."
+        },
         "count": {
           "type": "integer",
           "minimum": 0
@@ -11808,7 +12112,6 @@
         "state",
         "message",
         "diagnostic",
-        "fix",
         "count",
         "device_ids",
         "devices"

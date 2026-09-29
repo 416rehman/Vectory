@@ -338,7 +338,14 @@ try {
         },
         { deployment_id: randomUUID(), device_count: 1, at: at(2, 6) },
       ];
-    if (index === 3) fields.replaces = [deploymentIds[2], randomUUID()];
+    // A replaced rollback (11) says so; a malformed rollback_of (14) doesn't.
+    if (index === 3)
+      fields.replaces = [
+        deploymentIds[2],
+        deploymentIds[11],
+        deploymentIds[14],
+        randomUUID(),
+      ];
     if (index === 5) fields.replaced_by = "not-an-array";
     if (index === 6) fields.replaces = { private: marker };
     return fields;
@@ -476,6 +483,9 @@ try {
       attempt.generation = 29;
       diagnostic = null;
     }
+    // Stored attempt errors always have safe_error's shape: diagnostics are
+    // objects with a message. A bare string or a summary field is not one,
+    // so the server projects no diagnostic for either.
     if (index === 35) {
       // Stored errors always carry allowlisted diagnostic objects, so a bare
       // string is not a shape any reader may see.
@@ -809,8 +819,10 @@ try {
     "rolled_back_at",
     "rolled_back_by",
     "rolled_back_to_version",
+    "rolled_back_to_configuration_name",
     "rollback_of",
     "rollback_of_version",
+    "rollback_of_configuration_name",
     "replaced_by",
     "replaces",
   ].sort();
@@ -866,6 +878,19 @@ try {
         : undefined;
     return version ? version.number : null;
   };
+  // The pipeline name of the deployment with this id, bounded as the API
+  // bounds lineage names.
+  const pipelineNameOf = (id) => {
+    const found = deployments.find((d) => d.id === id);
+    const version =
+      found && typeof found.version_id === "string"
+        ? versions.find((v) => v.id === found.version_id)
+        : undefined;
+    const pipeline = version
+      ? configurations.find((c) => c.id === version.configuration_id)
+      : undefined;
+    return pipeline ? cut(pipeline.name, 240) : null;
+  };
   // What the provenance, outcome and lineage fields must read for a stored
   // deployment: text and identities only when they are the right type, bounded
   // where the API bounds them, and nothing else copied from lineage entries.
@@ -901,10 +926,18 @@ try {
         typeof stored.rolled_back_by === "string"
           ? versionNumberOf(stored.rolled_back_by)
           : null,
+      rolled_back_to_configuration_name:
+        typeof stored.rolled_back_by === "string"
+          ? pipelineNameOf(stored.rolled_back_by)
+          : null,
       rollback_of: text(stored.rollback_of),
       rollback_of_version:
         typeof stored.rollback_of === "string"
           ? versionNumberOf(stored.rollback_of)
+          : null,
+      rollback_of_configuration_name:
+        typeof stored.rollback_of === "string"
+          ? pipelineNameOf(stored.rollback_of)
           : null,
       replaced_by: Array.isArray(stored.replaced_by)
         ? stored.replaced_by.map((entry) => ({
@@ -912,12 +945,18 @@ try {
             device_count: entry.device_count,
             at: entry.at,
             version_number: versionNumberOf(entry.deployment_id),
+            configuration_name: pipelineNameOf(entry.deployment_id),
           }))
         : [],
       replaces: Array.isArray(stored.replaces)
         ? stored.replaces.map((id) => ({
             deployment_id: id,
             version_number: versionNumberOf(id),
+            configuration_name: pipelineNameOf(id),
+            // A replaced rollback runs the version it restored.
+            rollback:
+              typeof deployments.find((d) => d.id === id)?.rollback_of ===
+              "string",
           }))
         : [],
     };
@@ -996,10 +1035,14 @@ try {
     assert(isId(value.rolled_back_by) && isId(value.rollback_of));
     assert(isNumber(value.rolled_back_to_version));
     assert(isNumber(value.rollback_of_version));
+    // Lineage names the pipeline on the other side: bounded text or null.
+    assert(bounded(value.rolled_back_to_configuration_name, 240));
+    assert(bounded(value.rollback_of_configuration_name, 240));
     assert(Array.isArray(value.replaced_by));
     for (const entry of value.replaced_by) {
       assert.deepEqual(Object.keys(entry).sort(), [
         "at",
+        "configuration_name",
         "deployment_id",
         "device_count",
         "version_number",
@@ -1008,15 +1051,20 @@ try {
       assert(isCount(entry.device_count));
       assert(isWhen(entry.at) && entry.at !== null);
       assert(isNumber(entry.version_number));
+      assert(bounded(entry.configuration_name, 240));
     }
     assert(Array.isArray(value.replaces));
     for (const entry of value.replaces) {
       assert.deepEqual(Object.keys(entry).sort(), [
+        "configuration_name",
         "deployment_id",
+        "rollback",
         "version_number",
       ]);
       assert(isId(entry.deployment_id) && entry.deployment_id !== null);
       assert(isNumber(entry.version_number));
+      assert(bounded(entry.configuration_name, 240));
+      assert.equal(typeof entry.rollback, "boolean");
     }
     assert(value.name === null || typeof value.name === "string");
     if (typeof value.name === "string") assert([...value.name].length <= 120);
@@ -1228,6 +1276,8 @@ try {
               exercised.add(key);
           }
           if (item.rollback_available === false) exercised.add("not_available");
+          if (item.replaces.some((entry) => entry.rollback))
+            exercised.add("replaced_rollback");
           assert.equal(
             item.name,
             typeof original.name === "string"
@@ -1260,7 +1310,7 @@ try {
       // The fixtures reached every new field with a real value, so the checks
       // above proved more than the absence of data.
       assert.deepEqual(
-        [...newSummaryKeys, "not_available"].filter(
+        [...newSummaryKeys, "not_available", "replaced_rollback"].filter(
           (key) => !exercised.has(key),
         ),
         [],

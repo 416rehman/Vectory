@@ -233,7 +233,23 @@
   gap: 6px 10px;
 }
 .target-replacements li > svg {
+  flex-shrink: 0;
   color: var(--muted);
+}
+/* The icon stays beside its line; the line wraps inside, on phones too. */
+.target-replacements li:has(> svg) {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.target-replacements li:has(> svg) > svg {
+  margin-top: 2px;
+}
+.target-replacements li > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
 }
 .target-replacements small {
   color: var(--muted);
@@ -361,6 +377,31 @@
   display: grid;
   justify-items: start;
   gap: 4px;
+}
+.target-left-behind {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.target-left-behind input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+}
+.target-left-behind > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.target-left-behind strong {
+  font-weight: 600;
+}
+.target-left-behind small {
+  color: var(--muted);
+  font-size: 12.5px;
 }
 .target-conflicts-rule {
   margin: 0;

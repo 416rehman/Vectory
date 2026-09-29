@@ -202,6 +202,10 @@ async fn lanes_follow_release_order_and_failures_group_by_reason() {
     assert_eq!(failure["devices"][0]["device_id"], json!(canary));
     // Every member is listed for a retry, not only the named few.
     assert_eq!(failure["device_ids"], json!([canary]));
+    // A finding without a code says nothing about where to fix it.
+    for field in ["code", "component_id", "field", "buffer_utilization"] {
+        assert!(failure[field].is_null(), "{field}: {failure}");
+    }
     assert_eq!(lanes["check_in_seconds"], 60);
 
     // The target page carries timing, check-in cadence and the diagnostic.
@@ -233,6 +237,105 @@ async fn lanes_follow_release_order_and_failures_group_by_reason() {
 
     let (_, missing) = get(&f, &format!("/api/v1/deployments/{}/rollout", db::id())).await;
     assert_eq!(missing["error"]["code"], "NOT_FOUND");
+}
+
+/// Round-2 operator review P2-2 and P1-6: a failure group says where its
+/// leading finding points, so the rollout page can offer "Fix in pipeline" for
+/// a failure a retry can't clear and name the component that isn't delivering
+/// with its buffer fill. Malformed tokens never leave the server.
+#[tokio::test]
+async fn failure_groups_name_the_code_component_and_field_they_point_at() {
+    let f = fixture(3).await;
+    let v1 = version(&f.state, &f.pipeline, 1).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let created = rollout::create(&mut tx, &request(&f.devices, &v1, 100, false), "operator")
+        .await
+        .unwrap();
+    let id = created["id"].as_str().unwrap().to_owned();
+    let generation = |device: &str| {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT generation FROM deployment_targets WHERE deployment_id=? AND device_id=?",
+        )
+        .bind(id.clone())
+        .bind(device.to_owned())
+    };
+    let fail = |state: &str, device: &str, generation: i64, diagnostic: Value| {
+        let attempt = json!({"generation":generation,"version_id":v1,"sha256":"a".repeat(64),"state":state,"error":{"code":"APPLY_ROLLED_BACK","stage":"reload","message":"","diagnostics":[diagnostic]}});
+        (
+            sqlx::query("UPDATE deployment_targets SET state=? WHERE deployment_id=? AND device_id=?")
+                .bind(state.to_owned())
+                .bind(id.clone())
+                .bind(device.to_owned()),
+            sqlx::query("UPDATE devices SET data=json_set(data,'$.terminal_configuration_attempt',json(?),'$.apply_state',?) WHERE id=?")
+                .bind(attempt.to_string())
+                .bind(state.to_owned())
+                .bind(device.to_owned()),
+        )
+    };
+    let first = generation(&f.devices[0]).fetch_one(&mut *tx).await.unwrap();
+    let (target, device) = fail(
+        "rolled_back",
+        &f.devices[0],
+        first,
+        json!({"severity":"error","code":"ADDRESS_IN_USE","component_id":"vectory_metrics_exporter","field":"address","message":"Another process is already listening on this component's address."}),
+    );
+    target.execute(&mut *tx).await.unwrap();
+    device.execute(&mut *tx).await.unwrap();
+    let third = generation(&f.devices[2]).fetch_one(&mut *tx).await.unwrap();
+    let (target, device) = fail(
+        "failed",
+        &f.devices[2],
+        third,
+        json!({"severity":"error","code":"not a code","component_id":"../../escape","message":"Odd finding"}),
+    );
+    target.execute(&mut *tx).await.unwrap();
+    device.execute(&mut *tx).await.unwrap();
+    // Applied, but the sink can't deliver and its buffer is filling.
+    sqlx::query("UPDATE deployment_targets SET state='verified_applied' WHERE deployment_id=? AND device_id=?")
+        .bind(&id)
+        .bind(&f.devices[1])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let issue = json!({"code":"DATA_PLANE_SINK_ERRORS","component_id":"archive","title":"archive can't deliver events","message":"The http sink archive is failing about 4 requests a minute (connection refused).","hint":"Check that the destination is up."});
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.data_plane',json(?),'$.telemetry',json(?)) WHERE id=?")
+        .bind(json!({"version_id":v1,"evaluations":3,"issues":[issue]}).to_string())
+        .bind(json!({"sampled_at":db::now(),"components":[{"id":"ingest","buffer_utilization":0.9},{"id":"archive","buffer_utilization":0.34}]}).to_string())
+        .bind(&f.devices[1])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let (status, lanes) = get(&f, &format!("/api/v1/deployments/{id}/rollout")).await;
+    assert_eq!(status, StatusCode::OK, "{lanes}");
+    let group = |state: &str| {
+        lanes["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["state"] == state)
+            .unwrap_or_else(|| panic!("{state}: {lanes}"))
+            .clone()
+    };
+    let clash = group("rolled_back");
+    assert_eq!(clash["code"], "ADDRESS_IN_USE");
+    assert_eq!(clash["component_id"], "vectory_metrics_exporter");
+    assert_eq!(clash["field"], "address");
+    assert!(clash["buffer_utilization"].is_null());
+    let delivery = group("degraded");
+    assert_eq!(delivery["code"], "DATA_PLANE_SINK_ERRORS");
+    assert_eq!(delivery["component_id"], "archive");
+    assert!(delivery["field"].is_null());
+    assert_eq!(delivery["buffer_utilization"], 0.34);
+    assert_eq!(delivery["devices"][0]["device_id"], json!(f.devices[1]));
+    let odd = group("failed");
+    assert_eq!(odd["diagnostic"], "Odd finding");
+    for field in ["code", "component_id", "field"] {
+        assert!(odd[field].is_null(), "{field}: {odd}");
+    }
+    assert!(!lanes.to_string().contains("escape"));
+    assert!(!lanes.to_string().contains("_origin"));
 }
 
 #[tokio::test]

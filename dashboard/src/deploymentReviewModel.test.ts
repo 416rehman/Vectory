@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { AssignmentDescription, DeploymentPreview, Device } from "./api";
 import {
   assignmentName,
+  boundName,
   conflictRows,
   defaultRelease,
   inferPipelineName,
+  keptLine,
   pauseSource,
   policySummary,
   releaseErrors,
@@ -250,6 +252,82 @@ describe("conflict rows", () => {
     expect(rows[0].assignments.map((a) => a.id)).toEqual([id(7)]);
     expect(rows[1]).toMatchObject({ kind: "higher_priority", priority: 200 });
     expect(rows[1].assignments[0].id).toBe(id(8));
+  });
+  // Round-2 operator review P1-3: after a rollback, the device follows the
+  // rollback one priority up; the cancelled rollout is only still bound.
+  it("names the rollback the device follows, what else is bound, and one replace for every tier", () => {
+    const rollback = described({
+      id: id(20),
+      priority: 101,
+      configuration_name: "Edge syslog processing",
+      version_number: 1,
+      rollback_of: id(21),
+    });
+    const cancelled = described({
+      id: id(21),
+      priority: 100,
+      status: "cancelled",
+      configuration_name: "r15-demo",
+      version_number: 1,
+    });
+    const rows = conflictRows(
+      {
+        devices: [device(10, "edge-nyc-02")],
+        conflicts: [
+          {
+            device_id: id(10),
+            assignment_ids: [id(21), "preview"],
+            priority: 100,
+            resource: "configuration",
+            assignments: [cancelled],
+          },
+        ],
+        outcomes: [
+          {
+            device_id: id(10),
+            resource: "configuration",
+            outcome: "conflict",
+            winner: rollback,
+          },
+        ],
+        replacements_needed: [
+          {
+            assignment: cancelled,
+            device_ids: [id(10)],
+            retires_assignment: true,
+          },
+          {
+            assignment: rollback,
+            device_ids: [id(10)],
+            retires_assignment: true,
+          },
+        ],
+      },
+      "configuration",
+    );
+    expect(rows[0].winner?.id).toBe(id(20));
+    expect(rows[0].alsoBound.map(boundName)).toEqual([
+      "r15-demo v1 (cancelled)",
+    ]);
+    expect(boundName(rows[0].winner!)).toBe(
+      "Rollback to Edge syslog processing v1",
+    );
+    expect(rows[0].replace).toEqual([id(21), id(20)]);
+    expect(
+      keptLine(
+        {
+          name: "edge-nyc-02",
+          running_version: {
+            number: 1,
+            configuration_id: id(30),
+            configuration_name: "Edge syslog processing",
+          },
+        } as Device,
+        rollback,
+      ),
+    ).toBe(
+      "edge-nyc-02 keeps Edge syslog processing v1 (priority 101 rollback)",
+    );
   });
 });
 
