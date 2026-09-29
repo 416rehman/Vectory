@@ -5,7 +5,10 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Request, State as AppState},
+    extract::{
+        DefaultBodyLimit, Path, Query, RawQuery, Request, State as AppState,
+        rejection::QueryRejection,
+    },
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
@@ -183,6 +186,12 @@ pub fn router(s: State) -> Router {
             "/api/v1/configurations/{id}/revisions/{revision_id}",
             get(crate::pipelines::revision_detail),
         )
+        .route("/api/v1/devices/inventory", get(crate::fleet::inventory))
+        .route(
+            "/api/v1/devices/inventory/ids",
+            get(crate::fleet::inventory_ids),
+        )
+        .route("/api/v1/groups/{id}/members", get(crate::fleet::members))
         .route(
             "/api/v1/devices/{id}/telemetry",
             get(crate::telemetry::device_history),
@@ -285,7 +294,7 @@ pub fn router(s: State) -> Router {
             "/api/v1/agent-install/activity",
             get(crate::install::activity),
         )
-        .route("/api/v1/{collection}", get(list).post(create))
+        .route("/api/v1/{collection}", get(list_collection).post(create))
         .route("/api/v1/{collection}/{id}", get(detail).put(edit_group))
         .route(
             "/api/v1/{collection}/{id}/{action}",
@@ -297,7 +306,21 @@ pub fn router(s: State) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn(reject_oversized))
         .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(s.clone(), fleet_changes))
         .with_state(s)
+}
+/// Any request that can change something ends the shared fleet projection,
+/// once it has answered: the next read, the caller's included, sees it.
+async fn fleet_changes(AppState(s): AppState<State>, request: Request, next: Next) -> Response {
+    let change = !matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    let response = next.run(request).await;
+    if change {
+        s.fleet.invalidate();
+    }
+    response
 }
 /// Largest accepted request body for the dashboard/API and agent listeners.
 pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
@@ -409,9 +432,19 @@ pub(crate) fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 pub async fn list(
+    state: AppState<State>,
+    h: HeaderMap,
+    collection: Path<String>,
+) -> Result<Json<Value>> {
+    list_collection(state, h, collection, RawQuery(None), Ok(Query(Vec::new()))).await
+}
+/// `GET /api/v1/{collection}`. Only `groups` and `overview` read options.
+pub async fn list_collection(
     AppState(s): AppState<State>,
     h: HeaderMap,
     Path(collection): Path<String>,
+    RawQuery(raw): RawQuery,
+    options: std::result::Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Json<Value>> {
     let reader = auth::authorize(
         &s,
@@ -424,18 +457,18 @@ pub async fn list(
         false,
     )
     .await?;
+    if collection == "overview" {
+        // Before taking a connection: it may wait for the shared projection.
+        return Ok(Json(
+            crate::fleet::overview(&s, &reader, raw.as_deref(), options).await?,
+        ));
+    }
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => json!(
-            rollout::devices(&mut conn)
-                .await?
-                .into_iter()
-                .map(rollout::list_row)
-                .collect::<Vec<_>>()
-        ),
+        "devices" => json!(rollout::list_devices(&mut conn).await?),
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
-        "groups" => json!(crate::groups::list(&mut conn).await?),
+        "groups" => crate::fleet::group_list(&mut conn, raw.as_deref(), options).await?,
         "policies" => json!(db::records(&mut conn, "policy").await?),
         "issues" => json!(crate::issues::legacy(&mut conn).await?),
         "audit" => json!(
@@ -458,26 +491,6 @@ pub async fn list(
         "settings" => {
             json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name})
         }
-        "overview" => {
-            let devices = rollout::devices(&mut conn).await?;
-            let configurations: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='configuration'")
-                    .fetch_one(&mut *conn)
-                    .await?;
-            let deployments = db::records(&mut conn, "deployment").await?;
-            let issues_open = crate::issues::open_count(&mut conn).await?;
-            let audit = recent_activity(&mut conn).await?;
-            let mut overview = json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked"|"awaiting_first_check_in")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"recent_activity":audit});
-            // Aggregates read the full rows; the page only lists them.
-            crate::overview::extend(&mut conn, &devices, &mut overview).await?;
-            overview["devices"] = json!(
-                devices
-                    .into_iter()
-                    .map(rollout::list_row)
-                    .collect::<Vec<_>>()
-            );
-            overview
-        }
         _ => return Err(ApiError::missing()),
     };
     Ok(Json(out))
@@ -486,15 +499,22 @@ pub async fn detail(
     AppState(s): AppState<State>,
     h: HeaderMap,
     Path((collection, id)): Path<(String, String)>,
+    RawQuery(raw): RawQuery,
+    options: std::result::Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Response> {
     auth::authorize(&s, &h, &[], false).await?;
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => rollout::devices(&mut conn)
-            .await?
-            .into_iter()
-            .find(|d| d["id"] == id)
-            .ok_or_else(ApiError::missing)?,
+        "devices" => {
+            let groups = crate::fleet::wants_groups(raw.as_deref(), options)?;
+            let mut device = rollout::device(&mut conn, &id)
+                .await?
+                .ok_or_else(ApiError::missing)?;
+            if groups {
+                device["groups"] = crate::fleet::device_groups(&mut conn, &id).await?;
+            }
+            device
+        }
         "configurations" => db::record(&mut conn, "configuration", &id).await?,
         "groups" => crate::groups::normalized(db::record(&mut conn, "group", &id).await?)?,
         "versions" => db::record(&mut conn, "version", &id).await?,
@@ -975,10 +995,8 @@ pub async fn action(
                 }
             }
             db::audit(&mut tx, text(&actor, "id"), "device.retry", &id, "success").await?;
-            rollout::devices(&mut tx)
+            rollout::device(&mut tx, &id)
                 .await?
-                .into_iter()
-                .find(|d| d["id"] == id)
                 .ok_or_else(ApiError::missing)?
         }
         ("tokens", "revoke") => {
@@ -1021,7 +1039,7 @@ pub async fn deployment_preview(
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     Ok(Json(rollout::preview(&mut tx, &v).await?))
 }
-async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
+pub(crate) async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(
         conn,
         &crate::audit::Filters::default(),
