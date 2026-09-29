@@ -233,7 +233,23 @@
   gap: 6px 10px;
 }
 .target-replacements li > svg {
+  flex-shrink: 0;
   color: var(--muted);
+}
+/* The icon stays beside its line; the line wraps inside, on phones too. */
+.target-replacements li:has(> svg) {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.target-replacements li:has(> svg) > svg {
+  margin-top: 2px;
+}
+.target-replacements li > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
 }
 .target-replacements small {
   color: var(--muted);
