@@ -1523,11 +1523,6 @@ pub async fn reconcile_membership(db: &mut SqliteConnection) -> Result<()> {
 }
 // Preview and resolution must agree even when the winning assignment's target has
 // not been released yet. Admission gates application, not priority selection.
-async fn assignment_winners(
-    db: &mut SqliteConnection,
-) -> Result<BTreeMap<(String, String), Value>> {
-    assignment_winners_for(db, None).await
-}
 pub(crate) async fn assignment_winners_for(
     db: &mut SqliteConnection,
     scope: Option<&BTreeSet<String>>,
@@ -1536,12 +1531,15 @@ pub(crate) async fn assignment_winners_for(
     Ok(winners_among(&set, scope))
 }
 pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
-    if !conflicts(db, None).await?.is_empty() {
+    // One candidate pass serves both the conflict check and the winners: the
+    // scheduler runs this under the writer lock every tick.
+    let set = candidates(db, &Proposal::default()).await?;
+    if !conflicts_among(db, &set).await?.is_empty() {
         return Err(ApiError::conflict(
             "Inconsistent assignment state; preserving last valid desired state",
         ));
     }
-    let winners = assignment_winners(db).await?;
+    let winners = winners_among(&set, None);
     let rows = sqlx::query("SELECT * FROM devices WHERE revoked=0")
         .fetch_all(&mut *db)
         .await?;
