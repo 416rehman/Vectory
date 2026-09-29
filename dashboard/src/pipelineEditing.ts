@@ -9,8 +9,10 @@ import {
 } from "./catalog";
 
 import {
+  nodeOutputPorts,
   pipelineNodeHeight,
   PIPELINE_NODE_COLUMN_GAP,
+  PIPELINE_NODE_WIDTH,
 } from "./pipelineNodeModel";
 
 const kinds: Kind[] = ["sources", "transforms", "sinks"];
@@ -371,4 +373,71 @@ export function arrangeGraph(graph: Graph): Graph {
       },
     })),
   };
+}
+
+type PlacedNode = {
+  id: string;
+  position: { x: number; y: number };
+  data: { kind?: Kind; component?: Config };
+};
+const ROW_GAP = 40;
+
+/**
+ * The first free spot at or below `preferred` where a new card overlaps no
+ * existing card, so new steps never stack on top of each other.
+ */
+export function freePosition(
+  nodes: readonly PlacedNode[],
+  preferred: { x: number; y: number },
+  height = pipelineNodeHeight({}),
+) {
+  const overlaps = (y: number) =>
+    nodes.some(
+      (node) =>
+        preferred.x < node.position.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+        node.position.x < preferred.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+        y < node.position.y + pipelineNodeHeight(node.data) + ROW_GAP / 2 &&
+        node.position.y < y + height + ROW_GAP / 2,
+    );
+  let y = preferred.y;
+  for (let tries = 0; tries < 200 && overlaps(y); tries++) {
+    const blocker = nodes
+      .filter(
+        (node) =>
+          preferred.x < node.position.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+          node.position.x < preferred.x + PIPELINE_NODE_WIDTH + ROW_GAP / 2 &&
+          y < node.position.y + pipelineNodeHeight(node.data) + ROW_GAP / 2 &&
+          node.position.y < y + height + ROW_GAP / 2,
+      )
+      .reduce((lowest, node) =>
+        node.position.y + pipelineNodeHeight(node.data) >
+        lowest.position.y + pipelineNodeHeight(lowest.data)
+          ? node
+          : lowest,
+      );
+    y = blocker.position.y + pipelineNodeHeight(blocker.data) + ROW_GAP;
+  }
+  return { x: preferred.x, y };
+}
+
+/**
+ * The reference a new step reads when it is added next to `node`: its
+ * default output, or its first named output (a route's first route).
+ * Empty for destinations, which have no outputs.
+ */
+export function primaryOutput(node: PlacedNode) {
+  const kind = node.data.kind || "transforms";
+  const ports = nodeOutputPorts(node.data.component || {}, kind);
+  if (!ports.length) return "";
+  if (ports.includes("output")) return node.id;
+  const named = ports.find((port) => port !== "_unmatched") || ports[0];
+  return `${node.id}.${named}`;
+}
+
+/** Where a step added next to `node` goes: the next column, first free row. */
+export function besidePosition(nodes: readonly PlacedNode[], node: PlacedNode) {
+  return freePosition(nodes, {
+    x: node.position.x + PIPELINE_NODE_COLUMN_GAP,
+    y: node.position.y,
+  });
 }

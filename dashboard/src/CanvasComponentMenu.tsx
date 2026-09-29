@@ -10,12 +10,7 @@ import {
   ArrowUpFromLine,
   type LucideIcon,
 } from "lucide-react";
-import {
-  catalog,
-  acceptsComponentInput,
-  type Component,
-  type Kind,
-} from "./catalog";
+import { catalog, inputMismatch, type Component, type Kind } from "./catalog";
 import type { Config } from "./api";
 import { ComponentIcon } from "./PipelineNode";
 import { IconButton } from "./ui";
@@ -27,6 +22,10 @@ export type CanvasPickerLocation = {
   position: { x: number; y: number };
   input: string;
   kind?: Kind;
+  /** Insert on a connection: these consumers of `input` read the new step. */
+  insertBefore?: string[];
+  /** Steps at or right of this x move one column right to make room. */
+  shiftFrom?: number;
 };
 const kinds: { id: Kind | "all"; label: string; icon: LucideIcon }[] = [
   { id: "all", label: "All", icon: LayoutGrid },
@@ -45,7 +44,8 @@ export default function CanvasComponentMenu({
 }: {
   location: CanvasPickerLocation;
   config: Config;
-  onAdd: (component: Component) => void;
+  /** `input`: the output the new step reads, or "" for none. */
+  onAdd: (component: Component, input: string) => void;
   onClose: () => void;
   onImport: (kind: Kind) => void;
   error?: string;
@@ -53,24 +53,35 @@ export default function CanvasComponentMenu({
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<Kind | "all">(location.kind || "all");
   const [position, setPosition] = useState(location.screen);
+  // Offered from a selection, the connection is optional; from a dragged
+  // output or a connection it is what the person asked for.
+  const [from, setFrom] = useState(location.input);
   const menu = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  // Steps that can't read the chosen output stay listed, greyed with the
+  // reason, after the ones that can.
   const available = useMemo(
     () =>
-      catalog.filter((item) =>
-        acceptsComponentInput(config, location.input, item),
-      ),
-    [config, location.input],
+      catalog
+        .filter(
+          (item) =>
+            (!from || item.kind !== "sources") &&
+            (!location.insertBefore?.length || item.kind === "transforms"),
+        )
+        .map((item) => ({ item, reason: inputMismatch(config, from, item) }))
+        .sort((a, b) => Number(!!a.reason) - Number(!!b.reason)),
+    [config, from],
   );
   const matches = available.filter(
-    (item) =>
+    ({ item }) =>
       (kind === "all" || item.kind === kind) &&
       `${item.label} ${item.type} ${item.description}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
+  const firstMatch = matches.find((match) => !match.reason)?.item;
   useLayoutEffect(() => {
     const bounds = menu.current?.getBoundingClientRect();
     if (bounds)
@@ -145,9 +156,9 @@ export default function CanvasComponentMenu({
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && matches.length) {
+            if (event.key === "Enter" && firstMatch) {
               event.preventDefault();
-              onAdd(matches[0]);
+              onAdd(firstMatch, from);
             }
           }}
         />
@@ -158,14 +169,26 @@ export default function CanvasComponentMenu({
           {error}
         </p>
       )}
-      {location.input && (
+      {from && (
         <p className="canvas-component-from">
-          Connect from <code>{location.input}</code>
+          {location.insertBefore?.length ? "Insert after" : "Connect from"}{" "}
+          <code>{from}</code>
+          {!location.insertBefore?.length && (
+            <button type="button" onClick={() => setFrom("")}>
+              Don&apos;t connect
+            </button>
+          )}
         </p>
       )}
       <nav aria-label="Component category">
         {kinds
-          .filter((item) => !location.input || item.id !== "sources")
+          .filter(
+            (item) =>
+              (!from || item.id !== "sources") &&
+              (!location.insertBefore?.length ||
+                item.id === "all" ||
+                item.id === "transforms"),
+          )
           .map((item) => (
             <button
               key={item.id}
@@ -179,18 +202,22 @@ export default function CanvasComponentMenu({
           ))}
       </nav>
       <div className="canvas-component-results">
-        {matches.map((item) => (
+        {matches.map(({ item, reason }) => (
           <button
             type="button"
             className="canvas-component-result"
             key={`${item.kind}:${item.type}`}
             data-pipeline-category={item.kind}
-            onClick={() => onAdd(item)}
+            aria-disabled={reason ? true : undefined}
+            aria-description={reason || undefined}
+            onClick={() => !reason && onAdd(item, from)}
           >
             <ComponentIcon type={item.type} kind={item.kind} size={25} />
             <span>
-              <strong>{item.label}</strong>
-              <small>{item.description}</small>
+              <strong>
+                {item.label} <code>{item.type}</code>
+              </strong>
+              <small>{reason || item.description}</small>
             </span>
             <span className="canvas-component-kind">
               {item.kind === "sources"
@@ -202,18 +229,14 @@ export default function CanvasComponentMenu({
           </button>
         ))}
         {!matches.length && (
-          <p className="canvas-component-empty">
-            No matching {location.input ? "compatible " : ""}components.
-          </p>
+          <p className="canvas-component-empty">No matching components.</p>
         )}
       </div>
       <button
         type="button"
         className="canvas-component-import"
         onClick={() =>
-          onImport(
-            kind === "all" ? (location.input ? "transforms" : "sources") : kind,
-          )
+          onImport(kind === "all" ? (from ? "transforms" : "sources") : kind)
         }
       >
         <FileJson2 size={15} /> Import a component definition

@@ -378,12 +378,87 @@ export const exactOutputTypes = new Set([
   "log_to_metric",
 ]);
 const allEvents: EventType[] = ["logs", "metrics", "traces"];
+// Event types from Vector 0.58's component reference, for the components
+// whose input or output is a single kind. Anything not listed is treated as
+// accepting (or emitting) every type, so this never blocks a valid pipeline.
+const LOGS_ONLY_INPUT = new Set([
+  "loki",
+  "elasticsearch",
+  "reduce",
+  "log_to_metric",
+  "dedupe",
+  "aws_s3",
+  "aws_cloudwatch_logs",
+  "splunk_hec_logs",
+  "datadog_logs",
+  "gcp_cloud_storage",
+]);
+const METRICS_ONLY_INPUT = new Set([
+  "prometheus_exporter",
+  "prometheus_remote_write",
+  "statsd",
+  "datadog_metrics",
+  "influxdb_metrics",
+  "aws_cloudwatch_metrics",
+  "gcp_stackdriver_metrics",
+  "splunk_hec_metrics",
+  "aggregate",
+  "incremental_to_absolute",
+  "metric_to_log",
+  "tag_cardinality_limit",
+]);
+const LOG_SOURCES = new Set([
+  "demo_logs",
+  "file",
+  "syslog",
+  "http_server",
+  "journald",
+  "docker_logs",
+  "kubernetes_logs",
+  "internal_logs",
+  "stdin",
+]);
+const METRIC_SOURCES = new Set([
+  "internal_metrics",
+  "host_metrics",
+  "prometheus_scrape",
+  "prometheus_remote_write",
+  "statsd",
+  "apache_metrics",
+  "nginx_metrics",
+  "mongodb_metrics",
+  "postgresql_metrics",
+  "aws_ecs_metrics",
+  "eventstoredb_metrics",
+  "static_metrics",
+  "log_to_metric",
+]);
 function acceptedEvents(type: string): EventType[] {
   if (["sample"].includes(type)) return ["logs", "traces"];
-  if (["loki", "elasticsearch", "reduce", "log_to_metric"].includes(type))
-    return ["logs"];
-  if (type === "prometheus_exporter") return ["metrics"];
+  if (type === "datadog_traces") return ["traces"];
+  if (LOGS_ONLY_INPUT.has(type)) return ["logs"];
+  if (METRICS_ONLY_INPUT.has(type)) return ["metrics"];
   return allEvents;
+}
+const eventWords = (types: readonly EventType[]) =>
+  types.length > 1
+    ? `${types.slice(0, -1).join(", ")} and ${types.at(-1)}`
+    : types[0];
+
+/**
+ * Why a component can't read `input`, such as "Accepts metrics; parse
+ * sends logs." Null when it can, or when the types aren't known.
+ */
+export function inputMismatch(
+  config: Config,
+  input: string,
+  item: Pick<Component, "kind" | "type">,
+): string | null {
+  if (!input || item.kind === "sources") return null;
+  const sends = inferEvents(config, input);
+  const accepts = acceptedEvents(item.type);
+  if (sends.some((type) => accepts.includes(type))) return null;
+  return `Accepts ${eventWords(accepts)}; ${input} sends ${eventWords(sends)}.`;
 }
 function inferEvents(
   config: Config,
@@ -406,10 +481,8 @@ function inferEvents(
     allEvents.includes(port as EventType)
   )
     return [port as EventType];
-  if (["demo_logs", "file", "syslog", "http_server"].includes(c.type))
-    return ["logs"];
-  if (["internal_metrics", "log_to_metric"].includes(c.type))
-    return ["metrics"];
+  if (LOG_SOURCES.has(c.type) && !config.transforms?.[id]) return ["logs"];
+  if (METRIC_SOURCES.has(c.type)) return ["metrics"];
   if (
     [
       "remap",
