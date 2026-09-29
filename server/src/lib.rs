@@ -35,6 +35,7 @@ pub mod token_requests;
 pub mod user_requests;
 pub mod validation;
 pub mod variables;
+pub mod vector_diagnostics;
 #[cfg(windows)]
 mod windows_acl;
 

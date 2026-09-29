@@ -9529,7 +9529,7 @@
     },
     "/api/v1/configurations/test": {
       "post": {
-        "summary": "Run Vector pipeline tests in the isolated bounded validator; device-only resources defer",
+        "summary": "Run the draft's native Vector tests in the isolated bounded validator and report every test. Editors, Operators and Administrators; configuration providers defer to the device.",
         "operationId": "post__api_v1_configurations_test",
         "security": [
           {
@@ -9625,7 +9625,7 @@
     },
     "/api/v1/vrl/test": {
       "post": {
-        "summary": "Execute synthetic VRL in the isolated bounded validator",
+        "summary": "Run user-provided synthetic samples through one remap, filter, route or exclusive route step in the isolated bounded validator. Editors, Operators and Administrators.",
         "operationId": "post__api_v1_vrl_test",
         "security": [
           {
@@ -9647,21 +9647,59 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "program": {
-                    "type": "string",
-                    "maxLength": 16384
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "program": {
+                        "type": "string",
+                        "maxLength": 16384
+                      },
+                      "sample": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "program",
+                      "sample"
+                    ],
+                    "additionalProperties": true
                   },
-                  "sample": {
-                    "type": "object"
+                  {
+                    "type": "object",
+                    "properties": {
+                      "transform": {
+                        "type": "object",
+                        "description": "The step settings without inputs, at most 64 KiB."
+                      },
+                      "samples": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        },
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "description": "At most 64 KiB of JSON in total."
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 64
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "transform",
+                      "samples"
+                    ],
+                    "additionalProperties": true
                   }
-                },
-                "required": [
-                  "program",
-                  "sample"
-                ],
-                "additionalProperties": true
+                ]
               }
             }
           }
@@ -9675,6 +9713,9 @@
                   "type": "object",
                   "properties": {
                     "valid": {
+                      "type": "boolean"
+                    },
+                    "compiled": {
                       "type": "boolean"
                     },
                     "output": {},
@@ -9694,7 +9735,35 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Plain-text VRL compiler or runtime message for the submitted synthetic program, when the isolated runner produced one."
+                      "description": "Plain-text VRL compiler message for the submitted synthetic program, when the isolated runner produced one."
+                    },
+                    "diagnostics": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Diagnostic"
+                      },
+                      "maxItems": 50
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SampleResult"
+                      },
+                      "maxItems": 20
+                    },
+                    "ports": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 128
+                      }
+                    },
+                    "placeholders": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 200
+                      }
                     }
                   },
                   "required": [
@@ -15313,6 +15382,107 @@
         ],
         "additionalProperties": true
       },
+      "Diagnostic": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "section": {
+            "enum": [
+              "sources",
+              "transforms",
+              "sinks",
+              "enrichment_tables",
+              "tests",
+              "global"
+            ]
+          },
+          "component": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "route_output": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "field": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "hint": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 3000,
+            "description": "Plain text of the Vector compiler block for this finding, derived from the checked draft."
+          },
+          "docs_url": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^https://errors\\.vrl\\.dev/"
+          },
+          "fix": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "replacement": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "scope": {
+                "enum": [
+                  "span",
+                  "line"
+                ],
+                "description": "span replaces length characters at line:column; line replaces the whole line."
+              }
+            },
+            "required": [
+              "label",
+              "replacement",
+              "scope"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "severity",
+          "message"
+        ],
+        "additionalProperties": false
+      },
       "Validation": {
         "type": "object",
         "properties": {
@@ -15337,14 +15507,35 @@
           "vector_version": {
             "type": "string"
           },
+          "static_checked": {
+            "type": "boolean",
+            "description": "The isolated worker ran pinned Vector on this draft (with placeholders and stand-ins where only a device can resolve a value)."
+          },
           "deferred": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Each device still checks environment, secrets, files or platform before applying."
           },
           "deferred_reasons": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "placeholders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "maxItems": 64,
+            "description": "Secret and environment references that were replaced by typed placeholders for the static check."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "maxItems": 50
           }
         },
         "required": [
@@ -15354,6 +15545,39 @@
         ],
         "additionalProperties": true
       },
+      "PipelineTest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 3000
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 10,
+            "description": "Output payloads Vector printed for a failed test, from the draft's synthetic test inputs."
+          }
+        },
+        "required": [
+          "name",
+          "passed"
+        ],
+        "additionalProperties": false
+      },
       "PipelineTestResult": {
         "type": "object",
         "properties": {
@@ -15362,6 +15586,13 @@
           },
           "tests_run": {
             "type": "boolean"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineTest"
+            },
+            "maxItems": 100
           },
           "errors": {
             "type": "array",
@@ -15387,6 +15618,20 @@
               "type": "string"
             }
           },
+          "placeholders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "maxItems": 50
+          },
           "vector_version": {
             "type": "string"
           }
@@ -15398,6 +15643,78 @@
           "vector_version"
         ],
         "additionalProperties": true
+      },
+      "SampleResult": {
+        "type": "object",
+        "properties": {
+          "sample": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outcome": {
+            "enum": [
+              "emitted",
+              "filtered",
+              "unmatched",
+              "dropped",
+              "error",
+              "aborted"
+            ]
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "port": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "description": "Named output, or an empty string for the default output."
+                },
+                "event": {
+                  "type": "object"
+                },
+                "timestamps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "description": "Flattened field paths whose values are timestamps."
+                }
+              },
+              "required": [
+                "port",
+                "event",
+                "timestamps"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 8
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "sample",
+          "outcome",
+          "outputs"
+        ],
+        "additionalProperties": false
       },
       "EnrollmentRequest": {
         "type": "object",
