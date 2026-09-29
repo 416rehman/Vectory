@@ -1100,17 +1100,19 @@ export function Enrollment({
                   </div>
                 </div>
               )}
-              <p className="control-muted enroll-watch-help">
-                Devices only learn that enrollment was refused; the reasons
-                appear here and in{" "}
-                <DocLink
-                  topic="troubleshooting"
-                  section="an-enrollment-command-fails"
-                >
-                  the troubleshooting guide
-                </DocLink>
-                .
-              </p>
+              {!state?.checkedIn && (
+                <p className="control-muted enroll-watch-help">
+                  Devices only learn that enrollment was refused; the reasons
+                  appear here and in{" "}
+                  <DocLink
+                    topic="troubleshooting"
+                    section="an-enrollment-command-fails"
+                  >
+                    the troubleshooting guide
+                  </DocLink>
+                  .
+                </p>
+              )}
             </div>
           )}
         </section>

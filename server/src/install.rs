@@ -37,7 +37,10 @@ const OPERATING_SYSTEMS: [&str; 3] = ["linux", "darwin", "windows"];
 const ARCHITECTURES: [&str; 2] = ["amd64", "arm64"];
 /// Concurrent agent downloads across both listeners. A permit lives as long as
 /// its response body, so slow clients can't exhaust memory or file handles.
-static DOWNLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+static DOWNLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(32);
+/// How long a client turned away by a download cap is asked to wait. Transfers
+/// take seconds, and the installer's curl retries after this delay.
+const BUSY_RETRY_SECONDS: u64 = 5;
 
 /// One verified agent build.
 #[derive(Clone, Debug)]
@@ -273,10 +276,48 @@ async fn digest(s: &State, path: &FsPath, meta: &std::fs::Metadata) -> Option<St
     Some(sha)
 }
 
+/// Unauthenticated downloads in progress per client address, so one address
+/// can't hold more than a quarter of the download slots.
+static ACTIVE_DOWNLOADS: std::sync::Mutex<std::collections::BTreeMap<String, u32>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+const DOWNLOADS_PER_ADDRESS: u32 = 8;
+/// Held for as long as a download streams; releases its address's slot on drop.
+struct AddressSlot(String);
+impl AddressSlot {
+    fn take(address: String) -> Result<Self> {
+        let mut active = ACTIVE_DOWNLOADS
+            .lock()
+            .map_err(|_| ApiError::conflict("Download tracking is unavailable"))?;
+        let count = active.entry(address.clone()).or_insert(0);
+        if *count >= DOWNLOADS_PER_ADDRESS {
+            return Err(ApiError::throttled(
+                "RATE_LIMITED",
+                "This address already has several agent downloads in progress. Try again in a few seconds.",
+                BUSY_RETRY_SECONDS,
+            ));
+        }
+        *count += 1;
+        Ok(Self(address))
+    }
+}
+impl Drop for AddressSlot {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_DOWNLOADS.lock()
+            && let Some(count) = active.get_mut(&self.0)
+        {
+            *count -= 1;
+            if *count == 0 {
+                active.remove(&self.0);
+            }
+        }
+    }
+}
+
 /// Stream a release from disk. The SHA-256 is recomputed while streaming and
 /// the final chunk is withheld unless it matches, so a file that changed after
-/// it was listed can never be delivered complete.
-async fn stream(release: &Release, h: &HeaderMap) -> Result<Response> {
+/// it was listed can never be delivered complete. A client that stops reading
+/// for 20 seconds, or takes more than five minutes, is cut off.
+async fn stream(release: &Release, h: &HeaderMap, slot: Option<AddressSlot>) -> Result<Response> {
     let etag = format!("\"{}\"", release.sha256);
     let matches = h
         .get(header::IF_NONE_MATCH)
@@ -292,8 +333,8 @@ async fn stream(release: &Release, h: &HeaderMap) -> Result<Response> {
     let permit = DOWNLOADS.try_acquire().map_err(|_| {
         ApiError::throttled(
             "CAPACITY_BUSY",
-            "Too many agent downloads are in progress. Try again in a minute.",
-            30,
+            "Too many agent downloads are in progress. Try again in a few seconds.",
+            BUSY_RETRY_SECONDS,
         )
     })?;
     let mut file = tokio::fs::File::open(&release.path)
@@ -308,17 +349,25 @@ async fn stream(release: &Release, h: &HeaderMap) -> Result<Response> {
     let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
     let (expected, size, name) = (release.sha256.clone(), release.size, release.name.clone());
     tokio::spawn(async move {
-        let _permit = permit;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+        let (_permit, _slot) = (permit, slot);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+        // Every send gives up when the client stops reading for 20 seconds or
+        // the transfer passes its deadline; dropping the sender then cuts the
+        // response short of its Content-Length.
+        let send = |item: std::io::Result<Bytes>| {
+            let stalled = tokio::time::Instant::now() + Duration::from_secs(20);
+            let sent = tokio::time::timeout_at(deadline.min(stalled), tx.send(item));
+            async move { matches!(sent.await, Ok(Ok(()))) }
+        };
         let mut hasher = Sha256::new();
         let mut buffer = vec![0u8; 64 * 1024];
         let (mut total, mut held) = (0u64, None::<Bytes>);
-        let failed = || std::io::Error::other("agent download interrupted");
+        let failed = || Err(std::io::Error::other("agent download interrupted"));
         loop {
             let read = match tokio::time::timeout_at(deadline, file.read(&mut buffer)).await {
                 Ok(Ok(read)) => read,
                 _ => {
-                    let _ = tx.send(Err(failed())).await;
+                    send(failed()).await;
                     return;
                 }
             };
@@ -330,20 +379,19 @@ async fn stream(release: &Release, h: &HeaderMap) -> Result<Response> {
                 break;
             }
             hasher.update(&buffer[..read]);
-            if let Some(chunk) = held.replace(Bytes::copy_from_slice(&buffer[..read])) {
-                match tokio::time::timeout_at(deadline, tx.send(Ok(chunk))).await {
-                    Ok(Ok(())) => {}
-                    _ => return,
-                }
+            if let Some(chunk) = held.replace(Bytes::copy_from_slice(&buffer[..read]))
+                && !send(Ok(chunk)).await
+            {
+                return;
             }
         }
         if total == size && hex::encode(hasher.finalize()) == expected {
             if let Some(chunk) = held {
-                let _ = tx.send(Ok(chunk)).await;
+                send(Ok(chunk)).await;
             }
         } else {
             tracing::error!(release = %name, "agent release changed on disk; download aborted");
-            let _ = tx.send(Err(failed())).await;
+            send(failed()).await;
         }
     });
     let mut response = Response::new(Body::from_stream(
@@ -393,7 +441,7 @@ pub async fn download_release(
         .iter()
         .find(|r| r.name == name)
         .ok_or_else(ApiError::missing)?;
-    stream(release, &h).await
+    stream(release, &h, None).await
 }
 
 fn downloads_disabled() -> ApiError {
@@ -419,15 +467,19 @@ pub async fn download_platform(
     if s.settings.disable_public_agent_downloads {
         return Err(downloads_disabled());
     }
-    // The agent listener has no proxy in front: always the TCP peer.
-    s.limit(
-        format!("agent-download:{}", peer_key(peer)),
-        20,
-        Duration::from_secs(600),
-    )?;
     if !OPERATING_SYSTEMS.contains(&os.as_str()) || !ARCHITECTURES.contains(&arch.as_str()) {
         return Err(ApiError::missing());
     }
+    // The agent listener has no proxy in front: always the TCP peer. A fleet
+    // behind one NAT address shares these caps, so a client turned away while
+    // the address is busy retries shortly without spending its rate limit.
+    let address = peer_key(peer);
+    let slot = AddressSlot::take(address.clone())?;
+    s.limit(
+        format!("agent-download:{address}"),
+        120,
+        Duration::from_secs(600),
+    )?;
     let catalog = catalog(&s).await;
     let release = catalog.for_platform(&os, &arch).ok_or_else(|| {
         ApiError::new(
@@ -436,7 +488,7 @@ pub async fn download_platform(
             format!("This server has no agent build for {os}/{arch}."),
         )
     })?;
-    stream(release, &h).await
+    stream(release, &h, Some(slot)).await
 }
 
 /// `GET /agent/v1/identity`: the device a client certificate belongs to, so
@@ -849,12 +901,15 @@ vectory_install() {
 		url=$server/agent/v1/downloads/$os/$arch
 		unreachable="Check that this host can reach the server's agent address."
 		if command -v curl >/dev/null 2>&1; then
+			# A busy server answers 429 with Retry-After; --retry waits it out.
+			curl_options='-fsSg --proto =https --connect-timeout 20 --retry 6 --retry-max-time 120'
 			if [ -n "$tls_ca" ]; then
-				curl -fsSg --proto =https --cacert "$tls_ca" -o "$tmp/vectory" "$url" || fail Agent "Couldn't download the agent from $server." "$unreachable"
+				curl $curl_options --cacert "$tls_ca" -o "$tmp/vectory" "$url" || fail Agent "Couldn't download the agent from $server." "$unreachable"
 			else
-				curl -fsSg --proto =https -o "$tmp/vectory" "$url" || fail Agent "Couldn't download the agent from $server." "$unreachable"
+				curl $curl_options -o "$tmp/vectory" "$url" || fail Agent "Couldn't download the agent from $server." "$unreachable"
 			fi
 		elif command -v wget >/dev/null 2>&1; then
+			unreachable="$unreachable On BusyBox systems, install curl: BusyBox wget can't make this connection."
 			if [ -n "$tls_ca" ]; then
 				wget -q --ca-certificate="$tls_ca" -O "$tmp/vectory" "$url" || fail Agent "Couldn't download the agent from $server." "$unreachable"
 			else
@@ -917,7 +972,7 @@ pub async fn install_sh(
     }
     s.limit(
         format!("agent-installer:{}", peer_key(peer)),
-        60,
+        300,
         Duration::from_secs(600),
     )?;
     let agent_url = device_agent_url(&s.settings, &h, &uri)
@@ -1171,6 +1226,19 @@ mod tests {
             host_of("https://vectory.example.com"),
             "vectory.example.com"
         );
+    }
+
+    #[test]
+    fn one_address_cannot_hold_every_download_slot() {
+        let address = "192.0.2.9".to_owned();
+        let held: Vec<_> = (0..DOWNLOADS_PER_ADDRESS)
+            .map(|_| AddressSlot::take(address.clone()).unwrap())
+            .collect();
+        assert!(AddressSlot::take(address.clone()).is_err());
+        assert!(AddressSlot::take("192.0.2.10".into()).is_ok());
+        drop(held);
+        assert!(AddressSlot::take(address.clone()).is_ok());
+        assert!(!ACTIVE_DOWNLOADS.lock().unwrap().contains_key(&address));
     }
 
     #[test]

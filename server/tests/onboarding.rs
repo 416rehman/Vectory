@@ -701,7 +701,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     fake(
         "curl",
-        "#!/bin/sh\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\ncp \"$ca\" \"$FAKE_CURL_CA\" || exit 60\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\ncp \"$ca\" \"$FAKE_CURL_CA\" || exit 60\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
     );
     let download = root.join("download");
     let run = |bytes: &[u8], install_dir: &Path| {
@@ -721,6 +721,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             )
             .env("FAKE_DOWNLOAD", &download)
             .env("FAKE_CURL_URL", root.join("curl-url"))
+            .env("FAKE_CURL_ARGS", root.join("curl-args"))
             .env("FAKE_CURL_CA", root.join("curl-ca.pem"))
             .env("FAKE_AGENT_ARGS", root.join("agent-args"))
             .output()
@@ -749,6 +750,12 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     let ca = std::fs::read_to_string(root.join("curl-ca.pem")).unwrap();
     assert!(ca.starts_with("-----BEGIN CERTIFICATE-----"));
+    // HTTPS only, and a busy server's Retry-After is waited out.
+    let curl = std::fs::read_to_string(root.join("curl-args")).unwrap();
+    assert!(
+        curl.contains("--proto =https") && curl.contains("--retry 6"),
+        "{curl}"
+    );
     let args = std::fs::read_to_string(root.join("agent-args")).unwrap();
     let args: Vec<&str> = args.lines().collect();
     assert_eq!(
