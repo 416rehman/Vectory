@@ -34,6 +34,7 @@ import { DataTable, type TableColumn, type TableSort } from "./DataTable";
 import { matchesTableFilter, sortTableRows } from "./dataTableModel";
 import { Button, Modal, SearchBox, Spinner } from "./ui";
 import "./account.css";
+import type { Notify } from "./toast";
 
 type Status = "active" | "invited" | "disabled";
 const statusOf = (person: Person): Status =>
@@ -238,7 +239,7 @@ export function WorkspaceAccess({
   loading?: boolean;
   reload: () => void;
   reloadPeople?: () => Promise<Person[] | undefined>;
-  notify: (message: string) => void;
+  notify: Notify;
   onUserChanged: (user: User | null) => void;
   savedPerson: User | null;
   onPersonLocated: () => void;
@@ -307,6 +308,7 @@ export function WorkspaceAccess({
         accessChanged
           ? `Saved. ${firstName(result.name)} was signed out of every browser.`
           : `Saved ${result.name}.`,
+        { tone: "success" },
       );
       reload();
       if (result.id === request.context.userId) {
@@ -1112,7 +1114,7 @@ function TwoFactorReset({
   user: User;
   reloadPeople?: () => Promise<Person[] | undefined>;
   reload: () => void;
-  notify: (message: string) => void;
+  notify: Notify;
   onClose: () => void;
 }) {
   const [password, setPassword] = useState("");
@@ -1138,6 +1140,7 @@ function TwoFactorReset({
   function finished() {
     notify(
       `Two-factor is off for ${target.name}. They can sign in with their password and set it up again.`,
+      { tone: "success" },
     );
     reload();
     onClose();
@@ -1201,7 +1204,9 @@ function TwoFactorReset({
       const error = failure instanceof APIError ? failure : null;
       const wait = retryDelay(failure);
       if (error?.code === "MFA_NOT_ENABLED") {
-        notify(`Two-factor is already off for ${target.name}.`);
+        notify(`Two-factor is already off for ${target.name}.`, {
+          tone: "info",
+        });
         reload();
         onClose();
         return;

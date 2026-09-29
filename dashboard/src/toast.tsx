@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { CircleAlert, CircleCheck, X } from "lucide-react";
 import "./toast.css";
 
@@ -11,6 +11,9 @@ export type ToastOptions = {
   /** Milliseconds before an automatic dismissal; errors persist by default. */
   duration?: number | null;
 };
+/** What a page's `notify` accepts: the tone is stated, never guessed. */
+export type NotifyOptions = ToastOptions & { tone?: ToastTone };
+export type Notify = (message: string, options?: NotifyOptions) => void;
 export type ToastItem = {
   id: number;
   tone: ToastTone;
@@ -41,12 +44,24 @@ function show(tone: ToastTone, message: string, options: ToastOptions = {}) {
           : DEFAULT_DURATION,
   };
   // Replace an identical visible message instead of stacking duplicates.
-  items = [
+  items = evict([
     ...items.filter((old) => old.message !== message || old.tone !== tone),
     item,
-  ].slice(-MAX_TOASTS);
+  ]);
   emit();
   return item.id;
+}
+/**
+ * Keep at most three. The oldest message that dismisses itself goes first,
+ * so a persistent error is not pushed out by newer confirmations.
+ */
+function evict(list: ToastItem[]) {
+  const next = [...list];
+  while (next.length > MAX_TOASTS) {
+    const passing = next.findIndex((item) => item.duration !== null);
+    next.splice(passing >= 0 && passing < next.length - 1 ? passing : 0, 1);
+  }
+  return next;
 }
 export const toast = {
   success: (message: string, options?: ToastOptions) =>
@@ -67,14 +82,23 @@ export const toast = {
     emit();
   },
 };
-/** Compatibility for page `notify(message)` callbacks. */
-export function notifyToast(message: string) {
+/**
+ * The app's `notify`. Callers state the tone; a call without one (the
+ * pipeline editor still has some) falls back to reading the wording.
+ */
+export function notifyToast(message: string, options: NotifyOptions = {}) {
+  const { tone = guessTone(message), ...rest } = options;
+  return show(tone, message, rest);
+}
+export function guessTone(message: string): ToastTone {
   return /^(import failed|cannot |could ?n[o']t|failed|unable to)/i.test(
     message,
   )
-    ? toast.error(message)
-    : toast.info(message);
+    ? "error"
+    : "info";
 }
+/** Test-only: the current stack. */
+export const toastSnapshot = () => items;
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -126,7 +150,6 @@ function ToastCard({ item }: { item: ToastItem }) {
     <div
       className="toast-item"
       data-tone={item.tone}
-      role={item.tone === "error" ? "alert" : "status"}
       onPointerEnter={(event) => {
         entry.current = { x: event.clientX, y: event.clientY };
       }}
@@ -194,15 +217,59 @@ function ToastCard({ item }: { item: ToastItem }) {
   );
 }
 
-/** The app's notification stack, bottom-right on desktop, above the safe area on phones. */
+/**
+ * The app's notification stack, bottom-right on desktop, above the safe area
+ * on phones. Screen readers hear each new message through two live regions
+ * that are always mounted: a region inserted together with its text is often
+ * skipped, so the text is written into an existing, empty region instead.
+ */
 export function ToastViewport() {
   const list = useSyncExternalStore(subscribe, snapshot, snapshot);
-  if (!list.length) return null;
+  const [spoken, setSpoken] = useState({ polite: "", assertive: "" });
+  const announced = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    const newest = list[list.length - 1];
+    if (!newest || newest.id <= announced.current) return;
+    announced.current = newest.id;
+    const region = newest.tone === "error" ? "assertive" : "polite";
+    const text = newest.action
+      ? `${newest.message} ${newest.action.label} is available in the notification.`
+      : newest.message;
+    // Clear, then write, so a repeated message is announced again.
+    setSpoken((current) => ({ ...current, [region]: "" }));
+    clearTimeout(timer.current);
+    timer.current = setTimeout(
+      () => setSpoken((current) => ({ ...current, [region]: text })),
+      100,
+    );
+  }, [list]);
+  useEffect(() => () => clearTimeout(timer.current), []);
   return (
-    <section className="toast" aria-label="Notifications">
-      {list.map((item) => (
-        <ToastCard key={item.id} item={item} />
-      ))}
-    </section>
+    <>
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {spoken.polite}
+      </div>
+      <div
+        className="sr-only"
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+      >
+        {spoken.assertive}
+      </div>
+      {list.length > 0 && (
+        <section className="toast" aria-label="Notifications">
+          {list.map((item) => (
+            <ToastCard key={item.id} item={item} />
+          ))}
+        </section>
+      )}
+    </>
   );
 }

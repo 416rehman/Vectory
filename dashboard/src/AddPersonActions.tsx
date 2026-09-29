@@ -16,6 +16,7 @@ import RolePicker from "./RolePicker";
 import { firstName, type HeldLink } from "./AdminPasswordResetActions";
 import { Button, Modal, Spinner } from "./ui";
 import "./account.css";
+import type { Notify } from "./toast";
 
 type Draft = {
   name: string;
@@ -82,7 +83,7 @@ export default function AddPersonActions({
 }: {
   ref?: Ref<AddPersonHandle>;
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   onCreated: (person: User) => void;
   onInvite: (link: HeldLink) => void;
   onNewLink: (person: Person) => void;
@@ -143,6 +144,7 @@ export default function AddPersonActions({
       ) {
         notify(
           `An account for ${person.email} exists, but its details changed. Review it in Workspace access.`,
+          { tone: "info" },
         );
         return;
       }

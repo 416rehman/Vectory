@@ -62,6 +62,7 @@ import {
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 const platform = (device: Device) =>
@@ -559,7 +560,7 @@ export default function DeviceDetail({
 }: {
   id: string;
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
 }) {
   const [fast, setFast] = useState(false);
@@ -598,7 +599,7 @@ export default function DeviceDetail({
       });
   }, [device?.id, device?.name, user.id]);
   const afterAction = (message: string) => {
-    notify(message);
+    notify(message, { tone: "success" });
     void resource.reload();
   };
   const refresh = async () => {

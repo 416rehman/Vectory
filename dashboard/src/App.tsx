@@ -37,7 +37,7 @@ import {
   useGlobalShortcuts,
 } from "./Shell";
 import { knownPages, routeTitle, sectionOf, shellInfo } from "./navigation";
-import { notifyToast, toast, ToastViewport } from "./toast";
+import { notifyToast, toast, ToastViewport, type Notify } from "./toast";
 import { useAppearance } from "./appearance";
 import PageBoundary from "./PageBoundary";
 import { loadPage } from "./pageLoading";
@@ -326,8 +326,8 @@ export default function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [user?.id]);
-  const notify = useCallback((message: string) => {
-    notifyToast(message);
+  const notify = useCallback<Notify>((message, options) => {
+    notifyToast(message, options);
   }, []);
   const initialization = useRef<AbortController | null>(null);
   const initialize = useCallback(async () => {
