@@ -269,6 +269,61 @@ func TestEventsOutLeavesOutSinksCarryingOnlyVectorsOwnTelemetry(t *testing.T) {
 	}
 }
 
+func TestSeriesOfARetypedComponentAreIgnored(t *testing.T) {
+	// A reload retyped `archive` from blackhole to http. Vector keeps serving
+	// the blackhole series until they expire, so one scrape holds both.
+	data := []byte(strings.Join([]string{
+		`vector_component_sent_events_total{component_id="app",component_kind="source",component_type="demo_logs"} 100`,
+		`vector_component_sent_events_total{component_id="archive",component_kind="sink",component_type="blackhole"} 90`,
+		`vector_component_sent_events_total{component_id="archive",component_kind="sink",component_type="http"} 5`,
+		`vector_component_errors_total{component_id="archive",component_kind="sink",component_type="blackhole"} 1`,
+		`vector_component_errors_total{component_id="archive",component_kind="sink",component_type="http"} 3`,
+	}, "\n") + "\n")
+	byID := func(o metricObservation, id string) *ComponentTelemetry {
+		for i := range o.Components {
+			if o.Components[i].ID == id {
+				return &o.Components[i]
+			}
+		}
+		return nil
+	}
+
+	// With the running configuration, only the declared type counts.
+	o, err := parseMetricObservationFor(data, "vector", nil, map[string]string{"app": "demo_logs", "archive": "http"})
+	if err != nil {
+		t.Fatalf("a retyped component must not reject the scrape: %v", err)
+	}
+	archive := byID(o, "archive")
+	if archive == nil || archive.Type != "http" || o.Counters["d:out"] != 5 || value(o.Errors) != 3 || o.Counters["c:archive:sent"] != 5 {
+		t.Fatalf("archive=%+v out=%v errors=%v", archive, o.Counters["d:out"], value(o.Errors))
+	}
+	if byID(o, "app") == nil {
+		t.Fatal("the other components stay")
+	}
+
+	// Without one, neither type is trusted, and the rest of the scrape stays.
+	o, err = parseMetricObservationFor(data, "vector", nil, nil)
+	if err != nil {
+		t.Fatalf("a conflict must not reject the scrape: %v", err)
+	}
+	if byID(o, "archive") != nil || o.Counters["c:archive:sent"] != 0 || o.ComponentEvents["archive"] != 0 {
+		t.Fatal("a component with two types is left out")
+	}
+	if byID(o, "app") == nil || o.Counters["c:app:sent"] != 100 {
+		t.Fatal("the other components stay")
+	}
+}
+
+func TestComponentTypesComeFromTheRunningConfiguration(t *testing.T) {
+	got := componentTypes([]byte(`{"sources":{"app":{"type":"demo_logs"}},"transforms":{"parse":{"type":"remap"}},"sinks":{"out":{"type":"http"},"untyped":{}}}`))
+	if len(got) != 3 || got["app"] != "demo_logs" || got["parse"] != "remap" || got["out"] != "http" {
+		t.Fatalf("types = %v", got)
+	}
+	if componentTypes([]byte("not json")) != nil {
+		t.Fatal("an unreadable configuration declares nothing")
+	}
+}
+
 func TestChangingTelemetrySinksRestartsOnlyTheOutRate(t *testing.T) {
 	var round atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

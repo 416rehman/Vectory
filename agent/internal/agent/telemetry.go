@@ -25,6 +25,8 @@ type MetricsCollector struct {
 	namespace string
 	// internal lists sinks carrying only Vector's own telemetry.
 	internal map[string]bool
+	// types maps component IDs to the types the running configuration declares.
+	types    map[string]string
 	client   *http.Client
 	counters counterSet
 	sampled  time.Time
@@ -87,6 +89,12 @@ func (c *MetricsCollector) setEndpoint(endpoint, namespace string) error {
 	c.url, c.namespace = u.String(), namespace
 	c.counters, c.uptime, c.sampled = nil, nil, time.Time{}
 	return nil
+}
+
+// setComponentTypes records which type the running configuration declares for
+// each component, so series Vector keeps for a retyped component are ignored.
+func (c *MetricsCollector) setComponentTypes(types map[string]string) {
+	c.types = types
 }
 
 // setInternalSinks updates the sinks left out of "events out". A changed set
@@ -164,7 +172,7 @@ func (c *MetricsCollector) Collect(ctx context.Context, now time.Time) *Telemetr
 	if e != nil || len(data) > MaxArtifact {
 		return nil
 	}
-	observed, e := parseMetricObservationWithNamespace(data, c.namespace, c.internal)
+	observed, e := parseMetricObservationFor(data, c.namespace, c.internal, c.types)
 	if e != nil || (observed.Events == nil && observed.Errors == nil && observed.UptimeSeconds == nil && observed.BufferBytes == nil && observed.DiscardedEvents == nil && len(observed.Components) == 0) {
 		return nil
 	}
@@ -343,6 +351,7 @@ func (e *Engine) collectTelemetry(ctx context.Context, running []byte) (*Telemet
 		return nil, source, address
 	}
 	e.Metrics.setInternalSinks(telemetrySinks(running))
+	e.Metrics.setComponentTypes(componentTypes(running))
 	sample := e.Metrics.Collect(ctx, e.now())
 	if sample != nil {
 		sample.Components = runningComponents(sample.Components, running)
@@ -390,6 +399,26 @@ func telemetrySinks(config []byte) map[string]bool {
 		}
 	}
 	return sinks
+}
+
+// componentTypes maps every component ID of a configuration to its type. An
+// unreadable configuration declares nothing.
+func componentTypes(config []byte) map[string]string {
+	var root map[string]map[string]struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(config, &root) != nil {
+		return nil
+	}
+	types := map[string]string{}
+	for _, section := range []string{"sources", "transforms", "sinks"} {
+		for id, component := range root[section] {
+			if component.Type != "" {
+				types[id] = component.Type
+			}
+		}
+	}
+	return types
 }
 
 // runningComponents keeps components of the running configuration. Vector
