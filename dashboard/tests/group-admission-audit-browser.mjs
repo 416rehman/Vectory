@@ -497,11 +497,13 @@ try {
         ).toBeVisible();
         const popupUrl = new URL(popup.url());
         expect(popupUrl.hash).toBe("#/deployments?status=active&page=1");
-        const listReads = f.requests.filter(
-          (r) => r.path === "/deployments/history" && !r.query.group_id,
-        );
-        expect(listReads).toHaveLength(1);
-        expect(listReads[0].query).toMatchObject({
+        // The heading can render before the list read goes out.
+        const listReads = () =>
+          f.requests.filter(
+            (r) => r.path === "/deployments/history" && !r.query.group_id,
+          );
+        await expect.poll(() => listReads().length).toBe(1);
+        expect(listReads()[0].query).toMatchObject({
           status: "active",
           page: "1",
           page_size: "12",

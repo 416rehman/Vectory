@@ -6,6 +6,8 @@ Scripts that write evidence take its path from an environment variable. Without 
 
 Everything the older review process produced that no longer runs from a clean checkout is in `archive/`; its README says why and what covers the same guarantees now.
 
+[docs/internal/CI.md](../../docs/internal/CI.md) says what each CI job proves and does not, and lists the harnesses, specs and native scripts in the repository that CI leaves out, with the reason for each.
+
 ## Checks that start the server
 
 Build the server first (`cargo build --manifest-path server/Cargo.toml --bin vectory-server`), then run from the repository root. Each script copies the binary to a temporary folder, seeds SQLite fixtures directly (with marker strings, so a leak of any secret is visible), drives the HTTP API, asserts exact response key sets, bounds and authorization, and removes the fixture. Evidence is written only when everything passed.

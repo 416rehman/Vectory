@@ -61,16 +61,19 @@ services:
     environment:
       VECTORY_VALIDATOR_ISOLATED: "true"
     # GET /health answers only after the validator has confirmed the pinned
-    # Vector. The image has bash and grep but no curl.
+    # Vector. The image has no HTTP client, so bash asks over /dev/tcp.
     healthcheck:
       test:
         - CMD
         - bash
         - -c
-        - exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /health HTTP/1.0\r\n\r\n' >&3 && grep -q '"status":"ok"' <&3
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8081 &&
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status":"ok"' <&3
       interval: 10s
-      timeout: 3s
-      start_period: 10s
+      timeout: 5s
+      start_period: 20s
       retries: 3
     networks: [validation]
   proxy:

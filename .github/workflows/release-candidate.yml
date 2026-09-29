@@ -1,4 +1,12 @@
 name: release candidate (no publication)
+# An unsigned development candidate, kept only as workflow artifacts: agents
+# for every target with their archives and catalog, .deb and .rpm packages
+# (installed and removed in containers), an MSI (installed and removed on
+# Windows), the server and validator images, CycloneDX SBOMs for the Rust, Go
+# and npm dependencies, a license inventory, and SHA256SUMS over everything.
+# Nothing is signed, pushed or published; every catalog entry says signed:false.
+#   gh workflow run release-candidate.yml --ref <branch>
+# packaging/README.md describes the outputs.
 on:
   workflow_dispatch:
     inputs:
@@ -9,59 +17,345 @@ on:
         default: false
 permissions:
   contents: read
+env:
+  # Tools are pinned by version and, for Go modules, by the checksum-database hash.
+  NFPM_MODULE: github.com/goreleaser/nfpm/v2
+  NFPM_VERSION: v2.47.0
+  NFPM_SUM: "h1:0bioJAjWaMPntgDqynP4ze0Wt4zYqYSFJ5/BBy9XIGI="
+  CYCLONEDX_GOMOD_MODULE: github.com/CycloneDX/cyclonedx-gomod
+  CYCLONEDX_GOMOD_VERSION: v1.12.0
+  CYCLONEDX_GOMOD_SUM: "h1:OuFUYNhnjpju7RNArOVPPchFPWNobGfhrHODDPKcgZs="
+  CARGO_CYCLONEDX_VERSION: "0.5.9"
+  WIX_VERSION: "5.0.2"
+  DEBIAN_IMAGE: debian:12-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+  ALMALINUX_IMAGE: almalinux:9-minimal@sha256:e03fe7d942a94ad7a72b9fe5eb6af54388b05bc8357151c891f13c023817df98
 jobs:
-  unsigned-candidate:
+  agents:
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            dashboard/package-lock.json
-            help-center/package-lock.json
-      - run: npm ci
-        working-directory: dashboard
-      - run: npm ci
-        working-directory: help-center
-      - name: Build dashboard and bundled offline help
-        run: npm run build
-        working-directory: dashboard
+        timeout-minutes: 10
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        timeout-minutes: 10
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - run: go test ./...
+        timeout-minutes: 10
         working-directory: agent
       - name: Reject unsafe or incomplete release archives
+        timeout-minutes: 10
         run: python3 packaging/test_verify_release.py
-      - run: python3 packaging/build-release.py
+      - name: Build the agents, archives and catalog for every target
+        timeout-minutes: 10
+        run: python3 packaging/build-release.py --out artifacts/releases
       - name: Check Linux ELF has no dynamic interpreter or dependencies
+        timeout-minutes: 10
         run: |
+          # A negated command never stops `set -e`, so each check fails explicitly.
           for binary in artifacts/releases/vectory-*-linux-*; do
             case "$binary" in *.tar.gz) continue ;; esac
-            ! readelf -l "$binary" | grep 'INTERP'
-            ! readelf -d "$binary" | grep 'NEEDED'
+            if readelf -l "$binary" | grep 'INTERP'; then echo "::error::$binary has a dynamic interpreter"; exit 1; fi
+            if readelf -d "$binary" | grep 'NEEDED'; then echo "::error::$binary needs shared libraries"; exit 1; fi
           done
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: .
-          format: spdx-json
-          output-file: artifacts/releases/source.spdx.json
-          upload-artifact: false
-      - run: python3 packaging/record-source.py --out artifacts/releases/SOURCE-INPUTS.json
-      - run: python3 packaging/verify-release.py artifacts/releases --refresh-checksums
+      - name: Verify the catalog, archives and checksums
+        timeout-minutes: 10
+        run: python3 packaging/verify-release.py artifacts/releases
+      - name: Build .deb and .rpm packages with the pinned nfpm
+        timeout-minutes: 10
+        working-directory: packaging
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/tools"
+          sum=$(cd "$RUNNER_TEMP" && go mod download -json "$NFPM_MODULE@$NFPM_VERSION" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Sum"])')
+          [ "$sum" = "$NFPM_SUM" ] || { echo "::error::nfpm $NFPM_VERSION has hash $sum, expected $NFPM_SUM"; exit 1; }
+          go install "$NFPM_MODULE/cmd/nfpm@$NFPM_VERSION"
+          version=$(python3 -c 'import re; print(re.search(r"^const Version = \"([^\"]+)\"$", open("../agent/internal/agent/types.go").read(), re.M).group(1))')
+          mkdir -p ../artifacts/packages
+          for arch in amd64 arm64; do
+            for packager in deb rpm; do
+              VERSION="$version" GOARCH="$arch" "$GOBIN/nfpm" package --config nfpm.yaml --packager "$packager" --target ../artifacts/packages/
+            done
+          done
+          ls -l ../artifacts/packages
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 10
         with:
-          {
-            name: unsigned-development-candidate,
-            path: artifacts/releases,
-            if-no-files-found: error,
-          }
+          name: candidate-agents
+          path: |
+            artifacts/releases
+            artifacts/packages
+          if-no-files-found: error
+  packages:
+    needs: agents
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        timeout-minutes: 10
+        with: { name: candidate-agents, path: artifacts }
+      - name: Install, run and remove the .deb on Debian 12
+        timeout-minutes: 10
+        run: |
+          docker run --rm --network none -v "$PWD/artifacts/packages:/packages:ro" "$DEBIAN_IMAGE" sh -euxc '
+            dpkg -i /packages/vectory_*_amd64.deb
+            vectory --version
+            vectory version --json
+            vectory help setup > /dev/null
+            vectory setup --help > /dev/null
+            test "$(stat -c %a /usr/bin/vectory)" = 755
+            test -f /usr/lib/systemd/system/vectory.service
+            test -f /usr/share/doc/vectory/LICENSE
+            test ! -e /var/lib/vectory-agent
+            if getent passwd vectory; then echo "installing created an account"; exit 1; fi
+            status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
+            dpkg -r vectory
+            test ! -e /usr/bin/vectory
+          '
+      - name: Install, run and remove the .rpm on AlmaLinux 9
+        timeout-minutes: 10
+        run: |
+          docker run --rm --network none -v "$PWD/artifacts/packages:/packages:ro" "$ALMALINUX_IMAGE" sh -euxc '
+            rpm -i /packages/vectory-*.x86_64.rpm
+            rpm -q vectory
+            vectory --version
+            vectory version --json
+            vectory help setup > /dev/null
+            vectory setup --help > /dev/null
+            test "$(stat -c %a /usr/bin/vectory)" = 755
+            test -f /usr/lib/systemd/system/vectory.service
+            test ! -e /var/lib/vectory-agent
+            if getent passwd vectory; then echo "installing created an account"; exit 1; fi
+            status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
+            rpm -e vectory
+            test ! -e /usr/bin/vectory
+          '
+      - name: Check the arm64 packages' metadata and contents
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          deb=$(ls artifacts/packages/vectory_*_arm64.deb)
+          dpkg-deb -f "$deb" Package Version Architecture
+          [ "$(dpkg-deb -f "$deb" Architecture)" = arm64 ]
+          dpkg-deb -c "$deb" | grep -q ' ./usr/bin/vectory$'
+          docker run --rm --network none -v "$PWD/artifacts/packages:/packages:ro" "$ALMALINUX_IMAGE" sh -euxc '
+            rpm -qp --queryformat "%{NAME} %{VERSION} %{ARCH}\n" /packages/vectory-*.aarch64.rpm
+            test "$(rpm -qp --queryformat "%{ARCH}" /packages/vectory-*.aarch64.rpm)" = aarch64
+            rpm -qlp /packages/vectory-*.aarch64.rpm | grep -qx /usr/bin/vectory
+          '
+  msi:
+    needs: agents
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        timeout-minutes: 10
+        with: { name: candidate-agents, path: artifacts }
+      - name: Install the pinned WiX Toolset
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          dotnet tool install wix --version $env:WIX_VERSION --tool-path "$env:RUNNER_TEMP\wix"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\wix\wix.exe" --version
+          exit $LASTEXITCODE
+      - name: Build the MSI
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path agent/internal/agent/types.go -Pattern '^const Version = "([^"]+)"$').Matches[0].Groups[1].Value
+          # MSI product versions are numeric: 0.1.0-dev installs as 0.1.0.
+          $msiVersion = $version -replace '-.*$', ''
+          $binary = (Resolve-Path "artifacts/releases/vectory-$version-windows-amd64.exe").Path
+          New-Item -ItemType Directory -Force artifacts/msi | Out-Null
+          & "$env:RUNNER_TEMP\wix\wix.exe" build packaging/windows/vectory.wxs -arch x64 -d "Version=$msiVersion" -d "Binary=$binary" -o "artifacts/msi/vectory-$version-windows-amd64.msi"
+          exit $LASTEXITCODE
+      - name: Install, run and remove the MSI
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem artifacts/msi/*.msi).FullName
+          $logs = (Resolve-Path artifacts/msi).Path
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/l*v', "`"$logs\install.log`"") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "msiexec /i exited $($install.ExitCode)" }
+          $exe = Join-Path $env:ProgramFiles 'Vectory\vectory.exe'
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "vectory --version exited $LASTEXITCODE" }
+          if (Get-Service -Name Vectory -ErrorAction SilentlyContinue) { throw 'Installing the MSI registered a service.' }
+          $remove = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/l*v', "`"$logs\uninstall.log`"") -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { throw "msiexec /x exited $($remove.ExitCode)" }
+          if (Test-Path -LiteralPath $exe) { throw 'The agent is still installed after removal.' }
+          Write-Output "Installed, ran and removed $msi."
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: candidate-msi
+          path: artifacts/msi
+          if-no-files-found: error
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,
+      # SQLite at -O3) of the server, plus the agents, on a small runner.
+      - name: Build the server image
+        timeout-minutes: 30
+        run: docker build -f deploy/Dockerfile --target runtime -t vectory-server:candidate .
+      # Reuses the server stage built above.
+      - name: Build the validator image
+        timeout-minutes: 10
+        run: docker build -f deploy/Dockerfile --target validator -t vectory-validator:candidate .
+      - name: Check the images without secrets or network
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/images
+          [ "$(docker image inspect -f '{{.Config.User}}' vectory-server:candidate)" = "10001:10001" ]
+          [ "$(docker image inspect -f '{{.Config.User}}' vectory-validator:candidate)" = "10002:10002" ]
+          docker run --rm --network none --entrypoint vectory-admin vectory-server:candidate --version
+          docker run --rm --network none --entrypoint /usr/bin/vector vectory-validator:candidate --version
+          # Without TLS, a validator and a bootstrap secret the server must refuse to start.
+          if timeout 60 docker run --rm --network none vectory-server:candidate > artifacts/images/server-without-settings.log 2>&1; then
+            echo "::error::The server image started without its safety settings."
+            exit 1
+          fi
+          grep -m1 'VECTORY_' artifacts/images/server-without-settings.log
+          if timeout 60 docker run --rm --network none vectory-validator:candidate > artifacts/images/validator-without-isolation.log 2>&1; then
+            echo "::error::The validator image started without VECTORY_VALIDATOR_ISOLATED."
+            exit 1
+          fi
+          docker run --rm --network none --entrypoint cat vectory-server:candidate /app/agent-releases/catalog.json > artifacts/images/image-agent-catalog.json
+          docker image inspect vectory-server:candidate vectory-validator:candidate > artifacts/images/images.json
+      - name: Save the images
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          docker save vectory-server:candidate | gzip -n > artifacts/images/vectory-server-image.tar.gz
+          docker save vectory-validator:candidate | gzip -n > artifacts/images/vectory-validator-image.tar.gz
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        timeout-minutes: 10
+        with:
+          image: vectory-server:candidate
+          format: spdx-json
+          output-file: artifacts/images/vectory-server-image.spdx.json
+          upload-artifact: false
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        timeout-minutes: 10
+        with:
+          image: vectory-validator:candidate
+          format: spdx-json
+          output-file: artifacts/images/vectory-validator-image.spdx.json
+          upload-artifact: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: candidate-images
+          path: artifacts/images
+          if-no-files-found: error
+  sbom:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+      - name: Unit-test the license inventory
+        timeout-minutes: 10
+        run: python3 packaging/test_license_inventory.py
+      - name: CycloneDX SBOM of the server's Rust dependencies
+        timeout-minutes: 10
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 install cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION" --locked
+          cargo +1.94.0 cyclonedx --manifest-path server/Cargo.toml --format json --override-filename vectory-server.cdx
+          mkdir -p artifacts/sbom
+          mv server/vectory-server.cdx.json artifacts/sbom/
+      - name: CycloneDX SBOM of the agent's Go dependencies
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/tools"
+          sum=$(cd "$RUNNER_TEMP" && go mod download -json "$CYCLONEDX_GOMOD_MODULE@$CYCLONEDX_GOMOD_VERSION" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Sum"])')
+          [ "$sum" = "$CYCLONEDX_GOMOD_SUM" ] || { echo "::error::cyclonedx-gomod $CYCLONEDX_GOMOD_VERSION has hash $sum, expected $CYCLONEDX_GOMOD_SUM"; exit 1; }
+          go install "$CYCLONEDX_GOMOD_MODULE/cmd/cyclonedx-gomod@$CYCLONEDX_GOMOD_VERSION"
+          mkdir -p artifacts/sbom
+          cd agent
+          # The Linux amd64 build; the other targets compile the same two modules.
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 "$GOBIN/cyclonedx-gomod" app -json -licenses -assert-licenses -main cmd/vectory -output ../artifacts/sbom/vectory-agent.cdx.json
+      - name: CycloneDX SBOMs of the dashboard's and help center's npm dependencies
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/sbom
+          (cd dashboard && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-dashboard.cdx.json
+          (cd help-center && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-help-center.cdx.json
+      - name: License inventory, source lockfile inventory and source bytes
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python3 packaging/license-inventory.py artifacts/sbom/*.cdx.json --out artifacts/sbom
+          python3 packaging/generate-sbom.py --out artifacts/sbom/source.spdx.json
+          python3 packaging/record-source.py --out artifacts/sbom/SOURCE-INPUTS.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: candidate-sbom
+          path: artifacts/sbom
+          if-no-files-found: error
+  assemble:
+    needs: [agents, packages, msi, images, sbom]
+    if: ${{ !cancelled() && needs.agents.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        timeout-minutes: 10
+        with: { pattern: candidate-*, path: artifacts/parts }
+      - name: Gather every part into one folder with a manifest and SHA256SUMS
+        timeout-minutes: 10
+        env:
+          PACKAGES_RESULT: ${{ needs.packages.result }}
+          MSI_RESULT: ${{ needs.msi.result }}
+          IMAGES_RESULT: ${{ needs.images.result }}
+          SBOM_RESULT: ${{ needs.sbom.result }}
+        run: |
+          set -euo pipefail
+          out=artifacts/unsigned-release-candidate
+          mkdir -p "$out"
+          duplicates=$(find artifacts/parts -type f -printf '%f\n' | sort | uniq -d)
+          [ -z "$duplicates" ] || { echo "::error::Two parts hold the same file name: $duplicates"; exit 1; }
+          find artifacts/parts -type f -exec cp {} "$out/" \;
+          python3 packaging/candidate-manifest.py "$out"
+          python3 packaging/verify-release.py "$out" --refresh-checksums
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 10
+        with:
+          name: unsigned-release-candidate
+          path: artifacts/unsigned-release-candidate
+          if-no-files-found: error
   attest:
-    needs: unsigned-candidate
+    needs: assemble
     if: ${{ inputs.attest }}
     environment: release
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -69,7 +363,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with: { name: unsigned-development-candidate, path: artifacts/releases }
+        with: { name: unsigned-release-candidate, path: artifacts/releases }
       - run: python3 packaging/verify-release.py artifacts/releases
       - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
