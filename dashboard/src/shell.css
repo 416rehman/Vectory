@@ -1,0 +1,379 @@
+/* Application shell: navigation rail, mobile header and workspace framing. */
+.app-shell {
+  --sidebar-current: var(--sidebar-width);
+  --sidebar-hover: #e7e4de;
+  min-height: 100dvh;
+}
+:root[data-theme="dark"] .app-shell {
+  --sidebar-hover: #221f25;
+}
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-current);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  color: var(--text);
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border);
+  z-index: var(--z-sidebar);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  height: var(--control-md);
+  margin-bottom: var(--space-4);
+  padding-left: var(--space-1-5);
+}
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-md);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+}
+.sidebar-close {
+  display: none;
+}
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--control-md);
+  margin: 0 0 var(--space-4);
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
+  color: var(--text-subtle);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  font-size: var(--text-base);
+  text-align: left;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.sidebar-search:hover {
+  color: var(--text-muted);
+  border-color: var(--border-input);
+}
+.sidebar-search > span {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+.sidebar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.sidebar-item:hover {
+  color: var(--text);
+  background: var(--sidebar-hover);
+}
+.sidebar-item[aria-current="page"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px var(--border);
+}
+.sidebar-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+.sidebar-item > svg {
+  color: currentColor;
+}
+.sidebar-item[aria-current="page"] > svg {
+  color: var(--accent-text);
+}
+.sidebar-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin-top: auto;
+  padding-top: var(--space-4);
+}
+.sidebar-collapse .kbd {
+  margin-left: auto;
+}
+.account-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--space-1);
+  padding: var(--space-1-5) var(--space-2);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  color: var(--text-muted);
+  text-align: left;
+  font-size: var(--text-base);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.account-button:hover,
+.account-button[data-state="open"] {
+  color: var(--text);
+  background: var(--sidebar-hover);
+}
+.app-main {
+  margin-left: var(--sidebar-current);
+  min-width: 0;
+  min-height: 100dvh;
+  background: var(--bg);
+}
+.mobile-header {
+  display: none;
+}
+.sidebar-scrim {
+  display: none;
+}
+
+/* Collapsed rail (desktop). */
+@media (min-width: 761px) {
+  .app-shell.sidebar-collapsed {
+    --sidebar-current: var(--sidebar-collapsed);
+  }
+  .sidebar,
+  .app-main,
+  .skip-link {
+    transition:
+      width var(--dur-slow) var(--ease),
+      margin-left var(--dur-slow) var(--ease);
+  }
+  .sidebar-collapsed .sidebar {
+    padding: var(--space-4) var(--space-2-5) var(--space-3);
+    align-items: stretch;
+  }
+  .sidebar-collapsed .sidebar-heading {
+    justify-content: center;
+    padding: 0;
+  }
+  .sidebar-collapsed .brand {
+    gap: 0;
+  }
+  .sidebar-collapsed .brand-word,
+  .sidebar-collapsed .sidebar-label,
+  .sidebar-collapsed .sidebar-search > span,
+  .sidebar-collapsed .sidebar-search > .kbd,
+  .sidebar-collapsed .sidebar-collapse .kbd,
+  .sidebar-collapsed .account-name,
+  .sidebar-collapsed .account-role,
+  .sidebar-collapsed .account-button > svg {
+    display: none;
+  }
+  .sidebar-collapsed .sidebar-search,
+  .sidebar-collapsed .sidebar-item {
+    justify-content: center;
+    padding: 0;
+  }
+  .sidebar-collapsed .sidebar-search {
+    height: 34px;
+  }
+  .sidebar-collapsed .sidebar-item[aria-current="page"]::before {
+    left: -10px;
+  }
+  .sidebar-collapsed .account-button {
+    justify-content: center;
+    padding: var(--space-1-5) 0;
+  }
+  .editor-shell .app-main,
+  .editor-shell .editor-content {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .editor-shell .editor-content {
+    padding: 0;
+    max-width: none;
+  }
+}
+
+/* Drawer navigation (narrow screens). */
+@media (max-width: 760px) {
+  .sidebar {
+    width: min(280px, 86vw);
+    transform: translateX(-100%);
+    visibility: hidden;
+    box-shadow: var(--shadow-lg);
+    transition:
+      transform var(--dur-slow) var(--ease),
+      visibility 0s linear var(--dur-slow);
+  }
+  .sidebar-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform var(--dur-slow) var(--ease);
+  }
+  .sidebar-close {
+    display: inline-flex;
+  }
+  .sidebar-collapse {
+    display: none;
+  }
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--overlay);
+    z-index: calc(var(--z-sidebar) - 1);
+  }
+  .app-main {
+    margin-left: 0;
+  }
+  .mobile-header {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: 57px;
+    padding: 0 var(--space-2);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+  }
+  .mobile-header-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0 var(--space-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+  }
+  .mobile-header .icon-button {
+    width: 40px;
+    height: 40px;
+  }
+  .mobile-header .mobile-avatar {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-full);
+  }
+  .editor-shell .editor-content {
+    padding: 0;
+    height: calc(100dvh - 57px);
+    min-height: 580px;
+  }
+}
+
+/* Keyboard shortcut sheet. */
+.shortcut-sheet .modal-body {
+  padding-top: var(--space-3);
+}
+.shortcut-group + .shortcut-group {
+  margin-top: var(--space-5);
+}
+.shortcut-group h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  font-weight: var(--weight-semibold);
+}
+.shortcut-group dl {
+  margin: 0;
+}
+.shortcut-group dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.shortcut-group dl > div:last-child {
+  border-bottom: 0;
+}
+.shortcut-group dt {
+  font-size: var(--text-base);
+}
+.shortcut-group dd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+}
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.shortcut-then {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+/* Lazy page placeholders keep the final layout. */
+.page-skeleton-toolbar {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-md);
+  margin-bottom: var(--space-3);
+}
+.page-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: var(--row);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.page-skeleton-row:first-child {
+  height: 36px;
+  background: var(--surface-sunken);
+}
+.page-skeleton-row:last-child {
+  border-bottom: 0;
+}
+.page-skeleton-editor {
+  display: flex;
+  height: 100%;
+  min-height: 480px;
+}

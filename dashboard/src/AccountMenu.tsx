@@ -2,17 +2,20 @@ import { useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   BookOpen,
-  ChevronUp,
+  ChevronsUpDown,
   ExternalLink,
+  Keyboard,
   LogOut,
   Monitor,
   Moon,
   Settings,
+  ShieldCheck,
   Sun,
 } from "lucide-react";
 import type { User } from "./api";
 import { helpHref } from "./DocLink";
 import SignOutDialog from "./SignOutDialog";
+import { Kbd } from "./ui";
 import "./account-menu.css";
 
 type Appearance = "light" | "dark" | "auto";
@@ -27,6 +30,7 @@ export type AccountMenuProps = {
   onBeforeSignOut: () => boolean;
   onSignedOut: () => void;
   onReload: () => void;
+  onShowShortcuts?: () => void;
   mobile?: boolean;
   currentPage?: string;
 };
@@ -36,6 +40,12 @@ const appearances = [
   { value: "dark", label: "Dark", icon: Moon },
   { value: "auto", label: "Auto", icon: Monitor },
 ] as const;
+const roleNames: Record<User["role"], string> = {
+  viewer: "Viewer",
+  editor: "Editor",
+  operator: "Operator",
+  admin: "Administrator",
+};
 
 export default function AccountMenu({
   user,
@@ -47,6 +57,7 @@ export default function AccountMenu({
   onBeforeSignOut,
   onSignedOut,
   onReload,
+  onShowShortcuts,
   mobile = false,
   currentPage,
 }: AccountMenuProps) {
@@ -59,6 +70,7 @@ export default function AccountMenu({
     .map((part) => Array.from(part)[0])
     .join("")
     .toLocaleUpperCase();
+  const role = roleNames[user.role] ?? user.role;
 
   function closeConfirmation() {
     setConfirmingSignOut(false);
@@ -88,8 +100,11 @@ export default function AccountMenu({
             <span className="account-initial" aria-hidden="true">
               {initials}
             </span>
-            <span className="account-name">{user.name || user.email}</span>
-            <ChevronUp size={16} aria-hidden="true" />
+            <span className="account-text">
+              <span className="account-name">{user.name || user.email}</span>
+              <span className="account-role">{role}</span>
+            </span>
+            <ChevronsUpDown size={15} aria-hidden="true" />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -109,8 +124,14 @@ export default function AccountMenu({
             }}
           >
             <div className="account-menu-identity">
-              <strong>{user.name || user.email}</strong>
-              <span>{user.email}</span>
+              <span className="account-initial" aria-hidden="true">
+                {initials}
+              </span>
+              <span>
+                <strong>{user.name || user.email}</strong>
+                <span>{user.email}</span>
+              </span>
+              <span className="account-menu-role">{role}</span>
             </div>
             <DropdownMenu.Label className="account-menu-label">
               Appearance
@@ -156,7 +177,7 @@ export default function AccountMenu({
                     value === "auto" ? "Use your system appearance" : undefined
                   }
                 >
-                  <Icon size={17} aria-hidden="true" />
+                  <Icon size={15} aria-hidden="true" />
                   <span>{label}</span>
                 </DropdownMenu.RadioItem>
               ))}
@@ -170,10 +191,34 @@ export default function AccountMenu({
                 onNavigate("settings");
               }}
             >
-              <Settings size={17} aria-hidden="true" />
+              <Settings size={16} aria-hidden="true" />
               <span>Settings</span>
             </DropdownMenu.Item>
-            <DropdownMenu.Separator className="account-menu-separator" />
+            <DropdownMenu.Item
+              className="account-menu-item"
+              aria-current={currentPage === "users" ? "page" : undefined}
+              onSelect={(event) => {
+                event.preventDefault();
+                onNavigate("users");
+              }}
+            >
+              <ShieldCheck size={16} aria-hidden="true" />
+              <span>People &amp; security</span>
+            </DropdownMenu.Item>
+            {onShowShortcuts && (
+              <DropdownMenu.Item
+                className="account-menu-item"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onOpenChange(false);
+                  onShowShortcuts();
+                }}
+              >
+                <Keyboard size={16} aria-hidden="true" />
+                <span>Keyboard shortcuts</span>
+                <Kbd keys="?" />
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Item asChild className="account-menu-item">
               <a
                 href={helpHref()}
@@ -181,11 +226,11 @@ export default function AccountMenu({
                 rel="noopener noreferrer"
                 aria-label="Vectory documentation (opens in a new tab)"
               >
-                <BookOpen size={17} aria-hidden="true" />
+                <BookOpen size={16} aria-hidden="true" />
                 <span>Vectory documentation</span>
                 <ExternalLink
                   className="account-menu-external"
-                  size={14}
+                  size={13}
                   aria-hidden="true"
                 />
               </a>
@@ -200,7 +245,7 @@ export default function AccountMenu({
                 setConfirmingSignOut(true);
               }}
             >
-              <LogOut size={17} aria-hidden="true" />
+              <LogOut size={16} aria-hidden="true" />
               <span>
                 {signOutReview ? "Check sign-out status" : "Sign out"}
               </span>

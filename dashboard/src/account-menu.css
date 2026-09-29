@@ -1,126 +1,154 @@
-.account-button .account-initial {
+.account-initial {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
   width: 28px;
   height: 28px;
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  color: var(--ink);
-  background: var(--surface);
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: var(--radius-full);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.2px;
 }
-
-.account-button .account-name {
+.account-text {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
+  line-height: 16px;
 }
-
+.account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+.account-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
 .account-button > svg {
   flex-shrink: 0;
-}
-
-.account-button[data-state="open"] {
-  color: var(--ink);
+  color: var(--text-subtle);
 }
 
 .account-menu {
-  z-index: 110;
-  width: min(280px, calc(100vw - 24px));
+  z-index: var(--z-popover);
+  width: min(272px, calc(100vw - 24px));
   max-width: var(--radix-dropdown-menu-content-available-width);
   max-height: var(--radix-dropdown-menu-content-available-height);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 7px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow);
-  font-size: 13px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-base);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin);
 }
 
 .account-menu-identity {
   display: grid;
-  gap: 3px;
-  padding: 10px 10px 15px;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 2px var(--space-2-5);
+  padding: var(--space-2) var(--space-2) var(--space-3);
   overflow-wrap: anywhere;
 }
-
-.account-menu-identity strong {
-  font-size: 14px;
-  font-weight: 600;
+.account-menu-identity > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
 }
-
-.account-menu-identity > span {
-  color: var(--muted);
-  font-size: 12px;
+.account-menu-identity strong {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+.account-menu-identity > span:nth-child(2) > span {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.account-menu-role {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  font-weight: var(--weight-medium);
 }
 
 .account-menu-label {
-  padding: 0 10px 7px;
-  color: var(--muted);
-  font-size: 12px;
+  padding: 0 var(--space-2) var(--space-1-5);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
 
 .account-menu-appearance {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
-  margin: 0 5px 9px;
-  padding: 3px;
-  border-radius: 7px;
+  gap: 2px;
+  margin: 0 var(--space-1) var(--space-2);
+  padding: 2px;
+  border-radius: var(--radius-md);
   background: var(--surface-soft);
 }
 
 .account-menu-theme {
   display: flex;
-  min-height: 40px;
+  min-height: 30px;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 5px;
-  border-radius: 5px;
-  color: var(--muted);
+  padding: 4px 5px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   user-select: none;
   outline: none;
 }
 
 .account-menu-theme[data-highlighted]:not([data-disabled]) {
-  background: var(--surface);
-  color: var(--ink);
+  color: var(--text);
+}
+.account-menu-theme[data-highlighted]:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
 }
 
 .account-menu-theme[data-state="checked"] {
   background: var(--surface);
-  color: var(--accent-ink);
-  box-shadow: 0 1px 4px #00000012;
-}
-
-.account-menu-theme[data-state="checked"][data-highlighted]:not(
-    [data-disabled]
-  ) {
-  background: var(--surface-hover);
-  color: var(--accent-ink);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
 }
 
 .account-menu-separator {
   height: 1px;
-  margin: 5px 5px;
-  background: var(--line);
+  margin: var(--space-1) var(--space-1);
+  background: var(--border);
 }
 
 .account-menu-item {
   display: flex;
   align-items: center;
-  min-height: 42px;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 5px;
-  color: var(--ink);
+  min-height: 34px;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text);
   cursor: pointer;
   text-decoration: none;
   user-select: none;
@@ -129,6 +157,7 @@
 
 .account-menu-item > svg {
   flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 .account-menu-item > span {
@@ -136,16 +165,20 @@
   min-width: 0;
 }
 
+.account-menu-item > .kbd {
+  flex: 0 0 auto;
+}
+
 .account-menu-item[data-highlighted] {
   background: var(--surface-soft);
 }
 
 .account-menu-item[aria-current="page"] {
-  color: var(--accent-ink);
+  color: var(--accent-text);
 }
 
 .account-menu-external {
-  color: var(--muted);
+  color: var(--text-subtle);
 }
 
 .account-menu-item[data-disabled],
@@ -155,12 +188,13 @@
 }
 
 .account-menu-signout,
-.account-menu-error {
-  color: #b62d3b;
+.account-menu-error,
+.account-menu-signout > svg {
+  color: var(--danger-text);
 }
 
 .account-menu-signout[data-highlighted] {
-  background: #b62d3b0d;
+  background: var(--danger-bg);
 }
 
 .account-signout-dialog .modal-header {
@@ -173,21 +207,12 @@
 
 .account-menu-error {
   margin: 7px 10px;
-  font-size: 12px;
-}
-
-[data-theme="dark"] .account-menu-signout,
-[data-theme="dark"] .account-menu-error {
-  color: #f4a5aa;
-}
-
-[data-theme="dark"] .account-menu-signout[data-highlighted] {
-  background: #f4a5aa12;
+  font-size: var(--text-sm);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .account-menu[data-state="open"] {
-    animation: account-menu-enter 100ms ease-out;
+    animation: account-menu-enter var(--dur-fast) ease-out;
   }
 
   @keyframes account-menu-enter {
