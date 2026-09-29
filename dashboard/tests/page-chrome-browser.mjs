@@ -115,7 +115,11 @@ try {
       expect(
         await page.locator(".sr-only[aria-live]").evaluateAll((nodes) =>
           nodes
-            .filter((node) => !node.hasAttribute("role"))
+            .filter(
+              (node) =>
+                !node.hasAttribute("role") &&
+                !node.hasAttribute("data-route-announcer"),
+            )
             .map((node) => node.getAttribute("aria-live"))
             .sort(),
         ),
@@ -207,6 +211,51 @@ try {
     await context.close();
   }
   results.push("Dialogs return focus to the button that opened them");
+  {
+    // A section tab lives inside the page, so the page it opens replaces it.
+    // Focus goes to the new page's title instead of falling to the document,
+    // and the next Tab continues inside the page, not at the skip link.
+    const { context, page } = await open();
+    await page.goto(`${origin}#/devices`);
+    await expect(page.locator("main h1")).toHaveText("Devices");
+    const tab = page
+      .getByRole("navigation", { name: "Device sections" })
+      .getByRole("link", { name: "Groups", exact: true });
+    let reached = false;
+    for (let press = 0; press < 40 && !reached; press++) {
+      await page.keyboard.press("Tab");
+      reached = await tab.evaluate((node) => node === document.activeElement);
+    }
+    expect(reached, "Tab reaches the Groups tab").toBe(true);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/#\/groups$/);
+    const title = page.getByRole("heading", { level: 1, name: "Groups" });
+    await expect(title).toBeFocused();
+    await page.keyboard.press("Tab");
+    expect(
+      await page.evaluate(
+        () =>
+          !!document.activeElement?.closest("#main-content") &&
+          document.activeElement !== document.body,
+      ),
+      "the Tab after arriving stays inside the page",
+    ).toBe(true);
+    // The sidebar keeps its own focus and the new page is announced instead.
+    const overview = page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("link", { name: "Overview", exact: true });
+    await overview.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(overview).toBeFocused();
+    await expect(page.locator("[data-route-announcer]")).toHaveText(
+      "Overview",
+    );
+    await context.close();
+  }
+  results.push(
+    "Navigating inside a page focuses the new title; the sidebar keeps focus and the page is announced",
+  );
   {
     // A very long name wraps in the header of the dialog it opens and never
     // pushes the close button off a phone or widens the page.

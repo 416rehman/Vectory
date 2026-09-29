@@ -59,7 +59,9 @@ The sidebar has four destinations:
 | [**Devices**](/#/devices) | Add devices, organize groups and apply agent settings. |
 | [**Activity**](/#/deployments) | Follow deployments and schedules, review issues and read the audit log. |
 
-Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device or pipeline from anywhere. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Keyboard shortcuts**, **Vectory documentation** (this Help center) and **Sign out**.
+Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device or pipeline from anywhere. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Single-key shortcuts**, **Keyboard shortcuts**, **Help center** (this site) and **Sign out**.
+
+When you aren't typing in a field, single keys act on the page: **R** refreshes its data, **/** searches it, **?** lists every shortcut, **[** collapses the sidebar, and **G** then a letter goes to a page (**G** then **D** opens Devices). If you use speech input or type with a switch, turn off **Single-key shortcuts** in your account menu so a stray word doesn't refresh or leave the page. This browser remembers the choice. **Ctrl K** and **Ctrl S** (**⌘ K**, **⌘ S**) keep working.
 
 Help links open beside your work in a new tab, so an unsaved pipeline stays exactly as you left it.
 

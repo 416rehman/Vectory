@@ -20,7 +20,9 @@ export default function TargetDialog(
 ) {
   return (
     <ChunkBoundary
-      fallback={(kind) => <DialogRecovery kind={kind} onClose={props.onClose} />}
+      fallback={(kind) => (
+        <DialogRecovery kind={kind} onClose={props.onClose} />
+      )}
     >
       <Suspense fallback={<DialogLoading />}>
         <TargetDialogChunk {...props} />
