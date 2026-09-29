@@ -158,6 +158,22 @@ export function setCSRF(value: string) {
     }
   }
 }
+/**
+ * A browser network failure ("Failed to fetch", "Load failed", "NetworkError
+ * when attempting to fetch resource.") in words people can act on. It is never
+ * a server rejection: a change sent before the connection failed may or may
+ * not have been saved. An abort keeps its own reason.
+ */
+function networkFailure(failure: unknown, method: string, signal: AbortSignal) {
+  if (!(failure instanceof TypeError) || signal.aborted) return failure;
+  return new APIError(
+    "NETWORK_UNAVAILABLE",
+    method === "GET"
+      ? "Vectory didn't answer. It may be restarting, or the network is down."
+      : "Vectory didn't answer, so it isn't known whether this change was saved. It may be restarting, or the network is down.",
+    0,
+  );
+}
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -192,17 +208,22 @@ export async function api<T = unknown>(
   options.signal?.addEventListener("abort", parentAborted, { once: true });
   if (!publicRoute) sessionInterruptions.add(interrupt);
   async function execute(): Promise<T> {
-    const response = await fetch(`/api/v1${path}`, {
-      credentials: "same-origin",
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
-        ...options.headers,
-      },
-    });
-    const text = await response.text();
+    let response: Response, text: string;
+    try {
+      response = await fetch(`/api/v1${path}`, {
+        credentials: "same-origin",
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
+          ...options.headers,
+        },
+      });
+      text = await response.text();
+    } catch (failure) {
+      throw networkFailure(failure, method, controller.signal);
+    }
     if (!publicRoute && (!sessionValid || sentEpoch !== sessionEpoch))
       throw sessionFailure();
     const events = EVENT_PAYLOAD_ROUTES.includes(route);
