@@ -755,11 +755,15 @@ pub fn trust_for(settings: &Settings, agent_url: &str) -> Trust {
     Trust {
         publicly_trusted: public,
         pin: if public { None } else { ca.cloned() },
+        // The CA certificate itself is public, like its fingerprint: Add
+        // device writes it on the host so curl verifies the installer
+        // download against it, with no certificate check turned off.
         summary: json!({
             "available":true,
             "publicly_trusted":public,
             "ca_sha256":ca.map(|c|&c.sha256),
             "ca_fingerprint":ca.map(|c|fingerprint(&c.sha256)),
+            "ca_pem":ca.map(|c|&c.pem),
             "ca_name":ca.map(|c|&c.name),
             "ca_issuer":ca.map(|c|&c.issuer),
             "ca_not_after":ca.and_then(|c|c.not_after.as_ref()),
@@ -821,7 +825,10 @@ const INSTALL_SH: &str = r#"#!/bin/sh
 # SHA-256 below, installs it as DIR/vectory (default @INSTALL_DIR@) and runs
 # `vectory setup` with this server's address and CA pin. Setup options such
 # as --name, --mode, --service, --create-user and --dry-run pass through; see
-# `vectory help setup`.
+# `vectory help setup`. With --ca-file PATH (a CA certificate on this host)
+# or --ca-file= (this host's trusted certificates), the download and setup
+# trust the server that way instead of the pin. No option turns off
+# certificate verification.
 set -eu
 
 vectory_install() {
@@ -831,6 +838,10 @@ vectory_install() {
 	dashboard=@DASHBOARD@
 	install_dir=@INSTALL_DIR@
 	dry_run=
+	# The operator's own trust choice (--ca-file or --ca-sha256) replaces the pin.
+	own_trust=
+	ca_file_set=
+	ca_file=
 
 	step() { printf '%-4s %-12s %s\n' "$1" "$2" "$3"; }
 	fail() {
@@ -866,11 +877,30 @@ vectory_install() {
 			count=$((count - 1))
 			;;
 		--install-dir=*) install_dir=${arg#--install-dir=} ;;
+		--ca-file)
+			[ "$count" -gt 0 ] || fail Installer "--ca-file needs the path of a CA certificate on this host (or --ca-file= for this host's trusted certificates)."
+			ca_file=$1
+			shift
+			count=$((count - 1))
+			own_trust=1 ca_file_set=1
+			set -- ${1+"$@"} "$arg" "$ca_file"
+			;;
+		--ca-file=*)
+			ca_file=${arg#--ca-file=}
+			own_trust=1 ca_file_set=1
+			set -- ${1+"$@"} "$arg"
+			;;
+		--ca-sha256 | --ca-sha256=*)
+			own_trust=1
+			set -- ${1+"$@"} "$arg"
+			;;
 		-h | --help)
 			printf '%s\n' "Usage: sh vectory-install.sh [--install-dir DIR] [setup options]" \
 				"Downloads the Vectory agent from $server, checks its SHA-256, installs it" \
 				"as DIR/vectory (default @INSTALL_DIR@) and runs vectory setup. Setup options" \
-				"such as --name, --mode, --service, --create-user and --dry-run pass through."
+				"such as --name, --mode, --service, --create-user and --dry-run pass through." \
+				"--ca-file PATH (a CA certificate on this host) or --ca-file= (this host's" \
+				"trusted certificates) replaces the CA pin for the download and for setup."
 			exit 0
 			;;
 		*)
@@ -923,8 +953,16 @@ vectory_install() {
 		tmp=$(mktemp -d 2>/dev/null || mktemp -d -t vectory) || fail Agent "Can't create a temporary directory."
 		trap 'rm -rf "$tmp"' EXIT
 		trap 'exit 130' INT TERM
+		# The download trusts the server the way setup will: the CA file the
+		# operator named, this host's trusted certificates (--ca-file=), or
+		# the CA embedded above (the pin's certificate).
 		tls_ca=
-		if [ -n "$ca_pem" ]; then
+		if [ -n "$ca_file_set" ]; then
+			if [ -n "$ca_file" ]; then
+				[ -f "$ca_file" ] && [ -r "$ca_file" ] || fail Server "Can't read the CA certificate $ca_file." "Put the server's CA certificate (PEM) there first, or copy the command again from Add device."
+				tls_ca=$ca_file
+			fi
+		elif [ -n "$ca_pem" ]; then
 			printf '%s\n' "$ca_pem" >"$tmp/server-ca.pem"
 			tls_ca=$tmp/server-ca.pem
 		fi
@@ -955,7 +993,7 @@ vectory_install() {
 			can_install "$install_dir" || fail Agent "Can't write to $install_dir." "Run the installer with sudo, or choose a directory with --install-dir."
 			step '[..]' Agent "$version for $os/$arch would be installed at $target (SHA-256 $short... verified)"
 			if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
-			if [ -n "$ca_sha256" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
+			if [ -n "$ca_sha256" ] && [ -z "$own_trust" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 			status=0
 			# --agent-path names where the real run would put the agent, so the
 			# plan shows the --install-dir the person chose.
@@ -977,7 +1015,7 @@ vectory_install() {
 	fi
 
 	if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
-	if [ -n "$ca_sha256" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
+	if [ -n "$ca_sha256" ] && [ -z "$own_trust" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
 	# --agent-path: the service runs the agent from where it was installed.
 	exec "$target" setup --server "$server" --agent-path "$target" ${1+"$@"}
 }
