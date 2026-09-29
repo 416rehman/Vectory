@@ -1313,6 +1313,18 @@ export function Modal({
   const opener = useRef<HTMLElement | null>(null);
   const openRef = useRef(open);
   const unmounted = useRef(false);
+  // Remember the opener while rendering the opening frame: a field with
+  // autoFocus inside the dialog takes focus before any effect could look.
+  if (open && !openRef.current) opener.current = null;
+  if (open && !opener.current && typeof document !== "undefined") {
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      !content.current?.contains(active)
+    )
+      opener.current = active;
+  }
   openRef.current = open;
   useEffect(
     () => () => {
@@ -1362,6 +1374,7 @@ export function Modal({
           onOpenAutoFocus={(event) => {
             const active = document.activeElement;
             if (
+              !opener.current &&
               active instanceof HTMLElement &&
               active !== document.body &&
               !content.current?.contains(active)
