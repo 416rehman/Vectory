@@ -23,6 +23,7 @@ import {
   targetLabel,
 } from "./deploymentStatus";
 import { auditOutcomeLabel } from "./auditModel";
+import { IssueSchema } from "./api";
 
 const repository = new URL("../../", import.meta.url);
 const protocol = JSON.parse(
@@ -56,6 +57,17 @@ describe("status language", () => {
       for (const value of values)
         expect(Object.hasOwn(domain, value), `${name}: ${value}`).toBe(true);
     }
+  });
+
+  it("reads every issue resolution reason in the contract", () => {
+    const reasons: string[] =
+      definitions.Issue.properties.resolved_reason.anyOf[0].enum;
+    expect(reasons).toContain("revoked");
+    for (const reason of reasons)
+      expect(
+        IssueSchema.shape.resolved_reason.safeParse(reason).success,
+        reason,
+      ).toBe(true);
   });
 
   it("covers every device status the server derives", () => {
@@ -123,6 +135,23 @@ describe("status language", () => {
     expect(deviceDisplayStatus({ ...device, data_plane: null })).toBe(
       "verified",
     );
+  });
+
+  it("reads list rows, which carry only the first delivery issue", () => {
+    const first = { code: "DATA_PLANE_SINK_ERRORS", title: "Can't deliver" };
+    const listed = {
+      status: "verified",
+      desired_version_id: "v2",
+      data_plane: { version_id: "v2", issues: [first], issue_count: 3 },
+    };
+    expect(deviceDisplayStatus(listed)).toBe("degraded");
+    expect(dataPlaneIssues(listed)).toEqual([first]);
+    // The contract's list row keeps exactly what list pages read.
+    const row = definitions.DeviceListItem.properties;
+    for (const heavy of ["host_runtime", "vector_log_summary"])
+      expect(Object.hasOwn(row, heavy), heavy).toBe(false);
+    expect(row.data_plane.properties.issues.maxItems).toBe(1);
+    expect(row.data_plane.properties.issue_count.type).toBe("integer");
   });
 
   it("gives every entry a label, tone, icon and one-line description", () => {

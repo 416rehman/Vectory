@@ -23,7 +23,8 @@ The wire contract is in `../contracts/`: `CONTRACT.md`, the generated `openapi.j
 ## Durable state
 
 - SQLite with WAL, `FULL` synchronous writes, foreign keys, migrations, a five-second busy timeout, eight pooled connections and serialized writers. Every write transaction goes through `db::write_tx`: the process-wide writer lock plus `BEGIN IMMEDIATE`.
-- Migration numbers have gaps (0001–0027, 0040, 0100). Number a new migration above the highest existing one; tests that replay old schemas rewind exact version ranges.
+- Migration numbers have gaps (0001–0027, 0040, 0100, 0110). Number a new migration above the highest existing one; tests that replay old schemas rewind exact version ranges.
+- Migrations run at startup and only move forward: an older server refuses a database a newer one migrated, so a downgrade means restoring the pre-upgrade backup. Migration 0100 indexes stored telemetry, which delays the first start after that upgrade on a large telemetry table.
 - An exclusive lock on the data directory keeps out a second server or a running `vectory-admin`. No network filesystems, no active-active replicas.
 - At startup the server makes the data directory, database, lock and key tree private: owner-only modes on Unix, and on Windows an access list for the current identity and SYSTEM only. It refuses symlinks and reparse points. Operating-system administrators remain trusted.
 - The database and the `keys/` tree (device CA, manifest signing keys, `mfa-sealing.key`) belong together. A database that refers to a missing key refuses to start.
@@ -69,6 +70,7 @@ The agent substitutes values from protected local files, re-checks local policy,
 - Samples carry a timestamp plus optional throughput, errors, uptime, CPU, memory, discarded events and buffer bytes, and up to 50 components with a strict allowlist. Unknown or out-of-range values are rejected; missing values stay null.
 - Samples coalesce into per-minute buckets kept for `VECTORY_TELEMETRY_RETENTION_DAYS`. `GET /api/v1/devices/{id}/telemetry` returns up to 120 recent buckets.
 - The agent listener limits concurrent connections (`VECTORY_MAX_AGENT_CONNECTIONS`), TLS handshakes (128), parsed requests (128), HTTP/2 streams per connection (16), request bodies (1 MiB) and request time (15 seconds). These contain overload; they aren't a supported fleet size. Measurements are in [docs/internal/CAPACITY.md](../docs/internal/CAPACITY.md).
+- Request limits count per client in bounded partitions that evict the key whose window ends soonest, so a full partition never turns a new client away. Unauthenticated agent-listener requests and invitation previews have a partition of their own and a global cap a minute ahead of each address's budget: 1,200 installer fetches, 1,200 agent downloads, 600 enrollments and 600 previews. A flood from many addresses can't displace sign-in keys.
 
 ## Audit
 

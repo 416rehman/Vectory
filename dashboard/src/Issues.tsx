@@ -96,6 +96,8 @@ function resolution(issue: Issue) {
       return "Resolved when the device stopped running the version this was measured on.";
     case "unmonitored":
       return "Resolved when metrics were turned off, so delivery can't be checked any more.";
+    case "revoked":
+      return "Resolved when the device was revoked. It can't check in any more.";
     default:
       return "Resolved when the device verified a configuration after this failure.";
   }

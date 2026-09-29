@@ -1760,6 +1760,47 @@ async fn signed_manifest_binds_nonce_and_artifact_is_current_only() {
 }
 
 #[tokio::test]
+async fn artifact_downloads_never_wait_for_the_writer_lock() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 1).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "INSERT INTO credentials(fingerprint,device_id,expires_at) VALUES('fingerprint',?,?)",
+    )
+    .bind(&ids[0])
+    .bind((chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339())
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let app = device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(
+        "fingerprint".into(),
+    ))));
+    let path = format!("/agent/v1/artifacts/{}", db::hash("{}\n"));
+    // A heartbeat or the scheduler is writing. A download is a read: it
+    // must not queue behind the writer, nor make writers queue behind it.
+    let writing = s.writer.lock().await;
+    let download = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        call(app.clone(), "GET", &path, Value::Null, "", ""),
+    )
+    .await;
+    drop(writing);
+    let (status, artifact, _) = download.expect("the download waited for the writer lock");
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    assert_eq!(artifact, json!({}));
+    // The digest still decides: anything but the current artifact is refused.
+    let other = format!("/agent/v1/artifacts/{}", db::hash("other"));
+    assert_eq!(
+        call(app, "GET", &other, Value::Null, "", "").await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn mfa_requires_second_factor_and_recovery_codes_are_single_use() {
     let (_temp, s) = state().await;
     let app = api::router(s.clone());
@@ -2110,6 +2151,11 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{recovery}");
+    // The old identity has an open issue that it can never resolve itself.
+    let stranded = db::hash(format!("{old}:stranded"));
+    let mut conn = s.pool.acquire().await.unwrap();
+    db::insert(&mut conn, "issue", &json!({"id":stranded,"device_id":old,"code":"VALIDATION_FAILED","stage":"validate","count":1,"reports":1,"first_seen":db::now(),"last_seen":db::now(),"resolved":false,"revision":1})).await.unwrap();
+    drop(conn);
     let replacement = rcgen::KeyPair::generate().unwrap();
     let mut retry = request;
     retry["token"] = recovery["token"].clone();
@@ -2165,6 +2211,16 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
             .await
             .unwrap();
     assert_eq!(creds, 0);
+    let (_, issue, _) = call(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/issues/{stranded}"),
+        Value::Null,
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(issue["resolved_reason"], "revoked", "{issue}");
     let (_, groups, _) = call(app, "GET", "/api/v1/groups", Value::Null, &cookie, "").await;
     assert!(groups[0]["device_ids"].as_array().unwrap().is_empty());
 }
@@ -2572,18 +2628,86 @@ async fn authenticated_fleet_limiter_is_independent_of_anonymous_key_pressure() 
         )
         .unwrap();
     }
-    assert!(
-        s.limit(
-            "login:overflow".into(),
-            8,
-            std::time::Duration::from_secs(300)
-        )
-        .is_err()
-    );
     s.limit(
         "heartbeat:another-registered-device".into(),
         30,
         std::time::Duration::from_secs(60),
     )
     .unwrap();
+    assert_eq!(s.device_limits.lock().unwrap().len(), 10001);
+}
+
+#[tokio::test]
+async fn a_full_limiter_admits_new_sign_in_clients_and_keeps_spent_budgets() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    let five_minutes = std::time::Duration::from_secs(300);
+    // Someone spent a reset code's budget, in a five-minute window.
+    for _ in 0..8 {
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .unwrap();
+    }
+    assert!(
+        s.limit("password-reset:guessed".into(), 8, five_minutes)
+            .is_err()
+    );
+    // Sign-in clients with one-minute windows fill the partition.
+    for i in 0..vectory_server::ANONYMOUS_LIMIT_KEYS {
+        s.limit(format!("login-client:198.51.{i}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // A new client can still sign in: the key whose window ends soonest
+    // makes room. The server is never "busy" because the map is full.
+    for n in 0..100 {
+        s.limit(format!("login-client:203.0.113.{n}"), 60, minute)
+            .unwrap();
+    }
+    assert_eq!(
+        s.limits.lock().unwrap().len(),
+        vectory_server::ANONYMOUS_LIMIT_KEYS
+    );
+    // The spent budget has the most time left, so it still holds.
+    let refused = s
+        .limit("password-reset:guessed".into(), 8, five_minutes)
+        .unwrap_err();
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(refused.retry_after.unwrap() > 60, "{refused:?}");
+}
+
+#[tokio::test]
+async fn unauthenticated_agent_listener_traffic_never_displaces_sign_in_keys() {
+    let (_temp, s) = state().await;
+    let minute = std::time::Duration::from_secs(60);
+    for _ in 0..60 {
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .unwrap();
+    }
+    let signing_in = s.limits.lock().unwrap().len();
+    // A flood from many addresses fills its own partition: installer,
+    // download, enrollment and invitation keys. Nothing is ever refused
+    // because a map is full.
+    for i in 0..vectory_server::PUBLIC_LIMIT_KEYS + 1000 {
+        let key = match i % 4 {
+            0 => format!("agent-installer:2001:db8:{i:x}::/64"),
+            1 => format!("agent-download:2001:db8:{i:x}::/64"),
+            2 => format!("enrollment:2001:db8:{i:x}::/64"),
+            _ => format!("invite-preview:2001:db8:{i:x}::/64"),
+        };
+        s.limit(key, 300, std::time::Duration::from_secs(600))
+            .unwrap();
+    }
+    assert_eq!(
+        s.public_limits.lock().unwrap().len(),
+        vectory_server::PUBLIC_LIMIT_KEYS
+    );
+    assert_eq!(s.limits.lock().unwrap().len(), signing_in);
+    // The sign-in client's spent minute still holds.
+    assert!(
+        s.limit("login-client:198.51.100.7".into(), 60, minute)
+            .is_err()
+    );
 }

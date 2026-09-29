@@ -999,3 +999,34 @@ async fn one_noisy_client_cannot_block_enrollment_for_the_fleet() {
     .unwrap();
     assert_eq!(audited, 2, "one per client and reason each minute");
 }
+
+#[tokio::test]
+async fn installer_and_download_floods_from_many_addresses_share_one_budget() {
+    let f = fixture(|_, _| {}).await;
+    let device = device::router(f.s.clone());
+    for path in ["/agent/v1/install.sh", "/agent/v1/downloads/linux/amd64"] {
+        let mut refused = None;
+        for n in 0..1300u32 {
+            // Every request comes from a different address.
+            let [_, a, b, c] = n.to_be_bytes();
+            let mut request = Request::builder()
+                .uri(path)
+                .header(header::HOST, "vectory.example.test:8443")
+                .body(Body::empty())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([10, a, b, c], 40000))));
+            let (status, headers, _) = send(&device, request).await;
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                refused = Some((n, headers));
+                break;
+            }
+        }
+        let (n, headers) = refused.unwrap_or_else(|| panic!("{path} has no global cap"));
+        assert_eq!(n, 1200, "{path}: 1200 a minute from every address together");
+        assert!(headers.contains_key("retry-after"), "{path}");
+    }
+    // None of it landed where sign-in keys live.
+    assert_eq!(f.s.limits.lock().unwrap().len(), 0);
+}

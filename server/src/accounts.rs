@@ -558,6 +558,13 @@ pub async fn preview_invite(
     crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
+    // Every client shares one budget a minute ahead of its own, like
+    // enrollment, so a flood from many addresses can't grow the limiter.
+    s.limit(
+        "invite-preview".into(),
+        600,
+        std::time::Duration::from_secs(60),
+    )?;
     s.limit(
         format!(
             "invite-preview:{}",

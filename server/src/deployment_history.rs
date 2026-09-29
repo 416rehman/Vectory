@@ -474,21 +474,16 @@ const FAILED_STATES: [&str; 6] = [
 ];
 /// The first sanitized diagnostic the agent reported for this exact candidate.
 /// Older agents and servers omit diagnostics; callers fall back to the error.
+/// Stored attempt errors are always `safe_error`'s shape, whose diagnostics
+/// are allowlisted objects with a message.
 fn diagnostic(attempt: &Value, generation: &Value) -> Option<String> {
     if !attempt.is_object() || attempt["generation"] != *generation {
         return None;
     }
-    let error = &attempt["error"];
-    let first = error["diagnostics"]
+    let text = attempt["error"]["diagnostics"]
         .as_array()
-        .and_then(|list| list.first());
-    let text = first
-        .and_then(|item| {
-            item.as_str()
-                .or_else(|| item["message"].as_str())
-                .or_else(|| item["summary"].as_str())
-        })
-        .or_else(|| error["summary"].as_str())?;
+        .and_then(|list| list.first())
+        .and_then(|item| item["message"].as_str())?;
     let text = text.trim();
     (!text.is_empty()).then(|| text.chars().take(500).collect())
 }
@@ -550,76 +545,58 @@ fn finish_target(item: &mut Value) {
         },
     );
 }
+/// Changes a target's timeline shows, newest last.
+const TIMELINE_CHANGES: i64 = 12;
 /// Observed progress for each released target on this page, from the device's
 /// recorded apply-state changes between its release and the next release of
 /// another deployment (or verification). Heartbeats can skip states; missing
-/// steps stay missing rather than being invented.
+/// steps stay missing rather than being invented. Each target gets its own
+/// latest changes (a repeat of the previous state isn't a change), so a
+/// device that reported thousands of states pushes out neither its newest
+/// ones nor another device's.
 async fn timelines(db: &mut sqlx::SqliteConnection, items: &mut [Value]) -> Result<()> {
-    let released: Vec<(String, String)> = items
+    let windows: Vec<Value> = items
         .iter()
-        .filter_map(|item| {
-            Some((
-                item["device_id"].as_str()?.to_owned(),
-                item["released_at"].as_str()?.to_owned(),
-            ))
+        .map(|item| {
+            let end = [
+                item["next_release_at"].as_str(),
+                item["verified_at"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            json!([item["device_id"], item["released_at"], end])
         })
         .collect();
-    if released.is_empty() {
-        for item in items.iter_mut() {
-            item["timeline"] = json!([]);
-            item.as_object_mut().unwrap().remove("next_release_at");
-        }
-        return Ok(());
-    }
-    let earliest = released.iter().map(|(_, at)| at.clone()).min().unwrap();
-    let mut q = QueryBuilder::<Sqlite>::new(
-        "SELECT json_extract(r.data,'$.target') AS device,substr(json_extract(r.data,'$.outcome'),1,32) AS state,r.created_at AS at FROM records r JOIN audit_sequence s ON s.audit_id=r.id WHERE r.kind='audit' AND json_extract(r.data,'$.target') IN (",
-    );
-    let mut separated = q.separated(",");
-    for (device, _) in &released {
-        separated.push_bind(device.clone());
-    }
-    separated.push_unseparated(")");
-    q.push(" AND json_extract(r.data,'$.action')='device.apply_state' AND r.created_at>=")
-        .push_bind(earliest)
-        .push(" ORDER BY s.sequence LIMIT 5000");
-    let rows = q.build().fetch_all(&mut *db).await?;
+    let rows = sqlx::query(
+        "WITH w AS (SELECT key AS slot,json_extract(value,'$[0]') AS device,json_extract(value,'$[1]') AS start,json_extract(value,'$[2]') AS finish FROM json_each(?) WHERE json_type(value,'$[0]')='text' AND json_type(value,'$[1]')='text'), \
+         events AS (SELECT w.slot,substr(json_extract(r.data,'$.outcome'),1,32) AS state,r.created_at AS at,s.sequence FROM w \
+          JOIN records r INDEXED BY audit_target ON r.kind='audit' AND json_extract(r.data,'$.target')=w.device JOIN audit_sequence s ON s.audit_id=r.id \
+          WHERE json_extract(r.data,'$.action')='device.apply_state' AND json_extract(r.data,'$.outcome') IS NOT NULL \
+          AND r.created_at>=w.start AND (w.finish IS NULL OR r.created_at<=w.finish)), \
+         changes AS (SELECT *,lag(state) OVER (PARTITION BY slot ORDER BY sequence) AS previous FROM events), \
+         latest AS (SELECT *,row_number() OVER (PARTITION BY slot ORDER BY sequence DESC) AS recency FROM changes WHERE previous IS NULL OR previous<>state) \
+         SELECT slot,state,at FROM latest WHERE recency<=? ORDER BY slot,sequence",
+    )
+    .bind(json!(windows).to_string())
+    .bind(TIMELINE_CHANGES)
+    .fetch_all(&mut *db)
+    .await?;
     for item in items.iter_mut() {
-        let (Some(device), Some(start)) = (
-            item["device_id"].as_str().map(str::to_owned),
-            item["released_at"].as_str().map(str::to_owned),
-        ) else {
-            item["timeline"] = json!([]);
-            continue;
-        };
-        let end = [
-            item["next_release_at"].as_str(),
-            item["verified_at"].as_str(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .map(str::to_owned);
-        let mut events: Vec<Value> = Vec::new();
-        for row in &rows {
-            let (who, state, at): (String, Option<String>, String) =
-                (row.get("device"), row.get("state"), row.get("at"));
-            if who != device || at < start || end.as_ref().is_some_and(|end| &at > end) {
-                continue;
-            }
-            let Some(state) = state else { continue };
-            if events.last().is_some_and(|last| last["state"] == state) {
-                continue;
-            }
-            events.push(json!({"state":state,"at":at}));
-        }
-        if events.len() > 12 {
-            events.drain(..events.len() - 12);
-        }
-        item["timeline"] = json!(events);
-    }
-    for item in items.iter_mut() {
+        item["timeline"] = json!([]);
         item.as_object_mut().unwrap().remove("next_release_at");
+    }
+    for row in rows {
+        let slot: i64 = row.get("slot");
+        if let Some(events) = usize::try_from(slot)
+            .ok()
+            .and_then(|index| items.get_mut(index))
+            .and_then(|item| item["timeline"].as_array_mut())
+        {
+            events.push(
+                json!({"state":row.get::<String, _>("state"),"at":row.get::<String, _>("at")}),
+            );
+        }
     }
     Ok(())
 }

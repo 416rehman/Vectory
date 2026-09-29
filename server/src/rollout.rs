@@ -50,26 +50,22 @@ async fn select_impl(
     for excluded in ids(selector, "exclude_ids")? {
         selected.remove(&excluded);
     }
-    let mut unavailable = Vec::new();
-    for id in &selected {
-        let found: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=? AND revoked=0")
-                .bind(id)
-                .fetch_one(&mut *db)
-                .await?;
-        if found != 1 {
-            if strict {
-                return Err(ApiError::invalid(
-                    "Selector contains an unknown or revoked device",
-                ));
-            }
-            unavailable.push(id.clone());
-        }
+    // One read for the whole selection: persistent assignments are selected
+    // on every scheduler tick.
+    let available: BTreeSet<String> = sqlx::query_scalar(
+        "SELECT id FROM devices WHERE revoked=0 AND id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(json!(selected).to_string())
+    .fetch_all(&mut *db)
+    .await?
+    .into_iter()
+    .collect();
+    if strict && available.len() != selected.len() {
+        return Err(ApiError::invalid(
+            "Selector contains an unknown or revoked device",
+        ));
     }
-    for id in unavailable {
-        selected.remove(&id);
-    }
-    Ok(selected)
+    Ok(available)
 }
 /// Seconds an agent may currently take between check-ins. Until it acknowledges
 /// the current policy it may still use the interval it had before, so the larger
@@ -266,9 +262,38 @@ pub async fn devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         }
         d["desired_sha256"] = d["desired_artifact_sha256"].clone();
         d.as_object_mut().unwrap().remove("desired_artifact_sha256");
+        if let Some(summary) = d.get_mut("data_plane").and_then(Value::as_object_mut) {
+            let open = summary
+                .get("issues")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            summary.insert("issue_count".into(), json!(open));
+        }
         out.push(d);
     }
     Ok(out)
+}
+/// A device as lists show it (`GET /devices`, the Overview's `devices`): the
+/// full projection without what only the device page reads, which is most
+/// of a reporting device's row (per-component telemetry, the Vector log
+/// summary and the host runtime), and with only the first open delivery
+/// issue; `data_plane.issue_count` still counts them all.
+pub fn list_row(mut device: Value) -> Value {
+    if let Some(fields) = device.as_object_mut() {
+        fields.remove("vector_log_summary");
+        fields.remove("host_runtime");
+    }
+    if let Some(sample) = device.get_mut("telemetry").and_then(Value::as_object_mut) {
+        sample.remove("components");
+    }
+    if let Some(issues) = device
+        .get_mut("data_plane")
+        .and_then(|summary| summary.get_mut("issues"))
+        .and_then(Value::as_array_mut)
+    {
+        issues.truncate(1);
+    }
+    device
 }
 pub async fn targets(db: &mut SqliteConnection, id: &str) -> Result<Vec<Value>> {
     let rows=sqlx::query("SELECT device_id,state,generation,error,original FROM deployment_targets WHERE deployment_id=? ORDER BY device_id").bind(id).fetch_all(db).await?;
@@ -565,6 +590,48 @@ fn replaced_ids(d: &Value) -> Vec<&str> {
         .map(|ids| ids.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default()
 }
+/// Deployment records that can still select a device, newest first: live
+/// ones, and finished ones that still hold a device (a finished rollout stays
+/// its devices' fallback assignment until something retires it). The rest
+/// select nothing, so they are never read: `candidate_targets` of a cancelled
+/// or failed deployment is its released targets, of a completed snapshot its
+/// targets, and of a completed persistent one its members, each of whom holds
+/// a target (membership changes add one; targets are removed only for devices
+/// that leave the selection). Each branch is decided by the status index and
+/// the targets before any record's JSON is read.
+async fn candidate_records(db: &mut SqliteConnection) -> Result<Vec<Value>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT data FROM (\
+          SELECT data,created_at,id FROM records WHERE kind='deployment' AND json_extract(data,'$.status') IN ('active','paused') \
+          UNION ALL \
+          SELECT data,created_at,id FROM records WHERE kind='deployment' AND json_extract(data,'$.status')='completed' \
+           AND id IN (SELECT deployment_id FROM deployment_targets WHERE state<>'removed') \
+          UNION ALL \
+          SELECT data,created_at,id FROM records WHERE kind='deployment' AND json_extract(data,'$.status') IN ('cancelled','failed') \
+           AND id IN (SELECT deployment_id FROM deployment_targets WHERE state<>'removed' AND generation>0)\
+         ) ORDER BY created_at DESC,id",
+    )
+    .fetch_all(&mut *db)
+    .await?;
+    rows.iter().map(|row| db::parse(row)).collect()
+}
+/// Deployments the scheduler acts on, newest first: schedules waiting to
+/// start, active rollouts, and persistent assignments that follow their
+/// groups. For every other deployment a tick does nothing: it can't release,
+/// and a persistent one without targets has none to mark ineligible.
+async fn working_ids(db: &mut SqliteConnection) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM (\
+          SELECT id,created_at FROM records WHERE kind='deployment' AND json_extract(data,'$.status') IN ('scheduled','active') \
+          UNION ALL \
+          SELECT id,created_at FROM records WHERE kind='deployment' AND json_extract(data,'$.status') IN ('paused','completed') \
+           AND id IN (SELECT deployment_id FROM deployment_targets WHERE state<>'removed') \
+           AND json_extract(data,'$.target_mode')='persistent'\
+         ) ORDER BY created_at DESC,id",
+    )
+    .fetch_all(db)
+    .await?)
+}
 /// Every current candidate with its selected devices. A deployment that replaces
 /// another assignment defers to it on each device until it releases that device;
 /// the release retires the replaced assignment there (see `retire_replaced`).
@@ -573,7 +640,7 @@ pub(crate) async fn candidates(
     db: &mut SqliteConnection,
     proposal: &Proposal<'_>,
 ) -> Result<Vec<Candidate>> {
-    let mut deployments = db::records(db, "deployment").await?;
+    let mut deployments = candidate_records(db).await?;
     deployments.retain(|d| Some(text(d, "id")) != proposal.ignored);
     if let Some(x) = proposal.extra {
         deployments.retain(|d| d["id"] != x["id"]);
@@ -1522,7 +1589,7 @@ pub async fn reconcile_membership(db: &mut SqliteConnection) -> Result<()> {
     }
     // Releasing one assignment can retire another it replaces, so read each
     // record fresh instead of trusting a snapshot taken before the loop.
-    for id in deployment_ids(db).await? {
+    for id in working_ids(db).await? {
         let mut d = db::record(db, "deployment", &id).await?;
         if text(&d, "target_mode") != "persistent"
             || !["active", "paused", "completed"].contains(&text(&d, "status"))
@@ -1558,6 +1625,14 @@ pub(crate) async fn assignment_winners_for(
     let set = candidates(db, &Proposal::default()).await?;
     Ok(winners_among(&set, scope))
 }
+/// A device's stored record, read only when resolution changes the device.
+async fn device_record(db: &mut SqliteConnection, id: &str) -> Result<Value> {
+    let raw: String = sqlx::query_scalar("SELECT data FROM devices WHERE id=?")
+        .bind(id)
+        .fetch_one(&mut *db)
+        .await?;
+    db::parse(&raw)
+}
 pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
     // One candidate pass serves both the conflict check and the winners: the
     // scheduler runs this under the writer lock every tick.
@@ -1568,7 +1643,24 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
         ));
     }
     let winners = winners_among(&set, None);
-    let rows = sqlx::query("SELECT * FROM devices WHERE revoked=0")
+    // The winners' released targets, in one read rather than one per device
+    // and resource: a winner reaches a device only once its rollout has
+    // admitted it there.
+    let pairs: Vec<[&str; 2]> = winners
+        .iter()
+        .map(|((device, _), w)| [text(w, "id"), device.as_str()])
+        .collect();
+    let admitted: std::collections::HashSet<(String, String)> = sqlx::query_as(
+        "SELECT t.deployment_id,t.device_id FROM json_each(?) w JOIN deployment_targets t ON t.deployment_id=json_extract(w.value,'$[0]') AND t.device_id=json_extract(w.value,'$[1]') WHERE t.state<>'removed' AND t.generation<>0",
+    )
+    .bind(json!(pairs).to_string())
+    .fetch_all(&mut *db)
+    .await?
+    .into_iter()
+    .collect();
+    // Only the columns deciding needs. A device's record is read when its
+    // assignment actually changes.
+    let rows = sqlx::query("SELECT id,assignment_id,policy_assignment_id,desired_version_id,desired_generation,policy,policy_generation FROM devices WHERE revoked=0")
         .fetch_all(&mut *db)
         .await?;
     for row in rows {
@@ -1581,8 +1673,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
             });
             let winner = winners.get(&(device.clone(), resource.into()));
             if let Some(w) = winner {
-                let admitted:Option<i64>=sqlx::query_scalar("SELECT generation FROM deployment_targets WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(text(w,"id")).bind(&device).fetch_optional(&mut *db).await?;
-                if admitted.unwrap_or(0) == 0 {
+                if !admitted.contains(&(text(w, "id").to_owned(), device.clone())) {
                     continue;
                 } // Candidate cannot bypass rollout admission.
                 if old_id.as_deref() == Some(text(w, "id")) {
@@ -1611,9 +1702,10 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                         // The existing generation is authoritative. Historical deployment
                         // metadata can no longer change the bytes used for rollback or
                         // deciding whether a same-version redeploy changes the workload.
-                        let recorded_sha = db::parse(row.get("data"))?["desired_artifact_sha256"]
-                            .as_str()
-                            .map(str::to_owned);
+                        let recorded_sha =
+                            device_record(db, &device).await?["desired_artifact_sha256"]
+                                .as_str()
+                                .map(str::to_owned);
                         let previous_artifact = if let Some(stored) =
                             crate::variables::current(db, &device, old_generation, prior_version_id)
                                 .await?
@@ -1691,7 +1783,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                     // Until the agent acknowledges, it may check in at its old interval.
                     let floor = check_in_seconds(
                         &old,
-                        &db::parse(row.get("data"))?,
+                        &device_record(db, &device).await?,
                         row.get("policy_generation"),
                     );
                     sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+?,policy_assignment_id=?,data=CASE WHEN ?=1 THEN json_set(data,'$.heartbeat_floor_seconds',?) ELSE data END WHERE id=?").bind(w["policy"].to_string()).bind(inc).bind(text(w,"id")).bind(inc).bind(floor).bind(&device).execute(&mut *db).await?;
@@ -1717,7 +1809,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                     }
                     let floor = check_in_seconds(
                         &old,
-                        &db::parse(row.get("data"))?,
+                        &device_record(db, &device).await?,
                         row.get("policy_generation"),
                     );
                     sqlx::query("UPDATE devices SET policy=?,policy_generation=policy_generation+1,policy_assignment_id=NULL,data=json_set(data,'$.heartbeat_floor_seconds',?) WHERE id=?").bind(db::default_policy().to_string()).bind(floor).bind(&device).execute(&mut *db).await?;
@@ -1860,6 +1952,10 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         db::update(db, "deployment", d).await?;
         return Ok(());
     }
+    // Stored only when it changes: an all-at-once rollout waiting for an
+    // offline device, or a persistent one that never completes, reaches this
+    // point every tick with nothing to release.
+    let unchanged = d.clone();
     let take = if !is_canary {
         pending.len()
     } else if released.is_empty() {
@@ -1938,19 +2034,15 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         retire_replaced(db, d, &released).await?;
     }
     d["observation_started_at"] = Value::Null;
-    db::update(db, "deployment", d).await?;
+    if *d != unchanged {
+        db::update(db, "deployment", d).await?;
+    }
     Ok(())
-}
-async fn deployment_ids(db: &mut SqliteConnection) -> Result<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT id FROM records WHERE kind='deployment' ORDER BY created_at DESC,id",
-    )
-    .fetch_all(db)
-    .await?)
 }
 pub async fn tick(s: &State) -> Result<()> {
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    for id in deployment_ids(&mut tx).await? {
+    // Every other deployment is finished: this loop would only read it.
+    for id in working_ids(&mut tx).await? {
         let mut d = db::record(&mut tx, "deployment", &id).await?;
         if d["status"] == "scheduled" {
             let at = DateTime::parse_from_rfc3339(text(&d, "scheduled_at"))
@@ -2398,7 +2490,132 @@ pub(crate) async fn rollback_blockers(
 #[cfg(test)]
 mod tests {
     use super::requires_full_mode;
+    use crate::db;
+    use rand::{Rng, SeedableRng};
     use serde_json::json;
+    use sqlx::Connection;
+
+    /// A varied history: every status, both target modes, targets in every
+    /// state. Persistent assignments that follow their groups keep a target
+    /// for each member, as membership changes always give one.
+    async fn history(seed: u64) -> sqlx::SqliteConnection {
+        let mut db = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&mut db).await.unwrap();
+        let mut random = rand::rngs::StdRng::seed_from_u64(seed);
+        let devices: Vec<String> = (0..8).map(|n| format!("device-{n}")).collect();
+        for (n, id) in devices.iter().enumerate() {
+            sqlx::query("INSERT INTO devices(id,name,data,revoked) VALUES(?,?,'{}',?)")
+                .bind(id)
+                .bind(id)
+                .bind(n == 7)
+                .execute(&mut db)
+                .await
+                .unwrap();
+        }
+        let statuses = [
+            "active",
+            "paused",
+            "completed",
+            "cancelled",
+            "failed",
+            "unassigned",
+            "missed",
+            "scheduled",
+        ];
+        for n in 0..300 {
+            let id = format!("00000000-0000-4000-8000-{n:012}");
+            let status = statuses[random.gen_range(0..statuses.len())];
+            let persistent = random.gen_bool(0.3);
+            let members: Vec<&String> = devices.iter().filter(|_| random.gen_bool(0.4)).collect();
+            let group = format!("group-{n}");
+            db::insert(&mut db,"group",&json!({"id":group,"name":group,"description":"","device_ids":members,"created_at":db::now(),"revision":1})).await.unwrap();
+            let selector = if persistent {
+                json!({"device_ids":[],"group_ids":[group],"exclude_ids":[]})
+            } else {
+                json!({"device_ids":members,"group_ids":[],"exclude_ids":[]})
+            };
+            let following = persistent && ["active", "paused", "completed"].contains(&status);
+            db::insert(&mut db,"deployment",&json!({"id":id,"status":status,"target_mode":if persistent {"persistent"} else {"snapshot"},"selector":selector,"priority":random.gen_range(0..3)*10,"version_id":"v","created_at":format!("2026-01-01T00:{:02}:{:02}Z",n/60,n%60)})).await.unwrap();
+            for device in &devices {
+                let member = members.contains(&device);
+                let (state, generation) = match random.gen_range(0..6) {
+                    _ if following && member => ("verified_applied", 2),
+                    0 => ("removed", random.gen_range(0..3)),
+                    1 => ("pending", 0),
+                    2 => ("blocked", 0),
+                    3 => ("desired", 1),
+                    4 => ("failed", 3),
+                    _ => ("verified_applied", 2),
+                };
+                if following && !member && state != "removed" {
+                    continue;
+                }
+                sqlx::query("INSERT INTO deployment_targets(deployment_id,device_id,state,generation) VALUES(?,?,?,?)")
+                    .bind(&id)
+                    .bind(device)
+                    .bind(state)
+                    .bind(generation)
+                    .execute(&mut db)
+                    .await
+                    .unwrap();
+            }
+        }
+        db
+    }
+
+    #[tokio::test]
+    async fn skipped_history_can_neither_select_a_device_nor_need_a_tick() {
+        for seed in 0..8 {
+            let mut db = history(seed).await;
+            let every = db::records(&mut db, "deployment").await.unwrap();
+            let kept: Vec<String> = super::candidate_records(&mut db)
+                .await
+                .unwrap()
+                .iter()
+                .map(|d| d["id"].as_str().unwrap().to_owned())
+                .collect();
+            let mut order = Vec::new();
+            for d in &every {
+                let id = d["id"].as_str().unwrap();
+                let selects = super::candidate_status(d)
+                    && !super::candidate_targets(&mut db, d)
+                        .await
+                        .unwrap()
+                        .is_empty();
+                if kept.iter().any(|k| k == id) {
+                    assert!(super::candidate_status(d), "{d}");
+                    order.push(id.to_owned());
+                } else {
+                    assert!(!selects, "seed {seed}: {id} still selects a device");
+                }
+            }
+            assert_eq!(kept, order, "seed {seed}: newest first, as before");
+            let working = super::working_ids(&mut db).await.unwrap();
+            for d in &every {
+                let id = d["id"].as_str().unwrap();
+                if working.iter().any(|w| w == id) {
+                    continue;
+                }
+                let status = d["status"].as_str().unwrap();
+                assert!(!["scheduled", "active"].contains(&status), "{d}");
+                let holds: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM deployment_targets WHERE deployment_id=? AND state<>'removed'",
+                )
+                .bind(id)
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+                assert!(
+                    d["target_mode"] != "persistent"
+                        || !["paused", "completed"].contains(&status)
+                        || holds == 0,
+                    "seed {seed}: the tick would still mark {id}'s targets"
+                );
+            }
+        }
+    }
 
     fn remap(source: &str) -> serde_json::Value {
         json!({

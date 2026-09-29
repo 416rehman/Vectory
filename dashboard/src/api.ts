@@ -1317,7 +1317,14 @@ export const IssueSchema = z.object({
   deployment_id: z.string().nullable().optional(),
   resolved: z.boolean(),
   resolved_reason: z
-    .enum(["verified", "unassigned", "healthy", "superseded", "unmonitored"])
+    .enum([
+      "verified",
+      "unassigned",
+      "healthy",
+      "superseded",
+      "unmonitored",
+      "revoked",
+    ])
     .nullable()
     .optional(),
   resolved_at: z.string().nullable().optional(),

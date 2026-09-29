@@ -378,9 +378,12 @@ pub async fn admin_reset(
     AppState(s): AppState<State>,
     h: HeaderMap,
     Path(id): Path<String>,
-    Json(v): Json<Value>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>> {
+    // Authenticate before the body is judged at all, so an anonymous caller
+    // learns nothing from a malformed or undeclared one.
     crate::auth::authorize(&s, &h, &["admin"], true).await?;
+    let v = crate::token_requests::parse(&body)?;
     let id = crate::deployment_requests::parse_id(&id)?;
     let (_, hash) = crate::accounts::reauthenticate(
         &s,

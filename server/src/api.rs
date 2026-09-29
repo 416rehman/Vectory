@@ -426,7 +426,13 @@ pub async fn list(
     .await?;
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => json!(rollout::devices(&mut conn).await?),
+        "devices" => json!(
+            rollout::devices(&mut conn)
+                .await?
+                .into_iter()
+                .map(rollout::list_row)
+                .collect::<Vec<_>>()
+        ),
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
         "groups" => json!(crate::groups::list(&mut conn).await?),
@@ -462,8 +468,14 @@ pub async fn list(
             let issues_open = crate::issues::open_count(&mut conn).await?;
             let audit = recent_activity(&mut conn).await?;
             let mut overview = json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked"|"awaiting_first_check_in")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"recent_activity":audit});
+            // Aggregates read the full rows; the page only lists them.
             crate::overview::extend(&mut conn, &devices, &mut overview).await?;
-            overview["devices"] = json!(devices);
+            overview["devices"] = json!(
+                devices
+                    .into_iter()
+                    .map(rollout::list_row)
+                    .collect::<Vec<_>>()
+            );
             overview
         }
         _ => return Err(ApiError::missing()),

@@ -73,8 +73,16 @@ async fn bounded_request(
     }
 }
 pub(crate) async fn authenticated(s: &State, peer: &PeerCertificate) -> Result<String> {
+    authenticated_with(&s.pool, peer).await
+}
+/// The device a client certificate currently belongs to, read with `db` (the
+/// pool, or a transaction that must see the same snapshot as later reads).
+async fn authenticated_with<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
+    peer: &PeerCertificate,
+) -> Result<String> {
     let fp = peer.0.as_deref().ok_or_else(ApiError::unauthorized)?;
-    let id:Option<String>=sqlx::query_scalar("SELECT c.device_id FROM credentials c JOIN devices d ON d.id=c.device_id WHERE c.fingerprint=? AND c.revoked=0 AND d.revoked=0 AND c.expires_at>?").bind(fp).bind(db::now()).fetch_optional(&s.pool).await?;
+    let id:Option<String>=sqlx::query_scalar("SELECT c.device_id FROM credentials c JOIN devices d ON d.id=c.device_id WHERE c.fingerprint=? AND c.revoked=0 AND d.revoked=0 AND c.expires_at>?").bind(fp).bind(db::now()).fetch_optional(db).await?;
     id.ok_or_else(ApiError::unauthorized)
 }
 /// Why an enrollment was refused. Devices only ever receive the generic
@@ -293,8 +301,7 @@ async fn enroll_inner(
             .bind(existing)
             .execute(&mut *tx)
             .await?;
-        crate::groups::remove_device(&mut tx, existing).await?;
-        crate::rollout::retire_persistent_targets(&mut tx, existing).await?;
+        crate::device_revocation::retire(&mut tx, existing).await?;
     } else if recovery {
         return Err(refused("RECOVERY_TARGET_MISSING", token_ref));
     }
@@ -981,8 +988,12 @@ pub async fn artifact(
     Extension(peer): Extension<PeerCertificate>,
     Path(sha): Path<String>,
 ) -> Result<Response> {
-    let _guard = s.writer.lock().await;
-    let id = authenticated(&s, &peer).await?;
+    // A read: every device of an all-at-once rollout fetches at once, so this
+    // never takes the writer lock. One deferred read transaction gives the
+    // credential, device row and artifact a single consistent snapshot, and
+    // the digest check below refuses anything but the current artifact.
+    let mut tx = s.pool.begin().await?;
+    let id = authenticated_with(&mut *tx, &peer).await?;
     s.limit(
         format!("artifact:{id}"),
         30,
@@ -998,19 +1009,18 @@ pub async fn artifact(
     let row =
         sqlx::query("SELECT desired_version_id,desired_generation,data FROM devices WHERE id=?")
             .bind(&id)
-            .fetch_one(&s.pool)
+            .fetch_one(&mut *tx)
             .await?;
     let version: Option<String> = row.get("desired_version_id");
     let generation: i64 = row.get("desired_generation");
-    let mut conn = s.pool.acquire().await?;
     let version = db::record(
-        &mut conn,
+        &mut tx,
         "version",
         &version.ok_or_else(ApiError::forbidden)?,
     )
     .await?;
     let artifact =
-        match crate::variables::current(&mut conn, &id, generation, text(&version, "id")).await? {
+        match crate::variables::current(&mut tx, &id, generation, text(&version, "id")).await? {
             Some(snapshot) => snapshot,
             None if version["variables"].as_array().is_none_or(Vec::is_empty) => {
                 crate::variables::render(&version, &Value::Null, &id)?

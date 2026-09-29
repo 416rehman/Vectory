@@ -194,9 +194,10 @@ pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) ->
 
 /// Resolve a device's open issues: `verified` when it verified a
 /// configuration after the failure, `unassigned` when its assignment was
-/// removed. Acknowledgement context stays as history. Verifying a
-/// configuration says nothing about delivery, so data-plane issues resolve
-/// only through their own evaluation (or when the assignment goes away).
+/// removed, `revoked` when its identity was revoked. Acknowledgement context
+/// stays as history. Verifying a configuration says nothing about delivery,
+/// so data-plane issues resolve only through their own evaluation (or when
+/// the assignment or the device goes away).
 pub(crate) async fn resolve_device(
     db: &mut SqliteConnection,
     device_id: &str,
@@ -368,7 +369,7 @@ fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) ELSE NULL END,\
         'deployment_id',CASE WHEN json_type(i.data,'$.deployment_id')='text' THEN substr(json_extract(i.data,'$.deployment_id'),1,128) ELSE NULL END,\
         'resolved',json(CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'true' ELSE 'false' END),\
-        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded','unmonitored') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
+        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded','unmonitored','revoked') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
         'resolved_at',").push(timestamp("json_extract(i.data,'$.resolved_at')")).push(",\
         'revision',CASE WHEN json_type(i.data,'$.revision')='integer' AND json_extract(i.data,'$.revision') BETWEEN 1 AND 9007199254740991 THEN json_extract(i.data,'$.revision') ELSE 1 END,\
         'acknowledged',json(CASE WHEN json_type(i.data,'$.acknowledged')='true' THEN 'true' ELSE 'false' END),\
