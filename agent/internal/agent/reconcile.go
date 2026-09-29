@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -232,6 +233,18 @@ func (e *Engine) Poll(ctx context.Context) error {
 	}
 	return e.Reconcile(ctx, m)
 }
+
+// incompatibleVectorMessage names both versions. The manifest is signed, and
+// its version is still shown only as a bounded printable token.
+func incompatibleVectorMessage(wanted, adopted string) string {
+	if release, _, ok := vectorRelease(wanted); ok {
+		wanted = release
+	} else if wanted = safeText(strings.TrimSpace(wanted), 24); wanted == "" {
+		wanted = "an unknown version"
+	}
+	return "This version is built for Vector " + wanted + ", but this device runs Vector " + adopted + ". Only patch releases of the same minor version are interchangeable."
+}
+
 func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	if e.State.HighestGeneration != m.Generation || Identity(e.State.Desired) != Identity(m.Desired) {
 		return errors.New("manifest superseded before reconciliation")
@@ -253,8 +266,10 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	d := m.Desired
-	if !SupportedVectorVersion(d.VectorVersion) {
-		return e.failAttempt("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
+	// A manifest built for another patch release of this device's Vector is
+	// fine: patch releases fix bugs without changing configuration.
+	if adopted := e.Settings.adoptedVectorVersion(); !sameVectorSeries(d.VectorVersion, adopted) {
+		return e.failAttempt("INCOMPATIBLE", "compatibility", incompatibleVectorMessage(d.VectorVersion, adopted))
 	}
 	if !e.Settings.Adopted {
 		return e.failAttempt("ADOPTION_REQUIRED", "preflight", "Host operator must explicitly adopt the fixed Vector binary and sole managed config")
