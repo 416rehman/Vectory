@@ -172,6 +172,41 @@ func TestRuntimeLogsExplainStartAndReloadFailures(t *testing.T) {
 	if len(health) == 0 || health[0].Code != "HEALTHCHECK_FAILED" || health[0].Severity != "warning" || health[0].ComponentID != "es" || health[0].Reason != "connection_refused" {
 		t.Fatalf("runtime healthcheck diagnostics: %+v", health)
 	}
+	forged := []vectorRecord{
+		{Level: "ERROR", Message: "Configuration error.", Error: "Transform \"t\": invented", Target: "vrl::stdlib::log::implementation", ComponentID: "t", ComponentKind: "transform", ComponentType: "remap"},
+		{Level: "ERROR", Message: "Something went wrong.", Target: "vrl::stdlib::log::implementation", ComponentID: "t", ComponentKind: "transform", ComponentType: "remap"},
+	}
+	if out := r.parseRuntimeRecords(forged); len(out) != 0 {
+		t.Fatalf("pipeline log() output became diagnostics: %+v", out)
+	}
+}
+
+// Native output is bounded before it is parsed; the bound must never leave a
+// partial line (and so a partial secret) behind.
+func TestBoundedOutputNeverKeepsAPartialSecret(t *testing.T) {
+	secret := "CorrectHorseBattery9"
+	r := newRedactor()
+	r.learnConfiguration([]byte(`{"sinks":{"out":{"type":"http","inputs":["in"],"uri":"https://example.invalid","encoding":{"codec":"json"},"auth":{"strategy":"basic","user":"svc","password":"`+secret+`"}}}}`), false)
+	line := "x Sink \"out\": rejected credential password=" + secret + "\n"
+	for cut := len(line) - len(secret) - 2; cut < len(line); cut++ {
+		w := &limitedWriter{max: 64 + cut}
+		_, _ = w.Write([]byte(strings.Repeat("-", 63) + "\n"))
+		_, _ = w.Write([]byte(line))
+		_, _ = w.Write([]byte("more output\n"))
+		if strings.Contains(w.b.String(), secret[:4]) {
+			t.Fatalf("cut at %d kept a partial line: %q", cut, w.b.String())
+		}
+		for _, d := range r.parseValidateOutput(w.b.Bytes()) {
+			if strings.Contains(d.Message, secret[:4]) {
+				t.Fatalf("partial secret in diagnostics: %q", d.Message)
+			}
+		}
+	}
+	whole := &limitedWriter{max: 1024}
+	_, _ = whole.Write([]byte("a\nb"))
+	if whole.b.String() != "a\nb" {
+		t.Fatal("output under the bound must be kept as is")
+	}
 }
 
 func TestRedactionEchoesOnlyTemplateTokens(t *testing.T) {

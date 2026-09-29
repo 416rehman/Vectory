@@ -27,6 +27,7 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | `ENROLLMENT_FAILED` (401) | The server refused the token or name. Ask an administrator to check the token's expiry, uses, name prefix and revocation in **Add device**. A token can't take over a name that belongs to another device. |
 | Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
 | Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
+| The service account can't run Vector or the agent | Setup names the folder or file that blocks it, such as a private `/root`. Install Vector system-wide (https://vector.dev/download/) or pass `--vector-binary` with a path the account can read. Keep the agent at mode `0755`. |
 
 For security, the server never tells a device why it refused. Administrators see the reason in **Add device** and in the audit log.
 
@@ -37,12 +38,12 @@ Open the device and read its issue: it names the stage and the reason.
 | Issue code | What happened | Fix |
 | --- | --- | --- |
 | `VALIDATION_FAILED` | Vector rejected the configuration on the device, or its tests failed. | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
-| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. | Have the host operator allow the resource, or switch the device to full mode. The dashboard can't grant it. |
+| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator add the entry the fix names (such as `"127.0.0.1:9"` to `allowed_network_hosts`), or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, or its file can't be read. | Check the device's bindings and the secret file's permissions. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
 | `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. | Check disk space, ownership and permissions, and remove symlinks from the paths. |
-| `INCOMPATIBLE` | The version needs a different Vector version than the device runs. | Install Vector 0.58.0 and [approve it](agents.md#replace-the-vector-binary). |
+| `INCOMPATIBLE` | The version needs a different Vector version than the device runs. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
 | `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
 | `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, or the bytes didn't match. | Check connectivity; the agent retries on its own. |
 | `ROLLBACK_FAILED`, `ROLLBACK_UNAVAILABLE`, `RECOVERY_INVALID` | A failure left no working configuration to restore. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
@@ -161,7 +162,7 @@ The bootstrap secret only creates the first administrator; it can't sign anyone 
 | `STALE_REVISION` (409) | Someone saved a newer version first. | Load the latest, review, then save again. |
 | `ACTIVE_CANARY_OVERLAP` (409) | A running canary already covers some of these devices. | Wait for it to finish, or pause it deliberately. |
 | `FULL_VECTOR_MODE_REQUIRED` | The version needs full mode on a restricted device. | Deploy to full-mode devices, or change the pipeline. |
-| `VECTOR_VERSION_INCOMPATIBLE` | The device doesn't run Vector 0.58.0. | Install 0.58.0 on the device and approve it. |
+| `VECTOR_VERSION_INCOMPATIBLE` | The device doesn't run Vector 0.58.x. | Install a 0.58 release on the device and approve it. |
 | `DEVICE_SYNC_PAUSED` | The device's configuration sync is paused. | Resume sync before retrying. |
 | `CAPACITY_BUSY` | The agent listener is at its connection limit. | Nothing: agents retry on their own. |
 | `IDEMPOTENCY_CONFLICT` | A request ID was reused for a different request. | Start a new request. |

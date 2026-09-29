@@ -32,6 +32,18 @@ func TestHelpAndVersionWorkBeforeTheCompatibilityForm(t *testing.T) {
 	if code, _, stderr := invoke(); code != 2 || !strings.Contains(stderr, "Usage:") {
 		t.Fatal("no arguments should print usage to stderr with exit 2", code)
 	}
+	for _, topic := range []string{"help", "version"} {
+		if code, stdout, stderr := invoke("help", topic); code != 0 || stderr != "" || !strings.HasPrefix(stdout, "Usage:  vectory "+topic) {
+			t.Fatalf("help %s: code %d stdout %q stderr %q", topic, code, stdout, stderr)
+		}
+	}
+	// Examples teach download, check, run: never piping a script into a shell.
+	if _, stdout, _ := invoke("help"); strings.Contains(stdout, "| sudo sh") || !strings.Contains(stdout, "sha256sum -c -") {
+		t.Fatalf("help examples:\n%s", stdout)
+	}
+	if _, stdout, _ := invoke("help", "setup"); strings.Contains(stdout, "| sudo sh") || !strings.Contains(stdout, "sudo sh vectory-install.sh") {
+		t.Fatalf("setup examples:\n%s", stdout)
+	}
 }
 
 func TestEveryCommandHasHelpWithPurposeAndHidesCompatibilityFlags(t *testing.T) {

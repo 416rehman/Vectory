@@ -1,9 +1,25 @@
 package agent
 
-import "time"
+import (
+	"regexp"
+	"time"
+)
 
 const Version = "0.1.0-dev"
+
+// VectorVersion is the Vector release this agent is built and tested with.
+// Any patch release of the same minor version is supported (VectorSeries).
 const VectorVersion = "0.58.0"
+
+// VectorSeries names the supported Vector releases for people: 0.58.x.
+const VectorSeries = "0.58.x"
+
+var supportedVector = regexp.MustCompile(`^0\.58\.[0-9]+$`)
+
+// SupportedVectorVersion reports whether a Vector version is a patch release
+// of the supported minor version.
+func SupportedVectorVersion(version string) bool { return supportedVector.MatchString(version) }
+
 const MaxArtifact = 1024 * 1024
 const MaxJSONCounter uint64 = 9007199254740991
 
@@ -166,7 +182,20 @@ type Settings struct {
 	VectorDataDir string `json:"vector_data_dir,omitempty"`
 	// GracefulShutdownSeconds bounds Vector's drain on stop (default 60).
 	GracefulShutdownSeconds int `json:"graceful_shutdown_seconds,omitempty"`
+	// VectorVersion is what the adopted binary reported at adoption. The
+	// binary's SHA-256 is pinned, so it can't change without re-adoption.
+	VectorVersion string `json:"vector_version,omitempty"`
 }
+
+// adoptedVectorVersion is the adopted binary's version, or the release this
+// agent is built with for installations adopted before it was recorded.
+func (s Settings) adoptedVectorVersion() string {
+	if SupportedVectorVersion(s.VectorVersion) {
+		return s.VectorVersion
+	}
+	return VectorVersion
+}
+
 type State struct {
 	DeviceID                string                `json:"device_id"`
 	HighestGeneration       uint64                `json:"highest_generation"`
@@ -193,7 +222,26 @@ type State struct {
 	FailedEffectiveSHA256   string                `json:"failed_effective_sha256,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 	ServerFeatures          []string              `json:"server_features,omitempty"`
+	// Agent is the build of the agent process that last saved this state.
+	// Setup compares it with the installed file to restart an outdated service.
+	Agent *AgentBuild `json:"agent,omitempty"`
+	// CheckInFailure is the latest failed check-in since the last success.
+	CheckInFailure *CheckInFailure `json:"check_in_failure,omitempty"`
 }
+
+// CheckInFailure records why the agent couldn't check in. The message is a
+// classified, secret-free explanation.
+type CheckInFailure struct {
+	Since   time.Time `json:"since"`
+	Message string    `json:"message"`
+}
+
+// AgentBuild identifies an agent executable.
+type AgentBuild struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+}
+
 type Journal struct {
 	Stage                string                `json:"stage"`
 	Generation           uint64                `json:"generation"`

@@ -224,8 +224,8 @@ func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionC
 	if err = checkCandidate(); err != nil {
 		return report, err
 	}
-	if version != VectorVersion {
-		return report, errors.New("candidate is not the supported Vector version")
+	if !SupportedVectorVersion(version) {
+		return report, errors.New("candidate is not a supported Vector version (" + VectorSeries + ")")
 	}
 	artifacts := []struct {
 		label, path string
@@ -318,6 +318,7 @@ func reAdopt(ctx context.Context, dir, binary, expected string, checks adoptionC
 	}
 	fields["vector_binary"], _ = json.Marshal(binary)
 	fields["vector_binary_sha256"], _ = json.Marshal(expected)
+	fields["vector_version"], _ = json.Marshal(version)
 	updated, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return report, err

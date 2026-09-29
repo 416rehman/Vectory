@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -44,20 +46,29 @@ type VectorDriver struct {
 	verified bool
 	method   string
 }
+
+// limitedWriter keeps at most max bytes of a child's output. Once output
+// exceeds the bound it keeps only complete lines: a line cut mid-way could
+// carry part of a secret that redaction, which matches whole values, would
+// no longer recognize.
 type limitedWriter struct {
-	b   bytes.Buffer
-	max int
+	b    bytes.Buffer
+	max  int
+	full bool
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	if w.b.Len() < w.max {
-		left := w.max - w.b.Len()
-		if len(p) > left {
-			p = p[:left]
-		}
-		w.b.Write(p)
+	if w.full {
+		return n, nil
 	}
+	if left := w.max - w.b.Len(); len(p) > left {
+		w.b.Write(p[:left])
+		w.full = true
+		w.b.Truncate(bytes.LastIndexByte(w.b.Bytes(), '\n') + 1)
+		return n, nil
+	}
+	w.b.Write(p)
 	return n, nil
 }
 func cleanEnvironment() []string {
@@ -107,8 +118,15 @@ func vectorConfigArgs(command string, paths []string, full bool, options ...stri
 }
 func (d *VectorDriver) checkBinary() error {
 	h, e := FileDigest(d.Settings.VectorBinary)
-	if e != nil || h != d.Settings.VectorBinarySHA256 {
-		return errors.New("adopted Vector binary changed or is inaccessible; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	switch {
+	case os.IsNotExist(e):
+		return errors.New("the adopted Vector binary " + d.Settings.VectorBinary + " is missing; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	case os.IsPermission(e):
+		return errors.New("the agent's account can't read the adopted Vector binary " + d.Settings.VectorBinary + "; make it and its folders readable for the service account, or install Vector system-wide and use re-adopt")
+	case e != nil:
+		return errors.New("the agent can't use the adopted Vector binary " + d.Settings.VectorBinary + " (" + e.Error() + "); restore it or stop the agent and use re-adopt with a trusted expected SHA256")
+	case h != d.Settings.VectorBinarySHA256:
+		return errors.New("adopted Vector binary changed; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
 	}
 	return nil
 }
@@ -296,13 +314,16 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 		if err != nil {
 			return errors.New("cannot securely read the managed configuration")
 		}
-		content, _, err := runtimeOverlay(d.Settings, d.Dir, data)
+		content, host, err := runtimeOverlay(d.Settings, d.Dir, data)
 		if err != nil {
 			return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
 		}
 		overlay = hostRuntimePath(d.Dir)
 		if err = writeRuntimeOverlay(overlay, content); err != nil {
 			return errors.New("cannot write the host runtime settings")
+		}
+		if err = rememberHostDataDir(d.Dir, host); err != nil {
+			return errors.New("cannot record the device's Vector data directory")
 		}
 	}
 	if d.canReload() {
@@ -329,7 +350,7 @@ func (d *VectorDriver) reload(ctx context.Context) error {
 	d.mu.Lock()
 	lifetime, done := d.lifetime, d.done
 	d.mu.Unlock()
-	since := d.Log.beginCapture()
+	since := d.Log.beginCapture(false)
 	if _, err := lifetime.Write([]byte{hostCommandReload}); err != nil {
 		d.Log.endCapture()
 		return errors.New("Vector supervisor is not accepting reload requests")
@@ -380,11 +401,16 @@ func (d *VectorDriver) restart(ctx context.Context, path, overlay string) error 
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
+	supervisorPlatformOptions(cmd)
+	// Where no parent-death signal exists (macOS), a Vector orphaned by a
+	// killed supervisor keeps the log pipe open; stop waiting for it so the
+	// driver sees the exit instead of hanging.
+	cmd.WaitDelay = 2 * time.Second
 	in, e := cmd.StdinPipe()
 	if e != nil {
 		return e
 	}
-	since := d.Log.beginCapture()
+	since := d.Log.beginCapture(true)
 	cmd.Stdout = d.Log
 	cmd.Stderr = io.Discard
 	if e = cmd.Start(); e != nil {
@@ -440,6 +466,17 @@ func VectorHostMain(args []string) int {
 	if len(args) != 3 && len(args) != 5 {
 		return 2
 	}
+	// The supervisor is controlled only through stdin. Termination signals
+	// meant for the agent (a stray kill, a terminal's Ctrl-C) must neither kill
+	// it (which SIGKILLs Vector) nor make it signal Vector a second time, which
+	// Vector treats as "quit now, skip the drain". Handled, not ignored:
+	// ignored signals would be inherited by Vector across exec.
+	discard := make(chan os.Signal, 4)
+	signal.Notify(discard, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		for range discard {
+		}
+	}()
 	if args[2] != "restricted" && args[2] != "full" {
 		return 2
 	}
@@ -537,8 +574,9 @@ func ProbeVector(ctx context.Context, s Settings) (string, error) {
 	if e := cmd.Run(); e != nil {
 		return "", errors.New("cannot execute Vector --version")
 	}
-	if !strings.HasPrefix(out.b.String(), "vector "+VectorVersion+" ") {
-		return "", errors.New("this release requires Vector " + VectorVersion)
+	match := vectorVersionLine.FindStringSubmatch(strings.TrimSpace(out.b.String()))
+	if match == nil || !SupportedVectorVersion(match[1]) {
+		return "", errors.New("this release requires Vector " + VectorSeries)
 	}
-	return VectorVersion, nil
+	return match[1], nil
 }

@@ -124,8 +124,8 @@ func InspectVector(ctx context.Context, path string) VectorBinary {
 		return candidate
 	}
 	candidate.Version = match[1]
-	if candidate.Version != VectorVersion {
-		candidate.Problem = "this agent requires Vector " + VectorVersion
+	if !SupportedVectorVersion(candidate.Version) {
+		candidate.Problem = "this agent requires Vector " + VectorSeries
 	}
 	return candidate
 }

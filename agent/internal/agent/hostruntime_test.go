@@ -36,6 +36,40 @@ func TestHostDataDirPrecedence(t *testing.T) {
 	}
 }
 
+// Checkpoints and disk buffers live in the data directory: once an
+// activation used a derived directory, it must not move when Vector's own
+// default appears or becomes writable later.
+func TestDerivedDataDirStaysAfterFirstActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Vector's default data directory is not probed on Windows")
+	}
+	previous := vectorDefaultDataDirProbe
+	defer func() { vectorDefaultDataDirProbe = previous }()
+	vectorDefaultDataDirProbe = filepath.Join(t.TempDir(), "absent")
+	dir := t.TempDir()
+	h := hostRuntimeFor(Settings{}, dir, []byte(`{"sources":{}}`))
+	if h.DataDirSource != dataDirAgentDefault {
+		t.Fatalf("first choice = %+v", h)
+	}
+	if err := rememberHostDataDir(dir, h); err != nil {
+		t.Fatal(err)
+	}
+	vectorDefaultDataDirProbe = t.TempDir()
+	if path, source := hostDataDir(Settings{}, dir); path != agentDataDir(dir) || source != dataDirAgentDefault {
+		t.Fatalf("data_dir moved to %s (%s)", path, source)
+	}
+	explicit := filepath.Join(t.TempDir(), "explicit")
+	if path, source := hostDataDir(Settings{VectorDataDir: explicit}, dir); path != explicit || source != dataDirHost {
+		t.Fatalf("an explicit --vector-data-dir must still win: %s (%s)", path, source)
+	}
+	if err := rememberHostDataDir(dir, HostRuntime{DataDir: "/elsewhere", DataDirSource: dataDirVectorDefault}); err != nil {
+		t.Fatal(err)
+	}
+	if path, _ := hostDataDir(Settings{}, dir); path != agentDataDir(dir) {
+		t.Fatalf("the first choice was overwritten: %s", path)
+	}
+}
+
 func TestRuntimeOverlayOnlyFillsAnOmittedDataDir(t *testing.T) {
 	previous := vectorDefaultDataDirProbe
 	defer func() { vectorDefaultDataDirProbe = previous }()

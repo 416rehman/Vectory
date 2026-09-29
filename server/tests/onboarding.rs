@@ -769,7 +769,10 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     let download = root.join("download");
     let run = |bytes: &[u8], install_dir: &Path| {
         std::fs::write(&download, bytes).unwrap();
+        // A hardened host's root umask must not hide the agent from the
+        // service account.
         std::process::Command::new("sh")
+            .args(["-c", "umask 077; exec sh \"$0\" \"$@\""])
             .arg(&path)
             .args(["--install-dir"])
             .arg(install_dir)
@@ -805,6 +808,15 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("installed at"), "{stdout}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(installed.join("vectory"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "installed agent mode under umask 077");
+    }
     assert_eq!(
         std::fs::read_to_string(root.join("curl-url"))
             .unwrap()
@@ -821,12 +833,15 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     let args = std::fs::read_to_string(root.join("agent-args")).unwrap();
     let args: Vec<&str> = args.lines().collect();
+    let agent_path = installed.join("vectory").display().to_string();
     assert_eq!(
         args,
         vec![
             "setup",
             "--server",
             "https://vectory.example.test:8443",
+            "--agent-path",
+            &agent_path,
             "--ca-sha256",
             &d.ca_sha256,
             "--dashboard-url",

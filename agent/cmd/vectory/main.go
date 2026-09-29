@@ -43,6 +43,14 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "help", "-h", "-help", "--help":
 		if args[0] == "help" && len(args) > 1 {
+			switch args[1] {
+			case "help":
+				fmt.Fprint(stdout, "Usage:  vectory help [command]\n\nShow the list of commands, or the flags and examples of one command.\n")
+				return exitOK
+			case "version":
+				fmt.Fprint(stdout, "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n")
+				return exitOK
+			}
 			cmd := findCommand(args[1])
 			if cmd == nil || cmd.hidden {
 				return unknownCommand(stderr, args[1])
@@ -58,7 +66,7 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 && (args[1] == "--json" || args[1] == "-json") {
 			writeJSON(stdout, map[string]string{"version": agent.Version, "vector_version": agent.VectorVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
 		} else {
-			fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorVersion, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorSeries, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		}
 		return exitOK
 	}

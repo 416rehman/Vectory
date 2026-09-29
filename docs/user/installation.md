@@ -1,6 +1,6 @@
 # Connect a device
 
-Install the Vectory agent on a host that runs Vector 0.58.0. The agent connects out to your server, runs the pipelines you deploy and reports what Vector is doing. It takes about five minutes per host.
+Install the Vectory agent on a host that runs Vector 0.58 (any patch release, such as 0.58.0 or 0.58.1). The agent connects out to your server, runs the pipelines you deploy and reports what Vector is doing. It takes about five minutes per host.
 
 > [!TIP]
 > **Fastest path**
@@ -8,7 +8,7 @@ Install the Vectory agent on a host that runs Vector 0.58.0. The agent connects 
 
 ## Before you start
 
-- **Vector 0.58.0** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
+- **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
 - **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
 - **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
@@ -88,11 +88,11 @@ Use the [manual steps](#install-manually) in an elevated PowerShell.
 The installer and `vectory setup` then:
 
 <!-- steps -->
-1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory`.
-2. Find Vector 0.58.0 and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
+1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
+2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in the mode you chose on **Add device**.
 4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
-5. Register the agent as a service, start it and wait for its first check-in.
+5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one.
 
 The token is never part of the URL or the installer script. The installer contains only public values: your server's address, its certificate fingerprint and the agents' checksums.
 
@@ -224,7 +224,7 @@ A new restricted installation can't read files, reach destinations or open liste
 
 The installer registers a service: systemd on Linux, launchd on macOS, and the Service Control Manager on Windows. The service starts at boot and restarts the agent if it stops.
 
-To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages.
+To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Stopping or restarting the service drains Vector the same way.
 
 - The service records the agent's path when you register it, so keep the binary at a stable location.
 - On Linux and macOS the service runs as an unprivileged account. Registration hands the state and managed-configuration folders to that account. Make sure it can also read your CA file and everything your pipelines use.

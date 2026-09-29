@@ -87,6 +87,8 @@ From the dashboard, **Retry application** on the device does the same for the ve
 
 An agent upgrade replaces one file. It doesn't change Vector, the device's mode or its identity.
 
+On Linux and macOS, the quickest upgrade is to run the command from **Add device** again on the device. The installer replaces the agent, and setup restarts the service on the new build and waits for its first check-in. It prints, for example, `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. To upgrade by hand instead:
+
 <!-- steps -->
 1. On the device page, choose **Upgrade agent** and download the agent for the device's OS and CPU. Check its SHA-256 against the value shown.
 2. Stop the agent: `sudo vectory service-stop`.
@@ -104,7 +106,7 @@ On the device page, confirm the same device identity, a fresh check-in and the e
 The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed binary. After you upgrade or move Vector on purpose, approve the new binary:
 
 <!-- steps -->
-1. Get the new Vector 0.58.0 binary from a trusted source and note the SHA-256 of the executable itself (not of its archive): `sha256sum /usr/bin/vector`.
+1. Get the new Vector 0.58.x binary from a trusted source and note the SHA-256 of the executable itself (not of its archive): `sha256sum /usr/bin/vector`.
 2. Stop the agent: `sudo vectory service-stop`.
 3. Approve it:
 

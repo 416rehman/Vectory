@@ -892,6 +892,8 @@ vectory_install() {
 
 	target=$install_dir/vectory
 	if [ -z "$dry_run" ] && [ -f "$target" ] && [ "$(digest "$target")" = "$sha256" ]; then
+		# The service account runs this file: keep it executable for everyone.
+		chmod 0755 "$target" 2>/dev/null || true
 		step '[ok]' Agent "$target is already $version for $os/$arch (SHA-256 $short... verified)"
 	else
 		tmp=$(mktemp -d 2>/dev/null || mktemp -d -t vectory) || fail Agent "Can't create a temporary directory."
@@ -936,7 +938,9 @@ vectory_install() {
 		if ! mkdir -p "$install_dir" 2>/dev/null || [ ! -w "$install_dir" ]; then
 			fail Agent "Can't write to $install_dir." "Run the installer with sudo, or choose a directory with --install-dir."
 		fi
-		cp "$tmp/vectory" "$install_dir/.vectory.new.$$" && mv -f "$install_dir/.vectory.new.$$" "$target" || fail Agent "Couldn't install $target."
+		# cp creates the file under the caller's umask (027 or 077 on hardened
+		# hosts), which would hide it from the service account: set 0755.
+		cp "$tmp/vectory" "$install_dir/.vectory.new.$$" && chmod 0755 "$install_dir/.vectory.new.$$" && mv -f "$install_dir/.vectory.new.$$" "$target" || fail Agent "Couldn't install $target."
 		rm -rf "$tmp"
 		trap - EXIT INT TERM
 		step '[ok]' Agent "$version for $os/$arch installed at $target (SHA-256 $short... verified)"
@@ -944,7 +948,8 @@ vectory_install() {
 
 	if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
 	if [ -n "$ca_sha256" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi
-	exec "$target" setup --server "$server" ${1+"$@"}
+	# --agent-path: the service runs the agent from where it was installed.
+	exec "$target" setup --server "$server" --agent-path "$target" ${1+"$@"}
 }
 
 vectory_install ${1+"$@"}
