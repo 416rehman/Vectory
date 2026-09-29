@@ -83,7 +83,7 @@ While a canary runs, **Canary gate** shows what each released device still needs
 <!-- diagram: apply-states -->
 ```mermaid
 flowchart LR
-  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Restarting Vector"] --> OK["Applied"]
+  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Loading in Vector"] --> OK["Applied"]
   V --> F["Failed"]
   A --> F
   R --> RB["Rolled back"]
@@ -93,7 +93,7 @@ flowchart LR
 | State | What it establishes | What to do |
 | --- | --- | --- |
 | **Waiting for agent**, **Downloaded**, **Validated** | Released, or preparation succeeded. | Wait. None of these means Vector runs the version. |
-| **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. | Wait for a final state. |
+| **Applying**, **Loading in Vector** | The configuration is written and Vector is loading it: a reload on Linux and macOS, a restart on Windows or if the reload fails. | Wait for a final state. |
 | **Applied** | The agent verified Vector runs this version. | Check that data arrives where you expect. |
 | **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. | Read the device's issue, fix the cause, then retry. |
 | **Rolled back** | The version failed to start, so the agent restored the last working one. | Investigate the version. The device still wants it. |
@@ -104,7 +104,7 @@ An offline device's last state is history, not the present. It becomes current a
 
 ## Follow a rollout
 
-Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Vector reloaded** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Vector reloaded** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. The page's address is its link: share it with anyone who has an account.
+Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Loaded in Vector** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Loaded in Vector** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. The page's address is its link: share it with anyone who has an account.
 
 The page leads with the one action that fits:
 

@@ -455,11 +455,11 @@ export function failureStagePhrase(stage: string | null | undefined) {
   return step ? stagePhrases[step] : "";
 }
 /**
- * Released → Downloaded → Validated → Written → Vector reloaded → Applied for
+ * Released → Downloaded → Validated → Written → Loaded in Vector → Applied for
  * one device, from persisted release/verification times and recorded
  * apply-state changes. A step a check-in skipped is done without a time;
  * nothing is invented. A failure is placed at the stage the agent reported
- * (a reload failure marks Vector reloaded, as the device page does); without
+ * (a reload failure marks Loaded in Vector, as the device page does); without
  * one, a rollback means Vector didn't come up after the reload, and anything
  * else falls after the last recorded step.
  */

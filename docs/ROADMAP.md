@@ -4,7 +4,9 @@ Where Vectory is heading. Order reflects priority, not promised dates. To discus
 
 ## Now: 0.1 developer preview
 
-The full loop works against real Vector 0.58.0 agents: build, publish, canary, apply and roll back. See [What's new](user/whats-new.md).
+The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents in the local demo on Linux. See [What's new](user/whats-new.md).
+
+Shipped from earlier versions of this list: starter pipelines such as syslog to Loki and files to Amazon S3, live events per second on the pipeline canvas, and canary gates that also check delivery, such as sink errors and full buffers.
 
 ## Next
 
@@ -13,13 +15,10 @@ The full loop works against real Vector 0.58.0 agents: build, publish, canary, a
 - **API tokens.** Scoped, revocable tokens for automation, instead of session cookies.
 - **Guided adoption.** `vectory adopt` hands a running Vector to the agent with a plan, validation and automatic rollback.
 - **Container and Kubernetes devices.** An agent image that manages Vector in the same container, and a Helm chart.
-- **Recipes.** Validated starting points for common pipelines, such as syslog to Loki or files to object storage.
 
 ## Later
 
 - Single sign-on with OIDC.
-- Live throughput on the pipeline canvas.
-- Canary gates that also watch data-plane health, such as error rates.
 - Configuration drift and version reports across the fleet.
 
 ## Before 1.0
@@ -28,7 +27,7 @@ These gates must pass before Vectory calls itself production-ready:
 
 - Service, reboot and upgrade tests on every supported operating system, including the oldest supported versions.
 - Privileged account and access-control checks on each platform.
-- Container build and start, and validator isolation, tested on a clean host.
+- Container start and validator isolation tested on a clean host. CI builds both images but doesn't start them.
 - Reproducible builds from independent builders, signed packages and an approved distribution namespace.
 - Key rotation and disaster-recovery drills.
 - Sustained load with real agents on dedicated hosts, and outage and fault exercises.

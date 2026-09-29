@@ -277,7 +277,7 @@ describe("device timeline", () => {
       "Downloaded",
       "Validated",
       "Written",
-      "Vector reloaded",
+      "Loaded in Vector",
       "Applied",
     ]);
   });
@@ -363,7 +363,7 @@ describe("device timeline", () => {
       }).map((s) => s.state),
     ).toEqual(["done", "done", "failed", "waiting", "waiting", "waiting"]);
   });
-  it("marks Vector reloaded, not Written, when the reload fails (a port clash)", () => {
+  it("marks Loaded in Vector, not Written, when the reload fails (a port clash)", () => {
     const steps = timelineSteps({
       state: "rolled_back",
       failure_stage: "reload",
@@ -376,14 +376,14 @@ describe("device timeline", () => {
       ],
     });
     expect(steps.find((s) => s.state === "failed")?.label).toBe(
-      "Vector reloaded",
+      "Loaded in Vector",
     );
     expect(steps.find((s) => s.key === "written")).toMatchObject({
       state: "done",
       at: "2026-09-29T16:54:07Z",
     });
   });
-  it("places a rollback without a reported stage at Vector reloaded", () => {
+  it("places a rollback without a reported stage at Loaded in Vector", () => {
     expect(
       timelineSteps({
         state: "rolled_back",
@@ -593,7 +593,7 @@ describe("one apply table for the device page and the rollout page", () => {
       ["Downloaded", "downloaded"],
       ["Validated", "validated"],
       ["Written", "written"],
-      ["Vector reloaded", "reload_requested"],
+      ["Loaded in Vector", "reload_requested"],
       ["Applied", "verified_applied"],
     ]);
   });

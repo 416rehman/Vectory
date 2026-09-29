@@ -10,7 +10,7 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 - **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them. The one exception is a loopback-only exporter of Vector's own metrics, described under [Restricted and full mode](#restricted-and-full-mode).
 - **Credentials stay on the host.** Pipelines reference secrets by name. The values live in local files the server never sees.
 - **Your events stay yours.** Events flow from Vector to your destinations. Vectory receives only status and the bounded metrics you enable.
-- **Every change is authorized and recorded.** The server checks each permission itself and writes an audit event for every change.
+- **Changes are authorized and recorded.** The server checks each permission itself and writes an audit event for each change it accepts.
 
 ## Trust boundaries
 
@@ -63,7 +63,7 @@ Enrollment tokens can be limited by use count, expiry and device-name prefix. A 
 
 ## How a version reaches a device
 
-1. **Checked before publishing.** The sandboxed validator runs `vector validate` on the pipeline. If the validator is unavailable, publishing stops; it never skips the check.
+1. **Checked before publishing.** The isolated validator runs `vector validate` on the pipeline. Checks that need the device, such as local files, wait for step 6. If the validator is unavailable, publishing stops; it never skips the check.
 2. **Immutable once published.** A version never changes. Rolling back deploys an older version as a new, higher generation.
 3. **Signed for one device.** Each check-in returns a manifest signed with the server's Ed25519 key. It names the device, echoes a fresh random value the agent sent, and expires after five minutes, so it can't be replayed elsewhere or later.
 4. **Never older.** The agent remembers the highest generation it has accepted and refuses anything older, even from a restored server backup.
@@ -91,7 +91,7 @@ Enrollment tokens can be limited by use count, expiry and device-name prefix. A 
 - **Sign-in attempts** are rate-limited. Repeated failures for an account pause further attempts, and the error says when to try again.
 - **Permissions** are enforced by the server on every request. Hiding a button is only a convenience.
 - **Browser protection:** a strict Content Security Policy with no inline scripts, no framing, and no requests to other sites. The dashboard, fonts, API reference and this Help center are all served by your server.
-- **Audit log:** every change records who did it, when and the result. You can export it as JSON Lines with a SHA-256 of the file.
+- **Audit log:** each change the server accepts records who made it, when and the result. You can export it as JSON Lines with a SHA-256 of the file.
 
 ## Limits to know
 
