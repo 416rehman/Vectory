@@ -1596,6 +1596,19 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "author": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "draft_changed": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -1609,6 +1622,10 @@
               "type": "null"
             }
           ]
+        },
+        "assigned_devices": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [

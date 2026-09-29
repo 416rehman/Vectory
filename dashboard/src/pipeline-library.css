@@ -1,3 +1,5 @@
+@import "./editor-tokens.css";
+
 .pipeline-library {
   max-width: 1240px;
   margin: 0 auto;
@@ -35,8 +37,13 @@
   min-width: 190px;
   max-width: 540px;
 }
-.pipeline-library-toolbar > .refresh-button {
+.pipeline-library-toolbar-tools {
+  display: flex;
+  gap: 4px;
   margin-left: auto;
+}
+.pipeline-library-toolbar-tools .is-busy svg {
+  animation: spin 0.9s linear infinite;
 }
 .pipeline-library .pipeline-library-table .pipeline-list-item {
   display: block;
@@ -389,5 +396,49 @@
     align-items: flex-start;
     padding: 14px;
     flex-wrap: wrap;
+  }
+}
+
+/* Status column: published state first, then assignment and draft changes. */
+.pipeline-library-table td:nth-child(3) {
+  white-space: nowrap;
+}
+.pipeline-status {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.pipeline-status-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-weight: 500;
+}
+.pipeline-status small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pipeline-status-chip {
+  padding: 1px 7px;
+  border: 1px solid var(--ed-warning-line);
+  border-radius: 999px;
+  color: var(--ed-warning);
+  background: var(--ed-warning-bg);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .pipeline-library-table td:first-child {
+    min-width: 150px;
+  }
+  .pipeline-library-table td:nth-child(2) {
+    min-width: 140px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-library-toolbar-tools .is-busy svg {
+    animation: none;
   }
 }
