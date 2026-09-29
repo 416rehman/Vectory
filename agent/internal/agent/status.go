@@ -235,7 +235,7 @@ func RenderStatus(v *StatusView, now time.Time) string {
 	}
 	vector := v.Settings.VectorBinary
 	if v.BinaryOK {
-		vector = VectorVersion + " at " + vector + " · adopted binary unchanged"
+		vector = v.Settings.adoptedVectorVersion() + " at " + vector + " · adopted binary unchanged"
 	} else {
 		vector += " · changed or missing since adoption"
 	}
@@ -247,8 +247,37 @@ func RenderStatus(v *StatusView, now time.Time) string {
 		pipeline += " · paused from the dashboard"
 	}
 	row("Pipeline", pipeline)
+	for _, problem := range v.problems() {
+		row("Problem", problem.Message)
+		if problem.Hint != "" {
+			row("", "Fix: "+problem.Hint)
+		}
+	}
 	row("Next", v.Next)
 	return b.String()
+}
+
+// maxProblemRows bounds the diagnostics printed by status and doctor.
+const maxProblemRows = 3
+
+// problems are the diagnostics of the last failed apply, errors first.
+func (v *StatusView) problems() []Diagnostic {
+	if v.State.Error == nil {
+		return nil
+	}
+	return problemRows(v.State.Error.Diagnostics)
+}
+
+func problemRows(diagnostics []Diagnostic) []Diagnostic {
+	var out []Diagnostic
+	for _, severity := range []string{"error", "warning"} {
+		for _, d := range diagnostics {
+			if d.Severity == severity && len(out) < maxProblemRows {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
 }
 
 // StatusJSON keeps the established machine-readable fields and adds the view.

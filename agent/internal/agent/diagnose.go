@@ -931,6 +931,33 @@ func (e *Engine) diagnoseFailure(err error, effective []byte) []Diagnostic {
 	return out
 }
 
+// policyDiagnostics explains a restricted-mode refusal: the component, the
+// resource and the allowance that would permit it. The resource comes from
+// the published pipeline, so it may be echoed unless it carries a secret.
+func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
+	var refusal *PolicyRefusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	r := e.redactorFor(effective)
+	for _, token := range []string{refusal.Resource, refusal.Suggested} {
+		if token != "" && !r.containsSecret(token) {
+			r.safe[token] = true
+		}
+	}
+	return []Diagnostic{r.finalize(refusal.Diagnostic())}
+}
+
+// containsSecret reports whether text overlaps a secret value.
+func (r *redactor) containsSecret(text string) bool {
+	for _, secret := range r.secrets {
+		if strings.Contains(text, secret) || strings.Contains(secret, text) {
+			return true
+		}
+	}
+	return false
+}
+
 // secretDiagnostics explains a failed typed secret reference by name.
 func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
 	var ref *secretReferenceError

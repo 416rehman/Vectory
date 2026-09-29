@@ -45,7 +45,7 @@ Open the device and read its issue: it names the stage and the reason.
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
 | `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. | Check disk space, ownership and permissions, and remove symlinks from the paths. |
-| `INCOMPATIBLE` | The version needs a different Vector version than the device runs. | Install Vector 0.58.0 and [approve it](agents.md#replace-the-vector-binary). |
+| `INCOMPATIBLE` | The version needs a different Vector version than the device runs. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
 | `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
 | `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, or the bytes didn't match. | Check connectivity; the agent retries on its own. |
 | `ROLLBACK_FAILED`, `ROLLBACK_UNAVAILABLE`, `RECOVERY_INVALID` | A failure left no working configuration to restore. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
@@ -166,7 +166,7 @@ The bootstrap secret only creates the first administrator; it can't sign anyone 
 | `STALE_REVISION` (409) | Someone saved a newer version first. | Load the latest, review, then save again. |
 | `ACTIVE_CANARY_OVERLAP` (409) | A running canary already covers some of these devices. | Wait for it to finish, or pause it deliberately. |
 | `FULL_VECTOR_MODE_REQUIRED` | The version needs full mode on a restricted device. | Deploy to full-mode devices, or change the pipeline. |
-| `VECTOR_VERSION_INCOMPATIBLE` | The device doesn't run Vector 0.58.0. | Install 0.58.0 on the device and approve it. |
+| `VECTOR_VERSION_INCOMPATIBLE` | The device doesn't run Vector 0.58.x. | Install a 0.58 release on the device and approve it. |
 | `DEVICE_SYNC_PAUSED` | The device's configuration sync is paused. | Resume sync before retrying. |
 | `CAPACITY_BUSY` | The agent listener is at its connection limit. | Nothing: agents retry on their own. |
 | `IDEMPOTENCY_CONFLICT` | A request ID was reused for a different request. | Start a new request. |

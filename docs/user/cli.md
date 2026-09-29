@@ -90,7 +90,7 @@ sudo vectory install \
 
 | Flag | Meaning |
 | --- | --- |
-| `--vector-binary PATH` | The installed Vector 0.58.0 binary to adopt, pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
+| `--vector-binary PATH` | The installed Vector 0.58.x binary to adopt (any 0.58 patch release), pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
 | `--managed-config PATH` | The single JSON configuration file the agent manages. Its folder becomes private. |
 | `--adopt` | Confirms the adoption. Required for a new install. |
 | `--capability-policy PATH` | Restricted-mode allowances. Replaces all three lists. |

@@ -386,7 +386,7 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		if digest, err := FileDigest(settings.VectorBinary); err != nil || digest != settings.VectorBinarySHA256 {
 			r.add("vector", "warn", "Vector", "The adopted binary at "+settings.VectorBinary+" changed or is missing.", "If you upgraded Vector on purpose, stop the agent and approve it: vectory re-adopt --expected-sha256 SHA256.")
 		} else {
-			r.add("vector", "ok", "Vector", VectorVersion+" at "+settings.VectorBinary+" · adopted", "")
+			r.add("vector", "ok", "Vector", settings.adoptedVectorVersion()+" at "+settings.VectorBinary+" · adopted", "")
 		}
 		vector.Path = settings.VectorBinary
 	case options.VectorBinary != "":
@@ -394,21 +394,21 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		if vector.Problem != "" {
 			detail := "Vector at " + vector.Path + ": " + vector.Problem + "."
 			if vector.Version != "" {
-				detail = "Found Vector " + vector.Version + " at " + vector.Path + "; this agent requires " + VectorVersion + "."
+				detail = "Found Vector " + vector.Version + " at " + vector.Path + "; this agent requires " + VectorSeries + "."
 			}
-			return r.fail("vector", "Vector", detail, "Install Vector "+VectorVersion+" (https://vector.dev/download/), or pass the right --vector-binary.")
+			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass the right --vector-binary.")
 		}
 	default:
 		found, inspected := FindVector(ctx)
 		if found == nil {
-			detail := "Vector " + VectorVersion + " isn't installed here (looked on PATH and in the usual locations)."
+			detail := "Vector " + VectorSeries + " isn't installed here (looked on PATH and in the usual locations)."
 			for _, candidate := range inspected {
 				if candidate.Version != "" {
-					detail = "Found Vector " + candidate.Version + " at " + candidate.Path + "; this agent requires " + VectorVersion + "."
+					detail = "Found Vector " + candidate.Version + " at " + candidate.Path + "; this agent requires " + VectorSeries + "."
 					break
 				}
 			}
-			return r.fail("vector", "Vector", detail, "Install Vector "+VectorVersion+" (https://vector.dev/download/), or pass --vector-binary PATH.")
+			return r.fail("vector", "Vector", detail, "Install Vector "+VectorSeries+" (https://vector.dev/download/), or pass --vector-binary PATH.")
 		}
 		vector = *found
 	}

@@ -84,9 +84,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	case report.legacy != nil && report.legacy["binary_integrity"] == false:
 		report.add("vector", "fail", "Vector", "The adopted binary at "+s.VectorBinary+" changed or is missing since adoption.", "Restore it, or stop the agent and approve the new binary: vectory re-adopt --expected-sha256 SHA256")
 	case report.legacyErr != nil && report.legacy != nil && report.legacy["vector_version"] == "":
-		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report version "+VectorVersion+".", "Install Vector "+VectorVersion+" (https://vector.dev/download/), then approve it with vectory re-adopt.")
+		report.add("vector", "fail", "Vector", "Vector at "+s.VectorBinary+" didn't report a "+VectorSeries+" version.", "Install Vector "+VectorSeries+" (https://vector.dev/download/), then approve it with vectory re-adopt.")
 	default:
-		report.add("vector", "ok", "Vector", VectorVersion+" at "+s.VectorBinary+" (adopted binary unchanged)", "")
+		report.add("vector", "ok", "Vector", s.adoptedVectorVersion()+" at "+s.VectorBinary+" (adopted binary unchanged)", "")
 	}
 
 	if err := SafePath(s.ManagedConfig); err != nil {
@@ -181,6 +181,9 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 				status = "fail"
 			}
 			report.add("apply", status, "Last apply", fmt.Sprintf("%s during %s: %s", st.Error.Code, st.Error.Stage, st.Error.Message), applyNextAction(st))
+			for _, problem := range problemRows(st.Error.Diagnostics) {
+				report.add("apply", "info", "Problem", problem.Message, problem.Hint)
+			}
 		}
 	}
 	return report, nil

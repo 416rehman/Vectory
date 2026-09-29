@@ -137,7 +137,7 @@ func printCommandHelp(w io.Writer, cmd *command, specs []flagSpec, defaults map[
 }
 
 func printGeneralHelp(w io.Writer) {
-	fmt.Fprintf(w, "Vectory agent %s keeps one Vector %s process in sync with your Vectory server.\n\n", agent.Version, agent.VectorVersion)
+	fmt.Fprintf(w, "Vectory agent %s keeps one Vector %s process in sync with your Vectory server.\n\n", agent.Version, agent.VectorSeries)
 	fmt.Fprintln(w, "Usage:  vectory <command> [flags]")
 	for _, group := range groups {
 		fmt.Fprintf(w, "\n%s\n", group)

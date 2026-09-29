@@ -110,7 +110,7 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 			return e.fail("RECOVERY_INVALID", "startup", "Last verified recovery artifact is missing or corrupted")
 		}
 		if err = e.Settings.CapabilityPolicy.Check(good); err != nil {
-			return e.fail("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy")
+			return e.failWith("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy", e.policyDiagnostics(err, good))
 		}
 		if honorPause && e.paused() {
 			return errWorkloadPaused
@@ -127,7 +127,7 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 		return err
 	}
 	if err = e.Settings.CapabilityPolicy.Check(data); err != nil {
-		return e.fail("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy")
+		return e.failWith("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy", e.policyDiagnostics(err, data))
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
 		return e.failWith("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration", e.diagnoseFailure(err, data))
@@ -188,7 +188,7 @@ func (e *Engine) Poll(ctx context.Context) error {
 	if err := e.observeProcessExit(); err != nil {
 		return err
 	}
-	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: e.Settings.adoptedVectorVersion(), ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	e.addHeartbeatFeatures(&heartbeat, running, metricsSource, metricsAddress)
 	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", heartbeat)
 	if err != nil {
@@ -253,7 +253,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	d := m.Desired
-	if d.VectorVersion != VectorVersion {
+	if !SupportedVectorVersion(d.VectorVersion) {
 		return e.failAttempt("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
 	}
 	if !e.Settings.Adopted {
@@ -315,7 +315,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttempt("CAPABILITY_DENIED", "validation", "Effective configuration violates the local capability policy")
+		return e.failAttemptWith("CAPABILITY_DENIED", "validation", "This host's restricted-mode policy doesn't allow this pipeline", e.policyDiagnostics(err, data))
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {
@@ -326,7 +326,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version", e.diagnoseFailure(err, data))
+		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Vector rejected this version on the device", e.diagnoseFailure(err, data))
 	}
 	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
@@ -650,6 +650,12 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		report(err.Error())
 	}
 	e.State.Agent = runningAgentBuild()
+	if e.Settings.VectorVersion == "" {
+		// Adopted before the version was recorded: report what the binary says.
+		if version, err := ProbeVector(ctx, e.Settings); err == nil {
+			e.Settings.VectorVersion = version
+		}
+	}
 	failures := 0
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
