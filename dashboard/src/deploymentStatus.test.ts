@@ -10,6 +10,7 @@ import {
   since,
   targetLabel,
   timelineSteps,
+  verifiedText,
 } from "./deploymentStatus";
 
 const base = {
@@ -310,6 +311,31 @@ describe("device timeline", () => {
     expect(failedApplyStep("apply")).toBeNull();
     expect(failureStagePhrase("rollback")).toBe("while restarting Vector");
     expect(failureStagePhrase("apply")).toBe("");
+  });
+});
+
+describe("device counts on rollouts", () => {
+  const counts = (
+    target_count: number,
+    verified_count: number,
+    removed = 0,
+    rolled_back_by: string | null = null,
+  ) => ({
+    target_count,
+    verified_count,
+    state_counts: (removed ? { removed } : {}) as Record<string, number>,
+    rolled_back_by,
+  });
+  it("counts only the devices a rollout still follows", () => {
+    expect(verifiedText(counts(3, 2))).toBe("2 of 3 verified");
+    expect(verifiedText(counts(4, 2, 1))).toBe("2 of 3 verified");
+  });
+  it("says so when nothing follows it, or it was rolled back", () => {
+    expect(verifiedText(counts(2, 0, 2))).toBe("No devices follow this now");
+    expect(verifiedText(counts(0, 0))).toBe("No devices");
+    expect(verifiedText(counts(3, 3, 0, "id"))).toBe(
+      "3 of 3 verified, then rolled back",
+    );
   });
 });
 

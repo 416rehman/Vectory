@@ -7,6 +7,7 @@ import {
   interval,
   isLive,
   since,
+  verifiedText,
   type StatusTone,
 } from "./deploymentStatus";
 import { StatusChip } from "./DeploymentRollout";
@@ -192,9 +193,7 @@ export default function GroupOverview({
                     <ArrowRight size={13} aria-hidden="true" />
                   </a>
                   <span className="control-muted">
-                    {d.verified_count} of{" "}
-                    {d.target_count - (d.state_counts.removed || 0)} verified ·{" "}
-                    {since(d.created_at)?.toLowerCase()}
+                    {verifiedText(d)} · {since(d.created_at)?.toLowerCase()}
                   </span>
                   <StatusChip tone={display.tone} spin={isLive(d.status)}>
                     {display.label}

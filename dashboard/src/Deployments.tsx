@@ -87,6 +87,7 @@ import {
   since,
   statusFilters,
   targetFilterStates,
+  verifiedText,
   targetLabel,
   targetTone,
 } from "./deploymentStatus";
@@ -199,13 +200,6 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
       )}
     </div>
   );
-}
-/** "2 of 3 verified", the same words as the Devices column. */
-function devicesText(d: DeploymentSummary) {
-  const current = d.target_count - (d.state_counts.removed || 0);
-  if (!current && d.target_count) return "No devices follow this now";
-  if (!current) return "No devices";
-  return `${d.verified_count} of ${current} verified${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 function Empty({
   title: heading,
@@ -504,7 +498,7 @@ export function Deployments({
                   : d.version_number !== null
                     ? `v${d.version_number}`
                     : subtitle(d),
-                devicesText(d),
+                verifiedText(d),
                 <DateCell
                   key="date"
                   value={scheduled ? d.scheduled_at : d.created_at}

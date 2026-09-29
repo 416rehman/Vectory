@@ -570,6 +570,15 @@ async function load({
         return reply({ id: "not-a-uuid" });
       return reply(result);
     }
+    // The editor checks the draft as it opens; this fixture accepts it.
+    if (method === "POST" && path === `/configurations/${pipeline.id}/validate`)
+      return reply({
+        valid: true,
+        errors: [],
+        warnings: [],
+        vector_validated: false,
+        deferred: true,
+      });
     unexpected.push(`${method} ${path}`);
     return reply(
       {
