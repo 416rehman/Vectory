@@ -200,7 +200,7 @@
   .sidebar-collapsed .sidebar-search > .kbd,
   .sidebar-collapsed .sidebar-collapse .kbd,
   .sidebar-collapsed .account-name,
-  .sidebar-collapsed .account-role,
+  .sidebar-collapsed .account-button-role,
   .sidebar-collapsed .account-button > svg {
     display: none;
   }

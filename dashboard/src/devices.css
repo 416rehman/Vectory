@@ -21,7 +21,7 @@
   white-space: nowrap;
 }
 .device-name,
-.group-name {
+.groups-name {
   align-self: flex-start;
   max-width: 100%;
   padding: 0;
@@ -36,7 +36,7 @@
   cursor: pointer;
 }
 .device-name:hover,
-.group-name:hover {
+.groups-name:hover {
   color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -171,7 +171,7 @@ a.device-version-name:hover {
   padding-bottom: 0;
   font-size: var(--text-sm);
 }
-.selection-bar {
+.devices-selection-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -183,15 +183,15 @@ a.device-version-name:hover {
   border-radius: var(--radius-lg);
   font-size: var(--text-base);
 }
-.selection-bar strong {
+.devices-selection-bar strong {
   font-weight: var(--weight-semibold);
 }
-.selection-bar-actions {
+.devices-selection-bar-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
-.selection-bar p {
+.devices-selection-bar p {
   flex-basis: 100%;
   margin: 0;
   color: var(--text-muted);
@@ -199,7 +199,7 @@ a.device-version-name:hover {
 }
 
 /* ---------- Groups ---------- */
-.group-member-count {
+.groups-member-count {
   font-weight: var(--weight-medium);
 }
 .member-health {
@@ -222,17 +222,17 @@ a.device-version-name:hover {
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
 }
-.groups-table .group-manage {
+.groups-table .groups-manage {
   text-align: right;
 }
-.group-devices-link {
+.groups-devices-link {
   color: var(--accent-text);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   text-decoration: none;
   white-space: nowrap;
 }
-.group-devices-link:hover {
+.groups-devices-link:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -353,7 +353,7 @@ a.device-version-name:hover {
   gap: var(--space-3);
   min-height: 140px;
 }
-.running-lines {
+.device-running-lines {
   display: grid;
   gap: var(--space-2);
   margin: 0;
@@ -362,56 +362,56 @@ a.device-version-name:hover {
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
 }
-.running-lines > div {
+.device-running-lines > div {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: var(--space-3);
   align-items: baseline;
 }
-.running-lines dt {
+.device-running-lines dt {
   color: var(--text-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
 }
-.running-lines dd {
+.device-running-lines dd {
   margin: 0;
   min-width: 0;
   font-size: var(--text-base);
   line-height: var(--leading-base);
 }
-.running-value {
+.device-running-value {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1-5);
 }
-.running-value a {
+.device-running-value a {
   color: var(--text);
   font-weight: var(--weight-semibold);
   text-decoration: none;
 }
-.running-value a:hover {
+.device-running-value a:hover {
   color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.running-value > svg {
+.device-running-value > svg {
   flex-shrink: 0;
   color: var(--text-subtle);
 }
-.running-value[data-tone="success"] > svg {
+.device-running-value[data-tone="success"] > svg {
   color: var(--success-text);
 }
-.running-value[data-tone="info"] > svg {
+.device-running-value[data-tone="info"] > svg {
   color: var(--info-text);
 }
-.running-value[data-tone="warning"] > svg {
+.device-running-value[data-tone="warning"] > svg {
   color: var(--warning-text);
 }
-.running-value[data-tone="danger"] > svg {
+.device-running-value[data-tone="danger"] > svg {
   color: var(--danger-text);
 }
-.running-version {
+.device-running-version {
   padding: 0 var(--space-1-5);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -421,7 +421,7 @@ a.device-version-name:hover {
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
-.running-note {
+.device-running-note {
   margin: var(--space-2) 0 0;
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -442,25 +442,25 @@ a.device-version-name:hover {
 .device-pipeline .control-section-space {
   margin-top: var(--space-3);
 }
-.failure-details {
+.device-failure-details {
   margin-top: var(--space-3);
   padding: var(--space-3);
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-md);
   background: var(--danger-bg);
 }
-.failure-details-head {
+.device-failure-details-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   color: var(--danger-text);
 }
-.failure-details-head strong {
+.device-failure-details-head strong {
   color: var(--text);
   font-size: var(--text-base);
 }
-.failure-details-head code {
+.device-failure-details-head code {
   padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -468,7 +468,7 @@ a.device-version-name:hover {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
 }
-.failure-details-message {
+.device-failure-details-message {
   margin: var(--space-2) 0;
   padding: var(--space-2) var(--space-3);
   max-height: 160px;
@@ -482,29 +482,29 @@ a.device-version-name:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.failure-details a {
+.device-failure-details a {
   color: var(--accent-text);
   font-size: var(--text-sm);
 }
 
 /* Apply progress: a six-step track with one marker per stage. */
-.apply-progress {
+.device-apply-progress {
   margin-top: var(--space-4);
 }
-.apply-progress-title {
+.device-apply-progress-title {
   margin: 0 0 var(--space-2);
   color: var(--text-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
 }
-.apply-progress ol {
+.device-apply-progress ol {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.apply-progress li {
+.device-apply-progress li {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -513,7 +513,7 @@ a.device-version-name:hover {
   min-width: 0;
   padding-right: var(--space-2);
 }
-.apply-progress li::before {
+.device-apply-progress li::before {
   content: "";
   position: absolute;
   top: 9px;
@@ -523,13 +523,13 @@ a.device-version-name:hover {
   border-radius: 2px;
   background: var(--border);
 }
-.apply-progress li:last-child::before {
+.device-apply-progress li:last-child::before {
   display: none;
 }
-.apply-progress li[data-state="done"]::before {
+.device-apply-progress li[data-state="done"]::before {
   background: var(--mark-success);
 }
-.apply-step-marker {
+.device-apply-step-marker {
   position: relative;
   z-index: 1;
   display: inline-grid;
@@ -541,39 +541,39 @@ a.device-version-name:hover {
   background: var(--surface);
   color: var(--text-subtle);
 }
-.apply-progress li[data-state="done"] .apply-step-marker {
+.device-apply-progress li[data-state="done"] .device-apply-step-marker {
   border-color: var(--mark-success);
   background: var(--mark-success);
   color: var(--surface);
 }
-.apply-progress li[data-state="current"] .apply-step-marker {
+.device-apply-progress li[data-state="current"] .device-apply-step-marker {
   border-color: var(--mark-info);
   color: var(--info-text);
 }
-.apply-progress li[data-state="failed"] .apply-step-marker {
+.device-apply-progress li[data-state="failed"] .device-apply-step-marker {
   border-color: var(--mark-danger);
   background: var(--mark-danger);
   color: var(--surface);
 }
-.apply-progress li[data-state="unknown"] .apply-step-marker {
+.device-apply-progress li[data-state="unknown"] .device-apply-step-marker {
   border-color: var(--mark-warning);
   color: var(--warning-text);
 }
-.apply-progress li[data-state="paused"] .apply-step-marker {
+.device-apply-progress li[data-state="paused"] .device-apply-step-marker {
   border-color: var(--mark-paused);
   color: var(--text-muted);
 }
-.apply-step-label {
+.device-apply-step-label {
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: var(--leading-xs);
 }
-.apply-progress li[data-state="done"] .apply-step-label {
+.device-apply-progress li[data-state="done"] .device-apply-step-label {
   color: var(--text);
 }
-.apply-progress li[data-state="current"] .apply-step-label,
-.apply-progress li[data-state="failed"] .apply-step-label,
-.apply-progress li[data-state="unknown"] .apply-step-label {
+.device-apply-progress li[data-state="current"] .device-apply-step-label,
+.device-apply-progress li[data-state="failed"] .device-apply-step-label,
+.device-apply-progress li[data-state="unknown"] .device-apply-step-label {
   color: var(--text);
   font-weight: var(--weight-semibold);
 }
@@ -676,7 +676,7 @@ a.device-version-name:hover {
 }
 .device-issues ul,
 .device-activity-list,
-.vector-logs {
+.device-vector-logs {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -750,7 +750,7 @@ a.device-activity-time:hover {
   display: grid;
   gap: var(--space-2);
 }
-.vector-logs li {
+.device-vector-logs li {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: var(--space-2);
@@ -758,17 +758,17 @@ a.device-activity-time:hover {
   border-top: 1px solid var(--border);
   color: var(--danger-text);
 }
-.vector-logs li:first-child {
+.device-vector-logs li:first-child {
   border-top: 0;
 }
-.vector-logs li[data-level="warn"],
-.vector-logs li[data-level="warning"] {
+.device-vector-logs li[data-level="warn"],
+.device-vector-logs li[data-level="warning"] {
   color: var(--warning-text);
 }
-.vector-logs li > svg {
+.device-vector-logs li > svg {
   margin-top: 3px;
 }
-.vector-logs p {
+.device-vector-logs p {
   margin: 0;
   color: var(--text);
   font-family: var(--font-mono);
@@ -776,7 +776,7 @@ a.device-activity-time:hover {
   line-height: var(--leading-sm);
   overflow-wrap: anywhere;
 }
-.vector-logs small {
+.device-vector-logs small {
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
@@ -799,15 +799,15 @@ a.device-activity-time:hover {
   .device-card {
     padding: var(--space-4);
   }
-  .running-lines > div {
+  .device-running-lines > div {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-0-5);
   }
-  .apply-progress ol {
+  .device-apply-progress ol {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     row-gap: var(--space-3);
   }
-  .apply-progress li:nth-child(3)::before {
+  .device-apply-progress li:nth-child(3)::before {
     display: none;
   }
 }

@@ -206,7 +206,7 @@ export function Groups({
         <span className="device-name-cell">
           <button
             type="button"
-            className="group-name"
+            className="groups-name"
             onClick={() => edit(group)}
           >
             {group.name}
@@ -245,7 +245,7 @@ export function Groups({
           .filter(Boolean) as string[];
         return (
           <span className="device-stack">
-            <span className="group-member-count">
+            <span className="groups-member-count">
               {countLabel(group.device_ids.length, "device")}
             </span>
             {names.length > 0 && (
@@ -271,10 +271,10 @@ export function Groups({
       header: <span className="sr-only">Manage group</span>,
       label: "Manage group",
       width: 128,
-      className: "group-manage",
+      className: "groups-manage",
       cell: (group) => (
         <a
-          className="group-devices-link"
+          className="groups-devices-link"
           href={`#/devices?group=${encodeURIComponent(group.id)}`}
         >
           View devices
@@ -405,7 +405,7 @@ export function Groups({
                 title: (
                   <button
                     type="button"
-                    className="group-name"
+                    className="groups-name"
                     onClick={() => edit(group)}
                   >
                     {group.name}

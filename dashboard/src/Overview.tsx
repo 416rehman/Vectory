@@ -337,7 +337,10 @@ function OverviewSkeleton() {
     >
       <div className="overview-kpis" aria-hidden="true">
         {[0, 1, 2, 3].map((index) => (
-          <div key={index} className="kpi-tile kpi-tile-skeleton">
+          <div
+            key={index}
+            className="overview-kpi-tile overview-kpi-tile-skeleton"
+          >
             <Skeleton width={96} height={12} />
             <Skeleton width={72} height={26} />
             <Skeleton width="70%" height={12} />
@@ -521,10 +524,10 @@ function Checklist({
   }
   return (
     <section
-      className="overview-card checklist"
+      className="overview-card overview-checklist"
       aria-labelledby="overview-checklist-title"
     >
-      <div className="checklist-head">
+      <div className="overview-checklist-head">
         <div>
           <h2 id="overview-checklist-title">Set up your fleet</h2>
           <p>
@@ -533,7 +536,7 @@ function Checklist({
           </p>
         </div>
         <div
-          className="checklist-progress"
+          className="overview-checklist-progress"
           role="progressbar"
           aria-label="Setup progress"
           aria-valuemin={0}
@@ -544,7 +547,7 @@ function Checklist({
           <span style={{ width: `${(done / steps.length) * 100}%` }} />
         </div>
       </div>
-      <ol className="checklist-steps">
+      <ol className="overview-checklist-steps">
         {steps.map((step, index) => {
           const state = step.done
             ? "done"
@@ -554,23 +557,23 @@ function Checklist({
           const next = !step.done && action(step.id);
           return (
             <li key={step.id} data-state={state}>
-              <span className="checklist-marker" aria-hidden="true">
+              <span className="overview-checklist-marker" aria-hidden="true">
                 {step.done ? <Check size={13} strokeWidth={2.6} /> : index + 1}
               </span>
-              <div className="checklist-copy">
+              <div className="overview-checklist-copy">
                 <strong>
                   {stepTitles[step.id]}
                   <span className="sr-only">{step.done ? " (done)" : ""}</span>
                 </strong>
                 <p>{copy[step.id][step.done ? 0 : 1]}</p>
               </div>
-              {next && <div className="checklist-action">{next}</div>}
+              {next && <div className="overview-checklist-action">{next}</div>}
             </li>
           );
         })}
       </ol>
       {!can(user, "operate") && !can(user, "edit") && (
-        <p className="checklist-note">
+        <p className="overview-checklist-note">
           Viewers can follow progress here. An operator or editor completes
           these steps.
         </p>
@@ -609,16 +612,22 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
   const issues = data.issues_open;
   return (
     <div className="overview-kpis">
-      <a className="kpi-tile" href="#/devices">
-        <span className="kpi-label">
+      <a className="overview-kpi-tile" href="#/devices">
+        <span className="overview-kpi-label">
           <Server size={14} aria-hidden="true" />
           Devices online
         </span>
-        <span className="kpi-value">
+        <span className="overview-kpi-value">
           {online.toLocaleString()}
-          <span className="kpi-total"> / {total.toLocaleString()}</span>
+          <span className="overview-kpi-total">
+            {" "}
+            / {total.toLocaleString()}
+          </span>
         </span>
-        <span className="kpi-note" data-tone={offline ? "warning" : undefined}>
+        <span
+          className="overview-kpi-note"
+          data-tone={offline ? "warning" : undefined}
+        >
           {total === 0
             ? "No devices enrolled yet"
             : offline || never
@@ -632,18 +641,21 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
         </span>
       </a>
       <a
-        className="kpi-tile"
+        className="overview-kpi-tile"
         href={onDesired < managed ? "#/devices?view=drift" : "#/devices"}
       >
-        <span className="kpi-label">
+        <span className="overview-kpi-label">
           <CircleCheck size={14} aria-hidden="true" />
           On desired version
         </span>
-        <span className="kpi-value">
+        <span className="overview-kpi-value">
           {onDesired.toLocaleString()}
-          <span className="kpi-total"> / {managed.toLocaleString()}</span>
+          <span className="overview-kpi-total">
+            {" "}
+            / {managed.toLocaleString()}
+          </span>
         </span>
-        <span className="kpi-note">
+        <span className="overview-kpi-note">
           {managed === 0
             ? "No device has a pipeline yet"
             : onDesired === managed
@@ -654,13 +666,13 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
             : ""}
         </span>
       </a>
-      <a className="kpi-tile" href="#/deployments">
-        <span className="kpi-label">
+      <a className="overview-kpi-tile" href="#/deployments">
+        <span className="overview-kpi-label">
           <Rocket size={14} aria-hidden="true" />
           Rollouts in progress
         </span>
-        <span className="kpi-value">{active.toLocaleString()}</span>
-        <span className="kpi-note">
+        <span className="overview-kpi-value">{active.toLocaleString()}</span>
+        <span className="overview-kpi-note">
           {[
             paused && `${paused} paused`,
             scheduled && `${scheduled} scheduled in the next 24h`,
@@ -670,15 +682,18 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
             (active ? "Releasing to devices" : "None right now")}
         </span>
       </a>
-      <a className="kpi-tile" href="#/issues">
-        <span className="kpi-label">
+      <a className="overview-kpi-tile" href="#/issues">
+        <span className="overview-kpi-label">
           <CircleAlert size={14} aria-hidden="true" />
           Open issues
         </span>
-        <span className="kpi-value" data-tone={issues ? "danger" : undefined}>
+        <span
+          className="overview-kpi-value"
+          data-tone={issues ? "danger" : undefined}
+        >
           {issues.toLocaleString()}
         </span>
-        <span className="kpi-note">
+        <span className="overview-kpi-note">
           {issues ? "Reported by devices. Review them" : "No open reports"}
         </span>
       </a>
@@ -727,7 +742,7 @@ function FleetHealth({ live }: { live: Device[] }) {
       {total ? (
         <>
           <div
-            className="health-bar"
+            className="overview-health-bar"
             role="img"
             aria-label={`${countLabel(total, "device")}: ${summary}`}
           >
@@ -744,7 +759,7 @@ function FleetHealth({ live }: { live: Device[] }) {
               </Tooltip>
             ))}
           </div>
-          <ul className="health-legend" aria-label="Devices by state">
+          <ul className="overview-health-legend" aria-label="Devices by state">
             {healthOrder.map((bucket) => {
               const Icon = bucketIcons[bucket];
               const value = counts[bucket];
@@ -892,7 +907,7 @@ function NeedsYou({
       }
     >
       {groups.length ? (
-        <ul className="attention-list">
+        <ul className="overview-attention-list">
           {groups.map((group) => {
             const Icon = severityIcons[group.cause];
             const { title, detail } = attentionCopy(group, now)!;
@@ -903,25 +918,30 @@ function NeedsYou({
             return (
               <li
                 key={`${group.cause}:${group.state}:${group.version_id}`}
-                className="attention-item"
+                className="overview-attention-item"
                 data-severity={group.severity}
               >
-                <span className="attention-icon" aria-hidden="true">
+                <span className="overview-attention-icon" aria-hidden="true">
                   <Icon size={16} />
                 </span>
-                <div className="attention-copy">
-                  <p className="attention-title">{title}</p>
+                <div className="overview-attention-copy">
+                  <p className="overview-attention-title">{title}</p>
                   {group.reason && (
-                    <p className="attention-reason" title={group.reason}>
+                    <p
+                      className="overview-attention-reason"
+                      title={group.reason}
+                    >
                       {group.reason}
                     </p>
                   )}
-                  {detail && <p className="attention-detail">{detail}</p>}
-                  <p className="attention-devices">
+                  {detail && (
+                    <p className="overview-attention-detail">{detail}</p>
+                  )}
+                  <p className="overview-attention-devices">
                     {nameList(group.device_names, group.count)}
                   </p>
                 </div>
-                <div className="attention-actions">
+                <div className="overview-attention-actions">
                   {group.cause === "unmanaged" && can(user, "operate") ? (
                     <a
                       className="button secondary compact"
@@ -998,7 +1018,7 @@ export function RolloutBar({ progress }: { progress: RolloutProgress }) {
     .join(", ");
   return (
     <div
-      className="rollout-bar"
+      className="overview-rollout-bar"
       role="img"
       aria-label={
         progress.total
@@ -1012,7 +1032,7 @@ export function RolloutBar({ progress }: { progress: RolloutProgress }) {
           content={`${part.label} · ${countLabel(progress[part.key], "device")}`}
         >
           <span
-            className="rollout-bar-segment"
+            className="overview-rollout-bar-segment"
             data-part={part.key}
             style={{ flexGrow: progress[part.key] }}
           />
@@ -1050,7 +1070,7 @@ function Rollouts({
       action={<CardLink href="#/deployments">All deployments</CardLink>}
     >
       {list.length ? (
-        <ul className="rollout-list">
+        <ul className="overview-rollout-list">
           {list.map((rollout) => {
             const progress = rolloutProgress(rollout.state_counts);
             const starts = rollout.scheduled_at
@@ -1059,20 +1079,20 @@ function Rollouts({
             return (
               <li key={rollout.id}>
                 <a
-                  className="rollout-item"
+                  className="overview-rollout-item"
                   href={`#/deployments/${encodeURIComponent(rollout.id)}`}
                 >
-                  <span className="rollout-top">
-                    <span className="rollout-name">
+                  <span className="overview-rollout-top">
+                    <span className="overview-rollout-name">
                       {rolloutName(rollout)}
                       {rollout.rollout_kind === "canary" && (
-                        <span className="rollout-kind">Canary</span>
+                        <span className="overview-rollout-kind">Canary</span>
                       )}
                     </span>
                     <StatusBadge domain="deployment" value={rollout.status} />
                   </span>
                   {rollout.status === "scheduled" ? (
-                    <span className="rollout-meta">
+                    <span className="overview-rollout-meta">
                       {Number.isFinite(starts)
                         ? starts > now
                           ? `Starts in ${duration(starts - now)}`
@@ -1091,7 +1111,7 @@ function Rollouts({
                   ) : (
                     <>
                       <RolloutBar progress={progress} />
-                      <span className="rollout-meta">
+                      <span className="overview-rollout-meta">
                         {progress.total
                           ? `${progress.verified.toLocaleString()} of ${countLabel(progress.total, "device")} applied`
                           : "No devices targeted yet"}
@@ -1182,11 +1202,11 @@ function FleetThroughput({
         />
       ) : (
         <>
-          <dl className="throughput-stats">
+          <dl className="overview-throughput-stats">
             <div>
               <dt>
                 <span
-                  className="series-key"
+                  className="overview-series-key"
                   data-series="1"
                   aria-hidden="true"
                 />
@@ -1195,7 +1215,7 @@ function FleetThroughput({
               <dd data-missing={eventsIn === null ? "" : undefined}>
                 {eventsIn === null ? "Not reported" : formatRate(eventsIn)}
                 {eventsIn !== null && (
-                  <span className="throughput-unit">/s</span>
+                  <span className="overview-throughput-unit">/s</span>
                 )}
               </dd>
             </div>
@@ -1203,7 +1223,7 @@ function FleetThroughput({
               <div>
                 <dt>
                   <span
-                    className="series-key"
+                    className="overview-series-key"
                     data-series="2"
                     aria-hidden="true"
                   />
@@ -1211,7 +1231,7 @@ function FleetThroughput({
                 </dt>
                 <dd>
                   {formatRate(eventsOut)}
-                  <span className="throughput-unit">/s</span>
+                  <span className="overview-throughput-unit">/s</span>
                 </dd>
               </div>
             )}
@@ -1232,12 +1252,15 @@ function FleetThroughput({
                 {errorsPerMinute !== null ? (
                   <>
                     {formatRate(errorsPerMinute)}
-                    <span className="throughput-unit">/min</span>
+                    <span className="overview-throughput-unit">/min</span>
                   </>
                 ) : local.errors !== null ? (
                   <>
                     {local.errors.toLocaleString()}
-                    <span className="throughput-unit"> since start</span>
+                    <span className="overview-throughput-unit">
+                      {" "}
+                      since start
+                    </span>
                   </>
                 ) : (
                   "Not reported"
@@ -1278,11 +1301,11 @@ function MetricsHowTo({
       `${countLabel(withoutEndpoint, "agent")} ${withoutEndpoint === 1 ? "has" : "have"} no metrics endpoint configured.`,
   ].filter(Boolean) as string[];
   return (
-    <div className="throughput-howto">
-      <span className="throughput-howto-icon" aria-hidden="true">
+    <div className="overview-throughput-howto">
+      <span className="overview-throughput-howto-icon" aria-hidden="true">
         <ChartNoAxesCombined size={18} />
       </span>
-      <div className="throughput-howto-copy">
+      <div className="overview-throughput-howto-copy">
         <h3>No device is reporting metrics</h3>
         <p>
           {reasons.length
@@ -1333,17 +1356,27 @@ function BusiestDevices({
   const width = (value: number) =>
     `${max ? Math.max(2, (value / max) * 100) : 0}%`;
   return (
-    <div className="busiest" data-series={withOut ? "2" : "1"}>
-      <div className="busiest-head">
-        <p className="busiest-title">Busiest devices · events per second</p>
+    <div className="overview-busiest" data-series={withOut ? "2" : "1"}>
+      <div className="overview-busiest-head">
+        <p className="overview-busiest-title">
+          Busiest devices · events per second
+        </p>
         {withOut && (
-          <ul className="chart-legend" aria-label="Series">
+          <ul className="overview-chart-legend" aria-label="Series">
             <li>
-              <span className="series-key" data-series="1" aria-hidden="true" />
+              <span
+                className="overview-series-key"
+                data-series="1"
+                aria-hidden="true"
+              />
               In
             </li>
             <li>
-              <span className="series-key" data-series="2" aria-hidden="true" />
+              <span
+                className="overview-series-key"
+                data-series="2"
+                aria-hidden="true"
+              />
               Out
             </li>
           </ul>
@@ -1366,25 +1399,25 @@ function BusiestDevices({
                     : ""
                 }`}
               >
-                <span className="busiest-track" aria-hidden="true">
+                <span className="overview-busiest-track" aria-hidden="true">
                   <span
-                    className="busiest-bar"
+                    className="overview-busiest-bar"
                     data-series="1"
                     style={{ width: width(item.eventsPerSecond) }}
                   />
                   {withOut && (
                     <span
-                      className="busiest-bar"
+                      className="overview-busiest-bar"
                       data-series="2"
                       style={{ width: width(item.eventsOutPerSecond ?? 0) }}
                     />
                   )}
                 </span>
               </Tooltip>
-              <span className="busiest-value">
+              <span className="overview-busiest-value">
                 {formatRate(item.eventsPerSecond)}
                 {withOut && (
-                  <span className="busiest-out">
+                  <span className="overview-busiest-out">
                     {item.eventsOutPerSecond === null
                       ? " / —"
                       : ` / ${formatRate(item.eventsOutPerSecond)}`}
@@ -1453,13 +1486,24 @@ function FleetChart({
   return (
     <div className="fleet-chart">
       {showOut && (
-        <ul className="chart-legend fleet-chart-legend" aria-label="Series">
+        <ul
+          className="overview-chart-legend fleet-chart-legend"
+          aria-label="Series"
+        >
           <li>
-            <span className="series-key" data-series="1" aria-hidden="true" />
+            <span
+              className="overview-series-key"
+              data-series="1"
+              aria-hidden="true"
+            />
             Events in
           </li>
           <li>
-            <span className="series-key" data-series="2" aria-hidden="true" />
+            <span
+              className="overview-series-key"
+              data-series="2"
+              aria-hidden="true"
+            />
             Events out
           </li>
         </ul>
@@ -1558,12 +1602,12 @@ function FleetChart({
               >
                 <strong>{shortLocal(point.at)}</strong>
                 <span>
-                  <span className="series-key" data-series="1" />
+                  <span className="overview-series-key" data-series="1" />
                   In {point.in === null ? "—" : `${formatRate(point.in)}/s`}
                 </span>
                 {showOut && (
                   <span>
-                    <span className="series-key" data-series="2" />
+                    <span className="overview-series-key" data-series="2" />
                     Out{" "}
                     {point.out === null ? "—" : `${formatRate(point.out)}/s`}
                   </span>
@@ -1610,28 +1654,34 @@ function RecentChanges({ data }: { data: OverviewData }) {
       className="recent-changes"
     >
       {items.length ? (
-        <ol className="activity-list">
+        <ol className="overview-activity-list">
           {items.map((item) => {
             const parts = describeActivity(item);
             const tone = activityTone(item);
             return (
-              <li key={item.id} className="activity-item" data-tone={tone}>
+              <li
+                key={item.id}
+                className="overview-activity-item"
+                data-tone={tone}
+              >
                 <ActivityGlyph item={item} />
-                <p className="activity-text">
+                <p className="overview-activity-text">
                   {parts.map((part, index) => (
                     <PartText key={index} part={part} />
                   ))}
                 </p>
                 {item.created_at ? (
                   <a
-                    className="activity-time"
+                    className="overview-activity-time"
                     href={`#/audit/${encodeURIComponent(item.id)}?page=1`}
                     title={`${exactLocal(item.created_at)} · Open in the audit log`}
                   >
                     <TimeAgo value={item.created_at} />
                   </a>
                 ) : (
-                  <span className="activity-time">Time unavailable</span>
+                  <span className="overview-activity-time">
+                    Time unavailable
+                  </span>
                 )}
               </li>
             );
@@ -1642,7 +1692,7 @@ function RecentChanges({ data }: { data: OverviewData }) {
           Pipeline changes, deployments and device results will appear here.
         </p>
       )}
-      <div className="activity-footer">
+      <div className="overview-activity-footer">
         <a className="overview-inline-link" href="#/audit?scope=security">
           <ShieldCheck size={14} aria-hidden="true" />
           Security activity

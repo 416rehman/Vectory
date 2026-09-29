@@ -418,20 +418,27 @@ try {
     "KPI tiles and the health strip count live devices honestly and link to filtered lists",
     async () => {
       const { context, page } = await open();
-      const tiles = page.locator(".kpi-tile");
+      const tiles = page.locator(".overview-kpi-tile");
       await expect(tiles).toHaveCount(4);
       // Six live devices; the revoked identity is left out everywhere.
       await expect(tiles.nth(0)).toContainText("Devices online");
-      await expect(tiles.nth(0).locator(".kpi-value")).toHaveText("5 / 6");
+      await expect(tiles.nth(0).locator(".overview-kpi-value")).toHaveText(
+        "5 / 6",
+      );
       await expect(tiles.nth(0)).toContainText("1 offline");
-      await expect(tiles.nth(1).locator(".kpi-value")).toHaveText("3 / 5");
+      await expect(tiles.nth(1).locator(".overview-kpi-value")).toHaveText(
+        "3 / 5",
+      );
       await expect(tiles.nth(1)).toContainText("2 not yet verified");
       await expect(tiles.nth(1)).toContainText("1 without a pipeline");
-      await expect(tiles.nth(1)).toHaveAttribute("href", "#/devices?view=drift");
-      await expect(tiles.nth(2).locator(".kpi-value")).toHaveText("1");
+      await expect(tiles.nth(1)).toHaveAttribute(
+        "href",
+        "#/devices?view=drift",
+      );
+      await expect(tiles.nth(2).locator(".overview-kpi-value")).toHaveText("1");
       await expect(tiles.nth(2)).toContainText("1 scheduled in the next 24h");
-      await expect(tiles.nth(3).locator(".kpi-value")).toHaveText("2");
-      await expect(tiles.nth(3).locator(".kpi-value")).toHaveAttribute(
+      await expect(tiles.nth(3).locator(".overview-kpi-value")).toHaveText("2");
+      await expect(tiles.nth(3).locator(".overview-kpi-value")).toHaveAttribute(
         "data-tone",
         "danger",
       );
@@ -442,7 +449,7 @@ try {
       await expect(
         legend.getByRole("link", { name: /Failed\s*1/ }),
       ).toHaveAttribute("href", "#/devices?status=failed");
-      await expect(page.locator(".health-bar")).toHaveAttribute(
+      await expect(page.locator(".overview-health-bar")).toHaveAttribute(
         "aria-label",
         /6 devices: 3 applied, 1 failed, 1 offline, 1 no pipeline/,
       );
@@ -453,12 +460,12 @@ try {
     "Needs you groups problems by cause with the reported reason and typed next steps",
     async () => {
       const { context, page } = await open();
-      const items = page.locator(".attention-item");
+      const items = page.locator(".overview-attention-item");
       await expect(items).toHaveCount(3);
       await expect(items.nth(0)).toContainText("Orders v3 failed on 1 device");
-      await expect(items.nth(0).locator(".attention-reason")).toHaveText(
-        'data_dir "/var/lib/vector/" does not exist',
-      );
+      await expect(
+        items.nth(0).locator(".overview-attention-reason"),
+      ).toHaveText('data_dir "/var/lib/vector/" does not exist');
       await expect(
         items.nth(0).getByRole("link", { name: "Review devices" }),
       ).toHaveAttribute("href", `#/devices?status=failed&version=${version}`);
@@ -466,7 +473,9 @@ try {
         items.nth(0).getByRole("link", { name: "Open pipeline" }),
       ).toHaveAttribute("href", `#/configurations/${pipeline}`);
       await expect(items.nth(1)).toContainText("1 device offline");
-      await expect(items.nth(1)).toContainText("Longest without a check-in: 2h");
+      await expect(items.nth(1)).toContainText(
+        "Longest without a check-in: 2h",
+      );
       await expect(
         items.nth(2).getByRole("link", { name: "Deploy a pipeline" }),
       ).toHaveAttribute("href", "#/configurations");
@@ -477,7 +486,7 @@ try {
     "Rollouts show stacked progress, scheduled starts and deployment links",
     async () => {
       const { context, page } = await open();
-      const rollouts = page.locator(".rollout-item");
+      const rollouts = page.locator(".overview-rollout-item");
       await expect(rollouts).toHaveCount(2);
       await expect(rollouts.nth(0)).toHaveAttribute(
         "href",
@@ -485,17 +494,19 @@ try {
       );
       await expect(rollouts.nth(0)).toContainText("Orders v3");
       await expect(rollouts.nth(0)).toContainText("Canary");
-      await expect(rollouts.nth(0).locator(".rollout-meta")).toHaveText(
-        "3 of 7 devices applied · 1 failed",
-      );
-      await expect(rollouts.nth(0).locator(".rollout-bar")).toHaveAttribute(
+      await expect(
+        rollouts.nth(0).locator(".overview-rollout-meta"),
+      ).toHaveText("3 of 7 devices applied · 1 failed");
+      await expect(
+        rollouts.nth(0).locator(".overview-rollout-bar"),
+      ).toHaveAttribute(
         "aria-label",
         "7 devices: 3 applied, 1 applying, 1 failed, 2 waiting",
       );
       await expect(rollouts.nth(1)).toContainText("Agent settings");
-      await expect(rollouts.nth(1).locator(".rollout-meta")).toContainText(
-        /Starts in (2h 5\dm|3h)/,
-      );
+      await expect(
+        rollouts.nth(1).locator(".overview-rollout-meta"),
+      ).toContainText(/Starts in (2h 5\dm|3h)/);
       await context.close();
     },
   );
@@ -503,7 +514,7 @@ try {
     "Recent changes read as sentences, link only typed identities and keep sign-ins out",
     async () => {
       const { context, page } = await open();
-      const rows = page.locator(".activity-item");
+      const rows = page.locator(".overview-activity-item");
       await expect(rows).toHaveCount(6);
       await expect(rows.nth(0)).toContainText(
         "edge-fra-01, edge-nyc-01 and 1 more applied their pipeline",
@@ -529,26 +540,36 @@ try {
         rows.nth(3).getByRole("link", { name: "Orders v3" }),
       ).toHaveAttribute("href", `#/configurations/${pipeline}`);
       // Deleted and malformed identities stay plain text.
-      await expect(rows.nth(4).locator(".activity-text a")).toHaveCount(0);
-      await expect(rows.nth(5).locator(".activity-text a")).toHaveCount(0);
+      await expect(
+        rows.nth(4).locator(".overview-activity-text a"),
+      ).toHaveCount(0);
+      await expect(
+        rows.nth(5).locator(".overview-activity-text a"),
+      ).toHaveCount(0);
       await expect(page.locator('a[href^="javascript:"]')).toHaveCount(0);
       await expect(
-        rows.nth(0).locator("a.activity-time"),
+        rows.nth(0).locator("a.overview-activity-time"),
       ).toHaveAttribute("href", `#/audit/${uuid(101)}?page=1`);
       await expect(page.locator(".recent-changes")).not.toContainText(
         "Signed in",
       );
       const security = page.getByRole("link", { name: "Security activity" });
       await expect(security).toHaveAttribute("href", "#/audit?scope=security");
-      await expect(page.locator(".activity-footer")).toContainText("4 recent");
+      await expect(page.locator(".overview-activity-footer")).toContainText(
+        "4 recent",
+      );
       // Entity links are quiet until hover or focus.
       const link = rows.nth(2).getByRole("link", { name: "Orders v3" });
       expect(
-        await link.evaluate((node) => getComputedStyle(node).textDecorationLine),
+        await link.evaluate(
+          (node) => getComputedStyle(node).textDecorationLine,
+        ),
       ).toBe("none");
       await link.hover();
       expect(
-        await link.evaluate((node) => getComputedStyle(node).textDecorationLine),
+        await link.evaluate(
+          (node) => getComputedStyle(node).textDecorationLine,
+        ),
       ).toBe("underline");
       await context.close();
     },
@@ -560,17 +581,17 @@ try {
       const card = page.locator(".throughput");
       await expect(card).toContainText("2 of 6 devices reporting");
       // Only fresh samples count: 120.5 + 80, not the stale 999.
-      await expect(card.locator(".throughput-stats dd").first()).toHaveText(
-        "201/s",
-      );
-      await expect(card.locator(".throughput-stats")).toContainText(
+      await expect(
+        card.locator(".overview-throughput-stats dd").first(),
+      ).toHaveText("201/s");
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
         "Not reported",
       );
-      await expect(card.locator(".busiest li")).toHaveCount(2);
-      await expect(card.locator(".busiest li").first()).toContainText(
+      await expect(card.locator(".overview-busiest li")).toHaveCount(2);
+      await expect(card.locator(".overview-busiest li").first()).toContainText(
         "edge-fra-01",
       );
-      await expect(card.locator(".chart-legend")).toHaveCount(0);
+      await expect(card.locator(".overview-chart-legend")).toHaveCount(0);
       await context.close();
       const silent = devices.map(({ telemetry, ...rest }) => rest);
       silent[1].effective_policy = {
@@ -580,7 +601,7 @@ try {
       ({ context, page } = await open({
         overview: overview({ devices: silent }),
       }));
-      const howTo = page.locator(".throughput-howto");
+      const howTo = page.locator(".overview-throughput-howto");
       await expect(howTo).toContainText("No device is reporting metrics");
       await expect(howTo).toContainText(
         "1 device has metrics turned off in Agent settings.",
@@ -589,7 +610,7 @@ try {
       await expect(
         howTo.getByRole("link", { name: /Enable metrics step by step/ }),
       ).toHaveAttribute("href", "/help/telemetry/#enable-real-metrics");
-      await expect(page.locator(".throughput-stats")).toHaveCount(0);
+      await expect(page.locator(".overview-throughput-stats")).toHaveCount(0);
       await context.close();
     },
   );
@@ -605,9 +626,15 @@ try {
       await expect(card.getByRole("list", { name: "Series" })).toContainText(
         "Events out",
       );
-      await expect(card.locator(".throughput-stats")).toContainText("201/s");
-      await expect(card.locator(".throughput-stats")).toContainText("190/s");
-      await expect(card.locator(".throughput-stats")).toContainText("1.5/min");
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "201/s",
+      );
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "190/s",
+      );
+      await expect(card.locator(".overview-throughput-stats")).toContainText(
+        "1.5/min",
+      );
       // A missing point breaks the line instead of dropping to zero.
       const out = await card
         .locator('.fleet-chart-line[data-series="2"]')
@@ -628,7 +655,7 @@ try {
     "The first-run checklist follows real state and disappears when setup is complete",
     async () => {
       let { context, page } = await open({ overview: empty(), releases: [] });
-      const list = page.locator(".checklist");
+      const list = page.locator(".overview-checklist");
       await expect(list).toContainText("0 of 5 done");
       await expect(list.locator('li[data-state="current"]')).toContainText(
         "Make agent downloads available",
@@ -654,14 +681,16 @@ try {
           },
         ],
       }));
-      await expect(page.locator(".checklist")).toContainText("1 of 5 done");
+      await expect(page.locator(".overview-checklist")).toContainText(
+        "1 of 5 done",
+      );
       await expect(
-        page.locator('.checklist li[data-state="current"]'),
+        page.locator('.overview-checklist li[data-state="current"]'),
       ).toContainText("Connect your first device");
       await context.close();
       ({ context, page } = await open());
       await expect(page.locator(".overview-kpis")).toBeVisible();
-      await expect(page.locator(".checklist")).toHaveCount(0);
+      await expect(page.locator(".overview-checklist")).toHaveCount(0);
       await context.close();
     },
   );
@@ -670,7 +699,10 @@ try {
     async () => {
       const { context, page } = await open();
       for (const width of [1280, 390]) {
-        await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+        await page.setViewportSize({
+          width,
+          height: width === 390 ? 844 : 900,
+        });
         for (const theme of ["light", "dark"]) {
           await page.evaluate((value) => {
             document.documentElement.dataset.theme = value;

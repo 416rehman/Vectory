@@ -541,7 +541,9 @@ try {
   await check(
     "899px keeps a usable desktop rail; mobile opens complete labels independently and contains keyboard focus",
     async () => {
-      await sidebar.getByRole("link", { name: "Overview", exact: true }).click();
+      await sidebar
+        .getByRole("link", { name: "Overview", exact: true })
+        .click();
       await page.setViewportSize({ width: 899, height: 900 });
       await expect(expand()).toBeVisible();
       await noOverflow();
@@ -605,7 +607,9 @@ try {
         path: resolve(output, "sidebar-mobile-dark.png"),
         animations: "disabled",
       });
-      await sidebar.getByRole("link", { name: "Pipelines", exact: true }).click();
+      await sidebar
+        .getByRole("link", { name: "Pipelines", exact: true })
+        .click();
       await expect(sidebar).not.toBeVisible();
       await expect(
         page.getByRole("heading", { name: "Pipelines", exact: true }),
@@ -666,7 +670,9 @@ try {
       await page.keyboard.press("Escape");
       await expect(toggle).toBeFocused();
       await toggle.click();
-      await sidebar.getByRole("button", { name: "Search", exact: true }).click();
+      await sidebar
+        .getByRole("button", { name: "Search", exact: true })
+        .click();
       await expect(palette()).toBeVisible();
       await expect(sidebar).not.toBeVisible();
       await page.keyboard.press("Escape");
@@ -728,7 +734,7 @@ try {
     async () => {
       await page.setViewportSize({ width: 1440, height: 960 });
       await page.goto(origin + "/__sidebar-fixture#/overview");
-      const rows = page.locator(".activity-item");
+      const rows = page.locator(".overview-activity-item");
       await expect(rows).toHaveCount(5);
       await expect(
         rows
@@ -746,16 +752,16 @@ try {
         [3, "Malformed target"],
         [4, "Unknown target kind"],
       ]) {
-        await expect(rows.nth(index).locator(".activity-text")).toContainText(
-          name,
-        );
+        await expect(
+          rows.nth(index).locator(".overview-activity-text"),
+        ).toContainText(name);
         await expect(
           rows.nth(index).getByRole("link", { name, exact: true }),
         ).toHaveCount(0);
       }
       for (let index = 0; index < activity.length; index++)
         await expect(
-          rows.nth(index).locator("a.activity-time"),
+          rows.nth(index).locator("a.overview-activity-time"),
         ).toHaveAttribute("href", `#/audit/${activity[index].id}?page=1`);
       // People are named, not linked; device actors open their device.
       await expect(
