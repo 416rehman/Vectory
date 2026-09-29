@@ -118,6 +118,21 @@ func TestManifestVectorVersionOnlyNeedsTheSameMinorSeries(t *testing.T) {
 	}
 }
 
+// A pre-release or custom build reports a version Vector's own startup record
+// repeats, which the agent never acknowledges: setup must refuse it up front,
+// naming the version, instead of adopting it and timing out every activation.
+func TestPreReleaseBinaryIsRefusedWithItsFullVersion(t *testing.T) {
+	for _, version := range []string{"0.58.1-rc1", "0.58.0-nightly-2026-09-01", "0.58.2-custom.1"} {
+		binary := fakeVector(t, version)
+		if found := InspectVector(context.Background(), binary); found.Version != version || found.Problem == "" {
+			t.Errorf("inspect %s: %+v", version, found)
+		}
+		if got, err := ProbeVector(context.Background(), Settings{VectorBinary: binary}); err == nil {
+			t.Errorf("probe accepted %s as %q", version, got)
+		}
+	}
+}
+
 func TestPatchReleaseBinaryIsAdoptedAndReportsItsVersion(t *testing.T) {
 	binary := fakeVector(t, "0.58.2")
 	if found := InspectVector(context.Background(), binary); found.Problem != "" || found.Version != "0.58.2" {

@@ -472,7 +472,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		if err := CheckFreshStateDirectory(dir); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose an empty --state-dir.")
 		}
-		if err := CheckManagedDirectory(managed, dir); err != nil {
+		if err := checkManagedDirectory(managed, dir, !options.DryRun); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose a --managed-config path in a directory of its own.")
 		}
 	}

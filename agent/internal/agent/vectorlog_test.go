@@ -127,6 +127,18 @@ func TestReloadVerdictCannotBeForgedByPipelineLogs(t *testing.T) {
 	}
 }
 
+// A reload whose configuration doesn't even load ends with this record
+// instead of "Reload was not successful." (recorded from Vector 0.58); it is a
+// failed reload as well, so the agent doesn't wait out its startup timeout.
+func TestAConfigurationThatFailsToLoadIsAFailedReload(t *testing.T) {
+	l := newVectorLog("")
+	_, _ = l.Write([]byte(`{"timestamp":"2026-09-29T16:17:21.131571Z","level":"ERROR","message":"Failed to load config files, reload aborted.","error_code":"config_load","error_type":"configuration_failed","stage":"processing","internal_log_rate_limit":false,"target":"vector::internal_events::process"}` + "\n"))
+	_, _ = l.Write([]byte(`{"level":"ERROR","message":"Failed to load config files, reload aborted.","target":"vrl::stdlib::log::implementation"}` + "\n"))
+	if l.signals.reloadFailed != 1 || l.signals.reloaded != 0 {
+		t.Fatalf("signals = %+v", l.signals)
+	}
+}
+
 // A reload capture starts while Vector keeps writing: a line in flight must
 // survive intact rather than being cut in half.
 func TestBeginCaptureKeepsALineInFlight(t *testing.T) {
