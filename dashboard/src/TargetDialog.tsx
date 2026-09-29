@@ -201,6 +201,9 @@ const deviceStates: Record<string, string> = {
 function statusText(device: Device) {
   return deviceStates[device.status] || device.status.replaceAll("_", " ");
 }
+function capitalize(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 /** Worth a second line in the review: anything but a healthy, idle device. */
 function notable(device: Device) {
   return !["verified", "unmanaged", "online"].includes(device.status);
@@ -227,7 +230,8 @@ type Outcome = {
   label: string;
   tone: StatusTone;
   detail: string | null;
-  assignment: AssignmentDescription | null;
+  /** The assignment involved, when the server identifies it. */
+  link: { id: string; label: string } | null;
   /** Whether the device ends up with this request. */
   takes: boolean;
 };
@@ -782,6 +786,9 @@ export default function TargetDialog({
       .map((entry) => [entry.device_id, entry]),
   );
   const paused = new Set(preview?.paused_device_ids || []);
+  const configurationId = version?.configuration_id || null;
+  const shortName = (assignment: AssignmentDescription) =>
+    shortAssignmentName(assignment, configurationId);
   function outcomeFor(device: Device): Outcome | null {
     const outcome = outcomes.get(device.id);
     if (!outcome) return null;
@@ -790,7 +797,9 @@ export default function TargetDialog({
         label: "Replaces",
         tone: "info",
         detail: null,
-        assignment: outcome.replaces || null,
+        link: outcome.replaces
+          ? { id: outcome.replaces.id, label: shortName(outcome.replaces) }
+          : null,
         takes: true,
       };
     if (outcome.outcome === "conflict") {
@@ -806,7 +815,7 @@ export default function TargetDialog({
         label: "Conflict",
         tone: "danger",
         detail: "Same priority, different content",
-        assignment: other || null,
+        link: other ? { id: other.id, label: shortName(other) } : null,
         takes: false,
       };
     }
@@ -815,10 +824,17 @@ export default function TargetDialog({
         label: "Keeps current",
         tone: "warning",
         detail: `Priority ${outcome.assignment?.priority ?? "higher"} wins`,
-        assignment:
-          outcome.winner && outcome.winner.id === outcome.assignment?.id
-            ? outcome.winner
-            : null,
+        // The outranking assignment may still be waiting for its rollout, so
+        // it is named only when it is the one the device follows today.
+        link: outcome.assignment
+          ? {
+              id: outcome.assignment.id,
+              label:
+                outcome.winner?.id === outcome.assignment.id
+                  ? shortName(outcome.winner)
+                  : "View assignment",
+            }
+          : null,
         takes: false,
       };
     if (outcome.winner)
@@ -826,7 +842,7 @@ export default function TargetDialog({
         label: "Takes over",
         tone: "success",
         detail: `From priority ${outcome.winner.priority}`,
-        assignment: outcome.winner,
+        link: { id: outcome.winner.id, label: shortName(outcome.winner) },
         takes: true,
       };
     return {
@@ -834,11 +850,10 @@ export default function TargetDialog({
       tone: "success",
       detail:
         resource === "policy" ? "No settings assigned" : "No pipeline assigned",
-      assignment: null,
+      link: null,
       takes: true,
     };
   }
-  const configurationId = version?.configuration_id || null;
   const nowText = (device: Device) =>
     policy
       ? policySummary(device.effective_policy)
@@ -854,11 +869,9 @@ export default function TargetDialog({
       : device.running_version?.configuration_id === configurationId &&
           version?.number
         ? `v${version.number}`
-        : requestedName(change);
+        : capitalize(requestedName(change));
     return paused.has(device.id) ? `${next}, after sync resumes` : next;
   };
-  const shortName = (assignment: AssignmentDescription) =>
-    shortAssignmentName(assignment, configurationId);
   const artifactPreviews = preview?.artifact_previews || [];
   const artifactByDevice = new Map(
     artifactPreviews.map((artifact) => [artifact.device_id, artifact]),
@@ -1337,7 +1350,7 @@ export default function TargetDialog({
                       <span>
                         Replaces{" "}
                         <AssignmentLink
-                          assignment={replacement.assignment}
+                          id={replacement.assignment.id}
                           label={shortName(replacement.assignment)}
                           disabled={busy}
                         />{" "}
@@ -1579,11 +1592,11 @@ export default function TargetDialog({
                           <OutcomeChip tone={outcome.tone}>
                             {outcome.label}
                           </OutcomeChip>
-                          {outcome.assignment ? (
+                          {outcome.link ? (
                             <small>
                               <AssignmentLink
-                                assignment={outcome.assignment}
-                                label={shortName(outcome.assignment)}
+                                id={outcome.link.id}
+                                label={outcome.link.label}
                                 disabled={busy}
                               />
                               {outcome.detail ? ` · ${outcome.detail}` : ""}
