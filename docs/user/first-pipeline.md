@@ -54,7 +54,7 @@ Publishing freezes the draft as version 1. It changes nothing on any device yet.
 
 ## 5. Watch it apply
 
-The device picks up the version at its next check-in, within 60 seconds by default. Its pipeline status moves through these states:
+A connected agent picks up the version within seconds, because it keeps a request open to hear about changes. Otherwise the device picks it up at its next check-in, within 60 seconds by default. Its pipeline status moves through these states:
 
 <!-- diagram: apply-states -->
 ```mermaid
@@ -68,7 +68,7 @@ flowchart LR
 
 | State | What it means |
 | --- | --- |
-| **Waiting for agent** | Released; the device picks it up at its next check-in. |
+| **Waiting for agent** | Released; the device picks it up within seconds, or at its next check-in. |
 | **Downloaded**, **Validated** | The device fetched the signed version and Vector accepted it on the host. |
 | **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. |
 | **Applied** | The agent verified Vector runs this version. |
