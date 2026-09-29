@@ -1861,6 +1861,32 @@ export default function Editor({
       return;
     const nodeId = target.closest(".react-flow__node")?.getAttribute("data-id");
     const edgeId = target.closest(".react-flow__edge")?.getAttribute("data-id");
+    if (
+      event.key === "Escape" &&
+      !connectionGesture &&
+      multiSelected.length > 1
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSelection();
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "a"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (selected && !closeSettings()) return;
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.data.enrichmentTable ? node : { ...node, selected: true },
+        ),
+      );
+      return;
+    }
     if (event.key === "Escape" && connectionGesture) {
       event.preventDefault();
       event.stopPropagation();
@@ -1914,7 +1940,9 @@ export default function Editor({
     ) {
       event.preventDefault();
       event.stopPropagation();
-      duplicate(nodeId);
+      if (multiSelected.length > 1 && multiSelected.includes(nodeId))
+        duplicateSelection();
+      else duplicate(nodeId);
       return;
     }
     if (event.key === "Delete" || event.key === "Backspace") {
@@ -2081,6 +2109,12 @@ export default function Editor({
       ),
     );
   }
+  // Selecting several steps (Shift-drag, Ctrl-click, Ctrl+A) puts the
+  // inspector away: it shows one step at a time.
+  const selectingMany = multiSelected.length > 1;
+  useEffect(() => {
+    if (selectingMany && selected) closeSettings();
+  }, [selectingMany]);
   function findStep(stepId: string) {
     const node = nodes.find((item) => item.id === stepId);
     setFindOpen(false);
@@ -2091,8 +2125,7 @@ export default function Editor({
       node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
       {
         zoom: Math.max(flow.current.getZoom(), 0.85),
-        duration: window.matchMedia("(prefers-reduced-motion: reduce)")
-          .matches
+        duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches
           ? 0
           : 220,
       },
@@ -4602,11 +4635,18 @@ export default function Editor({
                     "onNodeClick",
                     (event, node) => {
                       if (
-                        !(event.target as Element).closest(
+                        (event.target as Element).closest(
                           ".react-flow__handle,[data-node-action]",
                         )
                       )
-                        selectStep(node.id);
+                        return;
+                      // Ctrl, Cmd or Shift builds a multi-selection, and the
+                      // inspector only ever shows one step.
+                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                        if (selected) closeSettings();
+                        return;
+                      }
+                      selectStep(node.id);
                     },
                   )}
                   onPaneClick={stableCanvasHandler("onPaneClick", () => {
@@ -5256,8 +5296,21 @@ export default function Editor({
             <dd>Remove selected steps or disconnect selected lines.</dd>
             <dt>Arrow keys</dt>
             <dd>Move a focused step 10 pixels. Hold Shift for 50 pixels.</dd>
+            <dt>Ctrl / ⌘ S</dt>
+            <dd>Save the draft.</dd>
+            <dt>⌘ K</dt>
+            <dd>Open the command menu.</dd>
+            <dt>Ctrl / ⌘ F</dt>
+            <dd>Find a step by ID, name or type.</dd>
+            <dt>Ctrl / ⌘ C, V</dt>
+            <dd>
+              Copy the selected steps as Vector YAML, and paste steps from any
+              Vector configuration.
+            </dd>
+            <dt>Ctrl / ⌘ click, Shift drag</dt>
+            <dd>Select several steps. Ctrl / ⌘ A selects all.</dd>
             <dt>Ctrl / ⌘ D</dt>
-            <dd>Duplicate the focused step.</dd>
+            <dd>Duplicate the focused or selected steps.</dd>
             <dt>Ctrl / ⌘ Z</dt>
             <dd>Undo. Add Shift to redo.</dd>
             <dt>Shift F10 / Menu key</dt>
