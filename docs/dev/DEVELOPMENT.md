@@ -1,8 +1,8 @@
 # Isolated local demonstration and integration tests
 
-This development workflow is for the current Windows checkout. It creates private `.local/` state, uses synthetic `demo_logs`, and does not change OS trust or register services. Production installation uses [Compose with verified HTTPS](QUICKSTART.md), not development cookies.
+This development workflow is for the current Windows checkout. It creates private `.local/` state, uses synthetic `demo_logs`, and does not change OS trust or register services. Production installation uses [Compose with verified HTTPS](../QUICKSTART.md), not development cookies.
 
-Prerequisites: Node.js 22/npm, Rust 1.94+, pinned Go 1.26.8 (Go can fetch the declared toolchain), and a separately obtained, checksum-verified **Vector 0.58.0** Windows executable. Put the latter at `.local/tools/vector-0.58.0/bin/vector.exe`. Verify the official distribution before executing it; see [acceptance evidence](ACCEPTANCE.md). Never use an unknown binary for adoption.
+Prerequisites: Node.js 22/npm, Rust 1.94+, pinned Go 1.26.8 (Go can fetch the declared toolchain), and a separately obtained, checksum-verified **Vector 0.58.0** Windows executable. Put the latter at `.local/tools/vector-0.58.0/bin/vector.exe`. Verify the official distribution before executing it; see [acceptance evidence](../internal/ACCEPTANCE.md). Never use an unknown binary for adoption.
 
 From the repository root, in PowerShell:
 
@@ -65,4 +65,4 @@ go test -v ./internal/agent -run 'TestNativeVector'
 Pop-Location
 ```
 
-The [load harness](../tests/load/README.md) runs an isolated synthetic protocol population, not native Vector workloads. Its measured failure boundary is recorded in [CAPACITY.md](CAPACITY.md).
+The [load harness](../../tests/load/README.md) runs an isolated synthetic protocol population, not native Vector workloads. Its measured failure boundary is recorded in [CAPACITY.md](../internal/CAPACITY.md).
