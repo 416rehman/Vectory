@@ -79,3 +79,31 @@ What the numbers mean:
 - **The membership preview is unchanged.** It takes the writer lock and answers "Preview busy" while a scheduler tick holds it: the new build's server refused 7 attempts across the six previews (the old one none, by timing), and the harness retried every 50 ms. Only the attempt that ran is timed.
 
 The harness checked that both builds listed all 5,000 devices, that the fleet stayed checked in, that the slim Overview differs from the default only by `devices`, that the inventory's first page is the first 50 live devices in natural name order, and that both builds returned identical device JSON and identical previews.
+
+## Agent wake-ups (2026-09-29)
+
+Between check-ins an agent holds one `GET /agent/v1/wait`, and the server answers `{"changed":true}` once a change to that device commits (`contracts/CONTRACT.md`). This measures how soon a deployment reaches a device with and without it, and what a parked wait costs. Debug builds without debug info on a shared Linux development host (4 CPUs, 16 GB, load average 8 to 17 from other builds). **Compare the rows with each other; this is not a capacity claim.**
+
+**Deploy to first apply report.** `scripts/preview.sh` and `scripts/demo.mjs` on one host: the preview server and validator, and two demo agents running Vector 0.58.0. Each run published a new version of a small `demo_logs` to `blackhole` pipeline and deployed it to one device on a 60-second check-in interval, then read `GET /devices/{id}` every 100 ms until the device reported the new generation. That first report was already **Applied** (`verified_applied`) in every run. The same server build ran with wake-ups on and with `VECTORY_AGENT_WAKE_LIMIT=0`.
+
+| Wake-ups | Deploy sent | First report min / median / max | Runs |
+| --- | --- | --- | --- |
+| On (default) | 2 to 5 s after a check-in | 3.39 / 3.45 / 3.66 s | 5 |
+| Off | 2 to 5 s after a check-in | 37.2 / 47.9 / 61.3 s | 5 |
+| Off | At a random point of the interval | 9.9 / 23.5 / 39.9 s | 5 |
+
+With wake-ups on, the wait was answered before the deployment request returned: the first poll after it, 21 to 53 ms after Deploy, already read `listening: false`. The rest is the agent's ordinary work: a heartbeat, the download, validation on the host, activation with its two-second watch that Vector stays up, and the follow-up check-in one second later. With a two-second follow-up, one trial took 4.8 s. The liveness watch is left alone, so the first report can't come much sooner than three seconds.
+
+**Rehearsals on the same preview.**
+
+- **Revocation while waiting.** The revocation request returned in 13 ms and the device stopped listening within 20 ms. The agent's immediate check-in met the ordinary refusal in the same second (`The server doesn't accept this device's credential (HTTP 401)`), instead of at its next check-in up to 15 seconds later.
+- **Server restart while both agents waited.** SIGTERM answered both waits (`answered parked agent waits before stopping answered=2`) and the server exited. Neither agent logged an outage, and both waited again after their next scheduled check-in to the restarted server.
+- **Connections.** Sampled every 200 ms for 75 seconds, across a check-in, an agent holding a wait kept exactly one connection to the agent listener: agents speak HTTP/2 there, so the wait and the heartbeats share it.
+
+**Memory per parked wait.** `server/tests/wake_capacity.rs` parks 10,000 waits through the real agent router, authentication query included, and counts allocations while holding only the response bodies. First waits cost 591 bytes each (the registry grows); the same devices waiting again cost 216 bytes each. The connection is not included. Agents on intervals under 90 seconds already keep their one connection open between check-ins (Go's idle timeout); with longer intervals, wake-ups keep it open all the time, and it counts toward `VECTORY_MAX_AGENT_CONNECTIONS`.
+
+**Pacing.** Answers go out up to 100 at once, then 50 a second, oldest first. Each brings a heartbeat and, after an apply, a follow-up. For scale: 10,000 agents on the default 60-second interval already send about 167 heartbeats a second, so an all-at-once release to all of them adds at most about 100 a second on top instead of 10,000 at once. Devices whose turn hasn't come by their own next check-in learn of the change there, as before.
+
+**Server tests** (`server/tests/wake.rs`, debug build): every writer that changes a device's desired state answers its parked wait within 200 ms (deployment, agent settings including pause and resume, retry, group membership under a persistent assignment, scheduled activation, assignment removal and revocation); a preview that rolls back answers nothing; a hold ends `changed:false` with the database closed; 1,000 waits each answer exactly once after one change; the registry cap answers 503 with `Retry-After: 60`; a release of 60 waits with a burst of 20 and a rate of 40 answers no faster than the pace; shutdown answers every wait and refuses new ones with `Retry-After: 1`.
+
+Not measured: release builds, a dedicated host, 10,000 real TLS connections holding waits, networks that cut idle connections, and pacing during a real release to thousands of devices.

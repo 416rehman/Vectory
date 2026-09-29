@@ -4,7 +4,7 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 
 ## The guarantees
 
-- **Devices only connect out.** The agent opens every connection, over TLS 1.3. Nothing on a device listens for Vectory, and there is no option to skip certificate checks.
+- **Devices only connect out.** The agent opens every connection, over TLS 1.3. Nothing on a device listens for Vectory, and there is no option to skip certificate checks. To hear about changes within seconds, the agent keeps one of its own requests open; the answer only tells it to check in.
 - **Devices prove who they are.** Each device has its own key and certificate. Every request after enrollment uses mutual TLS, and a revoked device is refused at once.
 - **Devices only run what they can verify.** A configuration is an immutable, published version. It arrives in a manifest signed for that one device, and the agent refuses anything older than what it has already accepted.
 - **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them. The one exception is a loopback-only exporter of Vector's own metrics, described under [Restricted and full mode](#restricted-and-full-mode).
@@ -65,12 +65,13 @@ Enrollment tokens can be limited by use count, expiry and device-name prefix. A 
 
 1. **Checked before publishing.** The sandboxed validator runs `vector validate` on the pipeline. If the validator is unavailable, publishing stops; it never skips the check.
 2. **Immutable once published.** A version never changes. Rolling back deploys an older version as a new, higher generation.
-3. **Signed for one device.** Each check-in returns a manifest signed with the server's Ed25519 key. It names the device, echoes a fresh random value the agent sent, and expires after five minutes, so it can't be replayed elsewhere or later.
-4. **Never older.** The agent remembers the highest generation it has accepted and refuses anything older, even from a restored server backup.
-5. **Fetched by digest.** The agent downloads the version by its SHA-256 and checks the bytes. The server only serves the version currently released to that device.
-6. **Checked again on the host.** The agent applies the device's mode and allowances, then runs Vector's own validation in the host environment.
-7. **Applied safely.** The agent records each step, starts Vector with the new configuration and watches it stay up. If it fails, the agent restores the last working configuration.
-8. **Pinned Vector.** The agent records the SHA-256 of the Vector binary it adopted and refuses to run a changed binary until someone on the host [approves the new one](agents.md#replace-the-vector-binary).
+3. **Announced, never pushed.** When a device's version, settings or access change, the server answers the agent's open request with `{"changed":true}`. The answer is unsigned and carries nothing else: the agent checks in as usual, so a forged answer can cause at most an early check-in.
+4. **Signed for one device.** Each check-in returns a manifest signed with the server's Ed25519 key. It names the device, echoes a fresh random value the agent sent, and expires after five minutes, so it can't be replayed elsewhere or later.
+5. **Never older.** The agent remembers the highest generation it has accepted and refuses anything older, even from a restored server backup.
+6. **Fetched by digest.** The agent downloads the version by its SHA-256 and checks the bytes. The server only serves the version currently released to that device.
+7. **Checked again on the host.** The agent applies the device's mode and allowances, then runs Vector's own validation in the host environment.
+8. **Applied safely.** The agent records each step, starts Vector with the new configuration and watches it stay up. If it fails, the agent restores the last working configuration.
+9. **Pinned Vector.** The agent records the SHA-256 of the Vector binary it adopted and refuses to run a changed binary until someone on the host [approves the new one](agents.md#replace-the-vector-binary).
 
 ## Credentials and data
 

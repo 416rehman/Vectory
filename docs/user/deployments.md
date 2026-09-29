@@ -97,6 +97,8 @@ flowchart LR
 | **Check required** | Applied, but the agent couldn't confirm what Vector runs. | Look at the device before retrying. |
 | **Sync paused** | Configuration changes wait until sync resumes. | Resume where it was paused: `vectory resume` on the host, or in agent settings. |
 
+While a device is **Waiting for agent**, its row says how soon: **connected, usually a few seconds** while its agent keeps a request open for changes, otherwise at its next check-in. See [Turn off wake-ups](agents.md#turn-off-wake-ups).
+
 An offline device's last state is history, not the present. It becomes current again when the device checks in.
 
 ## Follow a rollout
