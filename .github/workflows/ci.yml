@@ -287,12 +287,68 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        # The official Vector 0.58.0 release archive for each runner, pinned by
+        # the SHA-256 that vector-0.58.0-SHA256SUMS lists for it.
+        include:
+          - os: ubuntu-24.04
+            vector-archive: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+            vector-sha256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+            vector-binary: vector-x86_64-unknown-linux-gnu/bin/vector
+          - os: windows-2025
+            vector-archive: vector-0.58.0-x86_64-pc-windows-msvc.zip
+            vector-sha256: 72bbedf4772302f7f67e7db2120fe5b42e39ae65873c895876fc2038050c10c5
+            vector-binary: bin/vector.exe
+          - os: macos-15
+            vector-archive: vector-0.58.0-arm64-apple-darwin.tar.gz
+            vector-sha256: 9182491597f1bdedb08d84a051616c62deea770a9d905b697712cc6526919449
+            vector-binary: vector-arm64-apple-darwin/bin/vector
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      # Native agent tests (drain, reload and rollback, telemetry, secret
+      # rotation, full mode) run only when VECTOR_TEST_BINARY is set. A checksum
+      # mismatch fails the job; it never falls back to skipping them.
+      - name: Provide pinned Vector for native agent tests
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VECTOR_ARCHIVE: ${{ matrix.vector-archive }}
+          VECTOR_SHA256: ${{ matrix.vector-sha256 }}
+          VECTOR_BINARY: ${{ matrix.vector-binary }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | shasum -a 256 -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/$VECTOR_BINARY"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTOR_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+      - name: Provide pinned Vector for native agent tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VECTOR_ARCHIVE: ${{ matrix.vector-archive }}
+          VECTOR_SHA256: ${{ matrix.vector-sha256 }}
+          VECTOR_BINARY: ${{ matrix.vector-binary }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP $env:VECTOR_ARCHIVE
+          Invoke-WebRequest -Uri "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$env:VECTOR_ARCHIVE" -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:VECTOR_SHA256) { throw "Checksum mismatch for $($env:VECTOR_ARCHIVE): expected $($env:VECTOR_SHA256), got $actual" }
+          $destination = Join-Path $env:RUNNER_TEMP 'vector'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = (Get-Item -LiteralPath (Join-Path $destination $env:VECTOR_BINARY)).FullName
+          $version = & $binary --version
+          Write-Output $version
+          if ($LASTEXITCODE -ne 0 -or -not "$version".StartsWith('vector 0.58.0 ')) { throw "Unexpected Vector build at ${binary}: $version" }
+          "VECTOR_TEST_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append
       - run: go test ./...
         working-directory: agent
       - run: go vet ./...
