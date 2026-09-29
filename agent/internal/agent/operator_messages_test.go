@@ -325,3 +325,35 @@ func TestSetupBesideARunningAgentStartsNothing(t *testing.T) {
 		t.Fatalf("%+v", last)
 	}
 }
+
+func TestSetupBesideAnOlderRunningAgentSaysToRestartIt(t *testing.T) {
+	// The upgrade command installed a new build; `vectory run` still runs
+	// the old one, and nothing but its operator restarts it.
+	_, dir := enrolledInstallation(t)
+	state, _ := LoadState(dir)
+	state.Agent = &AgentBuild{Version: "0.0.9", SHA256: strings.Repeat("00", 32)}
+	if err := SaveState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := Lock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	claimAs(t, dir, "run")
+	options, _, _ := setupFixture(t)
+	options.StateDir = dir
+	options.Token = func() (string, error) { t.Fatal("asked for a token"); return "", nil }
+	result, err := Setup(context.Background(), options)
+	if runtime.GOOS == "windows" {
+		return
+	}
+	pid := strconv.Itoa(os.Getpid())
+	last := result.Steps[len(result.Steps)-1]
+	if err != nil || !result.OK || last.Status != "warn" || last.Detail != "none · the agent still runs 0.0.9 (vectory run, pid "+pid+"); "+Version+" is installed." {
+		t.Fatalf("%v %+v", err, last)
+	}
+	if !strings.HasPrefix(result.Next, "Stop it (Ctrl-C where it runs, or sudo kill "+pid+"), then start it again to run "+Version+": ") || !strings.Contains(result.Next, " run --state-dir ") {
+		t.Fatalf("next: %q", result.Next)
+	}
+}

@@ -160,7 +160,7 @@ export function effectiveTrust(
  */
 export function trustArguments(
   install: AgentInstall,
-  choices: SetupChoices,
+  choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
 ): string[] | null {
   switch (effectiveTrust(install, choices.trust)) {
     case "pinned":
@@ -196,6 +196,30 @@ export function installerCommand(
   install: AgentInstall,
   choices: SetupChoices,
 ): string | null {
+  const [mode, ...rest] = pairs(setupArguments(choices));
+  const installDir = choices.installDir?.trim();
+  return installerRun(
+    install,
+    choices,
+    [
+      ...mode,
+      ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
+    ],
+    rest.flat(),
+  );
+}
+
+/**
+ * Download the installer with verification on, check its SHA-256, and run it
+ * with `head`, the trust arguments, then `tail`. Upgrade agent runs it again
+ * with only what the enrolled device needs.
+ */
+export function installerRun(
+  install: AgentInstall,
+  choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
+  head: string[],
+  tail: string[],
+): string | null {
   if (choices.os === "windows" || !install.installer || !install.agent_url)
     return null;
   const trust = effectiveTrust(install, choices.trust);
@@ -213,10 +237,8 @@ export function installerCommand(
   }
   const check =
     choices.os === "darwin" ? "shasum -a 256 -c -" : "sha256sum -c -";
-  const [mode, ...rest] = pairs(setupArguments(choices));
-  const installDir = choices.installDir?.trim();
   const installerTrust =
-    trust === "pinned" ? [] : [trustArguments(install, choices)!];
+    trust === "pinned" ? [] : trustArguments(install, choices)!;
   lines.push(
     `curl -fsSL${cacert} \\`,
     `  -o ${installerFile} \\`,
@@ -225,10 +247,9 @@ export function installerCommand(
     `echo '${install.installer.sha256}  ${installerFile}' \\`,
     `  | ${check} &&`,
     continued(`sudo sh ${installerFile}`, [
-      ...mode,
-      ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
-      ...installerTrust.flat(),
-      ...rest.flat(),
+      ...head,
+      ...installerTrust,
+      ...tail,
     ]),
   );
   return lines.join("\n");

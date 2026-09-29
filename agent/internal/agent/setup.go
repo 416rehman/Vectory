@@ -825,12 +825,21 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 
 	if service == "none" {
 		if enrolled && agentLockHeld(dir) {
-			// Setup ran again beside a running agent: nothing to start.
-			running := "the agent is already running"
+			// Setup ran again beside a running agent: nothing to start, unless
+			// it runs an older build than the one just installed (an upgrade),
+			// which only a restart by whoever started it replaces.
+			process, stop := "vectory run", "Stop it (Ctrl-C where it runs)"
 			if owner := readLockOwner(dir); owner != nil {
-				running = fmt.Sprintf("the agent is already running (vectory %s, pid %d)", owner.Command, owner.PID)
+				process = fmt.Sprintf("vectory %s, pid %d", owner.Command, owner.PID)
+				stop = fmt.Sprintf("Stop it (Ctrl-C where it runs, or sudo kill %d)", owner.PID)
 			}
-			r.add("service", "ok", "Service", "none · "+running, "")
+			if running, installed := runningBuild(dir), fileDigestOrEmpty(agentPath); running != nil && installed != "" && running.SHA256 != installed {
+				r.add("service", "warn", "Service", fmt.Sprintf("none · the agent still runs %s (%s); %s is installed.", running.Version, process, Version), "")
+				r.result.Next = stop + ", then start it again to run " + Version + ": " + runCommand
+				r.result.OK = true
+				return r.result, nil
+			}
+			r.add("service", "ok", "Service", "none · the agent is already running ("+process+")", "")
 			r.result.Next = "Nothing to start. Deploy a pipeline to " + settings.Name + " from the dashboard."
 			r.result.OK = true
 			return r.result, nil

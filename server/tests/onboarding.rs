@@ -997,6 +997,59 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("is already 0.2.0"));
     assert!(!root.join("curl-url").exists());
+    // Upgrade agent (the device page) runs the same installer with only where
+    // the device keeps its state and what keeps it running: an older agent is
+    // replaced, and setup, which finds the enrolled state, gets no name, mode
+    // or token to change.
+    std::fs::write(installed.join("vectory"), fake_agent("older build")).unwrap();
+    std::fs::write(&download, &d.mirror_linux).unwrap();
+    let output = std::process::Command::new("sh")
+        .arg(&path)
+        .arg("--install-dir")
+        .arg(&installed)
+        .args(["--state-dir", "/srv/vectory state", "--service", "none"])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("FAKE_DOWNLOAD", &download)
+        .env("FAKE_CURL_URL", root.join("curl-url"))
+        .env("FAKE_CURL_ARGS", root.join("curl-args"))
+        .env("FAKE_CURL_CA", root.join("curl-ca.pem"))
+        .env("FAKE_AGENT_ARGS", root.join("agent-args"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("installed at"));
+    assert_eq!(
+        std::fs::read(installed.join("vectory")).unwrap(),
+        d.mirror_linux,
+        "the older agent was not replaced"
+    );
+    let args = std::fs::read_to_string(root.join("agent-args")).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    assert_eq!(
+        args,
+        vec![
+            "setup",
+            "--server",
+            "https://vectory.example.test:8443",
+            "--agent-path",
+            &agent_path,
+            "--ca-sha256",
+            &d.ca_sha256,
+            "--dashboard-url",
+            "https://vectory.example.test",
+            "--state-dir",
+            "/srv/vectory state",
+            "--service",
+            "none",
+        ]
+    );
 }
 
 #[tokio::test]
