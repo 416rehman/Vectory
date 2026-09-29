@@ -16,6 +16,14 @@ function Fixture() {
     <main style={{ padding: 20, minWidth: 0 }}>
       <h1>Synthetic table verification</h1>
       <button onClick={() => setLoading(!loading)}>Toggle loading</button>
+      <div style={{ display: "flex", gap: 16, marginTop: 12 }}>
+        <input type="checkbox" aria-label="Synthetic checkbox" />
+        <input
+          type="radio"
+          name="synthetic-choice"
+          aria-label="Synthetic radio"
+        />
+      </div>
       <div
         style={{
           border: "1px solid var(--line)",

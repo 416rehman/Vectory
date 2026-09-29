@@ -57,6 +57,7 @@ import {
   useResource,
 } from "./ui";
 import {
+  applyStepLabels,
   connectionState,
   dataPlaneIssues,
   deviceDisplayStatus,
@@ -70,6 +71,7 @@ import {
   type ApplyStep,
 } from "./deploymentStatus";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 const platform = (device: Device) =>
@@ -87,12 +89,12 @@ const assignmentLink = (assignmentId?: string) =>
 /* ---------- Apply progress ---------- */
 
 const steps = [
-  { state: "desired", label: "Released" },
-  { state: "downloaded", label: "Downloaded" },
-  { state: "validated", label: "Validated" },
-  { state: "written", label: "Written" },
-  { state: "reload_requested", label: "Vector reloaded" },
-  { state: "verified_applied", label: "Verified running" },
+  { state: "desired", label: applyStepLabels.released },
+  { state: "downloaded", label: applyStepLabels.downloaded },
+  { state: "validated", label: applyStepLabels.validated },
+  { state: "written", label: applyStepLabels.written },
+  { state: "reload_requested", label: applyStepLabels.reloaded },
+  { state: "verified_applied", label: applyStepLabels.applied },
 ];
 const applyStepIndex: Record<ApplyStep, number> = {
   downloaded: 1,
@@ -669,7 +671,7 @@ export default function DeviceDetail({
 }: {
   id: string;
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
 }) {
   const [fast, setFast] = useState(false);
@@ -709,7 +711,7 @@ export default function DeviceDetail({
       });
   }, [device?.id, device?.name, user.id]);
   const afterAction = (message: string) => {
-    notify(message);
+    notify(message, { tone: "success" });
     void resource.reload();
   };
   const refresh = async () => {

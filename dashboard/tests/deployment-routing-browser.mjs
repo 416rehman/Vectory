@@ -286,9 +286,9 @@ async function fixture({
 const dialog = (page) =>
   page.getByRole("region", { name: "Deployment details", exact: true });
 const back = (page) =>
-  dialog(page).getByRole("button", {
-    name: /^Back to (deployments|schedules)$/,
-  });
+  dialog(page)
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ });
 async function check(name, run) {
   await run();
   results.push({ name, passed: true });
@@ -544,6 +544,9 @@ try {
             exact: true,
           }),
         ).toHaveCount(0);
+        // The session really ends: the shell's sign-in prompt first asks the
+        // server whether it is still valid and resumes silently if it is.
+        f.state.signedIn = false;
         await f.page.evaluate(
           (hash) => (location.hash = hash),
           "/deployments/" + id(3) + "?page=1",

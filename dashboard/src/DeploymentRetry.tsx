@@ -14,14 +14,9 @@ import {
   type Device,
   type RolloutFailure,
 } from "./api";
-import { Button, ErrorBox, Modal, Spinner } from "./ui";
-import { StatusChip } from "./DeploymentRollout";
-import {
-  explainError,
-  targetLabel,
-  targetTone,
-  type StatusTone,
-} from "./deploymentStatus";
+import { Button, ErrorBox, Modal, Spinner, StatusBadge } from "./ui";
+import { explainError, targetLabel } from "./deploymentStatus";
+import type { StatusTone } from "./status";
 
 /** Device states the server accepts a retry for (see POST /devices/{id}/retry). */
 const retryableStates = [
@@ -310,9 +305,7 @@ export default function DeploymentRetry({
       <div className="modal-body deployment-retry">
         {scope && (
           <div className="deployment-retry-reason">
-            <StatusChip tone={targetTone(scope.state)}>
-              {targetLabel(scope.state)}
-            </StatusChip>
+            <StatusBadge domain="target" value={scope.state} />
             {scope.diagnostic ? (
               <code>{scope.diagnostic}</code>
             ) : (
@@ -411,21 +404,26 @@ export default function DeploymentRetry({
                           </label>
                           {outcome ? (
                             <span className="deployment-retry-outcome">
-                              <StatusChip
+                              <StatusBadge
                                 tone={outcomeChip[outcome.state][1]}
-                                spin={outcome.state === "sending"}
-                              >
-                                {outcomeChip[outcome.state][0]}
-                              </StatusChip>
+                                label={outcomeChip[outcome.state][0]}
+                                icon={
+                                  outcome.state === "sending"
+                                    ? "progress"
+                                    : undefined
+                                }
+                              />
                               {outcome.message && (
                                 <small>{outcome.message}</small>
                               )}
                             </span>
                           ) : (
                             blocker && (
-                              <StatusChip tone="neutral">
-                                Can't retry
-                              </StatusChip>
+                              <StatusBadge
+                                tone="neutral"
+                                icon="minus"
+                                label="Can't retry"
+                              />
                             )
                           )}
                         </li>

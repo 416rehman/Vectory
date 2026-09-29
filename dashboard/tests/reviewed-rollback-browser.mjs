@@ -759,7 +759,7 @@ try {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await dialog(page)
-          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         f.role = "viewer";
         await page.reload();

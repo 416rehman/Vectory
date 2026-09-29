@@ -1,3 +1,4 @@
+import { statusLabel } from "./status";
 /** Changes hide sign-ins; security shows only sign-in, account and key events. */
 export type AuditScope = "changes" | "security" | "all";
 export const auditScopes: { value: AuditScope; label: string }[] = [
@@ -108,29 +109,6 @@ export const auditFamilies: Record<string, string> = {
   vrl: "VRL tests",
 };
 
-export const auditOutcomes: Record<string, string> = {
-  success: "Succeeded",
-  failure: "Failed",
-  failed: "Failed",
-  denied: "Denied",
-  conflict: "Conflict",
-  missed: "Missed",
-  prepared: "Prepared",
-  full: "Full capabilities",
-  restricted: "Restricted capabilities",
-  unmanaged: "No pipeline",
-  desired: "Update pending",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  written: "Written",
-  reload_requested: "Restart requested",
-  verified_applied: "Applied and verified",
-  verification_unknown: "Verification needed",
-  rolled_back: "Rolled back",
-  incompatible: "Incompatible",
-  paused: "Paused",
-};
-
 export function auditActionLabel(action: string) {
   return (
     auditActions[action] ||
@@ -146,11 +124,9 @@ export function auditEventLabel(item: { action: string; outcome: string }) {
     return "Enrollment refused";
   return auditActionLabel(item.action);
 }
+/** Audit results read from status.ts, the one status vocabulary. */
 export function auditOutcomeLabel(outcome: string) {
-  return (
-    auditOutcomes[outcome] ||
-    outcome.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase())
-  );
+  return statusLabel("audit", outcome);
 }
 
 export function normalizeAuditQuery(
@@ -406,8 +382,7 @@ type GroupableEvent = {
   created_at: string | null;
 };
 export type AuditRow<T extends GroupableEvent> =
-  | { kind: "event"; item: T }
-  | { kind: "results"; key: string; items: T[] };
+  { kind: "event"; item: T } | { kind: "results"; key: string; items: T[] };
 /**
  * Consecutive per-device apply results ("edge-nyc-01 applied and verified")
  * collapse into one row, so deployments and edits stay readable in the

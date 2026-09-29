@@ -331,8 +331,6 @@ export function activityGlyph(item: ActivityItem): ActivityGlyph {
   );
 }
 
-export const isEventId = isAuditId;
-
 /** Sign-in and account events belong in Security activity (mirrors the server). */
 export function isSecurityAction(action: string) {
   return (

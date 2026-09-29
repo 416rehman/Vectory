@@ -88,7 +88,7 @@ test("contextual help opens at the explanation without disturbing an unfinished 
   const homePopup = page.waitForEvent("popup");
   await page
     .getByRole("menuitem", {
-      name: "Vectory documentation (opens in a new tab)",
+      name: "Help center (opens in a new tab)",
       exact: true,
     })
     .click();

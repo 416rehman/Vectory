@@ -21,7 +21,6 @@ import {
   EmptyState,
   ErrorBox,
   FilterChips,
-  InlineError,
   Modal,
   PageHeader,
   PageToolbar,
@@ -32,6 +31,7 @@ import {
   StatusBadge,
   useResource,
   type FilterChip,
+  CopyButton,
 } from "./ui";
 import {
   auditActions,
@@ -44,7 +44,6 @@ import {
   auditFilterSummary,
   auditHistoryPath,
   auditOutcomeLabel,
-  auditOutcomes,
   auditResourceRoute,
   auditRoute,
   auditScopes,
@@ -64,6 +63,7 @@ import "./audit.css";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
 import { describeAgent, refusal } from "./enrollmentActivity";
+import { auditOutcomes } from "./status";
 
 const emptyPage: AuditHistoryPage = {
   items: [],
@@ -113,12 +113,7 @@ function ResourceLink({
 
 function Result({ outcome }: { outcome: string }) {
   return (
-    <StatusBadge
-      domain="audit"
-      value={outcome}
-      label={auditOutcomeLabel(outcome)}
-      className="audit-result"
-    />
+    <StatusBadge domain="audit" value={outcome} className="audit-result" />
   );
 }
 
@@ -549,11 +544,11 @@ export function AuditLog({
         value: query.outcome,
         allLabel: "All results",
         options: [
-          ...Object.entries(auditOutcomes).map(([value, label]) => ({
+          ...Object.entries(auditOutcomes).map(([value, { label }]) => ({
             value,
             label: value === "failure" ? `${label} (request)` : label,
           })),
-          ...(query.outcome && !auditOutcomes[query.outcome]
+          ...(query.outcome && !Object.hasOwn(auditOutcomes, query.outcome)
             ? [
                 {
                   value: query.outcome,
@@ -680,7 +675,7 @@ export function AuditLog({
           />
         }
         count={
-          loading && !events.updatedAt
+          !events.updatedAt
             ? undefined
             : `${data.total.toLocaleString()} ${data.total === 1 ? "event" : "events"}`
         }
@@ -727,19 +722,6 @@ export function AuditLog({
         </p>
       )}
       {dateError && <ErrorBox message={dateError} />}
-      {error && !dateError && (
-        <InlineError
-          title={
-            data.items.length
-              ? "Couldn't refresh the audit log."
-              : "Couldn't load the audit log."
-          }
-          error={error}
-          updatedAt={events.updatedAt}
-          retry={() => void reload()}
-          retrying={events.refreshing}
-        />
-      )}
       <TableCard>
         <DataTable
           data={dateError ? [] : rows}
@@ -754,6 +736,19 @@ export function AuditLog({
           }
           label="Audit events"
           className="audit-table"
+          error={
+            error && !dateError
+              ? {
+                  title: events.updatedAt
+                    ? "Couldn't refresh the audit log."
+                    : "Couldn't load the audit log.",
+                  message: error,
+                  updatedAt: events.updatedAt,
+                  retry: () => void reload(),
+                  retrying: events.refreshing,
+                }
+              : null
+          }
           loading={loading && !events.updatedAt}
           skeletonRows={8}
           manualSorting
@@ -800,11 +795,7 @@ export function AuditLog({
                 }
           }
           empty={
-            error ? (
-              <EmptyState variant="error" title="Activity could not be loaded">
-                {error}
-              </EmptyState>
-            ) : dateError ? (
+            dateError ? (
               <EmptyState
                 variant="filtered"
                 title="Choose a valid date range"
@@ -875,42 +866,30 @@ function keepListRoute(query: AuditQuery) {
 }
 
 function AuditPermalink({ route }: { route: string }) {
-  const [state, setState] = useState<"idle" | "copying" | "copied" | "manual">(
-    "idle",
-  );
+  const [manual, setManual] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = `#/${route}`;
   const link = url.href;
   useEffect(() => {
-    if (state === "manual") {
+    if (manual) {
       input.current?.focus();
       input.current?.select();
     }
-  }, [state]);
-  async function copy() {
-    setState("copying");
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error();
-      await navigator.clipboard.writeText(link);
-      setState("copied");
-    } catch {
-      setState("manual");
-    }
-  }
+  }, [manual]);
   return (
     <div className="audit-permalink">
       <div className="audit-actions">
-        <Button
-          variant="secondary compact"
-          icon={Copy}
-          busy={state === "copying"}
-          onClick={copy}
-          aria-label="Copy event link"
-        >
-          {state === "copied" ? "Copied" : "Copy link"}
-        </Button>
+        <CopyButton
+          text={link}
+          label="Copy link"
+          ariaLabel="Copy event link"
+          copiedMessage="Event link copied."
+          failedMessage=""
+          onCopied={() => setManual(false)}
+          onFailed={() => setManual(true)}
+        />
         <a href={link} target="_blank" rel="noopener noreferrer">
           Open in new tab{" "}
           <ExternalLink
@@ -920,7 +899,7 @@ function AuditPermalink({ route }: { route: string }) {
           />
         </a>
       </div>
-      {state === "manual" && (
+      {manual && (
         <label className="audit-link-fallback">
           Event link
           <input ref={input} readOnly value={link} />
@@ -929,9 +908,6 @@ function AuditPermalink({ route }: { route: string }) {
           </span>
         </label>
       )}
-      <span className="sr-only" role="status">
-        {state === "copied" ? "Event link copied." : ""}
-      </span>
     </div>
   );
 }

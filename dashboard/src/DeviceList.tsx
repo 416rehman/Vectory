@@ -17,7 +17,6 @@ import {
   Button,
   EmptyState,
   FilterChips,
-  InlineError,
   PageHeader,
   PageToolbar,
   QuickFilters,
@@ -49,6 +48,7 @@ import {
   type VersionMarker,
 } from "./deviceModel";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 const PAGE_SIZES = [25, 50, 100];
@@ -122,7 +122,7 @@ export default function DeviceList({
   navigate,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
 }) {
   const devices = useResource<Device[]>("/devices", []);
@@ -424,17 +424,6 @@ export default function DeviceList({
           </Button>
         )}
       </PageHeader>
-      {devices.error && (
-        <InlineError
-          title={
-            all.length ? "Couldn't refresh devices." : "Couldn't load devices."
-          }
-          error={devices.error}
-          updatedAt={devices.updatedAt}
-          retry={() => void devices.reload()}
-          retrying={devices.refreshing}
-        />
-      )}
       {firstRun ? (
         <TableCard>
           <EmptyState
@@ -470,7 +459,7 @@ export default function DeviceList({
               />
             }
             count={
-              devices.loading && !devices.updatedAt
+              !devices.updatedAt
                 ? undefined
                 : filteredView
                   ? `${filtered.length.toLocaleString()} of ${all.length.toLocaleString()}`
@@ -484,7 +473,10 @@ export default function DeviceList({
                     options={deviceViews.map((item) => ({
                       value: item.value,
                       label: item.label,
-                      count: viewCounts[item.value],
+                      // No counts until a read succeeds: never a fake zero.
+                      count: devices.updatedAt
+                        ? viewCounts[item.value]
+                        : undefined,
                     }))}
                     value={view}
                     onChange={(value) => update({ view: value, page: 1 })}
@@ -556,6 +548,19 @@ export default function DeviceList({
               columns={columns}
               rowKey={(device) => device.id}
               label="Devices"
+              error={
+                devices.error
+                  ? {
+                      title: devices.updatedAt
+                        ? "Couldn't refresh devices."
+                        : "Couldn't load devices.",
+                      message: devices.error,
+                      updatedAt: devices.updatedAt,
+                      retry: () => void devices.reload(),
+                      retrying: devices.refreshing,
+                    }
+                  : null
+              }
               className="devices-table"
               loading={devices.loading && !devices.updatedAt}
               sort={{
@@ -605,28 +610,19 @@ export default function DeviceList({
                 ],
               })}
               empty={
-                devices.error && !all.length ? (
-                  <EmptyState
-                    variant="error"
-                    title="Devices couldn't be loaded"
-                  >
-                    {devices.error}
-                  </EmptyState>
-                ) : (
-                  <EmptyState
-                    variant="filtered"
-                    title="No matching devices"
-                    action={
-                      <Button variant="secondary" onClick={() => reset()}>
-                        Clear filters
-                      </Button>
-                    }
-                  >
-                    {view
-                      ? `No device matches "${deviceViews.find((item) => item.value === view)?.label}" with the other filters.`
-                      : "Try another name, label, version or state."}
-                  </EmptyState>
-                )
+                <EmptyState
+                  variant="filtered"
+                  title="No matching devices"
+                  action={
+                    <Button variant="secondary" onClick={() => reset()}>
+                      Clear filters
+                    </Button>
+                  }
+                >
+                  {view
+                    ? `No device matches "${deviceViews.find((item) => item.value === view)?.label}" with the other filters.`
+                    : "Try another name, label, version or state."}
+                </EmptyState>
               }
             />
           </TableCard>
@@ -642,7 +638,7 @@ export default function DeviceList({
           preserveExistingSettings
           initialDeviceIds={selectedIds}
           onDone={(message) => {
-            notify(message);
+            notify(message, { tone: "success" });
             setSelected([]);
             void devices.reload();
           }}

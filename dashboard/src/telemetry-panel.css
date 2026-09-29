@@ -1,20 +1,12 @@
-/* Series colors follow the documented data-viz palette: blue and aqua for
-   identity, status red only for series that mean "bad", gray for context. */
+/* One series meaning across the app (tokens.css): in is --series-1, out is
+   --series-2, and status red only for series that mean "bad". */
 .telemetry-panel {
-  --series-in: #2a78d6;
-  --series-out: #1baf7a;
-  --series-critical: #d03b3b;
-  --series-muted: #898781;
-  --check-ok: #256440;
-  --check-missing: #a32d28;
-}
-[data-theme="dark"] .telemetry-panel {
-  --series-in: #3987e5;
-  --series-out: #199e70;
-  --series-critical: #e66767;
-  --series-muted: #9d9b95;
-  --check-ok: #a2d5b2;
-  --check-missing: #ffb4ae;
+  --series-in: var(--series-1);
+  --series-out: var(--series-2);
+  --series-critical: var(--mark-danger);
+  --series-muted: var(--mark-paused);
+  --check-ok: var(--success-text);
+  --check-missing: var(--danger-text);
 }
 .telemetry-heading {
   display: flex;
@@ -39,40 +31,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-.telemetry-range {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--surface);
-}
-.telemetry-range button {
-  border: 0;
-  border-left: 1px solid var(--line);
-  padding: 6px 10px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.telemetry-range button:first-child {
-  border-left: 0;
-}
-.telemetry-range button:hover {
-  color: var(--ink);
-  background: var(--surface-hover);
-}
-.telemetry-range button[aria-pressed="true"] {
-  color: var(--ink);
-  font-weight: 600;
-  background: var(--surface-soft);
-}
-.telemetry-range button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 .telemetry-notice {
   margin: 0 0 16px;
@@ -344,6 +302,17 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+.telemetry-component-table th:not(:first-child) .data-table-heading {
+  justify-content: flex-end;
+}
+.telemetry-component-table th:first-child {
+  min-width: 200px;
+}
+.telemetry-kind {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-transform: capitalize;
+}
 .telemetry-component-table td strong {
   font-size: 13px;
   font-weight: 500;
@@ -443,10 +412,6 @@
 @media (max-width: 700px) {
   .telemetry-controls {
     width: 100%;
-  }
-  .telemetry-range {
-    max-width: 100%;
-    overflow-x: auto;
   }
   .telemetry-charts {
     grid-template-columns: minmax(0, 1fr);

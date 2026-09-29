@@ -9,7 +9,7 @@ import {
 } from "./api";
 import { Button, ErrorBox, Modal, SearchBox, Spinner, useResource } from "./ui";
 import TargetDialog from "./TargetDialog";
-import { since } from "./deploymentStatus";
+import { relativeTime } from "./time";
 
 type VersionItem = {
   id: string;
@@ -182,8 +182,7 @@ export default function DeploymentPicker({
                   <strong>{item.name}</strong>
                   <small>
                     Latest v{item.latest_version!.number} · published{" "}
-                    {since(item.latest_version!.created_at)?.toLowerCase() ||
-                      "recently"}
+                    {relativeTime(item.latest_version!.created_at)}
                     {" · "}
                     {item.component_counts.sources} in,{" "}
                     {item.component_counts.transforms} transforms,{" "}

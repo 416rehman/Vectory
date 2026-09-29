@@ -19,17 +19,21 @@ import {
   Ban,
   CalendarClock,
   CalendarX,
+  Check,
   ChevronRight,
   CircleCheck,
   CircleDot,
   CircleHelp,
   CircleMinus,
+  CirclePlus,
   CircleX,
   Clock3,
+  Copy,
   Eye,
   Info,
   LoaderCircle,
   Pause,
+  Repeat2,
   RotateCw,
   RotateCcw,
   Search,
@@ -81,12 +85,15 @@ export function useResource<T>(
     data: T;
     loading: boolean;
     error: string;
+    /** The HTTP status of the failed read, when the server answered. */
+    errorStatus: number | null;
     updatedAt: number | null;
   }>({
     path,
     data: initial,
     loading: !!path,
     error: "",
+    errorStatus: null,
     updatedAt: null,
   });
   const [refreshing, setRefreshing] = useState(false);
@@ -130,6 +137,7 @@ export function useResource<T>(
             data: result,
             loading: false,
             error: "",
+            errorStatus: null,
             updatedAt: lastSuccess.current,
           });
           return result;
@@ -151,6 +159,8 @@ export function useResource<T>(
               data: keep ? previous.data : initialValue.current,
               loading: false,
               error: (e as Error).message,
+              errorStatus:
+                e instanceof APIError && e.status > 0 ? e.status : null,
               updatedAt: keep ? previous.updatedAt : null,
             };
           });
@@ -175,6 +185,7 @@ export function useResource<T>(
       data: previous.path === path ? previous.data : initialValue.current,
       loading: !!path,
       error: "",
+      errorStatus: null,
       updatedAt: previous.path === path ? previous.updatedAt : null,
     }));
     void load();
@@ -211,12 +222,14 @@ export function useResource<T>(
           data: initial,
           loading: !!path,
           error: "",
+          errorStatus: null,
           updatedAt: null,
         };
   return {
     data: shown.data,
     loading: shown.loading,
     error: shown.error,
+    errorStatus: shown.errorStatus,
     updatedAt: shown.updatedAt,
     refreshing: refreshing && state.path === path,
     reload,
@@ -242,17 +255,24 @@ export function useMediaQuery(query: string) {
   return matches;
 }
 
-/** Re-render on a cadence suited to relative times ("4s ago"). */
-export function useNow(reference?: number | null) {
+/**
+ * The current time, re-rendering on a cadence: every `every` ms (countdowns),
+ * or one suited to a relative time ("4s ago") since `reference`.
+ */
+export function useNow(
+  reference?: number | null,
+  { every, active = true }: { every?: number; active?: boolean } = {},
+) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    if (!active) return;
     const age = reference ? Date.now() - reference : 0;
     const timer = setTimeout(
       () => setNow(Date.now()),
-      age < 60000 ? 1000 : 15000,
+      every ?? (age < 60000 ? 1000 : 15000),
     );
     return () => clearTimeout(timer);
-  }, [reference, now]);
+  }, [reference, now, every, active]);
   return now;
 }
 
@@ -350,6 +370,89 @@ export function IconButton({
     </Tooltip>
   ) : (
     button
+  );
+}
+
+/* ---------- Copy ---------- */
+
+/**
+ * The one copy action: the label turns into a confirmation, a status line
+ * tells screen readers, and a refusal (no clipboard access) is said out loud
+ * and, unless the caller shows its own fallback, written next to the button.
+ */
+export function CopyButton({
+  text,
+  label = "Copy",
+  copiedLabel = "Copied",
+  copiedMessage,
+  failedMessage = "Copy isn't available here. Select the text to copy it.",
+  variant = "secondary compact",
+  ariaLabel,
+  onCopied,
+  onFailed,
+}: {
+  /** Read when the button is pressed, so it can reflect the latest value. */
+  text: string | (() => string);
+  label?: string;
+  copiedLabel?: string;
+  /** What assistive tech hears after a copy; defaults to the label plus a period. */
+  copiedMessage?: string;
+  /** Empty when the caller shows its own selectable fallback (onFailed). */
+  failedMessage?: string;
+  variant?: string;
+  /** A name that says what is copied, when the visible label cannot. */
+  ariaLabel?: string;
+  onCopied?: () => void;
+  onFailed?: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <>
+      <button
+        type="button"
+        className={`button ${variant} copy-button`}
+        aria-label={ariaLabel}
+        onClick={async () => {
+          clearTimeout(timer.current);
+          let next: "copied" | "failed" = "copied";
+          try {
+            await navigator.clipboard.writeText(
+              typeof text === "function" ? text() : text,
+            );
+          } catch {
+            next = "failed";
+          }
+          setState(next);
+          if (next === "copied") onCopied?.();
+          else onFailed?.();
+          timer.current = setTimeout(
+            () => setState("idle"),
+            next === "copied" ? 2400 : 8000,
+          );
+        }}
+      >
+        {state === "copied" ? (
+          <Check size={15} aria-hidden="true" />
+        ) : (
+          <Copy size={15} aria-hidden="true" />
+        )}
+        {state === "copied" ? copiedLabel : label}
+      </button>
+      <span
+        className={
+          state === "failed" && failedMessage ? "copy-note" : "sr-only"
+        }
+        role="status"
+      >
+        {state === "copied"
+          ? (copiedMessage ?? `${copiedLabel}.`)
+          : state === "failed"
+            ? failedMessage
+            : ""}
+      </span>
+    </>
   );
 }
 
@@ -592,85 +695,58 @@ const statusIcons: Record<StatusIcon, LucideIcon> = {
   calendar: CalendarClock,
   "calendar-x": CalendarX,
   eye: Eye,
+  repeat: Repeat2,
+  plus: CirclePlus,
   dot: CircleDot,
 };
-/** The one way to show a backend state: icon + label, tinted by tone. */
+const toneIcons: Record<StatusTone, StatusIcon> = {
+  success: "check",
+  warning: "alert",
+  danger: "x",
+  info: "progress",
+  neutral: "dot",
+};
+/**
+ * The one way to show a state: icon + label, tinted by tone. A backend state
+ * reads from status.ts (domain + value); a local outcome with no domain passes
+ * its own tone and label.
+ */
 export function StatusBadge({
   domain,
-  value,
+  value = "",
   label,
+  tone,
+  icon,
   description,
   appearance = "chip",
   className = "",
 }: {
-  domain: StatusDomain;
-  value: string;
-  label?: string;
+  label?: ReactNode;
+  tone?: StatusTone;
+  icon?: StatusIcon;
   description?: string;
   appearance?: "chip" | "text";
   className?: string;
-}) {
-  const status = statusOf(domain, value);
-  const Icon = statusIcons[status.icon];
+} & (
+  | { domain: StatusDomain; value: string }
+  | { domain?: undefined; value?: string; tone: StatusTone; label: ReactNode }
+)) {
+  const status = domain ? statusOf(domain, value) : null;
+  const shownTone = tone ?? status?.tone ?? "neutral";
+  const shownIcon = icon ?? status?.icon ?? toneIcons[shownTone];
+  const Icon = statusIcons[shownIcon];
+  const title = description ?? status?.description;
   return (
     <span
       className={`status-badge ${className}`.trim()}
-      data-tone={status.tone}
+      data-tone={shownTone}
       data-appearance={appearance}
-      data-state={value}
-      title={description ?? (status.description || undefined)}
+      data-state={value || undefined}
+      data-icon={shownIcon}
+      title={title || undefined}
     >
       <Icon size={13} strokeWidth={2.2} aria-hidden="true" />
-      <span>{label ?? status.label}</span>
-    </span>
-  );
-}
-/** @deprecated Use StatusBadge with a status domain. */
-export function Badge({
-  status,
-  children,
-}: {
-  status?: string;
-  children?: ReactNode;
-}) {
-  const tone: StatusTone = [
-    "verified",
-    "online",
-    "verified_applied",
-    "completed",
-    "success",
-    "active",
-    "valid",
-  ].includes(status || "")
-    ? "success"
-    : [
-          "paused",
-          "scheduled",
-          "verification_unknown",
-          "desired",
-          "applying",
-          "written",
-          "reload_requested",
-          "stale",
-        ].includes(status || "")
-      ? "warning"
-      : [
-            "failed",
-            "offline",
-            "revoked",
-            "conflict",
-            "missed",
-            "error",
-          ].includes(status || "")
-        ? "danger"
-        : "neutral";
-  return (
-    <span
-      className="status-badge badge"
-      data-tone={tone}
-      data-appearance="chip"
-    >
-      <span>{children || statusOf("apply", status || "unknown").label}</span>
+      <span>{label ?? status?.label}</span>
     </span>
   );
 }
@@ -692,7 +768,12 @@ export type ShellInfo = {
 };
 /** Provided by the app shell so every PageHeader places crumbs and tabs alike. */
 export const ShellContext = createContext<ShellInfo | null>(null);
-export type Crumb = { label: string; href?: string };
+export type Crumb = {
+  label: string;
+  href?: string;
+  /** Handles a plain click in place (the href still opens in a new tab). */
+  onClick?: () => void;
+};
 export type LiveState = {
   updatedAt: number | null;
   error?: string;
@@ -710,8 +791,20 @@ export function PageHeader({
   breadcrumb,
   live,
   showTabs = true,
+  titleAside,
+  headingRef,
+  documentTitle,
+  loadingTitle = false,
 }: {
   title: string;
+  /** Beside the title, such as a version chip. */
+  titleAside?: ReactNode;
+  /** The title is not known yet: show a placeholder bar (the text stays for screen readers). */
+  loadingTitle?: boolean;
+  /** Makes the title focusable for focus moves after navigation. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
+  /** The browser tab title's leading part, when it differs from the title. */
+  documentTitle?: string;
   description?: ReactNode;
   children?: ReactNode;
   help?: HelpDescriptor;
@@ -729,13 +822,14 @@ export function PageHeader({
   const crumbs: Crumb[] = ancestors.length
     ? [...ancestors, { label: title }]
     : [];
+  const tabTitle = documentTitle ?? title;
   useEffect(() => {
     if (!shell) return;
-    const parts = [title];
-    if (shell.sectionLabel && shell.sectionLabel !== title)
+    const parts = [tabTitle];
+    if (shell.sectionLabel && shell.sectionLabel !== tabTitle)
       parts.push(shell.sectionLabel);
     document.title = [...parts, "Vectory"].join(" · ");
-  }, [title, shell?.sectionLabel]);
+  }, [tabTitle, shell?.sectionLabel]);
   return (
     <>
       <div className="page-context">
@@ -747,7 +841,26 @@ export function PageHeader({
                   {index === crumbs.length - 1 ? (
                     <span aria-current="page">{crumb.label}</span>
                   ) : crumb.href ? (
-                    <a href={crumb.href}>{crumb.label}</a>
+                    <a
+                      href={crumb.href}
+                      onClick={
+                        crumb.onClick
+                          ? (event) => {
+                              if (
+                                event.button !== 0 ||
+                                event.metaKey ||
+                                event.ctrlKey ||
+                                event.shiftKey
+                              )
+                                return;
+                              event.preventDefault();
+                              crumb.onClick!();
+                            }
+                          : undefined
+                      }
+                    >
+                      {crumb.label}
+                    </a>
                   ) : (
                     <span>{crumb.label}</span>
                   )}
@@ -761,7 +874,21 @@ export function PageHeader({
       <header className="page-heading">
         <div>
           <div className="page-title-row">
-            <h1>{title}</h1>
+            <h1
+              ref={headingRef}
+              tabIndex={headingRef ? -1 : undefined}
+              className={headingRef ? "page-title-focus" : undefined}
+            >
+              {loadingTitle ? (
+                <>
+                  <span className="sr-only">{title}</span>
+                  <Skeleton width={220} height={20} />
+                </>
+              ) : (
+                title
+              )}
+            </h1>
+            {titleAside}
             {help && (
               <HelpLink {...help} label={help.label || `Help for ${title}`} />
             )}
@@ -780,9 +907,20 @@ export function PageHeader({
 function SectionTabs({ shell }: { shell: ShellInfo }) {
   const list = useRef<HTMLElement>(null);
   useEffect(() => {
-    list.current
-      ?.querySelector('[aria-current="page"]')
-      ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    // Scroll only the strip. scrollIntoView would also move the sequential
+    // focus start, so the first Tab would skip the skip link and the shell.
+    const nav = list.current;
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
+    const left =
+      active.getBoundingClientRect().left -
+      nav.getBoundingClientRect().left +
+      nav.scrollLeft;
+    if (
+      left < nav.scrollLeft ||
+      left + active.offsetWidth > nav.scrollLeft + nav.clientWidth
+    )
+      nav.scrollLeft = Math.max(0, left - 16);
   }, [shell.currentTab]);
   return (
     <nav
@@ -1063,7 +1201,11 @@ export function ErrorBox({
     </div>
   );
 }
-/** A failed read that keeps the last good data on screen, with one retry. */
+/**
+ * The one failed-read message: what couldn't load, how old the data on screen
+ * is, the server's reason (inline when nothing else is shown, otherwise behind
+ * Details), and one retry.
+ */
 export function InlineError({
   title,
   error,
@@ -1083,11 +1225,12 @@ export function InlineError({
       <AlertCircle size={16} aria-hidden="true" />
       <div className="inline-error-copy">
         <strong>{title}</strong>
-        <span>
-          {updatedAt
-            ? ` Showing data from ${relativeTime(updatedAt, now)}.`
-            : ` ${error}`}
-        </span>
+        {updatedAt ? (
+          <span> Showing data from {relativeTime(updatedAt, now)}.</span>
+        ) : (
+          // Nothing else is on screen, so the reason is the message.
+          error && <span> {error}</span>
+        )}
         {updatedAt && error && (
           <details>
             <summary>Details</summary>
@@ -1269,6 +1412,18 @@ export function Modal({
   const opener = useRef<HTMLElement | null>(null);
   const openRef = useRef(open);
   const unmounted = useRef(false);
+  // Remember the opener while rendering the opening frame: a field with
+  // autoFocus inside the dialog takes focus before any effect could look.
+  if (open && !openRef.current) opener.current = null;
+  if (open && !opener.current && typeof document !== "undefined") {
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      !content.current?.contains(active)
+    )
+      opener.current = active;
+  }
   openRef.current = open;
   useEffect(
     () => () => {
@@ -1318,6 +1473,7 @@ export function Modal({
           onOpenAutoFocus={(event) => {
             const active = document.activeElement;
             if (
+              !opener.current &&
               active instanceof HTMLElement &&
               active !== document.body &&
               !content.current?.contains(active)
@@ -1497,6 +1653,7 @@ export function Pagination({
   sizeOptions,
   onSize,
   noun = "results",
+  alwaysShow = false,
 }: {
   count: number;
   page: number;
@@ -1505,8 +1662,11 @@ export function Pagination({
   sizeOptions?: number[];
   onSize?: (size: number) => void;
   noun?: string;
+  /** Keep the controls when everything fits on one page. */
+  alwaysShow?: boolean;
 }) {
   const pages = Math.max(1, Math.ceil(count / size));
+  if (!alwaysShow && page <= 1 && pages <= 1) return null;
   return (
     <div className="pagination">
       <span>

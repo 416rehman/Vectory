@@ -7,7 +7,6 @@ import {
   failureStagePhrase,
   progressSegments,
   releasePlan,
-  since,
   targetLabel,
   timelineSteps,
   withDegraded,
@@ -35,6 +34,7 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
         rolled_back_to_version: 2,
       }),
     ).toEqual({
+      state: "rolled_back",
       label: "Rolled back",
       tone: "warning",
       note: "To v2 after completing",
@@ -51,6 +51,7 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
         state_counts: { verified_applied: 1 },
       }),
     ).toEqual({
+      state: "recovered",
       label: "Recovered",
       tone: "success",
       note: "Stopped after a failure; every device verified since",
@@ -73,7 +74,12 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
         status: "unassigned",
         status_before_removal: "failed",
       }),
-    ).toEqual({ label: "Failed", tone: "danger", note: "Assignment removed" });
+    ).toEqual({
+      state: "failed",
+      label: "Failed",
+      tone: "danger",
+      note: "Assignment removed",
+    });
     expect(describeDeployment({ ...base, status: "unassigned" }).label).toBe(
       "Removed",
     );
@@ -94,7 +100,12 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
         status_before_removal: "completed",
         replaced_by: replaced,
       }),
-    ).toEqual({ label: "Replaced", tone: "neutral", note: "By v3" });
+    ).toEqual({
+      state: "replaced",
+      label: "Replaced",
+      tone: "neutral",
+      note: "By v3",
+    });
     expect(
       describeDeployment({ ...base, status: "active", replaced_by: replaced })
         .note,
@@ -108,6 +119,7 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
         failure_reason: "threshold",
       }),
     ).toEqual({
+      state: "failed",
       label: "Failed",
       tone: "danger",
       note: "Stopped after device failures",
@@ -118,7 +130,7 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
     expect(targetLabel("pending")).toBe("Queued");
     expect(targetLabel("pending", { stopped: true })).toBe("Not released");
     expect(targetLabel("removed", { replaced: true })).toBe("Replaced");
-    expect(targetLabel("desired")).toBe("Waiting for check-in");
+    expect(targetLabel("desired")).toBe("Waiting for agent");
   });
 });
 
@@ -393,9 +405,5 @@ describe("time formatting", () => {
     expect(countdown(185_400)).toBe("3:06");
     expect(countdown(3_723_000)).toBe("1:02:03");
     expect(countdown(-5)).toBe("0:00");
-    const now = Date.parse("2026-09-29T02:10:00Z");
-    expect(since("2026-09-29T02:09:48Z", now)).toBe("12 s ago");
-    expect(since("2026-09-29T02:06:00Z", now)).toBe("4 min ago");
-    expect(since(null, now)).toBeNull();
   });
 });

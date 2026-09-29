@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Check, X } from "lucide-react";
-import { ago, when, type Device } from "./api";
-import { ErrorBox, RefreshButton, Spinner, useResource } from "./ui";
+import { when, type Device } from "./api";
+import { relativeTime } from "./time";
+import {
+  ErrorBox,
+  RefreshButton,
+  SegmentedControl,
+  Spinner,
+  useResource,
+} from "./ui";
 import DocLink, { HelpLink } from "./DocLink";
 import { DataTable, type TableColumn } from "./DataTable";
 import VectorLogSummaryView from "./VectorLogSummary";
@@ -179,7 +186,7 @@ export default function TelemetryPanel({
               {latest ? (
                 <>
                   {stale ? "Last available sample" : "Last sample"}{" "}
-                  {ago(latest.sampled_at).toLowerCase()}
+                  {relativeTime(latest.sampled_at)}
                   {stale ? ". These values may be out of date." : "."}{" "}
                 </>
               ) : null}
@@ -188,18 +195,12 @@ export default function TelemetryPanel({
           )}
         </div>
         <div className="telemetry-controls">
-          <div className="telemetry-range" role="group" aria-label="Time range">
-            {ranges.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={range === option.value}
-                onClick={() => setRange(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            label="Time range"
+            options={ranges}
+            value={range}
+            onChange={setRange}
+          />
           <RefreshButton onClick={resource.reload} busy={resource.loading}>
             Refresh
           </RefreshButton>
@@ -885,6 +886,21 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
         label="Component metrics"
         className="fleet-table telemetry-component-table"
         empty="No matching components."
+        mobileCard={(component) => ({
+          title: component.id,
+          status: component.kind ? (
+            <span className="telemetry-kind">{component.kind}</span>
+          ) : undefined,
+          meta: [
+            component.type?.replaceAll("_", " ") || null,
+            ...visible.map((column) => {
+              const reading = column.read(component);
+              return present(reading)
+                ? `${column.title}: ${column.format(reading)}`
+                : null;
+            }),
+          ],
+        })}
       />
       <p className="telemetry-note">
         Filtered counts events a filter or sample transform dropped on purpose;

@@ -17,7 +17,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { Pagination, Skeleton, useMediaQuery } from "./ui";
+import { InlineError, Pagination, Skeleton, useMediaQuery } from "./ui";
 import {
   clampPage,
   matchesTableFilter,
@@ -74,6 +74,14 @@ type TablePagination = {
   /** Keep controls visible when everything fits on one page. */
   alwaysShow?: boolean;
   noun?: string;
+};
+/** A failed read: one message in the card, the last rows kept but dimmed. */
+export type TableError = {
+  title: string;
+  message: string;
+  updatedAt?: number | null;
+  retry?: () => void;
+  retrying?: boolean;
 };
 export type MobileCard = {
   title: ReactNode;
@@ -306,6 +314,7 @@ export function DataTable<T>({
   scrollClassName = "",
   mobileCard,
   skeletonRows = 5,
+  error,
 }: {
   data: T[];
   columns: TableColumn<T>[];
@@ -333,6 +342,8 @@ export function DataTable<T>({
   /** Below 640px, render rows as a stacked list with this mapping. */
   mobileCard?: (row: T) => MobileCard;
   skeletonRows?: number;
+  /** Replaces the empty state; never shows "no results" for a failed read. */
+  error?: TableError | null;
 }) {
   const [localSort, setLocalSort] = useState<TableSort | null>(defaultSort);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -373,7 +384,7 @@ export function DataTable<T>({
     pagination && pagination.total === undefined
       ? ordered.slice((page - 1) * pagination.size, page * pagination.size)
       : ordered;
-  const skeleton = loading && rows.length === 0;
+  const skeleton = loading && rows.length === 0 && !error;
   useEffect(() => {
     if (
       pagination &&
@@ -414,7 +425,19 @@ export function DataTable<T>({
   const showPagination =
     !!pagination &&
     !skeleton &&
+    !(error && !rows.length) &&
     (pagination.alwaysShow || count > pagination.size || page > 1);
+  const errorBanner = error && (
+    <InlineError
+      title={error.title}
+      error={error.message}
+      updatedAt={error.updatedAt}
+      retry={error.retry}
+      retrying={error.retrying}
+    />
+  );
+  // Nothing loaded: the message is the whole table. No headers, no "0 results".
+  if (errorBanner && !rows.length) return errorBanner;
   const loadingStatus = loading && (
     <span className="sr-only" role="status">
       Loading…
@@ -424,10 +447,12 @@ export function DataTable<T>({
     return (
       <>
         {loadingStatus}
+        {errorBanner}
         <ul
           className="data-list"
           aria-label={label}
           aria-busy={loading || undefined}
+          data-stale={error ? "" : undefined}
         >
           {skeleton ? (
             Array.from({ length: Math.min(skeletonRows, 4) }, (_, index) => (
@@ -498,6 +523,7 @@ export function DataTable<T>({
             sizeOptions={pagination!.sizeOptions}
             onSize={pagination!.onSize}
             noun={pagination!.noun}
+            alwaysShow={pagination!.alwaysShow}
           />
         )}
       </>
@@ -505,6 +531,7 @@ export function DataTable<T>({
   return (
     <>
       {loadingStatus}
+      {errorBanner}
       <div
         ref={scroller}
         className={`${variant === "code" ? "data-table-code-scroll" : "data-table-scroll"} ${scrollClassName}`}
@@ -518,6 +545,7 @@ export function DataTable<T>({
           aria-label={label}
           aria-busy={loading || undefined}
           data-interactive={interactive || undefined}
+          data-stale={error ? "" : undefined}
         >
           {columns.some((column) => column.width !== undefined) && (
             <colgroup>
@@ -699,6 +727,7 @@ export function DataTable<T>({
           sizeOptions={pagination!.sizeOptions}
           onSize={pagination!.onSize}
           noun={pagination!.noun}
+          alwaysShow={pagination!.alwaysShow}
         />
       )}
     </>

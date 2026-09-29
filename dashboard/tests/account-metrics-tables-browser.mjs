@@ -337,25 +337,32 @@ try {
               (theme) => (document.documentElement.dataset.theme = theme),
               theme,
             );
-            // On a phone, people are cards with their actions in view.
-            const cards = view === "people" && width < 760;
+            // On a phone, people and component metrics are cards, not tables
+            // that scroll sideways.
+            const cards = view === "people" ? width < 760 : width < 640;
             const table = f.page.getByRole("table").first();
             if (cards) {
               await expect(table).toBeHidden();
               const list = f.page.getByRole("list", {
-                name: "Workspace access",
+                name:
+                  view === "people" ? "Workspace access" : "Component metrics",
                 exact: true,
               });
               await expect(list).toBeVisible();
               await expect(list.getByRole("listitem")).toHaveCount(
-                people.length,
+                view === "people" ? people.length : components.length,
               );
-              await expect(
-                list.getByRole("button", {
-                  name: "Edit access for Person 3",
-                  exact: true,
-                }),
-              ).toBeVisible();
+              if (view === "people")
+                await expect(
+                  list.getByRole("button", {
+                    name: "Edit access for Person 3",
+                    exact: true,
+                  }),
+                ).toBeVisible();
+              else
+                await expect(
+                  list.getByRole("listitem").filter({ hasText: "ten" }),
+                ).toContainText("Errors (total): 3");
             } else {
               await expect(table.locator("thead")).toBeVisible();
               await expect(
@@ -383,11 +390,19 @@ try {
                     : "Component metrics table",
                 exact: true,
               });
-              await region.focus();
-              await expect(region).toBeFocused();
-              if (width === 375) {
+              // A region is a keyboard stop only while it scrolls sideways; one
+              // that fits has nothing to scroll and no tab stop.
+              const scrolls = await region.evaluate(
+                (node) => node.scrollWidth > node.clientWidth + 1,
+              );
+              if (scrolls) {
+                await expect(region).toHaveAttribute("tabindex", "0");
+                await region.focus();
+                await expect(region).toBeFocused();
                 await f.page.keyboard.press("End");
                 await f.page.keyboard.press("ArrowRight");
+              } else {
+                await expect(region).not.toHaveAttribute("tabindex");
               }
             }
             await f.page.screenshot({

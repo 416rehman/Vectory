@@ -22,6 +22,8 @@ export type StatusIcon =
   | "calendar"
   | "calendar-x"
   | "eye"
+  | "repeat"
+  | "plus"
   | "dot";
 export type StatusEntry = {
   label: string;
@@ -38,6 +40,7 @@ export type StatusDomain =
   | "issue"
   | "audit"
   | "gate"
+  | "stage"
   | "telemetry";
 
 const entry = (
@@ -117,6 +120,19 @@ export const applyStates = {
   ),
 } satisfies Record<string, StatusEntry>;
 export type ApplyState = keyof typeof applyStates;
+
+/**
+ * The apply pipeline as completed steps, for the device page's progress and
+ * the rollout timeline. The last step reads like the state it reaches.
+ */
+export const applyStepLabels = {
+  released: "Released",
+  downloaded: applyStates.downloaded.label,
+  validated: applyStates.validated.label,
+  written: "Written",
+  reloaded: "Vector reloaded",
+  applied: applyStates.verified_applied.label,
+} as const;
 
 /** The device's single effective state, computed by the server. */
 export const deviceStatuses = {
@@ -233,16 +249,37 @@ export const deploymentStatuses = {
     "minus",
     "The assignment was removed. Devices fall back to their next assignment.",
   ),
+  // Display states derived from a deployment's lineage, not stored statuses.
+  recovered: entry(
+    "Recovered",
+    "success",
+    "check",
+    "The rollout stopped after a failure, but every device has verified since.",
+  ),
+  rolled_back: entry(
+    "Rolled back",
+    "warning",
+    "undo",
+    "A rollback returned its devices to an earlier version.",
+  ),
+  replaced: entry(
+    "Replaced",
+    "neutral",
+    "minus",
+    "A newer deployment took over its devices.",
+  ),
 } satisfies Record<string, StatusEntry>;
 export type DeploymentStatus = keyof typeof deploymentStatuses;
 
 /** Per-device progress inside one deployment. */
 export const targetStates = {
-  pending: entry(
-    "Waiting for release",
+  pending: entry("Queued", "neutral", "clock", "Waits for its rollout stage."),
+  // A pending device in a rollout that stopped before its stage.
+  not_released: entry(
+    "Not released",
     "neutral",
-    "clock",
-    "Waits for its rollout stage.",
+    "minus",
+    "The rollout stopped before this device's stage.",
   ),
   ...applyStates,
   incompatible: entry(
@@ -257,11 +294,24 @@ export const targetStates = {
     "alert",
     "An active canary blocked the scheduled start.",
   ),
+  // Verified on the version, but an open delivery issue says it isn't delivering.
+  degraded: entry(
+    "Not delivering",
+    "warning",
+    "alert",
+    "Applied, but the device isn't delivering. An open delivery issue says why.",
+  ),
   removed: entry(
     "No longer targeted",
     "neutral",
     "minus",
     "The device left the target set.",
+  ),
+  replaced: entry(
+    "Replaced",
+    "neutral",
+    "minus",
+    "A newer deployment took over this device.",
   ),
   revoked: deviceStatuses.revoked,
 } satisfies Record<string, StatusEntry>;
@@ -361,6 +411,30 @@ export const gateStates = {
   paused: deploymentStatuses.paused,
 } satisfies Record<string, StatusEntry>;
 
+/** One release stage (canary, batch) of a rollout. */
+export const stageStates = {
+  verified: entry(
+    "Applied",
+    "success",
+    "check",
+    "Every device in this stage applied the version.",
+  ),
+  in_progress: entry(
+    "Rolling out",
+    "info",
+    "progress",
+    "Devices in this stage are applying the version.",
+  ),
+  failed: entry(
+    "Failed",
+    "danger",
+    "x",
+    "Devices in this stage failed to apply the version.",
+  ),
+  queued: targetStates.pending,
+  stopped: targetStates.not_released,
+} satisfies Record<string, StatusEntry>;
+
 export const telemetryStates = {
   reporting: entry(
     "Reporting",
@@ -394,6 +468,7 @@ export const statusDomains: Record<
   issue: issueDispositions,
   audit: auditOutcomes,
   gate: gateStates,
+  stage: stageStates,
   telemetry: telemetryStates,
 };
 

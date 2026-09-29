@@ -34,6 +34,7 @@ import {
   type TokenRequestIssue,
 } from "./enrollmentTokenRequests";
 import "./enrollment-token-flow.css";
+import type { Notify } from "./toast";
 
 export type EnrollmentTokenFlowHandle = {
   /**
@@ -63,7 +64,7 @@ export default forwardRef<
   EnrollmentTokenFlowHandle,
   {
     user: User;
-    notify(message: string): void;
+    notify: Notify;
     onChange(): void;
     onState(busy: boolean, blocked: boolean): void;
     onReady?(ready: ReadyToken | null): void;
@@ -399,7 +400,7 @@ export default forwardRef<
     try {
       await navigator.clipboard.writeText(ready.token);
       if (allowed() && epoch === getSessionEpoch())
-        callbacks.current.notify("Token copied.");
+        callbacks.current.notify("Token copied.", { tone: "success" });
     } catch {
       if (allowed() && epoch === getSessionEpoch())
         setError(

@@ -139,19 +139,21 @@ input::placeholder,
 textarea::placeholder {
   color: var(--text-subtle);
 }
+/* One chevron per select in both themes. Component rules often set the
+   background shorthand for their fill, which would drop or tile the image, so
+   the chevron layer is fixed here; components move it with
+   --select-chevron-inset. */
 select {
   appearance: none;
   padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366645e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
   cursor: pointer;
 }
-:root[data-theme="dark"] select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b8b3ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+select:not([multiple]) {
+  background-image: var(--select-chevron) !important;
+  background-repeat: no-repeat !important;
+  background-position: right var(--select-chevron-inset, 10px) center !important;
 }
 select[multiple] {
-  background-image: none;
   padding-right: 11px;
 }
 input[type="checkbox"],
@@ -164,6 +166,16 @@ input[type="radio"] {
   accent-color: var(--accent);
   flex-shrink: 0;
   box-shadow: none;
+}
+/* The reset above drops the field ring; small controls get an outline instead. */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Card-style choices carry the ring on the whole card. */
+.pipeline-start-option:has(> input:focus-visible) {
+  box-shadow: 0 0 0 2px var(--focus);
 }
 textarea {
   resize: vertical;
@@ -212,9 +224,6 @@ details[open] > summary {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-.full-width {
-  width: 100%;
 }
 /* Small utilities other pages still compose with their own classes. */
 .muted {
@@ -463,6 +472,21 @@ details[open] > summary {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text);
+}
+/* A long name shrinks to an ellipsis; the live control keeps its size. */
+.page-context > nav {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.page-breadcrumb li:last-child {
+  overflow: hidden;
+}
+/* Ancestors keep their whole label; only the current page shortens. */
+.page-breadcrumb li:not(:last-child) {
+  flex: none;
+}
+.page-context > .live-status {
+  flex: none;
 }
 .page-heading {
   display: flex;
@@ -716,11 +740,11 @@ td strong {
   border-color: var(--border);
 }
 .pagination select {
+  --select-chevron-inset: 6px;
   width: auto;
   min-height: var(--control-sm);
   padding: 2px 28px 2px 8px;
   font-size: var(--text-sm);
-  background-position: right 6px center;
 }
 .pagination label {
   display: inline-flex;
@@ -789,12 +813,17 @@ td strong {
   gap: var(--space-4);
   border-bottom: 1px solid var(--border);
 }
+/* A long name in the title wraps; it never pushes the close button away. */
+.modal-header > div {
+  min-width: 0;
+}
 .modal-header h2 {
   font-size: 18px;
   line-height: var(--leading-lg);
   letter-spacing: -0.2px;
   font-weight: var(--weight-semibold);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .modal-header p {
   margin: var(--space-1) 0 0;
@@ -802,8 +831,10 @@ td strong {
   font-size: var(--text-base);
   line-height: var(--leading-base);
   max-width: 680px;
+  overflow-wrap: anywhere;
 }
 .modal-header > .icon-button {
+  flex: none;
   margin: -4px -8px 0 0;
 }
 .modal-body {
@@ -893,58 +924,6 @@ td strong {
   display: block;
   margin-top: 3px;
   color: var(--text-muted);
-}
-
-/* ---------- Sign-in screens ---------- */
-.auth-page {
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 72px 24px;
-  background: var(--bg);
-}
-.auth-card {
-  width: min(420px, 100%);
-  padding: var(--space-10) var(--space-8) var(--space-8);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
-}
-.auth-card > .brand {
-  display: inline-flex;
-  margin-bottom: var(--space-10);
-}
-.auth-card h1 {
-  font-size: 26px;
-  line-height: 34px;
-  letter-spacing: -0.6px;
-  margin-bottom: var(--space-2);
-}
-.auth-card > p {
-  color: var(--text-muted);
-  margin-bottom: var(--space-6);
-  font-size: var(--text-md);
-}
-.auth-method {
-  margin-bottom: var(--space-5);
-}
-.auth-submit {
-  margin-top: var(--space-1);
-}
-.auth-recovery {
-  display: grid;
-  gap: var(--space-3);
-}
-.auth-recovery p {
-  margin: 0 0 var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-md);
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-.auth-card h1[tabindex="-1"]:focus {
-  outline: none;
 }
 .auth-help {
   display: flex;

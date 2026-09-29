@@ -22,10 +22,6 @@ export function registerCommand(name: string, handler: Handler) {
   };
 }
 
-export function hasCommand(name: string) {
-  return handlers.has(name);
-}
-
 /** Run now if available, else open `route` and run when its page is ready. */
 export function runCommand(name: string, route?: string) {
   const handler = handlers.get(name);
@@ -34,8 +30,19 @@ export function runCommand(name: string, route?: string) {
     return true;
   }
   if (!route) return false;
-  pending.set(name, Date.now());
+  const requested = Date.now();
+  pending.set(name, requested);
   window.location.hash = `/${route}`;
+  // A page with unsaved work can refuse the navigation (the hash is put back).
+  // Then nothing should run later, on some unrelated visit to that page.
+  const path = `#/${route.split("?")[0]}`;
+  setTimeout(() => {
+    const arrived =
+      window.location.hash === path ||
+      window.location.hash.startsWith(`${path}?`) ||
+      window.location.hash.startsWith(`${path}/`);
+    if (!arrived && pending.get(name) === requested) pending.delete(name);
+  }, 0);
   return true;
 }
 

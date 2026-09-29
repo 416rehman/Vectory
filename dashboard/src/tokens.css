@@ -75,6 +75,8 @@
   --mark-empty: #d6d1c9;
   --chart-grid: #ebe8e2;
   --chart-axis: #d6d1c9;
+  /* Select chevron, drawn in --text-muted. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366645e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   /* Categorical series (identity), validated for CVD separation. */
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -243,6 +245,7 @@
   --mark-empty: #4a464d;
   --chart-grid: #312e35;
   --chart-axis: #48444d;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b8b3ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;

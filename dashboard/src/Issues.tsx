@@ -14,14 +14,15 @@ import {
   type User,
 } from "./api";
 import {
-  Badge,
+  StatusBadge,
   Button,
   ErrorBox,
   Field,
   Modal,
   Pagination,
   PageHeader,
-  RefreshButton,
+  InlineError,
+  SegmentedControl,
   SearchBox,
   Spinner,
   useResource,
@@ -31,29 +32,22 @@ import { DataTable, type TableColumn, type TableSort } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
-import { isDataPlaneCode } from "./status";
+import { isDataPlaneCode, issueDispositions } from "./status";
 import "./control.css";
 import "./issues.css";
+import type { Notify } from "./toast";
 
 const issueTime = (value: string | null) =>
   value ? when(value) : "Unavailable";
 type Disposition = Issue["disposition"] | "all";
 type View = "groups" | "list";
 const labels = {
-  open: "Open",
-  acknowledged: "Acknowledged",
-  resolved: "Resolved",
+  open: issueDispositions.open.label,
+  acknowledged: issueDispositions.acknowledged.label,
+  resolved: issueDispositions.resolved.label,
   all: "All",
 };
 const PAGE_SIZE = 12;
-// States without a built-in Badge label.
-const applyStateLabels: Record<string, string | undefined> = {
-  failed: "Apply failed",
-  rolled_back: "Rolled back",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  paused: "Paused",
-};
 const emptyPage: IssueHistoryPage = {
   items: [],
   total: 0,
@@ -124,7 +118,7 @@ export default function Issues({
   deviceId,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: (path: string) => void;
   deviceId?: string;
 }) {
@@ -138,8 +132,7 @@ export default function Issues({
     }),
     [page, setPage] = useState(1),
     [groupPage, setGroupPage] = useState(1),
-    [dialog, setDialog] = useState<Dialog | null>(null),
-    [refreshing, setRefreshing] = useState(false);
+    [dialog, setDialog] = useState<Dialog | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null),
     container = useRef<HTMLDivElement | null>(null);
   function closeDialog(saved = false) {
@@ -210,8 +203,10 @@ export default function Issues({
     opener.current = target;
     setDialog({ kind, issue });
   }
+  // Rows from before a failed refresh stay readable, but nothing acts on them.
+  const stale = !!active.error;
   const actions = (issue: Issue) => (
-    <IssueActions issue={issue} user={user} onAct={act} />
+    <IssueActions issue={issue} user={user} onAct={act} stale={stale} />
   );
   const columns: TableColumn<Issue>[] = [
     {
@@ -291,6 +286,13 @@ export default function Issues({
           topic: "troubleshooting",
           section: "a-pipeline-is-rejected-or-rolled-back",
         }}
+        live={{
+          updatedAt: active.updatedAt,
+          error: active.error || undefined,
+          loading: active.loading,
+          refreshing: active.refreshing,
+          onRefresh: () => void active.reload(),
+        }}
       />
       <div className="control-toolbar issue-toolbar">
         <SearchBox
@@ -299,7 +301,7 @@ export default function Issues({
           maxLength={200}
           placeholder="Search devices, pipelines, or reasons"
         />
-        <Segmented
+        <SegmentedControl
           label="Issue status"
           value={state}
           options={(["open", "acknowledged", "resolved", "all"] as const).map(
@@ -312,7 +314,7 @@ export default function Issues({
           }}
         />
         {!deviceId && (
-          <Segmented
+          <SegmentedControl
             label="Issue layout"
             value={view}
             options={[
@@ -322,20 +324,6 @@ export default function Issues({
             onChange={setView}
           />
         )}
-        <RefreshButton
-          busy={refreshing}
-          onClick={async () => {
-            setRefreshing(true);
-            try {
-              await active.reload();
-            } finally {
-              setRefreshing(false);
-            }
-          }}
-          disabled={active.loading}
-        >
-          Refresh
-        </RefreshButton>
       </div>
       {deviceId && (
         <p className="issue-scope">
@@ -348,17 +336,27 @@ export default function Issues({
           </Button>
         </p>
       )}
-      {active.error && (
-        <ErrorBox message={active.error} retry={active.reload} />
-      )}
       {view === "list" ? (
         <div className="control-table issue-table-panel">
           <DataTable
-            data={list.error ? [] : list.data.items}
+            data={list.data.items}
             columns={columns}
             rowKey={(issue) => issue.id}
             label="Issues"
             className="issue-table"
+            error={
+              list.error
+                ? {
+                    title: list.updatedAt
+                      ? "Couldn't refresh issues."
+                      : "Couldn't load issues.",
+                    message: list.error,
+                    updatedAt: list.updatedAt,
+                    retry: () => void list.reload(),
+                    retrying: list.refreshing,
+                  }
+                : null
+            }
             loading={list.loading}
             manualSorting
             sort={sort}
@@ -376,14 +374,17 @@ export default function Issues({
                     onPage: setPage,
                   }
             }
-            empty={list.error ? "Issues could not be loaded." : emptyState}
+            empty={emptyState}
           />
         </div>
       ) : (
         <IssueGroups
           page={groups.data}
           loading={groups.loading}
-          failed={!!groups.error}
+          error={groups.error}
+          updatedAt={groups.updatedAt}
+          retry={() => void groups.reload()}
+          retrying={groups.refreshing}
           empty={emptyState}
           actions={actions}
           onPage={setGroupPage}
@@ -400,7 +401,7 @@ export default function Issues({
           onDone={(message) => {
             closeDialog(true);
             void active.reload();
-            notify(message);
+            notify(message, { tone: "success" });
           }}
         />
       )}
@@ -415,7 +416,7 @@ export default function Issues({
           onDone={(message) => {
             closeDialog(true);
             void active.reload();
-            notify(message);
+            notify(message, { tone: "success" });
           }}
         />
       )}
@@ -423,47 +424,8 @@ export default function Issues({
   );
 }
 
-function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="issue-segmented" role="group" aria-label={label}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function DispositionBadge({ issue }: { issue: Issue }) {
-  return (
-    <Badge
-      status={
-        issue.disposition === "open"
-          ? "failed"
-          : issue.disposition === "resolved"
-            ? "completed"
-            : undefined
-      }
-    >
-      {labels[issue.disposition]}
-    </Badge>
-  );
+  return <StatusBadge domain="issue" value={issue.disposition} />;
 }
 
 function DeviceCell({ issue }: { issue: Issue }) {
@@ -597,9 +559,11 @@ function IssueActions({
   issue,
   user,
   onAct,
+  stale = false,
 }: {
   issue: Issue;
   user: User;
+  stale?: boolean;
   onAct: (
     kind: Dialog["kind"],
     issue: Issue,
@@ -615,6 +579,7 @@ function IssueActions({
           <Button
             variant="secondary compact"
             aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
+            disabled={stale}
             onClick={(event) => onAct("retry", issue, event.currentTarget)}
           >
             Retry on device
@@ -623,6 +588,7 @@ function IssueActions({
       <Button
         variant="ghost compact"
         aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
+        disabled={stale}
         onClick={(event) => onAct("disposition", issue, event.currentTarget)}
       >
         {issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"}
@@ -634,21 +600,35 @@ function IssueActions({
 function IssueGroups({
   page,
   loading,
-  failed,
+  error,
+  updatedAt,
+  retry,
+  retrying,
   empty,
   actions,
   onPage,
 }: {
   page: IssueGroupPage;
   loading: boolean;
-  failed: boolean;
+  error: string;
+  updatedAt: number | null;
+  retry: () => void;
+  retrying: boolean;
   empty: React.ReactNode;
   actions: (issue: Issue) => React.ReactNode;
   onPage: (page: number) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  if (failed)
-    return <p className="control-muted">Issues could not be loaded.</p>;
+  const failure = error && (
+    <InlineError
+      title={updatedAt ? "Couldn't refresh issues." : "Couldn't load issues."}
+      error={error}
+      updatedAt={updatedAt}
+      retry={retry}
+      retrying={retrying}
+    />
+  );
+  if (failure && !page.items.length) return failure;
   if (loading && !page.items.length)
     return (
       <div className="issue-loading">
@@ -660,7 +640,9 @@ function IssueGroups({
     <div
       className={`issue-groups${loading ? " refreshing" : ""}`}
       aria-busy={loading || undefined}
+      data-stale={failure ? "" : undefined}
     >
+      {failure}
       {page.items.map((group) => (
         <IssueGroupCard
           key={group.key}
@@ -904,9 +886,7 @@ function RetryDialog({
               <div>
                 <dt>Current state</dt>
                 <dd>
-                  <Badge status={current.apply_state}>
-                    {applyStateLabels[current.apply_state]}
-                  </Badge>
+                  <StatusBadge domain="apply" value={current.apply_state} />
                 </dd>
               </div>
               <div>

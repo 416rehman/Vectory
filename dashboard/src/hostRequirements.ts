@@ -1,4 +1,5 @@
-import agentCatalog from "./generated/vector-catalog.json";
+/** The component catalog, read on demand: it is large and only this check needs it. */
+export type AgentCatalog = typeof import("./generated/vector-catalog.json");
 
 /**
  * What a pipeline needs from the devices that run it, worked out the way the
@@ -29,7 +30,10 @@ function isLoopbackSocketAddress(value: unknown): boolean {
     return false;
   }
 }
-export function fullModeRequirements(config: Record<string, any>): string[] {
+export function fullModeRequirements(
+  config: Record<string, any>,
+  agentCatalog: AgentCatalog,
+): string[] {
   const required = new Set<string>();
   const restrictedRoots = new Set([
     "sources",
@@ -198,12 +202,18 @@ export function allowancesFile(approvals: HostApprovals) {
  * has to allow its destinations, listeners or paths, or null when any device
  * runs it as is.
  */
-export function describeNeeds(config: Record<string, unknown>): {
+export function describeNeeds(
+  config: Record<string, unknown>,
+  agentCatalog: AgentCatalog,
+): {
   kind: "full" | "approval" | "none";
   label: string | null;
   detail: string | null;
 } {
-  const full = fullModeRequirements(config as Record<string, any>);
+  const full = fullModeRequirements(
+    config as Record<string, any>,
+    agentCatalog,
+  );
   if (full.length)
     return {
       kind: "full",

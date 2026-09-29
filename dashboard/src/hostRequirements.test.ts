@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import catalog from "./generated/vector-catalog.json";
 import {
   allowancesFile,
   describeNeeds,
@@ -60,24 +61,31 @@ describe("what a pipeline asks of its devices", () => {
         },
       },
     };
-    expect(fullModeRequirements(config)).toEqual(["source: host_metrics"]);
-    expect(describeNeeds(config)).toMatchObject({
+    expect(fullModeRequirements(config, catalog)).toEqual([
+      "source: host_metrics",
+    ]);
+    expect(describeNeeds(config, catalog)).toMatchObject({
       kind: "full",
       label: "Needs Full Vector",
     });
   });
   it("names what a restricted host has to approve, briefly", () => {
     expect(
-      describeNeeds({
-        sources: { nginx: { type: "file", include: ["/var/log/nginx/*.log"] } },
-        sinks: {
-          loki: {
-            type: "loki",
-            endpoint: "https://logs.example.net",
-            inputs: ["nginx"],
+      describeNeeds(
+        {
+          sources: {
+            nginx: { type: "file", include: ["/var/log/nginx/*.log"] },
+          },
+          sinks: {
+            loki: {
+              type: "loki",
+              endpoint: "https://logs.example.net",
+              inputs: ["nginx"],
+            },
           },
         },
-      }),
+        catalog,
+      ),
     ).toMatchObject({
       kind: "approval",
       label: "Host approval: /var/log/nginx, logs.example.net:443",
@@ -85,10 +93,13 @@ describe("what a pipeline asks of its devices", () => {
   });
   it("says nothing for a self-contained pipeline", () => {
     expect(
-      describeNeeds({
-        sources: { demo: { type: "demo_logs", format: "json" } },
-        sinks: { out: { type: "blackhole", inputs: ["demo"] } },
-      }),
+      describeNeeds(
+        {
+          sources: { demo: { type: "demo_logs", format: "json" } },
+          sinks: { out: { type: "blackhole", inputs: ["demo"] } },
+        },
+        catalog,
+      ),
     ).toEqual({ kind: "none", label: null, detail: null });
   });
 });

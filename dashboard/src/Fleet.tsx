@@ -10,7 +10,6 @@ import { roleAllows } from "./roleAccess";
 import {
   Button,
   EmptyState,
-  InlineError,
   PageHeader,
   PageToolbar,
   SearchBox,
@@ -29,6 +28,7 @@ import DeviceList from "./DeviceList";
 import DeviceDetail from "./DeviceDetail";
 import "./fleet.css";
 import "./devices.css";
+import type { Notify } from "./toast";
 
 type Navigate = (path: string) => void;
 
@@ -41,7 +41,7 @@ export function Devices({
   deviceId,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: Navigate;
   deviceId?: string;
 }) {
@@ -110,13 +110,7 @@ const groupDefaults = {
 };
 const GROUP_PAGE_SIZES = [25, 50, 100];
 
-export function Groups({
-  user,
-  notify,
-}: {
-  user: User;
-  notify: (message: string) => void;
-}) {
+export function Groups({ user, notify }: { user: User; notify: Notify }) {
   const groups = useResource<Group[]>("/groups", []),
     devices = useResource<Device[]>("/devices", []);
   const groupRequests = useGroupOperations(user.id);
@@ -328,24 +322,11 @@ export function Groups({
           </Button>
         )}
       </PageHeader>
-      {groups.error && (
-        <InlineError
-          title={
-            groups.data.length
-              ? "Couldn't refresh groups."
-              : "Couldn't load groups."
-          }
-          error={groups.error}
-          updatedAt={groups.updatedAt}
-          retry={() => void groups.reload()}
-          retrying={groups.refreshing}
-        />
-      )}
       <GroupRecovery
         user={user}
         onRecovered={() => {
           void groups.reload();
-          notify("Group creation confirmed.");
+          notify("Group creation confirmed.", { tone: "success" });
         }}
         onReview={(group) => edit(group)}
       />
@@ -387,7 +368,7 @@ export function Groups({
               />
             }
             count={
-              groups.loading && !groups.updatedAt
+              !groups.updatedAt
                 ? undefined
                 : query.q || query.members
                   ? `${filtered.length} of ${groups.data.length}`
@@ -400,6 +381,19 @@ export function Groups({
               columns={columns}
               rowKey={(group) => group.id}
               label="Groups"
+              error={
+                groups.error
+                  ? {
+                      title: groups.updatedAt
+                        ? "Couldn't refresh groups."
+                        : "Couldn't load groups.",
+                      message: groups.error,
+                      updatedAt: groups.updatedAt,
+                      retry: () => void groups.reload(),
+                      retrying: groups.refreshing,
+                    }
+                  : null
+              }
               className="groups-table"
               loading={groups.loading && !groups.updatedAt}
               sort={sort}
@@ -468,7 +462,16 @@ export function Groups({
           onSaved={(saved) => {
             setSavedGroup(saved);
             closeEditor();
-            notify("Group saved.");
+            notify("Group saved.", {
+              tone: "success",
+              // An empty group has no devices to show.
+              action: saved.device_ids.length
+                ? {
+                    label: "View devices",
+                    href: `#/devices?group=${encodeURIComponent(saved.id)}`,
+                  }
+                : undefined,
+            });
             void groups.reload();
           }}
         />

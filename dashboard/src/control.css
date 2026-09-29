@@ -1,22 +1,6 @@
 .control-page {
   min-width: 0;
 }
-
-.account-request-id {
-  overflow-wrap: anywhere;
-  white-space: normal;
-  word-break: break-all;
-}
-.control-page .page-heading {
-  margin-bottom: 24px;
-}
-.control-page .page-heading h1 {
-  font-size: 35px;
-  letter-spacing: -1.3px;
-}
-.control-page .page-heading p {
-  max-width: 700px;
-}
 .control-toolbar {
   display: flex;
   align-items: center;
@@ -66,31 +50,6 @@
   margin: 5px 0 0;
   color: var(--muted);
   font-size: 13px;
-}
-.control-status {
-  display: inline-block;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 550;
-  white-space: nowrap;
-}
-.control-status[data-state="failed"],
-.control-status[data-state="revoked"],
-.control-status[data-state="missed"] {
-  color: #b52d38;
-}
-.control-status[data-state="completed"],
-.control-status[data-state="verified_applied"] {
-  color: var(--green);
-}
-[data-theme="dark"] .control-status[data-state="failed"],
-[data-theme="dark"] .control-status[data-state="revoked"],
-[data-theme="dark"] .control-status[data-state="missed"] {
-  color: #f4a5aa;
-}
-.control-status[data-state="active"],
-.control-status[data-state="scheduled"] {
-  color: var(--accent);
 }
 .control-row-title {
   background: none;
@@ -275,67 +234,6 @@
 .control-command .button {
   margin-top: 12px;
 }
-.activity-progress {
-  min-width: 120px;
-  max-width: 200px;
-}
-.activity-progress-track {
-  height: 4px;
-  border-radius: 3px;
-  background: var(--line);
-  overflow: hidden;
-  margin-top: 7px;
-}
-.activity-progress-track span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-}
-.activity-detail-head {
-  margin-bottom: 22px;
-}
-.activity-detail-head h3 {
-  font-size: 20px;
-  margin: 0 0 6px;
-}
-.activity-detail-head p {
-  margin: 0;
-  color: var(--muted);
-}
-.activity-detail-actions {
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-  margin-top: 22px;
-}
-.activity-issue {
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--line);
-}
-.activity-issue:last-child {
-  border-bottom: none;
-}
-.activity-issue h3 {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
-.activity-issue p {
-  margin: 0 0 12px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.activity-issue-meta {
-  display: flex;
-  gap: 15px;
-  align-items: center;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-.activity-issue .control-disclosure {
-  margin-top: 10px;
-  padding-bottom: 0;
-}
 .target-flow {
   padding-top: 24px;
 }
@@ -349,10 +247,17 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-input);
   border-radius: 7px;
   padding: 0 12px;
   color: var(--muted);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.target-search:focus-within {
+  border-color: var(--focus);
+  box-shadow: var(--focus-ring);
 }
 .target-search input {
   border: 0 !important;
@@ -525,35 +430,9 @@
 .target-receipt > p {
   margin-top: 18px;
 }
-.control-security-account {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: center;
-}
-.account-security-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 24px;
-}
 
 .account-actions-dialog .modal-footer {
   flex-wrap: wrap;
-}
-.account-security-row + .account-security-row {
-  border-top: 1px solid var(--line);
-  margin-top: 20px;
-  padding-top: 20px;
-}
-.account-security-row h2 {
-  margin: 0 0 6px;
-  font-size: 15px;
-}
-.account-security-row p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
 }
 .person-email {
   overflow-wrap: anywhere;
@@ -576,38 +455,6 @@
 .person-actions .button {
   font-size: 12px;
   margin-left: 5px;
-}
-.account-notice {
-  padding: 12px 14px;
-  background: var(--surface-alt, var(--bg));
-  border-left: 2px solid var(--accent);
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0 0 18px;
-}
-.account-notice p {
-  margin: 0 0 10px;
-}
-.access-change-review {
-  display: grid;
-  gap: 6px;
-  margin: 8px 0;
-}
-.access-change-review div {
-  display: grid;
-  grid-template-columns: minmax(70px, 1fr) minmax(0, 2fr);
-  gap: 12px;
-}
-.access-change-review dt {
-  color: var(--muted);
-}
-.access-change-review dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.role-definition {
-  display: contents;
 }
 .role-hint-trigger {
   padding: 3px 0;
@@ -648,92 +495,13 @@
 .role-hint-popover:popover-open {
   display: block;
 }
-.auth-reset-link {
-  margin-top: 14px;
-  width: 100%;
-}
 @media (max-width: 720px) {
-  .people-table:not(.data-table),
-  .people-table:not(.data-table) tbody {
-    display: block;
-  }
-  .people-table:not(.data-table) thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-  .people-table:not(.data-table) tr {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    padding: 18px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .people-table:not(.data-table) td {
-    padding: 0;
-    border: 0;
-    min-width: 0;
-  }
-  .people-table:not(.data-table) td:first-child,
-  .people-table:not(.data-table) .person-actions {
-    grid-column: 1 / -1;
-  }
-  .people-table:not(.data-table) td[data-label]::before {
-    content: attr(data-label) ": ";
-    color: var(--muted);
-  }
-  .people-table:not(.data-table) .person-actions {
-    text-align: left;
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .account-security-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
   .person-actions {
     white-space: normal;
   }
   .person-actions .button {
     margin: 3px 0;
   }
-}
-.control-security-account h3 {
-  margin: 0 0 6px;
-  font-size: 15px;
-}
-.control-security-account p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-.control-roles {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 10px 18px;
-  font-size: 13px;
-  line-height: 1.5;
-  margin: 0;
-}
-.control-roles dt {
-  font-weight: 600;
-}
-.control-roles dd {
-  margin: 0;
-  color: var(--muted);
-}
-.control-vrl-output {
-  margin-top: 20px;
-  border-top: 1px solid var(--line);
-  padding-top: 18px;
-}
-.control-vrl-output h3 {
-  font-size: 14px;
-  margin: 0 0 12px;
 }
 .control-section-space {
   margin-top: 16px;
@@ -751,11 +519,6 @@
 .control-instructions li + li {
   margin-top: 9px;
 }
-.control-code-input {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-}
 @media (max-width: 720px) {
   .control-two-col,
   .control-three-col {
@@ -772,7 +535,6 @@
   .control-card {
     padding: 20px;
   }
-  .control-security-account,
   .control-section-head {
     align-items: flex-start;
     flex-direction: column;

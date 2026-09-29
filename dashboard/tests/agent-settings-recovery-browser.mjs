@@ -825,7 +825,7 @@ try {
             ),
           );
           if (different)
-            await expect(a.page.locator(".session-ended")).toBeVisible();
+            await expect(a.page.locator(".session-renewal")).toBeVisible();
           await expect(
             a.page.getByRole("button", { name: "New settings", exact: true }),
           ).toHaveCount(0);
