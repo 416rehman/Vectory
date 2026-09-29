@@ -346,7 +346,11 @@ const stepLabels: Record<TimelineStep["key"], string> = {
 };
 /** The apply step an agent's failure stage belongs to. */
 export type ApplyStep =
-  "downloaded" | "validated" | "written" | "reloaded" | "verified";
+  | "downloaded"
+  | "validated"
+  | "written"
+  | "reloaded"
+  | "verified";
 const failureStageSteps: Record<string, ApplyStep> = {
   fetch: "downloaded",
   download: "downloaded",

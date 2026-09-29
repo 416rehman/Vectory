@@ -406,7 +406,8 @@ type GroupableEvent = {
   created_at: string | null;
 };
 export type AuditRow<T extends GroupableEvent> =
-  { kind: "event"; item: T } | { kind: "results"; key: string; items: T[] };
+  | { kind: "event"; item: T }
+  | { kind: "results"; key: string; items: T[] };
 /**
  * Consecutive per-device apply results ("edge-nyc-01 applied and verified")
  * collapse into one row, so deployments and edits stay readable in the
