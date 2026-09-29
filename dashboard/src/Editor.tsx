@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
@@ -166,6 +167,7 @@ import {
   type Problem,
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
+import { coalesces, editedField } from "./editHistory";
 import {
   PIPELINE_NODE_WIDTH,
   PIPELINE_NODE_BODY_HEIGHT,
@@ -187,6 +189,20 @@ import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
 
 const edgeTypes = { pipeline: PipelineEdge };
+// Canvas options keep one identity: React Flow copies changed props into its
+// store, which re-runs every node and edge subscription.
+const connectionLineStyle = { stroke: "var(--accent)", strokeWidth: 2 };
+const fitViewOptions = { padding: 0.12, minZoom: 0.15, maxZoom: 1 };
+const smallFitViewOptions = { padding: 0.12, minZoom: 0.65, maxZoom: 1 };
+const defaultEdgeOptions = {
+  type: "pipeline",
+  markerEnd: {
+    type: MarkerType.ArrowClosed,
+    color: "var(--muted)",
+    width: 12,
+    height: 12,
+  },
+};
 type ConnectionGesture = {
   nodeId: string;
   handleId: string;
@@ -442,6 +458,7 @@ export default function Editor({
     } | null>(null);
   const stack = useRef<EditorSnapshot[]>([]),
     future = useRef<EditorSnapshot[]>([]),
+    lastEdit = useRef<{ key: string; at: number } | null>(null),
     latest = useRef({ doc, config, variables, nodes, edges, dirty }),
     pendingSave = useRef<Promise<Configuration | null> | null>(null),
     saveUncertain = useRef(false),
@@ -463,6 +480,87 @@ export default function Editor({
     importGeneration = useRef(0),
     dragDepth = useRef(0),
     importContext = useRef({ config, code, pending: false, allowed: false });
+  // Stable per-node and per-edge callbacks that read the latest handlers, so
+  // cached canvas objects never hold stale closures.
+  type MenuHandler = (
+    id: string,
+    position: { x: number; y: number },
+    opener: HTMLElement,
+  ) => void;
+  const graphHandlers = useRef<{
+    nodeMenu: MenuHandler;
+    edgeMenu: MenuHandler;
+    edgeHover: (id: string, hovered: boolean) => void;
+  }>({ nodeMenu: () => {}, edgeMenu: () => {}, edgeHover: () => {} });
+  const handlerCache = useRef(
+    new Map<
+      string,
+      {
+        menu: (position: { x: number; y: number }, opener: HTMLElement) => void;
+        hover: (hovered: boolean) => void;
+      }
+    >(),
+  );
+  function stableHandlers(key: string) {
+    let entry = handlerCache.current.get(key);
+    if (!entry) {
+      const [kind, ...rest] = key.split(":");
+      const id = rest.join(":");
+      entry = {
+        menu: (position, opener) =>
+          (kind === "node"
+            ? graphHandlers.current.nodeMenu
+            : graphHandlers.current.edgeMenu)(id, position, opener),
+        hover: (hovered) => graphHandlers.current.edgeHover(id, hovered),
+      };
+      handlerCache.current.set(key, entry);
+    }
+    return entry;
+  }
+  const flowCache = useRef(
+    new Map<string, { inputs: unknown[]; value: any }>(),
+  );
+  function cachedFlowObject(key: string, inputs: unknown[], build: () => any) {
+    const hit = flowCache.current.get(key);
+    if (
+      hit &&
+      hit.inputs.length === inputs.length &&
+      hit.inputs.every((value, index) => Object.is(value, inputs[index]))
+    )
+      return hit.value;
+    const value = build();
+    flowCache.current.set(key, { inputs, value });
+    return value;
+  }
+  // Canvas callbacks keep one identity per name and call the latest handler.
+  const canvasHandlers = useRef(new Map<string, (...args: any[]) => any>()),
+    canvasWrappers = useRef(new Map<string, (...args: any[]) => any>());
+  function stableCanvasHandler<T extends (...args: any[]) => any>(
+    name: string,
+    handler: T | undefined,
+  ): T | undefined {
+    if (!handler) return undefined;
+    canvasHandlers.current.set(name, handler);
+    let wrapper = canvasWrappers.current.get(name);
+    if (!wrapper) {
+      wrapper = (...args: any[]) => canvasHandlers.current.get(name)?.(...args);
+      canvasWrappers.current.set(name, wrapper);
+    }
+    return wrapper as T;
+  }
+  const flowNodeArray = useRef<any[]>([]),
+    flowEdgeArray = useRef<any[]>([]),
+    // Whether the latest graph change came from a config edit (deferred to
+    // the canvas) rather than a drag or selection (immediate).
+    graphFromEdit = useRef(false);
+  function stableArray(previous: { current: any[] }, next: any[]) {
+    if (
+      previous.current.length !== next.length ||
+      next.some((item, index) => item !== previous.current[index])
+    )
+      previous.current = next;
+    return previous.current;
+  }
   const publishActive = useRef<AbortController | null>(null);
   const publishMounted = useRef(false);
   const publicationObservation = useRef(0);
@@ -618,7 +716,14 @@ export default function Editor({
     codeAnalysis?.text === code && codeAnalysis.format === format
       ? codeAnalysis.result
       : null;
-  const graphDiagnosis = useMemo(() => diagnoseConfiguration(config), [config]);
+  // Local checks trail typing: React paints the keystroke first and then
+  // diagnoses the new draft in the background.
+  const checkedConfig = useDeferredValue(config),
+    checkedVariables = useDeferredValue(variables);
+  const graphDiagnosis = useMemo(
+    () => diagnoseConfiguration(checkedConfig),
+    [checkedConfig],
+  );
   const issues = graphDiagnosis.diagnostics
     .filter((item) => item.severity === "error")
     .map((item) => ({
@@ -656,7 +761,10 @@ export default function Editor({
       warningMessage: !errors && entry?.warnings ? first : undefined,
     };
   };
-  const connectivity = useMemo(() => pipelineConnectivity(config), [config]);
+  const connectivity = useMemo(
+    () => pipelineConnectivity(checkedConfig),
+    [checkedConfig],
+  );
   const customJSONAnalysis = useMemo(
     () => diagnoseJSONValue(customComponentJSON),
     [customComponentJSON],
@@ -666,8 +774,8 @@ export default function Editor({
   const customJSONFeedbackId = useId();
   const customJSONErrorId = useId();
   const variableMessages = useMemo(
-    () => variableErrors(config, variables),
-    [config, variables],
+    () => variableErrors(checkedConfig, checkedVariables),
+    [checkedConfig, checkedVariables],
   );
   const errors = [...issues.map((issue) => issue.message), ...variableMessages];
   // Problems: instant local checks plus the last Vector check. Vector's
@@ -677,14 +785,24 @@ export default function Editor({
     if (!check) return false;
     if (codeChecked) return check.code !== code;
     return (
-      (check.config !== config && !sameConfiguration(check.config, config)) ||
-      (check.variables !== variables &&
-        JSON.stringify(check.variables) !== JSON.stringify(variables))
+      (check.config !== checkedConfig &&
+        !sameConfiguration(check.config, checkedConfig)) ||
+      (check.variables !== checkedVariables &&
+        JSON.stringify(check.variables) !== JSON.stringify(checkedVariables))
     );
-  }, [check, config, variables, code, codeChecked]);
+  }, [check, checkedConfig, checkedVariables, code, codeChecked]);
   // An unfinished field value is not in the draft yet, so the last check no
   // longer describes what is on screen.
   const checkStale = draftChanged || (!!check && pendingFieldCount > 0);
+  // Whether the draft still equals the published version.
+  const publishedDraft = useMemo(
+    () =>
+      !!publishedVersion &&
+      sameConfiguration(publishedVersion.config, checkedConfig) &&
+      JSON.stringify(publishedVersion.variables || []) ===
+        JSON.stringify(checkedVariables),
+    [publishedVersion, checkedConfig, checkedVariables],
+  );
   // Unapplied Code edits are what a check sends, so their local findings
   // count until the text is applied or discarded.
   const codeProblemSource =
@@ -698,24 +816,34 @@ export default function Editor({
               ? pipelineConnectivity(codeProblemSource.config)
               : new Map(),
             variableMessages,
-            codeProblemSource.config || config,
+            codeProblemSource.config || checkedConfig,
           )
         : localProblems(
             graphDiagnosis.diagnostics,
             connectivity,
             variableMessages,
-            config,
+            checkedConfig,
           ),
-    [codeProblemSource, graphDiagnosis, connectivity, variableMessages, config],
+    [
+      codeProblemSource,
+      graphDiagnosis,
+      connectivity,
+      variableMessages,
+      checkedConfig,
+    ],
   );
   const problems = useMemo(() => {
-    const vector = checkProblems(check?.result || null, config, checkStale);
+    const vector = checkProblems(
+      check?.result || null,
+      checkedConfig,
+      checkStale,
+    );
     const program = (
       draft: "checked" | "current",
       component: string,
       field: string,
     ) => {
-      const value = (draft === "checked" ? check?.config : config)
+      const value = (draft === "checked" ? check?.config : checkedConfig)
         ?.transforms?.[component];
       return value ? vrlValue(value, field) : null;
     };
@@ -723,7 +851,7 @@ export default function Editor({
       draftProblems,
       checkStale ? settleStaleProblems(vector, program) : vector,
     );
-  }, [draftProblems, check, config, checkStale]);
+  }, [draftProblems, check, checkedConfig, checkStale]);
   const problemCounts = countProblems(problems);
   const nodeProblems = useMemo(() => componentProblems(problems), [problems]);
   const status = checkStatus({
@@ -858,6 +986,7 @@ export default function Editor({
         setDoc(result);
         setConfig(result.config);
         setVariables(result.variables || []);
+        graphFromEdit.current = false;
         setNodes(graph.nodes);
         setEdges(graph.edges);
         setDirty(false);
@@ -1081,11 +1210,24 @@ export default function Editor({
     },
     [editable, id, notify],
   );
+  // Undo history keeps references: every edit builds new objects and never
+  // changes an earlier draft. Edits to one field without a pause of a second
+  // or more share one undo step, so undo reverts a typed word, not a letter.
+  function rememberDraft(coalesce?: string) {
+    const now = performance.now(),
+      previous = lastEdit.current;
+    lastEdit.current = coalesce ? { key: coalesce, at: now } : null;
+    future.current = [];
+    if (coalesces(previous, coalesce, now) && stack.current.length) return;
+    stack.current.push({ config, graph: { nodes, edges }, variables });
+    if (stack.current.length > 100) stack.current.shift();
+  }
   function replace(
     next: Config,
     graph?: Graph,
     remember = true,
     nextVariables = variables,
+    coalesce?: string,
   ) {
     if (!editable) return;
     try {
@@ -1094,15 +1236,7 @@ export default function Editor({
       setError((failure as Error).message);
       return;
     }
-    if (remember) {
-      stack.current.push({
-        config: structuredClone(config),
-        graph: { nodes: structuredClone(nodes), edges: structuredClone(edges) },
-        variables: structuredClone(variables),
-      });
-      if (stack.current.length > 50) stack.current.shift();
-      future.current = [];
-    }
+    if (remember) rememberDraft(coalesce);
     let nextGraph = toGraph(next, graph || { nodes, edges });
     const edgeShape = (items: Edge[]) =>
       JSON.stringify(
@@ -1124,6 +1258,7 @@ export default function Editor({
       nextGraph = arrangeGraph(nextGraph);
     setConfig(next);
     setVariables(nextVariables);
+    graphFromEdit.current = true;
     setNodes(nextGraph.nodes);
     setEdges(nextGraph.edges);
     setDirty(true);
@@ -1135,11 +1270,8 @@ export default function Editor({
       to = redo ? stack.current : future.current;
     const item = from.pop();
     if (item) {
-      to.push({
-        config: structuredClone(config),
-        graph: { nodes: structuredClone(nodes), edges: structuredClone(edges) },
-        variables: structuredClone(variables),
-      });
+      to.push({ config, graph: { nodes, edges }, variables });
+      lastEdit.current = null;
       replace(item.config, item.graph, false, item.variables);
     }
   }
@@ -1600,6 +1732,7 @@ export default function Editor({
     );
   }
   function changeNodes(changes: NodeChange[]) {
+    graphFromEdit.current = false;
     if (!editable) {
       // Controlled nodes must retain measurements across presentation updates;
       // otherwise ReactFlow removes and recreates their connected SVG edges.
@@ -2030,6 +2163,7 @@ export default function Editor({
     setDoc(result);
     setConfig(result.config);
     setVariables(result.variables || []);
+    graphFromEdit.current = false;
     setNodes(graph.nodes);
     setEdges(graph.edges);
     syncCode(result.config);
@@ -2136,15 +2270,13 @@ export default function Editor({
       );
       const graph = toGraph(restored.config, restored.graph);
       stack.current.push({
-        config: structuredClone(latest.current.config),
-        graph: {
-          nodes: structuredClone(latest.current.nodes),
-          edges: structuredClone(latest.current.edges),
-        },
-        variables: structuredClone(latest.current.variables),
+        config: latest.current.config,
+        graph: { nodes: latest.current.nodes, edges: latest.current.edges },
+        variables: latest.current.variables,
       });
-      if (stack.current.length > 50) stack.current.shift();
+      if (stack.current.length > 100) stack.current.shift();
       future.current = [];
+      lastEdit.current = null;
       latest.current = {
         doc: restored,
         config: restored.config,
@@ -2156,6 +2288,7 @@ export default function Editor({
       setDoc(restored);
       setConfig(restored.config);
       setVariables(restored.variables || []);
+      graphFromEdit.current = false;
       setNodes(graph.nodes);
       setEdges(graph.edges);
       syncCode(restored.config);
@@ -2198,32 +2331,51 @@ export default function Editor({
       )
     : null;
   function changeComponent(value: Config) {
-    let next = structuredClone(config);
-    if (selectedNode.data.enrichmentTable) {
-      next.enrichment_tables[selectedNode.data.enrichmentTable] = value;
-      const before = component.source_config?.source_key,
-        after = value.source_config?.source_key;
-      if (typeof after === "string" && before !== after) {
-        try {
-          componentName(config, after, before, [
-            selectedNode.data.enrichmentTable,
-          ]);
-        } catch (failure) {
-          setError((failure as Error).message);
-          return;
-        }
+    const table = selectedNode.data.enrichmentTable;
+    if (!table) {
+      // Only the edited step gets a new object, so unchanged steps keep their
+      // identity for the canvas, the local checks and the undo history.
+      const kind = selectedNode.data.kind;
+      replace(
+        { ...config, [kind]: { ...config[kind], [selectedNode.id]: value } },
+        undefined,
+        true,
+        variables,
+        editedField(selectedNode.id, component, value),
+      );
+      setError("");
+      return;
+    }
+    const before = component.source_config?.source_key,
+      after = value.source_config?.source_key;
+    if (typeof after === "string" && before !== after) {
+      try {
+        componentName(config, after, before, [table]);
+      } catch (failure) {
+        setError((failure as Error).message);
+        return;
       }
-      if (
-        typeof before === "string" &&
-        typeof after === "string" &&
-        before !== after &&
-        after
-      ) {
-        next = retargetReferences(next, before, after);
-        if (selected === before) setSelected(after);
-      }
-    } else next[selectedNode.data.kind][selectedNode.id] = value;
-    replace(next);
+    }
+    let next: Config = {
+      ...config,
+      enrichment_tables: { ...config.enrichment_tables, [table]: value },
+    };
+    if (
+      typeof before === "string" &&
+      typeof after === "string" &&
+      before !== after &&
+      after
+    ) {
+      next = retargetReferences(next, before, after);
+      if (selected === before) setSelected(after);
+    }
+    replace(
+      next,
+      undefined,
+      true,
+      variables,
+      editedField(table, component, value),
+    );
     setError("");
   }
   function renameSelected(name: string) {
@@ -2515,9 +2667,7 @@ export default function Editor({
   const matchesPublished =
     publishedVersionStatus === "ready" &&
     !!publishedVersion &&
-    sameConfiguration(publishedVersion.config, config) &&
-    JSON.stringify(publishedVersion.variables || []) ===
-      JSON.stringify(variables) &&
+    publishedDraft &&
     !importedCodeDirty.current;
   const saveIndicator = (
     <PipelineSaveStatus
@@ -2689,6 +2839,117 @@ export default function Editor({
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
   });
+  // Canvas objects are rebuilt only for nodes and edges whose inputs changed,
+  // so React Flow re-renders just what an edit touched.
+  graphHandlers.current = {
+    nodeMenu: (nodeId, position, opener) => {
+      if (
+        graphMenu?.kind === "node" &&
+        graphMenu.id === nodeId &&
+        graphMenu.opener === opener
+      )
+        setGraphMenu(null);
+      else openGraphMenu("node", nodeId, position, opener);
+    },
+    edgeMenu: (edgeId, position, opener) =>
+      openGraphMenu("edge", edgeId, position, opener),
+    edgeHover: (edgeId, hovered) => hoverConnection(edgeId, hovered),
+  };
+  if (flowCache.current.size > 4 * (nodes.length + edges.length) + 64)
+    flowCache.current.clear();
+  const nodeKinds = new Map(nodes.map((node) => [node.id, node.data.kind]));
+  const currentFlowNodes = nodes.map((node) => {
+    const highlight = highlightedConnection
+      ? [highlightedConnection.source, highlightedConnection.target].includes(
+          node.id,
+        )
+        ? "endpoint"
+        : "dimmed"
+      : undefined;
+    const problem = nodeProblemData(node),
+      ports = validPorts.get(node.id),
+      outputs = ports?.outputs || [],
+      isSelected = node.id === selected || !!node.selected,
+      menuOpen = graphMenu?.kind === "node" && graphMenu.id === node.id,
+      warning = connectivity.get(node.id);
+    return cachedFlowObject(
+      `node:${node.id}`,
+      [
+        node,
+        highlight,
+        isSelected,
+        problem.hasIssue,
+        problem.issueCount,
+        problem.issueMessage,
+        problem.warningMessage,
+        warning,
+        editable && !busy,
+        menuOpen,
+        !!connectionGesture,
+        ports?.input || false,
+        outputs.join("\n"),
+      ],
+      () => ({
+        ...node,
+        domAttributes: {
+          ...node.domAttributes,
+          "data-connection-highlight": highlight,
+        },
+        selected: isSelected,
+        data: {
+          ...node.data,
+          ...problem,
+          connectivityWarning: warning,
+          editable: editable && !busy,
+          openMenu: stableHandlers(`node:${node.id}`).menu,
+          menuOpen,
+          connectionActive: !!connectionGesture,
+          validInputTarget: ports?.input || false,
+          validOutputTargets: outputs,
+        },
+      }),
+    );
+  });
+  const currentFlowEdges = edges.map((edge) => {
+    const highlight = highlightedConnection
+      ? highlightedConnection.id === edge.id
+        ? "active"
+        : "dimmed"
+      : undefined;
+    const category = nodeKinds.get(edge.source) || "transforms";
+    return cachedFlowObject(
+      `edge:${edge.id}`,
+      [edge, highlight, category, editable, connectionStyle],
+      () => ({
+        ...edge,
+        type: "pipeline",
+        className: "pipeline-connection",
+        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
+        domAttributes: {
+          ...edge.domAttributes,
+          "data-connection-highlight": highlight,
+          "data-pipeline-category": category,
+        } as Edge["domAttributes"],
+        data: {
+          editable,
+          connectionStyle,
+          connectionHighlight: highlight,
+          onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
+          openMenu: stableHandlers(`edge:${edge.id}`).menu,
+        },
+      }),
+    );
+  });
+  // Canvas arrays keep their identity while no element changed, and a config
+  // edit reaches the canvas in a deferred render: a keystroke paints the
+  // inspector first and the node summary follows. Drags and selections stay
+  // immediate.
+  const flowNodes = stableArray(flowNodeArray, currentFlowNodes),
+    flowEdges = stableArray(flowEdgeArray, currentFlowEdges);
+  const deferredFlowNodes = useDeferredValue(flowNodes),
+    deferredFlowEdges = useDeferredValue(flowEdges);
+  const canvasNodes = graphFromEdit.current ? deferredFlowNodes : flowNodes,
+    canvasEdges = graphFromEdit.current ? deferredFlowEdges : flowEdges;
   if (!doc)
     return error ? (
       <section
@@ -3342,113 +3603,70 @@ export default function Editor({
                 }}
               >
                 <ReactFlow
-                  nodes={nodes.map((node) => ({
-                    ...node,
-                    domAttributes: {
-                      ...node.domAttributes,
-                      "data-connection-highlight": highlightedConnection
-                        ? [
-                            highlightedConnection.source,
-                            highlightedConnection.target,
-                          ].includes(node.id)
-                          ? "endpoint"
-                          : "dimmed"
-                        : undefined,
-                    },
-                    selected: node.id === selected || node.selected,
-                    data: {
-                      ...node.data,
-                      ...nodeProblemData(node),
-                      connectivityWarning: connectivity.get(node.id),
-                      editable: editable && !busy,
-                      openMenu: (
-                        position: { x: number; y: number },
-                        opener: HTMLElement,
-                      ) => {
-                        if (
-                          graphMenu?.kind === "node" &&
-                          graphMenu.id === node.id &&
-                          graphMenu.opener === opener
-                        )
-                          setGraphMenu(null);
-                        else openGraphMenu("node", node.id, position, opener);
-                      },
-                      menuOpen:
-                        graphMenu?.kind === "node" && graphMenu.id === node.id,
-                      connectionActive: !!connectionGesture,
-                      validInputTarget: validPorts.get(node.id)?.input || false,
-                      validOutputTargets:
-                        validPorts.get(node.id)?.outputs || [],
-                    },
-                  }))}
-                  edges={edges.map((edge) => ({
-                    ...edge,
-                    type: "pipeline",
-                    className: "pipeline-connection",
-                    ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
-                    domAttributes: {
-                      ...edge.domAttributes,
-                      "data-connection-highlight": highlightedConnection
-                        ? highlightedConnection.id === edge.id
-                          ? "active"
-                          : "dimmed"
-                        : undefined,
-                      "data-pipeline-category":
-                        nodes.find((node) => node.id === edge.source)?.data
-                          .kind || "transforms",
-                    } as Edge["domAttributes"],
-                    data: {
-                      editable,
-                      connectionStyle,
-                      connectionHighlight: highlightedConnection
-                        ? highlightedConnection.id === edge.id
-                          ? "active"
-                          : "dimmed"
-                        : undefined,
-                      onHoverChange: (hovered: boolean) =>
-                        hoverConnection(edge.id, hovered),
-                      openMenu: (
-                        position: { x: number; y: number },
-                        opener: HTMLElement,
-                      ) => openGraphMenu("edge", edge.id, position, opener),
-                    },
-                  }))}
+                  nodes={canvasNodes}
+                  edges={canvasEdges}
                   nodeTypes={nodeTypes}
                   edgeTypes={edgeTypes}
-                  onInit={(instance) => {
+                  onInit={stableCanvasHandler("onInit", (instance) => {
                     flow.current = instance;
-                  }}
-                  onNodesChange={changeNodes}
-                  onEdgesChange={(changes) =>
-                    setEdges((previous) =>
-                      applyEdgeChanges(
-                        changes.filter((c) => c.type !== "remove"),
-                        previous,
+                  })}
+                  onNodesChange={stableCanvasHandler(
+                    "onNodesChange",
+                    changeNodes,
+                  )}
+                  onEdgesChange={stableCanvasHandler(
+                    "onEdgesChange",
+                    (changes) => {
+                      graphFromEdit.current = false;
+                      setEdges((previous) =>
+                        applyEdgeChanges(
+                          changes.filter((c) => c.type !== "remove"),
+                          previous,
+                        ),
+                      );
+                    },
+                  )}
+                  onConnect={stableCanvasHandler(
+                    "onConnect",
+                    editable ? onConnect : undefined,
+                  )}
+                  onConnectStart={stableCanvasHandler(
+                    "onConnectStart",
+                    editable ? onConnectStart : undefined,
+                  )}
+                  onConnectEnd={stableCanvasHandler(
+                    "onConnectEnd",
+                    editable ? onConnectEnd : undefined,
+                  )}
+                  onClickConnectStart={stableCanvasHandler(
+                    "onClickConnectStart",
+                    editable ? onConnectStart : undefined,
+                  )}
+                  onClickConnectEnd={stableCanvasHandler(
+                    "onClickConnectEnd",
+                    editable ? () => setConnectionGesture(null) : undefined,
+                  )}
+                  isValidConnection={stableCanvasHandler(
+                    "isValidConnection",
+                    (connection) =>
+                      editable &&
+                      !busy &&
+                      !connectionCancelled.current &&
+                      !reconnectGesture.current?.cancelled &&
+                      canConnect(
+                        config,
+                        connection,
+                        reconnectGesture.current?.edge,
                       ),
-                    )
-                  }
-                  onConnect={editable ? onConnect : undefined}
-                  onConnectStart={editable ? onConnectStart : undefined}
-                  onConnectEnd={editable ? onConnectEnd : undefined}
-                  onClickConnectStart={editable ? onConnectStart : undefined}
-                  onClickConnectEnd={
-                    editable ? () => setConnectionGesture(null) : undefined
-                  }
-                  isValidConnection={(connection) =>
-                    editable &&
-                    !busy &&
-                    !connectionCancelled.current &&
-                    !reconnectGesture.current?.cancelled &&
-                    canConnect(
-                      config,
-                      connection,
-                      reconnectGesture.current?.edge,
-                    )
-                  }
-                  onReconnect={editable ? onReconnect : undefined}
-                  onReconnectStart={
+                  )}
+                  onReconnect={stableCanvasHandler(
+                    "onReconnect",
+                    editable ? onReconnect : undefined,
+                  )}
+                  onReconnectStart={stableCanvasHandler(
+                    "onReconnectStart",
                     editable
-                      ? (event, edge) => {
+                      ? (event: React.MouseEvent, edge: Edge) => {
                           clearConnectionHighlight();
                           setReconnecting(true);
                           reconnectGesture.current = {
@@ -3459,11 +3677,17 @@ export default function Editor({
                             cancelled: false,
                           };
                         }
-                      : undefined
-                  }
-                  onReconnectEnd={
+                      : undefined,
+                  )}
+                  onReconnectEnd={stableCanvasHandler(
+                    "onReconnectEnd",
                     editable
-                      ? (event, _edge, _handle, state) => {
+                      ? (
+                          event: MouseEvent | TouchEvent,
+                          _edge: Edge,
+                          _handle: unknown,
+                          state: { toNode: unknown },
+                        ) => {
                           setReconnecting(false);
                           const gesture = reconnectGesture.current;
                           reconnectGesture.current = null;
@@ -3494,56 +3718,69 @@ export default function Editor({
                           )
                             removeEdges([gesture.edge]);
                         }
-                      : undefined
-                  }
+                      : undefined,
+                  )}
                   edgesReconnectable={editable}
                   reconnectRadius={12}
                   connectionRadius={28}
                   connectionLineType={connectionLineTypes[connectionStyle]}
-                  connectionLineStyle={{
-                    stroke: "var(--accent)",
-                    strokeWidth: 2,
-                  }}
-                  onEdgeClick={(_event, edge) => {
-                    if (!closeSettings()) return;
-                    setNodes((previous) =>
-                      previous.map((node) => ({ ...node, selected: false })),
-                    );
-                    setEdges((previous) =>
-                      previous.map((item) => ({
-                        ...item,
-                        selected: item.id === edge.id,
-                      })),
-                    );
-                  }}
-                  onEdgeMouseEnter={(_event, edge) =>
-                    hoverConnection(edge.id, true)
-                  }
-                  onEdgeMouseLeave={(_event, edge) =>
-                    hoverConnection(edge.id, false)
-                  }
-                  onMoveStart={clearConnectionHighlight}
-                  onEdgeContextMenu={(event, edge) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openGraphMenu(
-                      "edge",
-                      edge.id,
-                      { x: event.clientX, y: event.clientY },
-                      event.currentTarget as unknown as HTMLElement,
-                    );
-                  }}
-                  onNodeContextMenu={(event, node) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openGraphMenu(
-                      "node",
-                      node.id,
-                      { x: event.clientX, y: event.clientY },
-                      event.currentTarget as HTMLElement,
-                    );
-                  }}
-                  onPaneContextMenu={
+                  connectionLineStyle={connectionLineStyle}
+                  onEdgeClick={stableCanvasHandler(
+                    "onEdgeClick",
+                    (_event: React.MouseEvent, edge: Edge) => {
+                      if (!closeSettings()) return;
+                      graphFromEdit.current = false;
+                      setNodes((previous) =>
+                        previous.map((node) => ({ ...node, selected: false })),
+                      );
+                      setEdges((previous) =>
+                        previous.map((item) => ({
+                          ...item,
+                          selected: item.id === edge.id,
+                        })),
+                      );
+                    },
+                  )}
+                  onEdgeMouseEnter={stableCanvasHandler(
+                    "onEdgeMouseEnter",
+                    (_event, edge) => hoverConnection(edge.id, true),
+                  )}
+                  onEdgeMouseLeave={stableCanvasHandler(
+                    "onEdgeMouseLeave",
+                    (_event, edge) => hoverConnection(edge.id, false),
+                  )}
+                  onMoveStart={stableCanvasHandler(
+                    "onMoveStart",
+                    clearConnectionHighlight,
+                  )}
+                  onEdgeContextMenu={stableCanvasHandler(
+                    "onEdgeContextMenu",
+                    (event, edge) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openGraphMenu(
+                        "edge",
+                        edge.id,
+                        { x: event.clientX, y: event.clientY },
+                        event.currentTarget as unknown as HTMLElement,
+                      );
+                    },
+                  )}
+                  onNodeContextMenu={stableCanvasHandler(
+                    "onNodeContextMenu",
+                    (event, node) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      openGraphMenu(
+                        "node",
+                        node.id,
+                        { x: event.clientX, y: event.clientY },
+                        event.currentTarget as HTMLElement,
+                      );
+                    },
+                  )}
+                  onPaneContextMenu={stableCanvasHandler(
+                    "onPaneContextMenu",
                     editable
                       ? (event) => {
                           event.preventDefault();
@@ -3552,59 +3789,44 @@ export default function Editor({
                             y: event.clientY,
                           });
                         }
-                      : undefined
-                  }
-                  onNodeClick={(event, node) => {
-                    if (
-                      !(event.target as Element).closest(
-                        ".react-flow__handle,[data-node-action]",
+                      : undefined,
+                  )}
+                  onNodeClick={stableCanvasHandler(
+                    "onNodeClick",
+                    (event, node) => {
+                      if (
+                        !(event.target as Element).closest(
+                          ".react-flow__handle,[data-node-action]",
+                        )
                       )
-                    )
-                      selectStep(node.id);
-                  }}
-                  onPaneClick={() => {
+                        selectStep(node.id);
+                    },
+                  )}
+                  onPaneClick={stableCanvasHandler("onPaneClick", () => {
                     if (canvasPicker) closeCanvasPicker();
                     else closeSettings();
-                  }}
-                  onNodeDragStart={
+                  })}
+                  onNodeDragStart={stableCanvasHandler(
+                    "onNodeDragStart",
                     editable
                       ? () => {
                           clearConnectionHighlight();
                           setAutoArrange(false);
-                          stack.current.push({
-                            config: structuredClone(config),
-                            graph: {
-                              nodes: structuredClone(nodes),
-                              edges: structuredClone(edges),
-                            },
-                            variables: structuredClone(variables),
-                          });
-                          if (stack.current.length > 50) stack.current.shift();
-                          future.current = [];
+                          rememberDraft();
                         }
-                      : undefined
-                  }
+                      : undefined,
+                  )}
                   nodesDraggable={editable}
                   nodesConnectable={editable}
                   deleteKeyCode={null}
                   fitView
-                  fitViewOptions={{
-                    padding: 0.12,
-                    minZoom: nodes.length <= 8 ? 0.65 : 0.15,
-                    maxZoom: 1,
-                  }}
+                  fitViewOptions={
+                    nodes.length <= 8 ? smallFitViewOptions : fitViewOptions
+                  }
                   zoomOnDoubleClick={false}
                   minZoom={0.15}
                   maxZoom={2}
-                  defaultEdgeOptions={{
-                    type: "pipeline",
-                    markerEnd: {
-                      type: MarkerType.ArrowClosed,
-                      color: "var(--muted)",
-                      width: 12,
-                      height: 12,
-                    },
-                  }}
+                  defaultEdgeOptions={defaultEdgeOptions}
                 >
                   <ConnectionCancellation
                     active={!!connectionGesture}

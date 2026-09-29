@@ -431,7 +431,13 @@ export function connectionEdgeId(
   return `conn:${encodeURIComponent(JSON.stringify([reference, target, index]))}`;
 }
 export function toGraph(config: Config, existing?: Graph): Graph {
-  const nodes: any[] = [];
+  const previousNodes = new Map<string, any>(
+    (existing?.nodes || []).map((node: any) => [node.id, node]),
+  );
+  const previousEdges = new Map<string, any>(
+    (existing?.edges || []).map((edge: any) => [edge.id, edge]),
+  );
+  const drafts: { id: string; old: any; position: any; data: Config }[] = [];
   const edges: any[] = [];
   const counts = { sources: 0, transforms: 0, sinks: 0 };
   for (const {
@@ -445,10 +451,10 @@ export function toGraph(config: Config, existing?: Graph): Graph {
       continue;
     const col = ["sources", "transforms", "sinks"].indexOf(kind),
       i = counts[kind]++;
-    const old = existing?.nodes.find((node) => node.id === id);
-    nodes.push({
+    const old = previousNodes.get(id);
+    drafts.push({
       id,
-      type: "component",
+      old,
       position: old?.position || { x: col * 290 + 60, y: i * 170 + 100 },
       data: {
         kind,
@@ -462,23 +468,46 @@ export function toGraph(config: Config, existing?: Graph): Graph {
       : []
     ).entries()) {
       if (typeof input !== "string" || isInputPattern(input)) continue;
-      const dot = input.indexOf(".");
-      edges.push({
-        id: connectionEdgeId(input, id, j),
-        source: dot < 0 ? input : input.slice(0, dot),
-        sourceHandle: dot < 0 ? "output" : input.slice(dot + 1),
-        target: id,
-        targetHandle: "input",
-        type: "smoothstep",
-        animated: false,
-      });
+      const dot = input.indexOf("."),
+        edgeId = connectionEdgeId(input, id, j),
+        source = dot < 0 ? input : input.slice(0, dot),
+        sourceHandle = dot < 0 ? "output" : input.slice(dot + 1);
+      const oldEdge = previousEdges.get(edgeId);
+      edges.push(
+        oldEdge &&
+          oldEdge.source === source &&
+          oldEdge.sourceHandle === sourceHandle &&
+          oldEdge.target === id
+          ? oldEdge
+          : {
+              id: edgeId,
+              source,
+              sourceHandle,
+              target: id,
+              targetHandle: "input",
+              type: "smoothstep",
+              animated: false,
+            },
+      );
     }
   }
-  for (const node of nodes)
-    node.data.disconnected =
-      node.data.kind === "sources"
-        ? !edges.some((e) => e.source === node.id)
-        : !edges.some((e) => e.target === node.id);
+  const sending = new Set(edges.map((edge) => edge.source)),
+    receiving = new Set(edges.map((edge) => edge.target));
+  // Unchanged steps keep their node object, so the canvas re-renders only
+  // what an edit touched.
+  const nodes = drafts.map(({ id, old, position, data }) => {
+    const disconnected =
+      data.kind === "sources" ? !sending.has(id) : !receiving.has(id);
+    const same =
+      old?.type === "component" &&
+      old.position === position &&
+      old.data?.disconnected === disconnected &&
+      Object.keys(data).length + 1 === Object.keys(old.data).length &&
+      Object.entries(data).every(([key, value]) => old.data[key] === value);
+    return same
+      ? old
+      : { id, type: "component", position, data: { ...data, disconnected } };
+  });
   return { nodes, edges };
 }
 export function validateGraph(config: Config): string[] {
@@ -808,6 +837,22 @@ export function removePipelineStep(config: Config, id: string): Config {
   return next;
 }
 
+// Required-option findings by component content: while one step is edited the
+// others are not re-walked against the schema. Bounded; content-keyed, so a
+// caller that mutates a component in place still gets fresh findings.
+const requiredIssueCache = new Map<string, string[]>();
+function requiredIssues(kind: Kind, component: Config, schema: Schema) {
+  const key = `${kind}\n${JSON.stringify(component)}`;
+  let issues = requiredIssueCache.get(key);
+  if (!issues) {
+    if (requiredIssueCache.size > 4000) requiredIssueCache.clear();
+    requiredIssueCache.set(
+      key,
+      (issues = requiredSchemaIssues(schema, vectorSchema, component)),
+    );
+  }
+  return issues;
+}
 export function pipelineIssues(
   config: Config,
 ): { id?: string; message: string }[] {
@@ -835,11 +880,7 @@ export function pipelineIssues(
       );
       const schema = definition ? componentSchema(definition) : undefined;
       if (schema)
-        for (const message of requiredSchemaIssues(
-          schema,
-          vectorSchema,
-          component,
-        ))
+        for (const message of requiredIssues(kind, component, schema))
           issues.push({ id, message: `${id}: ${message}` });
       // Curated display shortcuts are not authoritative requirements. Native
       // alternatives and omitted defaults follow the pinned component schema.
