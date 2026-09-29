@@ -893,8 +893,9 @@ type appliedOutcome struct {
 }
 
 // followUpDelay brings an apply's outcome to the dashboard within seconds
-// instead of a full check-in interval.
-const followUpDelay = 2 * time.Second
+// instead of a full check-in interval. Activation already watched Vector stay
+// up; one second is the spacing wake-ups keep too.
+const followUpDelay = time.Second
 
 // followUp reports whether this poll finished an apply the last heartbeat
 // didn't report. The follow-up heartbeat reports it, so the next poll sees
