@@ -1,82 +1,27 @@
-/* Rollout state colors. Validated as a set (dataviz six checks): the in-flight
-   pair is one ordinal blue ramp; failures sit at the far end of every stack,
-   away from the amber mark. Labels and icons always accompany color. */
+/* Rollout state marks alias the shared status tokens (tokens.css), so a
+   rollout's green, amber and red are the same everywhere. The in-flight pair
+   is one ordinal blue ramp; failures sit at the far end of every stack.
+   Labels and icons always accompany color. */
 :root {
-  --rollout-verified: #2f9e62;
-  --rollout-attention: #d99a1e;
-  --rollout-applying: #2a78d6;
+  --rollout-verified: var(--mark-success);
+  --rollout-attention: var(--mark-warning);
+  --rollout-applying: var(--series-1);
   --rollout-waiting: #86b6ef;
-  --rollout-queued: #d9d5ce;
-  --rollout-failed: #d03b3b;
-  --rollout-success-ink: #256440;
-  --rollout-success-soft: #eaf6ee;
-  --rollout-danger-ink: #a32d28;
-  --rollout-danger-soft: #fdeeed;
-  --rollout-warning-ink: #7a520d;
-  --rollout-warning-soft: #fdf4df;
-  --rollout-info-ink: #2359a8;
-  --rollout-info-soft: #eaf1fc;
-  --rollout-neutral-ink: #5f5d57;
-  --rollout-neutral-soft: #efede9;
+  --rollout-queued: var(--mark-empty);
+  --rollout-failed: var(--mark-danger);
+  --rollout-success-ink: var(--success-text);
+  --rollout-success-soft: var(--success-bg);
+  --rollout-danger-ink: var(--danger-text);
+  --rollout-danger-soft: var(--danger-bg);
+  --rollout-warning-ink: var(--warning-text);
+  --rollout-warning-soft: var(--warning-bg);
+  --rollout-info-ink: var(--info-text);
+  --rollout-info-soft: var(--info-bg);
+  --rollout-neutral-ink: var(--neutral-text);
+  --rollout-neutral-soft: var(--neutral-bg);
 }
 [data-theme="dark"] {
-  --rollout-verified: #36a86a;
-  --rollout-attention: #b98b22;
-  --rollout-applying: #4f93e2;
   --rollout-waiting: #2a6fcb;
-  --rollout-queued: #4a464e;
-  --rollout-failed: #e05a5a;
-  --rollout-success-ink: #a2d5b2;
-  --rollout-success-soft: #20352a;
-  --rollout-danger-ink: #ffb8b3;
-  --rollout-danger-soft: #45282a;
-  --rollout-warning-ink: #efd294;
-  --rollout-warning-soft: #3e3320;
-  --rollout-info-ink: #b9d3fb;
-  --rollout-info-soft: #25324a;
-  --rollout-neutral-ink: #cbc6c1;
-  --rollout-neutral-soft: #36333a;
-}
-
-.rollout-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px 2px 6px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 18px;
-  white-space: nowrap;
-  color: var(--rollout-neutral-ink);
-  background: var(--rollout-neutral-soft);
-}
-.rollout-chip svg {
-  flex: none;
-}
-.rollout-chip[data-tone="success"] {
-  color: var(--rollout-success-ink);
-  background: var(--rollout-success-soft);
-}
-.rollout-chip[data-tone="danger"] {
-  color: var(--rollout-danger-ink);
-  background: var(--rollout-danger-soft);
-}
-.rollout-chip[data-tone="warning"] {
-  color: var(--rollout-warning-ink);
-  background: var(--rollout-warning-soft);
-}
-.rollout-chip[data-tone="info"] {
-  color: var(--rollout-info-ink);
-  background: var(--rollout-info-soft);
-}
-.rollout-spin {
-  animation: rollout-spin 1.6s linear infinite;
-}
-@keyframes rollout-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* Stacked state bar: one baseline, 2px surface gaps, 4px rounded ends. */
@@ -502,30 +447,7 @@
       color-mix(in srgb, var(--rollout-applying) 22%, transparent);
   }
 }
-
-.rollout-updated {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.rollout-live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--rollout-verified);
-  animation: rollout-breathe 2.4s ease-in-out infinite;
-}
-@keyframes rollout-breathe {
-  50% {
-    opacity: 0.35;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .rollout-spin,
-  .rollout-live-dot,
   .rollout-timeline li[data-state="current"] .rollout-timeline-mark {
     animation: none;
   }

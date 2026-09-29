@@ -53,7 +53,12 @@ import {
   TimeAgo,
   useResource,
 } from "./ui";
-import { connectionState, deviceDisplayStatus, statusLabel } from "./status";
+import {
+  applyStepLabels,
+  connectionState,
+  deviceDisplayStatus,
+  statusLabel,
+} from "./status";
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
 import "./devices.css";
@@ -74,12 +79,12 @@ const assignmentLink = (assignmentId?: string) =>
 /* ---------- Apply progress ---------- */
 
 const steps = [
-  { state: "desired", label: "Released" },
-  { state: "downloaded", label: "Downloaded" },
-  { state: "validated", label: "Validated" },
-  { state: "written", label: "Written" },
-  { state: "reload_requested", label: "Vector reloaded" },
-  { state: "verified_applied", label: "Verified running" },
+  { state: "desired", label: applyStepLabels.released },
+  { state: "downloaded", label: applyStepLabels.downloaded },
+  { state: "validated", label: applyStepLabels.validated },
+  { state: "written", label: applyStepLabels.written },
+  { state: "reload_requested", label: applyStepLabels.reloaded },
+  { state: "verified_applied", label: applyStepLabels.applied },
 ];
 const stageStep: Record<string, number> = {
   download: 1,

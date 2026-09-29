@@ -32,7 +32,8 @@ import {
   type DeploymentOperation,
   type DeploymentStorageIssue,
 } from "./deploymentRequests";
-import { releasePlan, type StatusTone } from "./deploymentStatus";
+import { releasePlan } from "./deploymentStatus";
+import { deviceDisplayStatus, statusLabel, type StatusTone } from "./status";
 import {
   AssignmentLink,
   ConflictTable,
@@ -185,21 +186,11 @@ function fullModeRequirements(config: Record<string, any>): string[] {
   inspect(config);
   return [...required];
 }
-const deviceStates: Record<string, string> = {
-  verified: "Online",
-  unmanaged: "Online",
-  online: "Online",
-  applying: "Applying a change",
-  failed: "Last change failed",
-  rolled_back: "Last change rolled back",
-  verification_unknown: "Needs verification",
-  paused: "Sync paused",
-  offline: "Offline, applies when it reconnects",
-  awaiting_first_check_in: "Waiting for its first check-in",
-  revoked: "Revoked",
-};
 function statusText(device: Device) {
-  return deviceStates[device.status] || device.status.replaceAll("_", " ");
+  const label = statusLabel("device", deviceDisplayStatus(device));
+  return device.status === "offline"
+    ? `${label}, applies when it reconnects`
+    : label;
 }
 function capitalize(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);

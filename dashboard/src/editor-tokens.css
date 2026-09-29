@@ -1,21 +1,21 @@
-/* Editor-scoped status and code tokens (light, then dark). Contrast-checked
-   pairs from the shell review; kept self-contained so the editor does not
-   depend on the shell token rollout. */
+/* Editor-scoped tokens. Status colors alias the shared status tokens
+   (tokens.css) so a warning is the same amber in the editor and the shell;
+   the code palette is editor-only (light, then dark). */
 :root {
-  --ed-danger: #a3262b;
-  --ed-danger-bg: #fdecec;
-  --ed-danger-line: #f3c7c7;
-  --ed-warning: #7a4f06;
-  --ed-warning-bg: #fdf3dc;
-  --ed-warning-line: #f0d9a6;
-  --ed-success: #1f6b43;
-  --ed-success-bg: #e9f5ee;
-  --ed-success-line: #c5e3d1;
-  --ed-info: #3446ba;
-  --ed-info-bg: #eceefd;
-  --ed-info-line: #cdd3f7;
-  --ed-neutral-bg: #eeece8;
-  --ed-neutral-line: #dcd8d1;
+  --ed-danger: var(--danger-text);
+  --ed-danger-bg: var(--danger-bg);
+  --ed-danger-line: var(--danger-border);
+  --ed-warning: var(--warning-text);
+  --ed-warning-bg: var(--warning-bg);
+  --ed-warning-line: var(--warning-border);
+  --ed-success: var(--success-text);
+  --ed-success-bg: var(--success-bg);
+  --ed-success-line: var(--success-border);
+  --ed-info: var(--info-text);
+  --ed-info-bg: var(--info-bg);
+  --ed-info-line: var(--info-border);
+  --ed-neutral-bg: var(--neutral-bg);
+  --ed-neutral-line: var(--neutral-border);
   --ed-mono:
     ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas,
     monospace;
@@ -30,20 +30,6 @@
   --ed-elevation: 0 1px 2px #2925220d, 0 8px 24px #2925220f;
 }
 [data-theme="dark"] {
-  --ed-danger: #f5a5a5;
-  --ed-danger-bg: #3d2224;
-  --ed-danger-line: #5e3336;
-  --ed-warning: #f0cf8a;
-  --ed-warning-bg: #3a2f1a;
-  --ed-warning-line: #5a4a26;
-  --ed-success: #8fd1a8;
-  --ed-success-bg: #1d3326;
-  --ed-success-line: #2c4d39;
-  --ed-info: #b6beff;
-  --ed-info-bg: #2b2d4a;
-  --ed-info-line: #3d4170;
-  --ed-neutral-bg: #353238;
-  --ed-neutral-line: #4a464d;
   --ed-code-path: #a6c6ff;
   --ed-code-function: #d6b2ed;
   --ed-code-string: #acd5b8;

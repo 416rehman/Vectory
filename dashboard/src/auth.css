@@ -1,24 +1,14 @@
-/* Authentication, first run and account controls. Built on the workspace
-   tokens in styles.css; the few status colors are scoped with an --va prefix. */
+/* Authentication, first run and account controls. The --va status names
+   alias the shared status tokens in tokens.css. */
 :root {
-  --va-danger: #a42f29;
-  --va-danger-soft: #fff1ef;
-  --va-danger-line: #e2aca6;
-  --va-warning: #7a520f;
-  --va-warning-soft: #fff6df;
-  --va-success: #22603f;
-  --va-success-soft: #eaf5ee;
-  --va-success-line: #b9dcc6;
-}
-[data-theme="dark"] {
-  --va-danger: #ffb4ad;
-  --va-danger-soft: #3b2322;
-  --va-danger-line: #8a4c46;
-  --va-warning: #f1d18f;
-  --va-warning-soft: #3d311f;
-  --va-success: #9fd4b0;
-  --va-success-soft: #1f3528;
-  --va-success-line: #3f6b50;
+  --va-danger: var(--danger-text);
+  --va-danger-soft: var(--danger-bg);
+  --va-danger-line: var(--danger-border);
+  --va-warning: var(--warning-text);
+  --va-warning-soft: var(--warning-bg);
+  --va-success: var(--success-text);
+  --va-success-soft: var(--success-bg);
+  --va-success-line: var(--success-border);
 }
 
 /* Fields */

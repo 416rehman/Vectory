@@ -1,20 +1,12 @@
-/* Series colors follow the documented data-viz palette: blue and aqua for
-   identity, status red only for series that mean "bad", gray for context. */
+/* One series meaning across the app (tokens.css): in is --series-1, out is
+   --series-2, and status red only for series that mean "bad". */
 .telemetry-panel {
-  --series-in: #2a78d6;
-  --series-out: #1baf7a;
-  --series-critical: #d03b3b;
-  --series-muted: #898781;
-  --check-ok: #256440;
-  --check-missing: #a32d28;
-}
-[data-theme="dark"] .telemetry-panel {
-  --series-in: #3987e5;
-  --series-out: #199e70;
-  --series-critical: #e66767;
-  --series-muted: #9d9b95;
-  --check-ok: #a2d5b2;
-  --check-missing: #ffb4ae;
+  --series-in: var(--series-1);
+  --series-out: var(--series-2);
+  --series-critical: var(--mark-danger);
+  --series-muted: var(--mark-paused);
+  --check-ok: var(--success-text);
+  --check-missing: var(--danger-text);
 }
 .telemetry-heading {
   display: flex;

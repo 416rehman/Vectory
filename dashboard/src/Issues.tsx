@@ -14,7 +14,7 @@ import {
   type User,
 } from "./api";
 import {
-  Badge,
+  StatusBadge,
   Button,
   ErrorBox,
   Field,
@@ -31,6 +31,7 @@ import { DataTable, type TableColumn, type TableSort } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
+import { issueDispositions } from "./status";
 import "./control.css";
 import "./issues.css";
 
@@ -39,20 +40,12 @@ const issueTime = (value: string | null) =>
 type Disposition = Issue["disposition"] | "all";
 type View = "groups" | "list";
 const labels = {
-  open: "Open",
-  acknowledged: "Acknowledged",
-  resolved: "Resolved",
+  open: issueDispositions.open.label,
+  acknowledged: issueDispositions.acknowledged.label,
+  resolved: issueDispositions.resolved.label,
   all: "All",
 };
 const PAGE_SIZE = 12;
-// States without a built-in Badge label.
-const applyStateLabels: Record<string, string | undefined> = {
-  failed: "Apply failed",
-  rolled_back: "Rolled back",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  paused: "Paused",
-};
 const emptyPage: IssueHistoryPage = {
   items: [],
   total: 0,
@@ -436,19 +429,7 @@ function Segmented<T extends string>({
 }
 
 function DispositionBadge({ issue }: { issue: Issue }) {
-  return (
-    <Badge
-      status={
-        issue.disposition === "open"
-          ? "failed"
-          : issue.disposition === "resolved"
-            ? "completed"
-            : undefined
-      }
-    >
-      {labels[issue.disposition]}
-    </Badge>
-  );
+  return <StatusBadge domain="issue" value={issue.disposition} />;
 }
 
 function DeviceCell({ issue }: { issue: Issue }) {
@@ -877,9 +858,7 @@ function RetryDialog({
               <div>
                 <dt>Current state</dt>
                 <dd>
-                  <Badge status={current.apply_state}>
-                    {applyStateLabels[current.apply_state]}
-                  </Badge>
+                  <StatusBadge domain="apply" value={current.apply_state} />
                 </dd>
               </div>
               <div>

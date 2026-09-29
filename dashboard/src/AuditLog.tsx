@@ -42,7 +42,6 @@ import {
   auditFilterSummary,
   auditHistoryPath,
   auditOutcomeLabel,
-  auditOutcomes,
   auditResourceRoute,
   auditRoute,
   auditScopes,
@@ -59,6 +58,7 @@ import { exactLocal, exactUtc, shortLocal } from "./time";
 import "./audit.css";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
+import { auditOutcomes } from "./status";
 
 const emptyPage: AuditHistoryPage = {
   items: [],
@@ -108,12 +108,7 @@ function ResourceLink({
 
 function Result({ outcome }: { outcome: string }) {
   return (
-    <StatusBadge
-      domain="audit"
-      value={outcome}
-      label={auditOutcomeLabel(outcome)}
-      className="audit-result"
-    />
+    <StatusBadge domain="audit" value={outcome} className="audit-result" />
   );
 }
 
@@ -484,11 +479,11 @@ export function AuditLog({
         value: query.outcome,
         allLabel: "All results",
         options: [
-          ...Object.entries(auditOutcomes).map(([value, label]) => ({
+          ...Object.entries(auditOutcomes).map(([value, { label }]) => ({
             value,
             label: value === "failure" ? `${label} (request)` : label,
           })),
-          ...(query.outcome && !auditOutcomes[query.outcome]
+          ...(query.outcome && !Object.hasOwn(auditOutcomes, query.outcome)
             ? [
                 {
                   value: query.outcome,

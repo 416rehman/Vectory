@@ -1,43 +1,48 @@
 import type { DeploymentSummary, DeploymentTarget } from "./api";
+import {
+  applyStates,
+  applyStepLabels,
+  deploymentStatuses,
+  statusOf,
+  targetStates,
+  type StatusTone,
+} from "./status";
 
-/** One vocabulary for rollout outcomes and target progress on every deployment view. */
-export type StatusTone = "success" | "danger" | "warning" | "info" | "neutral";
+/*
+ * Rollout outcomes and target progress for every deployment view. Labels and
+ * tones come from status.ts; this module only decides which state applies.
+ */
 
-export const lifecycleLabels: Record<string, string> = {
-  scheduled: "Scheduled",
-  active: "In progress",
-  paused: "Paused",
-  completed: "Complete",
-  failed: "Failed",
-  cancelled: "Cancelled",
-  missed: "Schedule missed",
-  unassigned: "Removed",
-};
-const lifecycleTones: Record<string, StatusTone> = {
-  scheduled: "info",
-  active: "info",
-  paused: "warning",
-  completed: "success",
-  failed: "danger",
-  cancelled: "neutral",
-  missed: "danger",
-  unassigned: "neutral",
-};
+/** The lifecycle statuses the server stores for a deployment. */
+export const deploymentLifecycle = [
+  "scheduled",
+  "active",
+  "paused",
+  "completed",
+  "cancelled",
+  "failed",
+  "missed",
+  "unassigned",
+] as const;
 
 /** Filter options for deployment history, in reading order. */
-export const statusFilters: { value: string; label: string }[] = [
-  { value: "active", label: "In progress" },
-  { value: "paused", label: "Paused" },
-  { value: "scheduled", label: "Scheduled" },
-  { value: "completed", label: "Complete" },
-  { value: "failed", label: "Failed" },
-  { value: "rolled_back", label: "Rolled back" },
-  { value: "cancelled", label: "Cancelled" },
-  { value: "unassigned", label: "Removed" },
-  { value: "missed", label: "Schedule missed" },
-];
+export const statusFilters: { value: string; label: string }[] = (
+  [
+    "active",
+    "paused",
+    "scheduled",
+    "completed",
+    "failed",
+    "rolled_back",
+    "cancelled",
+    "unassigned",
+    "missed",
+  ] as const
+).map((value) => ({ value, label: deploymentStatuses[value].label }));
 
 export type DeploymentDisplay = {
+  /** The status.ts deployment state this outcome displays as. */
+  state: string;
   /** The rollout's own outcome, never rewritten by later assignment changes. */
   label: string;
   tone: StatusTone;
@@ -66,8 +71,7 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
   if (d.rolled_back_by) {
     const before = d.status_before_rollback || "";
     return {
-      label: "Rolled back",
-      tone: "warning",
+      ...display("rolled_back"),
       note:
         [
           d.rolled_back_to_version
@@ -86,10 +90,11 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
   if (d.status === "unassigned") {
     const before = d.status_before_removal || "";
     const base =
-      lifecycleLabels[before] && before !== "unassigned" ? before : "";
+      Object.hasOwn(deploymentStatuses, before) && before !== "unassigned"
+        ? before
+        : "";
     return {
-      label: latest ? "Replaced" : base ? lifecycleLabels[base] : "Removed",
-      tone: latest ? "neutral" : base ? lifecycleTones[base] : "neutral",
+      ...display(latest ? "replaced" : base || "unassigned"),
       note: latest
         ? `By ${version(latest.version_number)}`
         : base
@@ -104,11 +109,11 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
       : d.status === "failed" && d.failure_reason === "incompatible"
         ? "A device became incompatible"
         : null;
-  return {
-    label: lifecycleLabels[d.status] || d.status.replaceAll("_", " "),
-    tone: lifecycleTones[d.status] || "neutral",
-    note,
-  };
+  return { ...display(d.status), note };
+}
+function display(state: string) {
+  const { label, tone } = statusOf("deployment", state);
+  return { state, label, tone };
 }
 
 /** Whether a rollout can still release devices (and is worth polling fast). */
@@ -116,49 +121,24 @@ export function isLive(status: string) {
   return status === "active" || status === "paused" || status === "scheduled";
 }
 
-const targetLabels: Record<string, string> = {
-  verified_applied: "Verified",
-  desired: "Waiting for check-in",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  written: "Applying",
-  reload_requested: "Restarting Vector",
-  verification_unknown: "Needs verification",
-  rolled_back: "Rolled back",
-  incompatible: "Incompatible",
-  failed: "Failed",
-  blocked: "Blocked",
-  removed: "No longer targeted",
-  revoked: "Revoked",
-};
-const targetTones: Record<string, StatusTone> = {
-  verified_applied: "success",
-  desired: "info",
-  downloaded: "info",
-  validated: "info",
-  written: "info",
-  reload_requested: "info",
-  verification_unknown: "warning",
-  rolled_back: "danger",
-  incompatible: "danger",
-  failed: "danger",
-  blocked: "danger",
-  pending: "neutral",
-  removed: "neutral",
-  revoked: "neutral",
-};
-
+/** The status.ts target state for a device's progress within one rollout. */
+export function targetState(
+  state: string,
+  options: { stopped?: boolean; replaced?: boolean } = {},
+) {
+  if (state === "pending" && options.stopped) return "not_released";
+  if (state === "removed" && options.replaced) return "replaced";
+  return state;
+}
 /** Label for a device's progress within one rollout. */
 export function targetLabel(
   state: string,
   options: { stopped?: boolean; replaced?: boolean } = {},
 ) {
-  if (state === "pending") return options.stopped ? "Not released" : "Queued";
-  if (state === "removed" && options.replaced) return "Replaced";
-  return targetLabels[state] || state.replaceAll("_", " ");
+  return statusOf("target", targetState(state, options)).label;
 }
 export function targetTone(state: string): StatusTone {
-  return targetTones[state] || "neutral";
+  return statusOf("target", state).tone;
 }
 export const targetFilterStates = [
   "verified_applied",
@@ -184,16 +164,24 @@ export type ProgressSegment = {
 // Stack order follows progress, with failures at the far end. The order also
 // keeps the amber and red marks apart (validated for color-vision deficiency).
 const segmentStates: [ProgressSegment["key"], string, string[]][] = [
-  ["verified", "Verified", ["verified_applied"]],
-  ["attention", "Needs verification", ["verification_unknown"]],
+  ["verified", applyStates.verified_applied.label, ["verified_applied"]],
+  [
+    "attention",
+    applyStates.verification_unknown.label,
+    ["verification_unknown"],
+  ],
   [
     "applying",
-    "Applying",
+    applyStates.written.label,
     ["downloaded", "validated", "written", "reload_requested"],
   ],
-  ["waiting", "Waiting for check-in", ["desired"]],
-  ["queued", "Not released", ["pending"]],
-  ["failed", "Failed", ["failed", "rolled_back", "incompatible", "blocked"]],
+  ["waiting", applyStates.desired.label, ["desired"]],
+  ["queued", targetStates.not_released.label, ["pending"]],
+  [
+    "failed",
+    applyStates.failed.label,
+    ["failed", "rolled_back", "incompatible", "blocked"],
+  ],
 ];
 /**
  * Stacked progress from persisted target states. Only verified_applied counts
@@ -206,7 +194,8 @@ export function progressSegments(
   const known = new Set(segmentStates.flatMap(([, , states]) => states));
   return segmentStates.map(([key, label, states]) => ({
     key,
-    label: key === "queued" && !options.stopped ? "Queued" : label,
+    label:
+      key === "queued" && !options.stopped ? targetStates.pending.label : label,
     count:
       states.reduce((sum, state) => sum + (counts[state] || 0), 0) +
       (key === "applying"
@@ -220,7 +209,8 @@ export function progressSegments(
 function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
-export function duration(seconds: number) {
+/** A rough duration from seconds: "about 12 min". Not time.ts duration (ms). */
+export function approxDuration(seconds: number) {
   if (seconds < 90) return "about 1 min";
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `about ${minutes} min`;
@@ -274,7 +264,7 @@ export function releasePlan(options: {
     return {
       waves,
       seconds,
-      sentence: `${devices === 1 ? "1 device" : `All ${devices} devices`} at once · ${duration(seconds)} ${cadence}`,
+      sentence: `${devices === 1 ? "1 device" : `All ${devices} devices`} at once · ${approxDuration(seconds)} ${cadence}`,
     };
   const [canary, ...batches] = waves;
   const sizes = new Set(batches);
@@ -286,7 +276,7 @@ export function releasePlan(options: {
   return {
     waves,
     seconds,
-    sentence: `${plural(canary, "canary device")}${batchText} · ${duration(seconds)} ${cadence}`,
+    sentence: `${plural(canary, "canary device")}${batchText} · ${approxDuration(seconds)} ${cadence}`,
   };
 }
 
@@ -304,11 +294,11 @@ const stepStates: Record<TimelineStep["key"], string[]> = {
   verified: ["verified_applied"],
 };
 const stepLabels: Record<TimelineStep["key"], string> = {
-  released: "Released",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  applied: "Applied",
-  verified: "Verified",
+  released: applyStepLabels.released,
+  downloaded: applyStepLabels.downloaded,
+  validated: applyStepLabels.validated,
+  applied: applyStepLabels.written,
+  verified: applyStepLabels.applied,
 };
 /**
  * Released → downloaded → validated → applied → verified for one device, from
@@ -380,20 +370,6 @@ export function countdown(milliseconds: number) {
   return hours
     ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`
     : `${minutes}:${seconds}`;
-}
-
-/** "Just now", "12 s ago", "4 min ago", "3 h ago", "2 days ago". */
-export function since(value: string | null | undefined, now = Date.now()) {
-  if (!value) return null;
-  const at = Date.parse(value);
-  if (Number.isNaN(at)) return null;
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 5) return "Just now";
-  if (seconds < 60) return `${seconds} s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
-  const days = Math.floor(seconds / 86400);
-  return `${days} ${days === 1 ? "day" : "days"} ago`;
 }
 
 /** Plain words for the failure codes agents report; the code stays available. */

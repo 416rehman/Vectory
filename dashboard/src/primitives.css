@@ -51,15 +51,8 @@
   border: 0;
   background: none;
 }
-.status-badge.badge {
-  padding: 0 8px;
-}
-.status-badge[data-state="applying"] > svg,
-.status-badge[data-state="active"] > svg,
-.status-badge[data-state="written"] > svg,
-.status-badge[data-state="reload_requested"] > svg,
-.status-badge[data-state="downloaded"] > svg,
-.status-badge[data-state="validated"] > svg {
+/* Work in flight turns slowly; waiting and scheduled states stay still. */
+.status-badge[data-icon="progress"] > svg {
   animation: spin 2.4s linear infinite;
 }
 
