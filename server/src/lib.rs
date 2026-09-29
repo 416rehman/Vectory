@@ -20,6 +20,7 @@ pub mod group_requests;
 pub mod groups;
 pub mod install;
 pub mod issues;
+pub mod ledger;
 pub mod login_challenges;
 pub mod maintenance;
 pub mod mfa;
@@ -34,7 +35,6 @@ pub mod restored_access;
 pub mod rollback_review;
 pub mod rollout;
 pub mod scheduled_refresh;
-pub mod sign_in_failures;
 pub mod telemetry;
 pub mod token_requests;
 pub mod user_requests;
@@ -49,12 +49,7 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
@@ -93,17 +88,38 @@ pub struct App {
     pub validation_slots: tokio::sync::Semaphore,
     pub agent_request_slots: tokio::sync::Semaphore,
     pub instance_lock: std::fs::File,
-    pub limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
-    pub device_limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
+    /// Request limiter partitions (see `App::limit`): sign-in, browser and
+    /// account keys; unauthenticated keys outside sign-in; authenticated
+    /// devices. None of them can displace another's keys.
+    pub limits: std::sync::Mutex<ledger::Ledger>,
+    pub public_limits: std::sync::Mutex<ledger::Ledger>,
+    pub device_limits: std::sync::Mutex<ledger::Ledger>,
     /// Sign-in failure counts and recently successful clients, per account.
-    pub sign_in_failures: std::sync::Mutex<sign_in_failures::Ledger>,
+    pub sign_in_failures: std::sync::Mutex<ledger::Ledger>,
     /// Release file SHA-256 keyed by name and the (length, modified) pair it was computed for.
     pub release_hashes: std::sync::Mutex<HashMap<String, (u64, std::time::SystemTime, String)>>,
 }
 pub type State = Arc<App>;
-/// Tracked rate-limit keys for browser/anonymous callers and for authenticated devices.
+/// Tracked rate-limit keys per limiter partition. A full partition evicts
+/// the key whose window ends soonest; it never turns a new key away.
 pub const ANONYMOUS_LIMIT_KEYS: usize = 32768;
+pub const PUBLIC_LIMIT_KEYS: usize = 32768;
 pub const DEVICE_LIMIT_KEYS: usize = 40000;
+/// Sign-in failure keys. A single instance allows 600 sign-in attempts a
+/// minute, each adding at most two failure keys with 15- and 60-minute
+/// windows: about 45,000 live keys at the cap, so nothing live is evicted.
+pub const SIGN_IN_FAILURE_KEYS: usize = 65536;
+/// Key prefixes of unauthenticated requests outside sign-in: the agent
+/// listener's installer, agent downloads and enrollment, and invitation
+/// previews. Each namespace has a global per-minute cap ahead of its
+/// per-address key, so this partition can't fill with live keys, and
+/// traffic here never evicts a sign-in key.
+const PUBLIC_LIMIT_PREFIXES: [&str; 4] = [
+    "agent-installer",
+    "agent-download",
+    "enrollment",
+    "invite-preview",
+];
 pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
     std::fs::create_dir_all(&settings.data_dir)?;
     crypto::restrict_state(&settings.data_dir)
@@ -165,9 +181,10 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         settings,
         keys,
         audit_exports,
-        limits: Default::default(),
-        device_limits: Default::default(),
-        sign_in_failures: Default::default(),
+        limits: ledger::Ledger::with_capacity(ANONYMOUS_LIMIT_KEYS).into(),
+        public_limits: ledger::Ledger::with_capacity(PUBLIC_LIMIT_KEYS).into(),
+        device_limits: ledger::Ledger::with_capacity(DEVICE_LIMIT_KEYS).into(),
+        sign_in_failures: ledger::Ledger::with_capacity(SIGN_IN_FAILURE_KEYS).into(),
         release_hashes: Default::default(),
         agent_request_slots: tokio::sync::Semaphore::new(128),
         validation_slots: tokio::sync::Semaphore::new(2),
@@ -178,10 +195,7 @@ impl App {
     fn limit_partition(
         &self,
         key: &str,
-    ) -> error::Result<(
-        std::sync::MutexGuard<'_, HashMap<String, (Instant, u32, Duration)>>,
-        usize,
-    )> {
+    ) -> error::Result<std::sync::MutexGuard<'_, ledger::Ledger>> {
         // These namespaces are called only after mTLS registration/revocation checks.
         // Partition them from attacker-selected login email keys: an enrolled fleet
         // must not exhaust browser authentication's independent memory budget.
@@ -189,46 +203,30 @@ impl App {
             || key.starts_with("artifact:")
             || key.starts_with("renew:")
             || key.starts_with("identity:");
-        let maximum_entries = if authenticated_device {
-            DEVICE_LIMIT_KEYS
-        } else {
-            ANONYMOUS_LIMIT_KEYS
-        };
         let partition = if authenticated_device {
             &self.device_limits
+        } else if PUBLIC_LIMIT_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+        {
+            &self.public_limits
         } else {
             &self.limits
         };
-        let limits = partition.lock().map_err(|_| {
+        partition.lock().map_err(|_| {
             error::ApiError::new(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL",
                 "Rate limiter unavailable",
             )
-        })?;
-        Ok((limits, maximum_entries))
+        })
     }
-    /// Count an attempt against a fixed window and refuse once `maximum` is exceeded.
+    /// Count an attempt against a fixed window and refuse once `maximum` is
+    /// exceeded. Each partition is bounded: when full it evicts the key whose
+    /// window ends soonest, so a new key is always counted, never refused.
     pub fn limit(&self, key: String, maximum: u32, window: Duration) -> error::Result<()> {
-        let (mut limits, maximum_entries) = self.limit_partition(&key)?;
-        // Hard cap makes attacker-controlled keys unable to allocate unbounded state.
-        if limits.len() >= maximum_entries {
-            limits.retain(|_, (start, _, lifetime)| start.elapsed() < *lifetime);
-        }
-        if limits.len() >= maximum_entries && !limits.contains_key(&key) {
-            return Err(error::ApiError::throttled(
-                "RATE_LIMITED",
-                "The server is busy. Try again in a minute.",
-                60,
-            ));
-        }
-        let entry = limits.entry(key).or_insert((Instant::now(), 0, window));
-        if entry.0.elapsed() >= window {
-            *entry = (Instant::now(), 0, window)
-        }
-        entry.1 += 1;
-        if entry.1 > maximum {
-            let remaining = window.saturating_sub(entry.0.elapsed()).as_secs() + 1;
+        let (count, remaining) = self.limit_partition(&key)?.hit(&key, window);
+        if count > maximum {
             return Err(error::ApiError::throttled(
                 "RATE_LIMITED",
                 format!("Too many requests. Try again in {}.", wait_text(remaining)),
@@ -239,7 +237,7 @@ impl App {
     }
     /// The sign-in failure ledger. A poisoned lock still yields the ledger:
     /// failure accounting must never fail open.
-    pub fn sign_in_failures(&self) -> std::sync::MutexGuard<'_, sign_in_failures::Ledger> {
+    pub fn sign_in_failures(&self) -> std::sync::MutexGuard<'_, ledger::Ledger> {
         self.sign_in_failures
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

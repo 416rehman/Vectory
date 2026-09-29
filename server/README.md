@@ -69,6 +69,7 @@ The agent substitutes values from protected local files, re-checks local policy,
 - Samples carry a timestamp plus optional throughput, errors, uptime, CPU, memory, discarded events and buffer bytes, and up to 50 components with a strict allowlist. Unknown or out-of-range values are rejected; missing values stay null.
 - Samples coalesce into per-minute buckets kept for `VECTORY_TELEMETRY_RETENTION_DAYS`. `GET /api/v1/devices/{id}/telemetry` returns up to 120 recent buckets.
 - The agent listener limits concurrent connections (`VECTORY_MAX_AGENT_CONNECTIONS`), TLS handshakes (128), parsed requests (128), HTTP/2 streams per connection (16), request bodies (1 MiB) and request time (15 seconds). These contain overload; they aren't a supported fleet size. Measurements are in [docs/internal/CAPACITY.md](../docs/internal/CAPACITY.md).
+- Request limits count per client in bounded partitions that evict the key whose window ends soonest, so a full partition never turns a new client away. Unauthenticated agent-listener requests and invitation previews have a partition of their own and a global cap a minute ahead of each address's budget: 1,200 installer fetches, 1,200 agent downloads, 600 enrollments and 600 previews. A flood from many addresses can't displace sign-in keys.
 
 ## Audit
 
