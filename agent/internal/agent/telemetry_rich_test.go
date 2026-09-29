@@ -195,4 +195,15 @@ func TestHeartbeatFeaturesAreSentOnlyToServersThatAcceptThem(t *testing.T) {
 	if len(rich.Error.Diagnostics) != 1 || rich.HostRuntime == nil || rich.HostRuntime.DataDirSource != dataDirAgentDefault || rich.HostRuntime.MetricsSource != metricsNone || rich.Telemetry.EventsOutPerSecond == nil {
 		t.Fatalf("rich heartbeat = %+v", rich)
 	}
+	// A supporting server learns "nothing to report"; an older one never
+	// sees the field at all.
+	for _, c := range []struct {
+		h    Heartbeat
+		want string
+	}{{rich, `"vector_log_summary":[]`}, {legacy, ""}} {
+		encoded, _ := json.Marshal(c.h)
+		if got := strings.Contains(string(encoded), `"vector_log_summary"`); got != (c.want != "") || c.want != "" && !strings.Contains(string(encoded), c.want) {
+			t.Fatalf("vector_log_summary encoding: %s", encoded)
+		}
+	}
 }

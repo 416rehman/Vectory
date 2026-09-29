@@ -41,7 +41,11 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 		h.HostRuntime = &host
 	}
 	if e.serverSupports(featureLogSummary) && e.Log != nil {
-		h.VectorLogSummary = e.Log.summaries(e.redactorFor(running))
+		items := e.Log.summaries(e.redactorFor(running))
+		if items == nil {
+			items = []LogSummary{}
+		}
+		h.VectorLogSummary = &items
 	}
 }
 
