@@ -155,7 +155,7 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 
 func ServiceControl(action string) error {
 	if action == "uninstall" {
-		if agentJob.installed() {
+		if _, loaded := agentJob.loaded(context.Background()); loaded {
 			_ = agentJob.bootout()
 		}
 		if err := os.Remove(serviceDefinition); err != nil && !os.IsNotExist(err) {
