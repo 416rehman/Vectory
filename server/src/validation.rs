@@ -1856,7 +1856,9 @@ pub async fn pipeline_tests(
                 }
             })
         });
-    } else if !tests_run && !diagnostics.iter().any(|d| d.severity == "error") {
+    } else if !tests_run && diagnostics.is_empty() {
+        // The worker skipped the tests without saying why (a skip it explains,
+        // such as a program that calls out, is not a failure to retry).
         diagnostics.push(Diagnostic::error(
             "The isolated Vector worker could not run pipeline tests. Try again.",
         ));
