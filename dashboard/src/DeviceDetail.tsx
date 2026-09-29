@@ -7,6 +7,7 @@ import {
   CircleX,
   LoaderCircle,
   Pause,
+  Play,
   Rocket,
   TriangleAlert,
   WifiOff,
@@ -27,6 +28,7 @@ import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
 import TargetDialog from "./TargetDialog";
+import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
 import DeviceRevocation from "./DeviceAccessRevocation";
 import { DeviceIdentityRecovery, DeviceRetryAction } from "./RecoveryActions";
@@ -56,6 +58,11 @@ import {
 import { connectionState, deviceDisplayStatus, statusLabel } from "./status";
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
+import {
+  failedApplyStep,
+  failureStagePhrase,
+  type ApplyStep,
+} from "./deploymentStatus";
 import "./devices.css";
 
 type Navigate = (path: string) => void;
@@ -81,21 +88,12 @@ const steps = [
   { state: "reload_requested", label: "Vector reloaded" },
   { state: "verified_applied", label: "Verified running" },
 ];
-const stageStep: Record<string, number> = {
-  download: 1,
+const applyStepIndex: Record<ApplyStep, number> = {
   downloaded: 1,
-  verify: 1,
-  validation: 2,
-  validate: 2,
   validated: 2,
-  secrets: 2,
-  write: 3,
   written: 3,
-  reload: 4,
-  startup: 4,
-  start: 4,
-  reload_requested: 4,
-  verification: 5,
+  reloaded: 4,
+  verified: 5,
 };
 type StepState = "done" | "current" | "failed" | "unknown" | "todo" | "paused";
 export function applySteps(device: Device, version?: Version | null) {
@@ -112,9 +110,8 @@ export function applySteps(device: Device, version?: Version | null) {
     reached = steps.length - 1;
     outcome = "done";
   } else if (state === "failed" || state === "rolled_back") {
-    failedAt =
-      stageStep[(attempt?.error?.stage || "").toLowerCase()] ??
-      (state === "rolled_back" ? 4 : 2);
+    const step = failedApplyStep(attempt?.error?.stage);
+    failedAt = step ? applyStepIndex[step] : state === "rolled_back" ? 4 : 2;
     reached = failedAt;
   } else if (state === "verification_unknown") {
     reached = steps.length - 1;
@@ -198,9 +195,25 @@ function ApplyProgress({
 
 /* ---------- Running vs desired ---------- */
 
+/**
+ * The last verified managed version, named with its pipeline when that
+ * differs from the desired one. Null when the device runs no managed version.
+ */
+export function runningVersionText(device: Device) {
+  const running = device.running_version;
+  if (!running) return null;
+  const number = running.number ? `v${running.number}` : "a managed version";
+  const samePipeline =
+    !!running.configuration_id &&
+    running.configuration_id === device.desired_version?.configuration_id;
+  return samePipeline || !running.configuration_name
+    ? number
+    : `${running.configuration_name} ${number}`;
+}
 function RunningLine({ device, number }: { device: Device; number?: number }) {
   const v = number ? `v${number}` : "the assigned version";
   const attempt = device.configuration_attempt;
+  const running = runningVersionText(device);
   if (device.status === "revoked")
     return (
       <span className="device-muted">Unknown. Device access is revoked.</span>
@@ -231,16 +244,34 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
         )}
       </span>
     );
-  if (device.status === "failed" || device.status === "rolled_back")
+  if (device.status === "failed" || device.status === "rolled_back") {
+    const after =
+      device.status === "rolled_back"
+        ? `restored after ${v} failed`
+        : `kept after ${v} failed to apply`;
+    if (running)
+      return (
+        <span className="device-running-value" data-tone="success">
+          <Check size={14} aria-hidden="true" />
+          {running}
+          <span className="device-muted">· {after}</span>
+        </span>
+      );
     return (
-      <span className="device-running-value" data-tone="danger">
+      <span className="device-running-value">
         <CircleX size={14} aria-hidden="true" />
-        Its last working configuration.{" "}
-        {device.status === "rolled_back"
-          ? `${v} was rolled back.`
-          : `${v} failed to apply.`}
+        {device.actual_sha256
+          ? "Its local config, from before Vectory"
+          : "Nothing yet"}
+        <span className="device-muted">
+          ·{" "}
+          {device.status === "rolled_back"
+            ? `${v} was rolled back`
+            : `${v} failed to apply`}
+        </span>
       </span>
     );
+  }
   if (device.status === "verification_unknown")
     return (
       <span className="device-running-value" data-tone="warning">
@@ -265,7 +296,7 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
   return (
     <span className="device-running-value" data-tone="info">
       <LoaderCircle size={14} className="spin" aria-hidden="true" />
-      Its previous configuration while {v} is{" "}
+      {running ? running : "Its previous configuration"} while {v} is{" "}
       {attempt && attempt.version_id === device.desired_version_id
         ? statusLabel("apply", attempt.state).toLowerCase()
         : "on its way"}
@@ -287,10 +318,14 @@ function FailureDetails({
       <div className="device-failure-details-head">
         <CircleAlert size={15} aria-hidden="true" />
         <strong>
-          {attempt.state === "rolled_back" ? "Rolled back" : "Apply failed"} at{" "}
-          {attempt.error.stage.replaceAll("_", " ")}
+          {attempt.state === "rolled_back" ? "Rolled back" : "Apply failed"}
+          {failureStagePhrase(attempt.error.stage)
+            ? ` ${failureStagePhrase(attempt.error.stage)}`
+            : ""}
         </strong>
-        <code>{attempt.error.code}</code>
+        <small className="device-muted">
+          Agent code <code>{attempt.error.code}</code>
+        </small>
       </div>
       {/* The reason is explained from the code above; agent messages are
           never shown, even the server's substituted ones. */}
@@ -410,7 +445,14 @@ function VectorLogs({ device }: { device: Device }) {
 
 /* ---------- Activity ---------- */
 
-function DeviceActivity({ device }: { device: Device }) {
+function DeviceActivity({
+  device,
+  outage,
+}: {
+  device: Device;
+  /** The device itself couldn't be refreshed; that error already shows. */
+  outage: boolean;
+}) {
   const id = device.id;
   const issues = useResource<IssueHistoryPage>(
     `/issues/history?state=open&device_id=${encodeURIComponent(id)}&page_size=5`,
@@ -444,7 +486,7 @@ function DeviceActivity({ device }: { device: Device }) {
           All device activity <ArrowRight size={14} aria-hidden="true" />
         </a>
       </div>
-      {(issues.error || audit.error) && (
+      {(issues.error || audit.error) && !outage && (
         <InlineError
           title="Couldn't load all device activity."
           error={issues.error || audit.error}
@@ -468,7 +510,7 @@ function DeviceActivity({ device }: { device: Device }) {
             {reports.map((issue) => (
               <li key={issue.id}>
                 <a href={`#/issues/${encodeURIComponent(issue.id)}`}>
-                  {issue.code.replaceAll("_", " ")}
+                  {issue.title || issue.code.replaceAll("_", " ")}
                 </a>
                 <p>{issue.message}</p>
                 <small>
@@ -565,6 +607,7 @@ export default function DeviceDetail({
   const applying = device?.status === "applying";
   useEffect(() => setFast(!!applying), [applying]);
   const [policy, setPolicy] = useState<Policy | null>(null);
+  const [deployOpen, setDeployOpen] = useState(false);
   const canReviewPolicy =
     roleAllows(user, "operate") && device?.status !== "revoked";
   useEffect(() => {
@@ -718,20 +761,25 @@ export default function DeviceDetail({
         meta={
           <>
             <StatusBadge domain="device" value={display} />
-            <StatusBadge
-              domain="connection"
-              value={connection}
-              appearance="text"
-              label={
-                connection === "online"
-                  ? "Online"
-                  : connection === "never"
-                    ? "Never connected"
-                    : connection === "revoked"
-                      ? "Access revoked"
-                      : "Offline"
-              }
-            />
+            {resource.error ? (
+              // A stale "Online" would claim a check-in nobody can see now.
+              <span className="device-meta-note">Connection unknown</span>
+            ) : (
+              <StatusBadge
+                domain="connection"
+                value={connection}
+                appearance="text"
+                label={
+                  connection === "online"
+                    ? "Online"
+                    : connection === "never"
+                      ? "Never connected"
+                      : connection === "revoked"
+                        ? "Access revoked"
+                        : "Offline"
+                }
+              />
+            )}
             {device.last_seen && (
               <span className="device-meta-note">
                 Last check-in <TimeAgo value={device.last_seen} />
@@ -749,9 +797,7 @@ export default function DeviceDetail({
           <Button
             icon={Rocket}
             variant={device.desired_version_id ? "secondary" : ""}
-            onClick={() =>
-              navigate(`configurations?device=${encodeURIComponent(device.id)}`)
-            }
+            onClick={() => setDeployOpen(true)}
           >
             Deploy a pipeline
           </Button>
@@ -759,7 +805,11 @@ export default function DeviceDetail({
       </PageHeader>
       {resource.error && (
         <InlineError
-          title="Couldn't refresh this device."
+          title={
+            /fetch|network|timed out|deadline/i.test(resource.error)
+              ? "Can't reach the Vectory server. Retrying."
+              : "Couldn't refresh this device."
+          }
           error={resource.error}
           updatedAt={resource.updatedAt}
           retry={() => void resource.reload()}
@@ -795,6 +845,25 @@ export default function DeviceDetail({
                 </>
               )}
             </p>
+            {!device.local_paused &&
+              device.sync_paused &&
+              canReviewPolicy &&
+              device.effective_policy && (
+                <Button
+                  variant="secondary compact"
+                  icon={Play}
+                  className="device-banner-action"
+                  onClick={() =>
+                    device.effective_policy &&
+                    setPolicy({
+                      ...device.effective_policy,
+                      sync_paused: false,
+                    })
+                  }
+                >
+                  Resume sync
+                </Button>
+              )}
           </div>
         </div>
       )}
@@ -828,7 +897,7 @@ export default function DeviceDetail({
                 <StatusBadge domain="device" value={display} />
               )}
             </div>
-            {(version.error || configuration.error) && (
+            {(version.error || configuration.error) && !resource.error && (
               <InlineError
                 title="Pipeline details couldn't be loaded."
                 error={version.error || configuration.error}
@@ -861,6 +930,15 @@ export default function DeviceDetail({
                       {number !== undefined && (
                         <span className="device-running-version">
                           v{number}
+                        </span>
+                      )}
+                      {(device.status === "failed" ||
+                        device.status === "rolled_back") && (
+                        <span className="device-running-flag">
+                          <CircleX size={13} aria-hidden="true" />
+                          {device.status === "rolled_back"
+                            ? "Rolled back on this device"
+                            : "Failed on this device"}
                         </span>
                       )}
                       {version.data?.created_at && (
@@ -919,9 +997,10 @@ export default function DeviceDetail({
               )}
             </div>
           </section>
-          <TelemetryPanel device={device} />
+          {/* Vector's warnings and errors have their own card below. */}
+          <TelemetryPanel device={device} logs={false} />
           <VectorLogs device={device} />
-          <DeviceActivity device={device} />
+          <DeviceActivity device={device} outage={!!resource.error} />
         </div>
         <aside className="device-side">
           <section className="device-card" aria-labelledby="device-about-title">
@@ -1182,6 +1261,19 @@ export default function DeviceDetail({
           </Disclosure>
         </aside>
       </div>
+      {deployOpen && operate && (
+        <DeploymentPicker
+          user={user}
+          scheduled={false}
+          initialDeviceIds={[device.id]}
+          deviceName={device.name}
+          onClose={() => setDeployOpen(false)}
+          onDone={(message) => {
+            setDeployOpen(false);
+            afterAction(message);
+          }}
+        />
+      )}
       {policy && canReviewPolicy && (
         <TargetDialog
           key={user.id}

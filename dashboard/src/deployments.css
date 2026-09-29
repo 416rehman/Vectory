@@ -11,6 +11,11 @@
 .deployment-toolbar > .button {
   margin-left: auto;
 }
+/* Tables become cards on a phone and lose their column filters; this select
+   takes over there. */
+.deployment-mobile-filter {
+  display: none;
+}
 .deployment-table td:first-child {
   min-width: 180px;
 }
@@ -352,6 +357,23 @@ a.control-row-title {
   margin: -8px 0 0;
   font-size: 13px;
 }
+.rollout-rolled-back-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  line-height: 1.5;
+}
+.rollout-rolled-back-note > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--muted);
+}
 .deployment-membership-note,
 .rollout-recorded-note {
   margin: 0;
@@ -407,6 +429,11 @@ a.control-row-title {
 .rollout-diagnostic {
   display: grid;
   gap: 5px;
+  min-width: 0;
+}
+.rollout-diagnostic > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .rollout-diagnostic > code {
   display: block;
@@ -638,5 +665,30 @@ a.control-row-title {
   .deployment-retry-outcome {
     justify-items: start;
     text-align: left;
+  }
+}
+@media (max-width: 639px) {
+  .deployment-mobile-filter {
+    display: block;
+    flex: 1 1 100%;
+  }
+  .deployment-mobile-filter select {
+    width: 100%;
+    min-height: 36px;
+  }
+  .deployment-device-results .data-list-meta > span:has(> .rollout-timeline),
+  .deployment-device-results
+    .data-list-meta
+    > span:has(> .rollout-mobile-details) {
+    flex-basis: 100%;
+  }
+  .rollout-mobile-details {
+    display: block;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .rollout-action-row {
+    flex-wrap: wrap;
   }
 }

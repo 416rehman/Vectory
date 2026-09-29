@@ -992,6 +992,8 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   last_seen?: string | null;
   replaced_by?: string | null;
   diagnostic?: string | null;
+  /** The agent's reported failure stage ("validation", "rollback", …). */
+  failure_stage?: string | null;
   check_in_seconds?: number | null;
   timeline?: { state: string; at: string }[];
 };

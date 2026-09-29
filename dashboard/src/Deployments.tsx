@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUpDown,
   Ban,
   CalendarClock,
@@ -49,6 +50,7 @@ import {
   RefreshButton,
   SearchBox,
   Spinner,
+  DEFAULT_POLL_INTERVAL,
   useResource,
 } from "./ui";
 import { DataTable } from "./DataTable";
@@ -112,6 +114,7 @@ import {
 } from "./canaryGateModel";
 
 const knownStatuses = new Set(Object.keys(lifecycleLabels));
+const LIVE_POLL_INTERVAL = 4000;
 function title(d: DeploymentSummary) {
   return (
     d.name ||
@@ -196,6 +199,13 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
       )}
     </div>
   );
+}
+/** "2 of 3 verified", the same words as the Devices column. */
+function devicesText(d: DeploymentSummary) {
+  const current = d.target_count - (d.state_counts.removed || 0);
+  if (!current && d.target_count) return "No devices follow this now";
+  if (!current) return "No devices";
+  return `${d.verified_count} of ${current} verified${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 function Empty({
   title: heading,
@@ -441,6 +451,28 @@ export function Deployments({
           maxLength={200}
           placeholder={scheduled ? "Search schedules" : "Search deployments"}
         />
+        <label className="deployment-mobile-filter">
+          <span className="sr-only">Status</span>
+          <select
+            value={query.status}
+            onChange={(event) => {
+              const status = event.target.value;
+              setQuery((old) => ({
+                ...old,
+                search: search.trim(),
+                status,
+                page: 1,
+              }));
+            }}
+          >
+            <option value="all">All statuses</option>
+            {statusFilters.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <RefreshButton busy={refreshing} onClick={() => void refresh()}>
           Refresh
         </RefreshButton>
@@ -452,6 +484,34 @@ export function Deployments({
           className="deployment-table"
           data={error ? [] : data.items}
           rowKey={(row) => row.id}
+          onRowClick={(row, event) => {
+            if (event.metaKey || event.ctrlKey) return;
+            openDetail(row.id);
+          }}
+          mobileCard={(d) => {
+            const display = describeDeployment(d);
+            return {
+              title: title(d),
+              href: `#/${deploymentRoute(scheduled, d.id, query)}`,
+              status: (
+                <StatusChip tone={display.tone} spin>
+                  {display.label}
+                </StatusChip>
+              ),
+              meta: [
+                d.policy
+                  ? subtitle(d)
+                  : d.version_number !== null
+                    ? `v${d.version_number}`
+                    : subtitle(d),
+                devicesText(d),
+                <DateCell
+                  key="date"
+                  value={scheduled ? d.scheduled_at : d.created_at}
+                />,
+              ],
+            };
+          }}
           loading={waiting}
           manualSorting
           sort={{
@@ -627,7 +687,7 @@ type DeviceResultsQuery = {
 function DeviceResults({
   deployment,
   revision,
-  pulse,
+  live,
   stages,
   navigate,
   search,
@@ -637,7 +697,8 @@ function DeviceResults({
 }: {
   deployment: DeploymentSummary;
   revision: number;
-  pulse: number;
+  /** Poll every 4 s while the rollout can still move. */
+  live: boolean;
   stages: Map<string, string>;
   navigate(path: string): void;
   search: string;
@@ -667,10 +728,8 @@ function DeviceResults({
     `/deployments/${deployment.id}/targets?${params}`,
     { items: [], total: 0, page: query.page, page_size: 12 },
     revision,
+    { interval: live ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL },
   );
-  useEffect(() => {
-    if (pulse) void reload();
-  }, [pulse, reload]);
   const now = useNow(true, 5000);
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correcting = !loading && !error && query.page > lastPage;
@@ -696,6 +755,28 @@ function DeviceResults({
           maxLength={200}
           placeholder="Search deployment devices"
         />
+        <label className="deployment-mobile-filter">
+          <span className="sr-only">Progress</span>
+          <select
+            value={query.state}
+            onChange={(event) => {
+              const state = event.target.value;
+              setQuery((old) => ({
+                ...old,
+                search: search.trim(),
+                state,
+                page: 1,
+              }));
+            }}
+          >
+            <option value="all">All devices</option>
+            {states.map((value) => (
+              <option key={value} value={value}>
+                {`${targetLabel(value, { stopped })} (${deployment.state_counts[value] || 0})`}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       {error && <ErrorBox message={error} retry={reload} />}
       <div className="control-table">
@@ -704,6 +785,35 @@ function DeviceResults({
           className="deployment-targets"
           data={error ? [] : data.items}
           rowKey={(row) => row.device_id}
+          mobileCard={(t) => ({
+            title: t.device_name || t.device_id,
+            href: `#/devices/${encodeURIComponent(t.device_id)}`,
+            status: (
+              <StatusChip
+                tone={targetTone(t.state)}
+                spin={isLive(deployment.status)}
+              >
+                {targetLabel(t.state, { stopped, replaced: !!t.replaced_by })}
+              </StatusChip>
+            ),
+            meta: [
+              stages.get(t.device_id) || null,
+              t.last_seen
+                ? `Checked in ${since(t.last_seen, now)?.toLowerCase()}`
+                : "Never checked in",
+              t.state === "removed" || t.state === "pending" ? null : (
+                <DeviceTimeline key="timeline" target={t} />
+              ),
+              <span key="details" className="rollout-mobile-details">
+                <TargetDetails
+                  t={t}
+                  deployment={deployment}
+                  stopped={stopped}
+                  navigate={navigate}
+                />
+              </span>,
+            ],
+          })}
           loading={loading || correcting || query.search !== search.trim()}
           manualSorting
           sort={{ column: query.sort, direction: query.direction }}
@@ -1013,19 +1123,28 @@ function RolloutPage({
   permalinkRoute: string;
   originLabel: string;
 }) {
+  // Poll faster while the rollout can still move. Background polls never
+  // cancel a slow read in flight, so a loaded server still gets its answer in.
+  const [live, setLive] = useState(false);
+  const pollInterval = live ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
   const {
     data: deployment,
     error,
     loading,
     reload,
     reloadResult,
+    updatedAt,
   } = useResource<DeploymentSummary | null>(
     `/deployments/${encodeURIComponent(id)}/summary`,
     null,
+    0,
+    { interval: pollInterval },
   );
   const lanes = useResource<RolloutLanes | null>(
     `/deployments/${encodeURIComponent(id)}/rollout`,
     null,
+    0,
+    { interval: pollInterval },
   );
   const [action, setAction] = useState<string | null>(null),
     [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(
@@ -1046,14 +1165,12 @@ function RolloutPage({
     [checkingStatus, setCheckingStatus] = useState(false),
     [statusReadError, setStatusReadError] = useState(""),
     [revision, setRevision] = useState(0),
-    [pulse, setPulse] = useState(0),
     [assignmentCommitting, setAssignmentCommitting] = useState(false),
     [assignmentRemovalOpen, setAssignmentRemovalOpen] = useState(false),
     [scheduledRefreshOpen, setScheduledRefreshOpen] = useState(false),
     [retryScope, setRetryScope] = useState<RolloutFailure | null | undefined>(
       undefined,
     ),
-    [updatedAt, setUpdatedAt] = useState<number | null>(null),
     [clockOffset, setClockOffset] = useState(0);
   const assignmentReturnFocus = useRef<HTMLElement | null>(null);
   // The rollout is a page, not a dialog: a dialog opened from it hands focus
@@ -1095,9 +1212,6 @@ function RolloutPage({
     }
   }, []);
   useEffect(() => {
-    if (deployment) setUpdatedAt(Date.now());
-  }, [deployment]);
-  useEffect(() => {
     if (lanes.data)
       setClockOffset(Date.parse(lanes.data.evaluated_at) - Date.now());
   }, [lanes.data]);
@@ -1106,19 +1220,8 @@ function RolloutPage({
     // Focus the page title once, when the rollout first loads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading && !deployment]);
-  const live = !!deployment && isLive(deployment.status);
-  // Refresh faster while a rollout can still move, and only while visible.
-  useEffect(() => {
-    if (!live) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      if (busyRef.current || assignmentCommittingRef.current) return;
-      void reload();
-      void lanes.reload();
-      setPulse((value) => value + 1);
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [live, reload, lanes.reload]);
+  const movable = !!deployment && isLive(deployment.status);
+  useEffect(() => setLive(movable), [movable]);
   useEffect(() => {
     mounted.current = true;
     const guard = (event: Event) => {
@@ -1521,15 +1624,31 @@ function RolloutPage({
                 />
                 {operate && (
                   <div className="rollout-action-row">
-                    {failedCount > 0 && deployment.version_id && (
+                    {deployment.rolled_back_by && (
                       <Button
-                        icon={RotateCcw}
+                        icon={ArrowRight}
                         disabled={locked}
-                        onClick={() => openRetry(null)}
+                        onClick={() =>
+                          goToDeployment(deployment.rolled_back_by!)
+                        }
                       >
-                        Retry failed ({failedCount})
+                        Open rollback
+                        {deployment.rolled_back_to_version
+                          ? ` (v${deployment.rolled_back_to_version})`
+                          : ""}
                       </Button>
                     )}
+                    {failedCount > 0 &&
+                      deployment.version_id &&
+                      !deployment.rolled_back_by && (
+                        <Button
+                          icon={RotateCcw}
+                          disabled={locked}
+                          onClick={() => openRetry(null)}
+                        >
+                          Retry failed ({failedCount})
+                        </Button>
+                      )}
                     {status === "active" && (
                       <Button
                         variant="secondary"
@@ -1743,18 +1862,34 @@ function RolloutPage({
                 lastWave={lastWave}
               />
             )}
+            {deployment.rolled_back_by && (
+              <p className="rollout-note rollout-rolled-back-note" role="note">
+                <Undo2 size={14} aria-hidden="true" />
+                <span>
+                  Rolled back to{" "}
+                  {deployment.rolled_back_to_version
+                    ? `v${deployment.rolled_back_to_version}`
+                    : "the earlier version"}
+                  {deployment.rolled_back_at
+                    ? ` at ${exactTime(deployment.rolled_back_at)}`
+                    : ""}
+                  . Fix the pipeline and publish a new version to try again.
+                </span>
+              </p>
+            )}
             {lanes.data && lanes.data.failures.length > 0 && (
               <FailureGroups
                 failures={lanes.data.failures}
                 navigate={navigate}
                 onRetry={
-                  operate && deployment.version_id
+                  operate && deployment.version_id && !deployment.rolled_back_by
                     ? (failure) => openRetry(failure)
                     : undefined
                 }
               />
             )}
             {deployment.status === "failed" &&
+              !deployment.rolled_back_by &&
               deployment.rollout.kind === "canary" && (
                 <p className="control-muted rollout-note">
                   Retrying a device sends the same version again. It doesn't
@@ -1764,7 +1899,7 @@ function RolloutPage({
             <DeviceResults
               deployment={deployment}
               revision={revision}
-              pulse={pulse}
+              live={live}
               stages={stageByDevice}
               navigate={navigate}
               search={deviceSearch}
@@ -1942,7 +2077,7 @@ function Lineage({
             }}
           >
             {link.label}
-            <ExternalLink
+            <ArrowRight
               size={12}
               aria-hidden="true"
               className="rollout-lineage-icon"

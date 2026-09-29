@@ -3,6 +3,8 @@ import {
   countdown,
   describeDeployment,
   explainError,
+  failedApplyStep,
+  failureStagePhrase,
   progressSegments,
   releasePlan,
   since,
@@ -35,6 +37,32 @@ describe("rollout status keeps outcome separate from assignment changes", () => 
       tone: "warning",
       note: "To v2 after completing",
     });
+  });
+  it("doesn't call a rollout failed once every device verified", () => {
+    expect(
+      describeDeployment({
+        ...base,
+        status: "failed",
+        failure_reason: "threshold",
+        target_count: 1,
+        verified_count: 1,
+        state_counts: { verified_applied: 1 },
+      }),
+    ).toEqual({
+      label: "Recovered",
+      tone: "success",
+      note: "Stopped after a failure; every device verified since",
+    });
+    expect(
+      describeDeployment({
+        ...base,
+        status: "failed",
+        failure_reason: "threshold",
+        target_count: 3,
+        verified_count: 1,
+        state_counts: { verified_applied: 1, pending: 2 },
+      }).label,
+    ).toBe("Failed");
   });
   it("keeps the rollout outcome when its assignment is removed", () => {
     expect(
@@ -238,6 +266,50 @@ describe("device timeline", () => {
         verified_at: null,
       }).map((s) => s.state),
     ).toEqual(["waiting", "waiting", "waiting", "waiting", "waiting"]);
+  });
+  it("blames the stage the agent reported, not the step after the last check-in", () => {
+    // A 15 s heartbeat recorded nothing between release and the rollback.
+    const steps = timelineSteps({
+      state: "rolled_back",
+      failure_stage: "rollback",
+      released_at: "2026-09-29T08:13:00Z",
+      verified_at: null,
+      timeline: [{ state: "desired", at: "2026-09-29T08:13:02Z" }],
+    });
+    expect(steps.map((s) => [s.key, s.state])).toEqual([
+      ["released", "done"],
+      ["downloaded", "done"],
+      ["validated", "done"],
+      ["applied", "failed"],
+      ["verified", "waiting"],
+    ]);
+    expect(
+      timelineSteps({
+        state: "failed",
+        failure_stage: "validation",
+        released_at: "2026-09-29T08:13:00Z",
+        verified_at: null,
+        timeline: [{ state: "desired", at: "2026-09-29T08:13:02Z" }],
+      }).map((s) => s.state),
+    ).toEqual(["done", "done", "failed", "waiting", "waiting"]);
+  });
+  it("places a rollback without a reported stage at Applied", () => {
+    expect(
+      timelineSteps({
+        state: "rolled_back",
+        released_at: "2026-09-29T08:13:00Z",
+        verified_at: null,
+        timeline: [],
+      }).map((s) => s.state),
+    ).toEqual(["done", "done", "done", "failed", "waiting"]);
+  });
+  it("maps agent stages to one apply step shared with the device page", () => {
+    expect(failedApplyStep("validation")).toBe("validated");
+    expect(failedApplyStep("rollback")).toBe("reloaded");
+    expect(failedApplyStep("download")).toBe("downloaded");
+    expect(failedApplyStep("apply")).toBeNull();
+    expect(failureStagePhrase("rollback")).toBe("while restarting Vector");
+    expect(failureStagePhrase("apply")).toBe("");
   });
 });
 

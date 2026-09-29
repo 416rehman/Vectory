@@ -248,6 +248,25 @@
 .rollout-lane[data-state="stopped"] {
   background: color-mix(in srgb, var(--surface) 55%, var(--bg));
 }
+@media (max-width: 639px) {
+  /* Stack stages top to bottom on a phone instead of scrolling sideways. */
+  .rollout-lanes {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow: visible;
+  }
+  .rollout-lane {
+    min-height: 0;
+  }
+  .rollout-lane:not(:last-child)::after {
+    top: auto;
+    right: auto;
+    bottom: -12px;
+    left: 26px;
+    width: 1px;
+    height: 12px;
+  }
+}
 .rollout-lane header {
   display: flex;
   align-items: center;
