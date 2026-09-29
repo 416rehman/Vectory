@@ -9,8 +9,7 @@ Install the Vectory agent on a host that runs Vector 0.58.0. The agent connects 
 ## Before you start
 
 - **Vector 0.58.0** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
-<!-- verify-after-merge: token defaults (one use, 24 hours) after the Add device redesign -->
-- **An enrollment token.** **Add device** creates one. It is shown once. By default it works for one enrollment and expires after 24 hours.
+- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
 - **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
 
@@ -56,25 +55,30 @@ Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`
 
 ## Install and enroll
 
-<!-- verify-after-merge: Add device's generated commands, the install.sh endpoint and setup's behavior (checksum check, CA pin, hidden token prompt, service start, first check-in) -->
 <!-- tabs:os -->
 #### Linux
 
-Copy the command from **Add device** and run it on the host. It looks like this:
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. It looks like this:
 
 ```sh
-curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh | sudo sh
+curl -fsSLk https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh
+echo '<sha256 shown on Add device>  vectory-install.sh' | sha256sum -c - &&
+  sudo sh vectory-install.sh --mode restricted --create-user
 ```
+
+`-k` only skips the download's TLS check. The SHA-256 from your dashboard proves the installer is genuine, and the installer then checks the agent and pins your server's CA.
 
 #### macOS
 
-Copy the command from **Add device** and run it in Terminal. It looks like this:
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It looks like this:
 
 ```sh
-curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh | sudo sh
+curl -fsSLk https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh
+echo '<sha256 shown on Add device>  vectory-install.sh' | shasum -a 256 -c - &&
+  sudo sh vectory-install.sh --mode restricted --create-user
 ```
 
-The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
+`-k` only skips the download's TLS check. The SHA-256 from your dashboard proves the installer is genuine. The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
 
 #### Windows
 
@@ -86,7 +90,7 @@ The installer and `vectory setup` then:
 <!-- steps -->
 1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory`.
 2. Find Vector 0.58.0 and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
-3. Install in restricted mode, unless you asked for full mode.
+3. Install in the mode you chose on **Add device**.
 4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
 5. Register the agent as a service, start it and wait for its first check-in.
 
@@ -106,7 +110,6 @@ Avoid `--token VALUE`: other users can read it from the process list and your sh
 
 Use these steps for air-gapped hosts, configuration management or Windows. Download the agent for the host's OS and CPU from **Add device** and check its SHA-256 against the value shown there.
 
-<!-- verify-after-merge: default state directory and managed configuration paths after W1 unifies them (CLI, setup, packaged systemd unit) -->
 <!-- tabs:os -->
 #### Linux
 
@@ -119,7 +122,7 @@ sudo vectory install \
 sudo vectory enroll \
   --server https://vectory.example.com:8443 \
   --ca-file /etc/vectory/trust/server-ca.pem \
-  --id web-01
+  --name web-01
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin vectory
 sudo vectory service-install --service-user vectory
 sudo vectory service-start
@@ -136,7 +139,7 @@ sudo vectory install \
 sudo vectory enroll \
   --server https://vectory.example.com:8443 \
   --ca-file "/Library/Application Support/VectoryTrust/server-ca.pem" \
-  --id mac-01
+  --name mac-01
 sudo vectory service-install --service-user "$SERVICE_USER"
 sudo vectory service-start
 ```
@@ -156,7 +159,7 @@ Set-Location 'C:\Program Files\Vectory'
 .\vectory.exe enroll `
   --server https://vectory.example.com:8443 `
   --ca-file 'C:\ProgramData\VectoryTrust\server-ca.pem' `
-  --id win-01
+  --name win-01
 .\vectory.exe service-install
 .\vectory.exe service-start
 ```
@@ -175,7 +178,6 @@ The agent makes the managed configuration's folder private. Don't point it at a 
 
 The agent checks the server's certificate before it sends the enrollment token, and on every connection after that. There is no option to skip the check.
 
-<!-- verify-after-merge: --ca-sha256 pinning semantics and the Add device page showing the CA fingerprint -->
 | Your server's certificate | What to do |
 | --- | --- |
 | Issued by a public CA, or a CA the host already trusts | Nothing. The host's trust store is used. |
@@ -183,6 +185,8 @@ The agent checks the server's certificate before it sends the enrollment token, 
 | Private CA, manual install | Copy the CA's public certificate (PEM) to the host and pass `--ca-file PATH`. |
 
 A pinned fingerprint is checked before anything is sent. The agent accepts the server only if its chain contains a certificate with exactly that fingerprint, then verifies the host name and validity with that certificate as the only trusted root. It saves the certificate, so later connections are ordinary verified TLS. It never trusts a certificate on first use and never falls back to an unverified connection.
+
+Add device shows the start and end of the fingerprint; hover over it to see it in full.
 
 For `--ca-file`:
 
@@ -232,7 +236,6 @@ Registering a service doesn't prove it started. [Verify the first connection](#v
 
 Open [**Devices**](/#/devices). The host appears with its name, mode and a recent check-in. It has no pipeline yet.
 
-<!-- verify-after-merge: human-readable `vectory status` and `vectory doctor` with server connectivity checks -->
 On the host:
 
 ```sh

@@ -6,11 +6,10 @@ Commands that change local settings need the agent stopped. Stopping the agent a
 
 ## Check an agent
 
-<!-- verify-after-merge: human-readable status, doctor with server connectivity checks, and `vectory logs` -->
 ```sh
 sudo vectory status           # identity, server, last check-in, pipeline and next step
 sudo vectory doctor           # local setup and server connection, with a fix for each problem
-sudo vectory logs --follow    # Vector's recent output
+sudo vectory logs --follow    # Vector's own log (never your events)
 ```
 
 Add `--json` to `status` or `doctor` for scripts. Both only read: they never change settings, retry state or counters.
@@ -88,7 +87,6 @@ From the dashboard, **Retry application** on the device does the same for the ve
 
 An agent upgrade replaces one file. It doesn't change Vector, the device's mode or its identity.
 
-<!-- verify-after-merge: `vectory --version` prints the version; Add device/Upgrade agent offer the bundled download with its SHA-256 -->
 <!-- steps -->
 1. On the device page, choose **Upgrade agent** and download the agent for the device's OS and CPU. Check its SHA-256 against the value shown.
 2. Stop the agent: `sudo vectory service-stop`.
@@ -153,7 +151,6 @@ Delete any downloaded token file afterwards. If creating the token was interrupt
 2. In the dashboard, open the device and choose **Revoke device identity…** under **Device access**. The host can't revoke its own identity offline.
 3. Delete the agent's state, including its private key:
 
-   <!-- verify-after-merge: default Linux state directory after W1 unifies paths -->
    ```sh
    sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
    ```

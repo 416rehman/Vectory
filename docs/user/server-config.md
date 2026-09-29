@@ -46,7 +46,6 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 
 ### Agent downloads
 
-<!-- verify-after-merge: bundled agent downloads, the public agent URL and the public install endpoints (W1) -->
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `VECTORY_BUNDLED_RELEASES_DIR` | Set by the image | Agent downloads built into the server image. |

@@ -4,7 +4,6 @@ A deployment sends one published version, or a set of agent settings, to the dev
 
 ## Deploy a published version
 
-<!-- verify-after-merge: deploy dialog after W3 (release strategy control, Now → After column, plan summary) -->
 <!-- steps -->
 1. Open the pipeline and choose **Review & publish** for the current draft, or **Choose devices** if it's already published.
 2. Select devices, groups or both. Exclude any group members that shouldn't get it.
@@ -12,7 +11,6 @@ A deployment sends one published version, or a set of agent settings, to the dev
 4. Choose **Review deployment**. Check the exact device list, what each device runs now and what it will run after.
 5. Choose **Deploy to devices**, then **View deployment** to follow it.
 
-<!-- verify-after-merge: deploying a newer version of the same pipeline replaces the older assignment (W3) -->
 Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
@@ -39,7 +37,6 @@ The server checks again when the deployment starts, at each canary stage and whe
 
 Groups can carry pipeline and agent-settings deployments that include future members, so editing a group can change what devices run.
 
-<!-- verify-after-merge: the membership-change preview ("Adding web-01 will deploy X v3", W3) -->
 - The group editor previews the effect: which devices would get or lose a pipeline.
 - If someone else changed the group while you were editing, **This group changed** shows their version next to yours. Choose **Use latest name**, **Use latest description** or **Use latest members**, or keep your edits, then **Save changes**.
 - A group change that would add devices to a canary that's still running is refused, with a link to that canary.
@@ -64,7 +61,6 @@ Vectory never raises a priority for you. **No current priority conflict** means 
 
 For a first canary, try one device, a batch size that suits your fleet and a few minutes of observation.
 
-<!-- verify-after-merge: the "Stop if more than N devices fail" threshold in the deploy dialog (W3) -->
 Only **Applied** counts toward a canary. Offline, failed and unconfirmed devices hold the rollout, and if more devices fail than you allow, the rollout stops before releasing more.
 
 While a canary runs, **Canary gate** shows what each released device still needs:
@@ -81,30 +77,30 @@ While a canary runs, **Canary gate** shows what each released device still needs
 
 ## Read the apply states
 
-<!-- verify-after-merge: labels match the shared status vocabulary (status.ts, W6) -->
 <!-- diagram: apply-states -->
 ```mermaid
 flowchart LR
-  P["Pending"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> S["Starting Vector"] --> OK["Applied"]
-  A --> F["Apply failed"]
-  S --> R["Rolled back"]
-  S --> C["Check required"]
+  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Restarting Vector"] --> OK["Applied"]
+  V --> F["Failed"]
+  A --> F
+  R --> RB["Rolled back"]
+  R --> C["Check required"]
 ```
 
 | State | What it establishes | What to do |
 | --- | --- | --- |
-| **Pending**, **Downloaded**, **Validated** | Work is queued, or preparation succeeded. | Wait. None of these means Vector runs the version. |
-| **Applying**, **Starting Vector** | The switch is in progress. | Wait for a final state. |
-| **Applied** | The agent saw Vector start with the version and keep running. | Check that data arrives where you expect. |
-| **Apply failed** | A step failed; the previous configuration keeps running. | Read the device's issue, fix the cause, then retry. |
-| **Rolled back** | The version failed to start, so the agent restored the last working configuration. | Investigate the version. The device still wants it. |
-| **Check required** | The agent couldn't confirm what Vector runs. | Look at the device before retrying. |
+| **Waiting for agent**, **Downloaded**, **Validated** | Released, or preparation succeeded. | Wait. None of these means Vector runs the version. |
+| **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. | Wait for a final state. |
+| **Applied** | The agent verified Vector runs this version. | Check that data arrives where you expect. |
+| **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. | Read the device's issue, fix the cause, then retry. |
+| **Rolled back** | The version failed to start, so the agent restored the last working one. | Investigate the version. The device still wants it. |
+| **Check required** | Applied, but the agent couldn't confirm what Vector runs. | Look at the device before retrying. |
+| **Sync paused** | Configuration changes wait until sync resumes. | Resume where it was paused: `vectory resume` on the host, or in agent settings. |
 
 An offline device's last state is history, not the present. It becomes current again when the device checks in.
 
 ## Follow a rollout
 
-<!-- verify-after-merge: the rollout page at #/deployments/<id> with status bar, stage lanes, per-device timeline and failures grouped by reason (W3) -->
 Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline. Failures are grouped by reason. **Copy link** shares the page with anyone who has an account.
 
 ## Find a deployment or device result
@@ -153,7 +149,6 @@ A rollback deploys an earlier version as a new change. History never changes, an
 
 From a deployment, **Roll back** prepares this for you. **Review rollback** lists the devices it includes, the ones it excludes and why, and what happens to the original rollout: normally its remaining releases stop and the rollback takes over at a higher priority. Only **Roll back N devices** sends it.
 
-<!-- verify-after-merge: rollback with nothing earlier to roll back to offers "Remove assignment" (W3) -->
 Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
 
 After a failed attempt, fix the cause, then use **Retry application** on the device or deploy a corrected version. A device doesn't retry a failed version by itself, so it can't restart Vector in a loop. Retrying one device doesn't restart a canary that stopped; deploy again with the rollout you want.

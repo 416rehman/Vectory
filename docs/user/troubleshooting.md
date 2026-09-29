@@ -4,7 +4,6 @@ Find your symptom, check the likely causes in order, and fix the first one that 
 
 ## A device is offline or never connects
 
-<!-- verify-after-merge: `vectory doctor` checks DNS, TLS, certificate, clock and credentials against the server (W1) -->
 <!-- steps -->
 1. **Is the agent running?** On the device, `sudo vectory status`. If the service is stopped, `sudo vectory service-start`. Don't start a second agent by hand: only one can use the state directory.
 2. **Can it reach the server?** Run `sudo vectory doctor`. It checks name resolution, the TLS connection, the certificate, the clock and the device's credentials, and prints a fix for each failure.
@@ -29,7 +28,6 @@ Keep the state directory. Don't delete keys or `enrollment.json` to start over: 
 | Already enrolled | The device already has an identity. Look it up in **Devices**. Re-enroll only through [identity recovery](agents.md#recover-a-device-identity). |
 | Interrupted | Run the same command again with the same server, name and token. The agent reuses its pending request, so nothing is created twice. |
 
-<!-- verify-after-merge: the dashboard shows the reason for a refused enrollment to administrators (W1) -->
 For security, the server never tells a device why it refused. Administrators see the reason in **Add device** and in the audit log.
 
 ## A pipeline is rejected or rolled back
@@ -50,8 +48,7 @@ Open the device and read its issue: it names the stage and the reason.
 | `ROLLBACK_FAILED`, `ROLLBACK_UNAVAILABLE`, `RECOVERY_INVALID` | A failure left no working configuration to restore. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
 | `MANIFEST_EXPIRED` | The approval expired before the switch. | Nothing: the agent waits for its next check-in. |
 
-<!-- verify-after-merge: redacted Vector diagnostics in the issue, device page and `vectory status` (W2) -->
-The issue and `sudo vectory status` show Vector's own message, with secret values removed.
+The issue, the device page and `sudo vectory status --json` (under `configuration_attempt.error.diagnostics`) show Vector's own message, with secret values removed.
 
 A device doesn't retry a failed version by itself, so a bad version can't restart Vector in a loop. After fixing the cause, use **Retry application** on the device, deploy a corrected version, or run `vectory retry` on the host with the agent stopped. Never delete state, edit counters or re-enroll to force a retry.
 
@@ -63,7 +60,6 @@ Vector refuses to start when its data directory is missing, with a message like:
 data_dir "/var/lib/vector/" does not exist
 ```
 
-<!-- verify-after-merge: the agent supplies a host data directory when a pipeline omits data_dir (W2) -->
 - If the pipeline sets **Data directory** in its general settings, create that folder on every device and give the agent's service account write access. On restricted devices, also allow it as a file root.
 - If the pipeline leaves it empty, the agent gives Vector its own private data directory. Update the agent if you still see this message.
 
@@ -148,7 +144,7 @@ The dashboard stops waiting after 30 seconds. Choose **Retry connection**, or **
 
 ### Credentials or account access are rejected
 
-- **Wrong password:** after several failures, sign-in pauses for that account and the message says when to try again. Ask an administrator for a [reset code](administer.md#help-someone-reset-a-forgotten-password) if you forgot it.
+- **Wrong password:** after several failures, sign-in pauses for that account and the message says when to try again. Ask an administrator for a [reset link](administer.md#help-someone-reset-a-forgotten-password) if you forgot it.
 - **Code rejected:** check that your phone's clock is right, or choose **Use a recovery code instead**. If the code step expires, start again with your email and password.
 - **Account disabled:** an administrator must turn access back on under **People & security**.
 - **After a restore:** old sessions and recovery codes no longer work. Sign in with your password and authenticator.

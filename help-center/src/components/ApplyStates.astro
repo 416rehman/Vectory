@@ -1,10 +1,11 @@
 ---
-// The rollout states a device moves through. Labels match the dashboard; each
+// The rollout states a device moves through. Labels are the dashboard's
+// (applyStates in dashboard/src/status.ts; a test keeps them in sync). Each
 // outcome also carries a text label and an icon, never color alone.
-const steps = ["Pending", "Downloaded", "Validated", "Applying", "Starting Vector"];
+const steps = ["Waiting for agent", "Downloaded", "Validated", "Applying", "Restarting Vector"];
 const outcomes = [
-  { label: "Applied", tone: "ok", icon: "✓", note: "running the new version" },
-  { label: "Apply failed", tone: "error", icon: "✕", note: "previous configuration keeps running" },
+  { label: "Applied", tone: "ok", icon: "✓", note: "the agent verified Vector runs it" },
+  { label: "Failed", tone: "error", icon: "✕", note: "previous configuration keeps running" },
   { label: "Rolled back", tone: "error", icon: "↺", note: "last working configuration restored" },
   { label: "Check required", tone: "warning", icon: "!", note: "couldn’t confirm what is running" },
 ];

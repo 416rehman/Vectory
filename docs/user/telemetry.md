@@ -6,29 +6,29 @@ See which devices are healthy, what they run and how much data flows through the
 
 Open [**Devices**](/#/devices) and select a device.
 
-<!-- verify-after-merge: device page section names after W6's redesign (running vs desired header, timeline) -->
 | Section | Tells you |
 | --- | --- |
-| Connection | Whether the agent checked in recently, and its mode, agent version and Vector version. |
-| **Pipeline** | The version the device should run, what it runs now, and the deployment that decided it. **View pipeline assignment** opens that deployment. |
-| **Agent settings** | The check-in interval, sync and metrics settings in force, and the deployment they came from. |
-| **Metrics** | Throughput, errors and per-component numbers, when the pipeline exports them. |
-| **Activity** | This device's issues and audit history. |
+| Header | Status (for example **Applied** or **Updating**), connection, last check-in, **Open rollout** and **Deploy a pipeline**. |
+| **Running vs desired** | The version the device should run, what it runs now, and each apply step. **View pipeline assignment** opens the deployment that decided it. |
+| **Operational metrics** | Throughput, errors, discarded events and buffers, when the pipeline exports metrics. |
+| **Recent Vector warnings and errors** | Vector's own warnings and errors from the last hour, redacted on the device. |
+| **Activity** | This device's open issues and recent changes. |
+| **About this device** | Platform, Vector and agent versions, mode, groups and the agent settings in force. **Upgrade agent** is here. |
+| **Sync, recovery and access** | Pause sync, device recovery and **Revoke device identity…**. |
 
 A pipeline and agent settings can come from different deployments with different priorities. When something is unknown, the page says so; it never guesses an assignment.
 
-**No pipeline assigned** doesn't mean Vector is stopped. A device that kept its existing workload runs it until you deploy a version. A new device with no configuration waits without starting Vector. Use **Choose pipeline** to deploy one.
+**No pipeline** doesn't mean Vector is stopped. A device that kept its existing workload runs it until you deploy a version. A new device with no configuration waits without starting Vector. Use **Deploy a pipeline** to deploy one.
 
 ## Enable real metrics
 
 Vectory reads metrics from a Prometheus exporter in your own pipeline. It never inserts components by itself.
 
-<!-- verify-after-merge: agent auto-discovery of a loopback prometheus_exporter (W2) -->
 <!-- steps -->
 1. In the editor, open **Actions** and choose **Add monitoring**. It adds an `internal_metrics` source and a `prometheus_exporter` sink on `127.0.0.1:9598` (the next free port if that one is taken), without changing your other steps.
 2. On restricted devices, allow the listener: add `127.0.0.1:9598` to `allowed_listen_addresses` in the device's [allowances](installation.md#configure-restricted-allowances).
 3. Publish and deploy the pipeline.
-4. Open the device's **Metrics**. Numbers appear within two check-ins: rates need two samples.
+4. Open the device's **Operational metrics**. Numbers appear within two check-ins: rates need two samples.
 
 The agent finds a loopback exporter in the running configuration by itself. The fragment it looks for is:
 
@@ -73,15 +73,15 @@ Clearing the URL doesn't remove the exporter from the pipeline, and old samples 
 
 ## Interpret the numbers
 
-<!-- verify-after-merge: metric names and the discarded split in TelemetryPanel (W2) -->
 | Measurement | Means | Don't read it as |
 | --- | --- | --- |
-| Throughput | Events per second sent by sources, excluding the metrics source itself. | Delivery to the final destination. |
-| Component events / s | Events per second sent by one component. | Unique events: one event passes several components. |
-| Errors | Errors reported since Vector started. | A rate, or a count of lost events. |
-| Discarded | Events a component dropped: filtered out on purpose, or dropped due to errors. | Always a fault: filters discard by design. |
-| Buffered | Data waiting in a buffer. | Empty, when the value is missing. |
-| Vector uptime | How long Vector has run. | The agent's last check-in. |
+| **Throughput** (In / Out) | Events per second leaving sources and entering sinks. | Delivery confirmed by the destination. |
+| **Errors / min** | Component errors per minute; the tile also shows the total since Vector started. | Lost events. |
+| **Dropped due to errors** | Events components discarded because of errors. | Filtering. |
+| **Filtered out (expected)** | Events a filter, route or sample removed on purpose. | A fault. |
+| **Buffer fill** | How full the fullest buffer is, with the bytes buffered. | Empty, when missing. |
+| Components table: **In / s**, **Out / s**, **Errors / min**, **Dropped / min**, **Filtered / min** | The same numbers per component. | Unique events: one event passes several components. |
+| **Vector uptime**, **Memory**, **CPU time** | The Vector process. | The agent's check-in. |
 
 A rate needs two samples, so the first sample shows no rate. A Vector restart resets counters; Vectory never shows negative throughput. A dash means the value wasn't reported: it isn't zero. Some exporters, such as Vector's on Windows, don't report CPU or memory.
 
@@ -105,8 +105,7 @@ This pattern points to a slow or failing destination, but confirm it with the de
 
 ## Work with issues
 
-<!-- verify-after-merge: issue grouping, acknowledgement on live devices and recovery actions (W2) -->
-[**Activity → Issues**](/#/issues) lists problems devices reported, such as a version that failed to apply. Each issue names the device, the version and the reason, and links to the device and the deployment.
+[**Activity → Issues**](/#/issues) lists problems devices reported, such as a version that failed to apply. Each issue names the device, the version and the reason, and links to the device and the deployment. Issues are grouped by version and reason; choose **All issues** for one row per device.
 
 - An issue resolves by itself when the device next applies a version and confirms it.
 - **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back. Both are recorded in the audit log.

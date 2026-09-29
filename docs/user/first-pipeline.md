@@ -20,7 +20,7 @@ You should see three connected cards:
 | --- | --- | --- |
 | `demo` | `demo_logs` source | Generates one JSON log event per second. |
 | `enrich` | `remap` transform | Adds `environment` and `managed_by` fields with VRL. |
-| `output` | `console` sink | Prints each event as JSON to Vector's standard error. |
+| `output` | `console` sink | Writes each event to Vector's standard error. The agent discards it, so nothing is stored. |
 
 Select `enrich` to see its VRL program in the right-hand panel:
 
@@ -45,9 +45,8 @@ Publishing freezes the draft as version 1. It changes nothing on any device yet.
 
 ## 4. Deploy it to your device
 
-<!-- verify-after-merge: deploy dialog labels (Choose devices, Review deployment, Deploy to devices) and the rollout page at #/deployments/<id> -->
 <!-- steps -->
-1. Choose **Choose devices** and select your device.
+1. Select **Choose devices** and your device.
 2. Choose **Review deployment**. The review lists the exact devices that will receive the version and whether anything else takes priority on them.
 3. Choose **Deploy to devices**, then **View deployment** to follow the rollout.
 
@@ -55,40 +54,40 @@ Publishing freezes the draft as version 1. It changes nothing on any device yet.
 
 The device picks up the version at its next check-in, within 60 seconds by default. Its pipeline status moves through these states:
 
-<!-- verify-after-merge: state labels match the new shared status vocabulary (status.ts) -->
 <!-- diagram: apply-states -->
 ```mermaid
 flowchart LR
-  P["Pending"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> S["Starting Vector"] --> OK["Applied"]
-  A --> F["Apply failed"]
-  S --> R["Rolled back"]
-  S --> C["Check required"]
+  W["Waiting for agent"] --> D["Downloaded"] --> V["Validated"] --> A["Applying"] --> R["Restarting Vector"] --> OK["Applied"]
+  V --> F["Failed"]
+  A --> F
+  R --> RB["Rolled back"]
+  R --> C["Check required"]
 ```
 
 | State | What it means |
 | --- | --- |
-| **Pending** | The device hasn't picked up the version yet. |
-| **Downloaded**, **Validated** | The device fetched the signed version and Vector validated it on the host. |
-| **Applying**, **Starting Vector** | The agent is writing the configuration and starting Vector with it. |
-| **Applied** | The agent saw Vector start with the new version and keep running. |
-| **Apply failed** | A step failed before the switch. The device keeps running its previous configuration. |
-| **Rolled back** | The new version failed to start, so the agent restored the last working configuration. |
-| **Check required** | The agent couldn't confirm what Vector is running. Look at the device before retrying. |
+| **Waiting for agent** | Released; the device picks it up at its next check-in. |
+| **Downloaded**, **Validated** | The device fetched the signed version and Vector accepted it on the host. |
+| **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. |
+| **Applied** | The agent verified Vector runs this version. |
+| **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. |
+| **Rolled back** | The new version failed to start; the agent restored the last working one. |
+| **Check required** | Applied, but the agent couldn't confirm what Vector runs. Look at the device before retrying. |
 
 Only **Applied** means the new version is running. A download, a written file or a started process alone is not proof.
 
-<!-- verify-after-merge: `vectory logs --follow` exists and shows Vector's output -->
-To see the events on the host, follow Vector's output:
+Vectory never stores your events. To confirm on the host that Vector runs the new version, read Vector's own log:
 
 ```sh
 sudo vectory logs --follow
 ```
 
+Look for `Vector has started.` The console sink writes events to Vector's standard error, which the agent discards so event data never lands in a file. To watch data flow, [add monitoring](telemetry.md#enable-real-metrics) and open the device's **Operational metrics**.
+
 ## 6. Change it and roll back
 
-<!-- verify-after-merge: deploying a newer version of the same pipeline replaces the older assignment instead of reporting a priority conflict -->
 <!-- steps -->
-1. In `enrich`, add a line: `.greeting = "hello"`. Choose **Check pipeline**, then **Review & publish** to publish version 2.
+1. In `enrich`, add a line: `.greeting = "hello"`. Choose the check button, then **Review & publish** to publish version 2.
 2. Deploy version 2 to the same device. It replaces version 1 there.
 3. To go back, open **Actions → Version history**, select version 1 and choose **Deploy this version**. Review the devices and confirm.
 

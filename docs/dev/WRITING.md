@@ -10,7 +10,7 @@ Short, confident, precise and friendly. Think Linear, Stripe or Vercel.
 - Lead with what the reader can do, then why it's safe. "Choose **Check status**. It never sends the change again." Not "Checking status does not resend the change, which does not..."
 - Say what is true now. No fix history (`older development builds`), no internal process language (`acceptance evidence`, `this Windows workspace`). Record fixes in `CHANGELOG.md`.
 - Use the product's words and the exact UI labels, in bold: **Devices → Add device**, **Review & publish**. Use `→` for a path through the UI.
-- Terms: "device" for an enrolled host, "agent settings" (never `agent policy`), "Help center", "version", "deployment", "restricted mode" and "full mode". Status names match the dashboard: **Applied**, **Apply failed**, **Rolled back**, **Check required**.
+- Terms: "device" for an enrolled host, "agent settings" (never `agent policy`), "Help center", "version", "deployment", "restricted mode" and "full mode". Status names match the dashboard's `dashboard/src/status.ts`: **Waiting for agent**, **Applied**, **Failed**, **Rolled back**, **Check required**. A test checks the apply-state diagrams against it.
 - Address the reader as "you". Contractions are fine.
 
 ## Shape of a page

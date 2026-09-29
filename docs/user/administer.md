@@ -6,7 +6,6 @@ Run your Vectory server: manage people and sign-in security, back up and restore
 
 Open [**Settings → People & security**](/#/users) and choose **Add person**.
 
-<!-- verify-after-merge: invite links as the default, "Set a password now" as the alternative (W4) -->
 - **Invite link** (recommended): Vectory creates a single-use link that expires after 24 hours. Send it through a channel you trust. The person chooses their own password and is offered two-factor sign-in.
 - **Set a password now:** choose a password of 12 characters or more and share it privately. Vectory doesn't send email.
 
@@ -19,14 +18,13 @@ Pick the role the person's work needs:
 | **Operator** | Viewer access, plus publish and deploy, and manage schedules, groups, agent settings, enrollment tokens and device access. Cannot edit drafts. |
 | **Administrator** | Everything, including managing people and recovering device identities. |
 
-<!-- verify-after-merge: whether W4 added a combined Editor + Operator role -->
 Editor and Operator are separate jobs, not levels. Someone who both builds and ships pipelines needs Administrator.
 
 ## Change access or offboard a person
 
 In **People & security**, find the person and choose **Edit access**. You can change their name, role or whether they can sign in. Confirm with your own password and choose **Save access**.
 
-- Changing someone's role or turning off their access signs them out everywhere and cancels their unused reset codes. Changing only their name doesn't.
+- Changing someone's role or turning off their access signs them out everywhere and cancels their unused reset links. Changing only their name doesn't.
 - Their pipelines, deployments and history stay.
 - At least one active administrator must remain. Promote someone else first.
 - Changing your own role signs you out.
@@ -37,20 +35,19 @@ Offboarding someone from Vectory doesn't revoke credentials they hold elsewhere,
 
 In **People & security**, under your account:
 
-- **Change password** keeps this browser signed in and signs out every other session. It also cancels unused reset codes you created for others.
+- **Change password** keeps this browser signed in and signs out every other session. It also cancels unused reset links you created for others.
 - **Sign out other sessions** keeps this browser signed in and ends the rest, without changing your password.
 
-<!-- verify-after-merge: the sessions list with per-session sign-out (W4) -->
 The sessions list shows where you're signed in. Sign out any session you don't recognize, then change your password.
 
 ## Help someone reset a forgotten password
 
 <!-- steps -->
-1. In **People & security**, find the person and choose **Reset password**. Confirm with your own password and choose **Create reset code**.
-2. Share the code privately. It works once and expires after 15 minutes; a newer code replaces it.
-3. The person chooses **Reset password** on the sign-in page, enters the code and a new password, then signs in normally.
+1. In **People & security**, open the person's actions and choose **Reset password**. Confirm with your own password and choose **Create reset link**.
+2. Send the link privately. It works once, for 15 minutes, and replaces any earlier link.
+3. The person opens it, chooses a new password and signs in. Two-factor sign-in stays on.
 
-A reset code changes only the password: two-factor sign-in stays on. Disabled accounts can't use reset codes. If no administrator can sign in at all, use [`vectory-admin reset-password`](vectory-admin.md#reset-password) on the stopped server.
+A reset link changes only the password. Disabled accounts can't use reset links. If no administrator can sign in at all, use [`vectory-admin reset-password`](vectory-admin.md#reset-password) on the stopped server.
 
 ## Set up an authenticator
 
@@ -62,14 +59,12 @@ A reset code changes only the password: two-factor sign-in stays on. Disabled ac
 
 From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code instead**.
 
-<!-- verify-after-merge: an administrator can reset another person's two-factor sign-in (W4) -->
 > [!IMPORTANT]
 > **Keep recovery codes somewhere else**
 > If you lose both your authenticator and your recovery codes, another administrator must reset two-factor sign-in for you. Keep the server's and your phone's clocks accurate.
 
 To replace a lost authenticator, sign in with a recovery code, choose **Disable authenticator** (it asks for your password and a second unused recovery code), then set up the new one. Turning two-factor sign-in on or off signs out your other sessions.
 
-<!-- verify-after-merge: admin "Reset two-factor" action and `vectory-admin disable-mfa` (W4) -->
 An administrator can choose **Reset two-factor** for a person who lost both, confirmed with the administrator's password. If no administrator can sign in, use [`vectory-admin disable-mfa`](vectory-admin.md#disable-mfa) on the stopped server.
 
 ## Back up the complete state

@@ -141,7 +141,6 @@ Open [**Actions → Pipeline settings**](/#/configurations?panel=settings) for s
 
 These settings travel with the version. Paths refer to the device, not your browser or the server. If you opened help without a pipeline, the links ask you to choose one first.
 
-<!-- verify-after-merge: the agent supplies a host data directory when a pipeline omits data_dir (W2) -->
 Leave **Data directory** empty unless you need a specific path: the agent gives Vector a private data directory on each device. If you set one, it must exist and be writable on every device, and restricted devices must allow it.
 
 ## Import and export

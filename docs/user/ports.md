@@ -37,7 +37,6 @@ Nothing on a device listens for Vectory: every connection starts at the agent.
 
 With Compose, the ports are fixed at 443 and 8443; set `VECTORY_BIND_IP` in `deploy/.env` to listen on one interface. Without Compose, set [`VECTORY_HTTP_ADDR` and `VECTORY_AGENT_ADDR`](server-config.md#server-settings).
 
-<!-- verify-after-merge: VECTORY_PUBLIC_AGENT_URL is used in Add device commands -->
 If devices reach the server through a different name or port, for example through NAT, set `VECTORY_PUBLIC_AGENT_URL` so **Add device** builds commands with the address devices actually use.
 
 The agent listener's certificate must be valid for the name devices connect to. A bare IP address works only if the certificate lists that IP.

@@ -8,7 +8,7 @@ When a connection drops, or a reply takes longer than 30 seconds, Vectory can't 
 | --- | --- |
 | **Check status** | Asks the server what happened to the original request. It never sends the change again. |
 | **Retry same request** | Sends the original request again, with its original ID. If the first attempt already succeeded, the server returns that result instead of making a second change. |
-| **Cancel request** | For requests that create a secret, such as a token or a reset code: stops a late request from completing and revokes anything it already created. |
+| **Cancel request** | For requests that create a secret, such as a token or a reset link: stops a late request from completing and revokes anything it already created. |
 | **Dismiss reminder** | Removes the reminder from this browser. It doesn't cancel anything on the server. |
 
 Check first, then retry or cancel. Start a new, different request only once you know how the first one ended.
@@ -18,7 +18,7 @@ Check first, then retry or cancel. Start a new, different request only once you 
 - **A timeout isn't a failure.** It ends the wait in your browser, not the work on the server.
 - **"Not found" isn't a failure either.** The server hasn't recorded the request yet, and it may still arrive. To be sure it never does, cancel it.
 - **Nothing is resent automatically**, not even after a reload.
-- **Secrets are never kept for replay.** Passwords, codes and tokens are cleared from the form. A lost token or reset code can't be shown again; cancel it and create a new one.
+- **Secrets are never kept for replay.** Passwords, codes and tokens are cleared from the form. A lost token or reset link can't be shown again; cancel it and create a new one.
 - **Reminders stay in this browser**, for your account only, across tabs and reloads. They hold what's needed to check the request, never passwords or tokens. Clearing site data removes them.
 
 Lost a reminder, or working from another device? Most areas keep a list of your recent requests on the server. It can confirm a result, but it can't rebuild a missing request for a retry.
@@ -48,15 +48,14 @@ A deployment's reminder confirms that the server saved it. Devices still have to
 
 ### Accounts and sign-in
 
-<!-- verify-after-merge: account flows after W4 (automatic first status check, shared "couldn't confirm" component, new labels) -->
 | You were | What to do |
 | --- | --- |
-| Signing in | Choose **Check sign-in status**. It reads this browser's session without sending your password or code again. |
-| Setting up the first administrator | Choose **Check setup status** before trying again. |
-| Signing out | Choose **Check sign-out status**. **Retry sign out** sends a new request only when you choose it. |
-| Adding a person, issuing a reset code or editing access | Use **Review account creation**, **Review reset request** or **Review access change** on **People & security**, then **Check request status**. **Cancel this request** stops a late request; it can't undo one that already applied. |
+| Signing in | Vectory checks your session automatically. If it still can't tell, it says **We couldn't confirm your sign-in**: enter your password again. |
+| Setting up the first administrator | Vectory checks automatically. If setup didn't finish, paste the setup secret and choose your password again. |
+| Signing out | Open the account menu and choose **Check sign-out status**, or **Check again** in the dialog. |
+| Adding a person, creating a reset link, editing access, or turning two-factor on or off | The dialog shows **We couldn't confirm that**. Choose **Check again**; it only reads. Act again only if it says nothing changed. |
 | Changing your password | Sign in with the new password. If it doesn't work, try the old one. |
-| Setting up or turning off two-factor sign-in | Choose **Check current status**, then decide. Don't resubmit a disable: it can sign out sessions created since. |
+| Setting a new password from a reset or invite link | Try signing in with the new password. If that fails, ask for a new link. |
 
 Account reviews live only on the open page, because they involve passwords. Resolve them before you leave the page.
 
