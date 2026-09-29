@@ -1189,6 +1189,15 @@ export const AuditDetailsSchema = z.object({
   deployment_id: z.string().optional(),
   previous_signing_key_id: z.string().optional(),
   signing_key_id: z.string().optional(),
+  // Enrollment attempts, refused ones included (bounded by the server).
+  reason_code: z.string().max(64).optional(),
+  name: z.string().max(100).optional(),
+  token_id: z.string().max(128).optional(),
+  agent_os: z.string().max(64).optional(),
+  agent_arch: z.string().max(64).optional(),
+  agent_version: z.string().max(64).optional(),
+  configuration_mode: z.string().max(16).optional(),
+  client_address: z.string().max(64).optional(),
 });
 export const AuditDetailSchema = AuditSummarySchema.extend({
   details: AuditDetailsSchema,
