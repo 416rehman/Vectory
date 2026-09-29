@@ -1061,9 +1061,15 @@ export default function Editor({
         return;
       }
       try {
-        const data = await api<PipelineTelemetry>(
-          `/configurations/${id}/telemetry`,
-          { signal: controller.signal },
+        // A hung read times out and reports, instead of stopping live rates.
+        const data = await withRequestDeadline(
+          (signal) =>
+            api<PipelineTelemetry>(
+              `/configurations/${encodeURIComponent(id)}/telemetry`,
+              { signal },
+            ),
+          30000,
+          controller.signal,
         );
         if (alive) setTelemetry({ data, error: "" });
       } catch (failure) {

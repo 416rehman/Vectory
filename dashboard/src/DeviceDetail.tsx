@@ -674,13 +674,17 @@ export default function DeviceDetail({
   notify: Notify;
   navigate: Navigate;
 }) {
+  // Poll faster while a version is applying; the pace follows the last read.
   const [fast, setFast] = useState(false);
-  const resource = useResource<Device | null>(`/devices/${id}`, null, 0, {
-    interval: fast ? 5000 : 15000,
-  });
+  const resource = useResource<Device | null>(
+    `/devices/${encodeURIComponent(id)}`,
+    null,
+    0,
+    { interval: fast ? 5000 : 15000 },
+  );
   const device = resource.data;
   const applying = device?.status === "applying";
-  useEffect(() => setFast(!!applying), [applying]);
+  if (applying !== fast) setFast(applying);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [deployOpen, setDeployOpen] = useState(false);
   const canReviewPolicy =

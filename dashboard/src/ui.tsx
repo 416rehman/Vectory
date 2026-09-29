@@ -72,6 +72,8 @@ const visible = () =>
  * Bounded, cancellable reads that poll while the tab is visible.
  * Background polls never supersede an in-flight read; an explicit refresh does.
  * A failed refresh keeps the last loaded data with an error.
+ * `interval: 0` reads once (static data); changing the interval only
+ * reschedules the next poll.
  */
 export function useResource<T>(
   path: string | null,
@@ -180,40 +182,49 @@ export function useResource<T>(
   useEffect(() => {
     mounted.current = true;
     ++requestId.current;
-    setState((previous) => ({
-      path,
-      data: previous.path === path ? previous.data : initialValue.current,
-      loading: !!path,
-      error: "",
-      errorStatus: null,
-      updatedAt: previous.path === path ? previous.updatedAt : null,
-    }));
+    setState((previous) => {
+      // A refresh of data already on screen is not a first load: keep the
+      // data, its error and `loading: false` until the new read settles.
+      const same = previous.path === path;
+      const loaded = same && previous.updatedAt !== null;
+      return {
+        path,
+        data: same ? previous.data : initialValue.current,
+        loading: !!path && !loaded,
+        error: loaded ? previous.error : "",
+        errorStatus: loaded ? previous.errorStatus : null,
+        updatedAt: same ? previous.updatedAt : null,
+      };
+    });
     void load();
-    // Hidden tabs stop polling; returning to the tab refreshes stale data.
-    const timer = path
-      ? setInterval(() => {
-          if (visible()) void load(true);
-        }, interval)
-      : undefined;
-    const returned = () => {
-      if (visible() && Date.now() - lastSuccess.current > interval / 2)
-        void load(true);
-    };
     const renewed = () => {
       if (isSessionValid()) void load();
     };
-    document.addEventListener("visibilitychange", returned);
     window.addEventListener("vectory:session-changed", renewed);
     return () => {
       mounted.current = false;
       ++requestId.current;
       activeRequest.current?.controller.abort();
       activeRequest.current = null;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", returned);
       window.removeEventListener("vectory:session-changed", renewed);
     };
-  }, [path, refresh, load, interval]);
+  }, [path, refresh, load]);
+  useEffect(() => {
+    if (!path || !(interval > 0)) return;
+    // Hidden tabs stop polling; returning to the tab refreshes stale data.
+    const timer = setInterval(() => {
+      if (visible()) void load(true);
+    }, interval);
+    const returned = () => {
+      if (visible() && Date.now() - lastSuccess.current > interval / 2)
+        void load(true);
+    };
+    document.addEventListener("visibilitychange", returned);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", returned);
+    };
+  }, [path, load, interval]);
   // Hide old-resource data during the render before the new path's effect runs.
   const shown =
     state.path === path
