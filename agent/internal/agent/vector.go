@@ -44,20 +44,29 @@ type VectorDriver struct {
 	verified bool
 	method   string
 }
+
+// limitedWriter keeps at most max bytes of a child's output. Once output
+// exceeds the bound it keeps only complete lines: a line cut mid-way could
+// carry part of a secret that redaction, which matches whole values, would
+// no longer recognize.
 type limitedWriter struct {
-	b   bytes.Buffer
-	max int
+	b    bytes.Buffer
+	max  int
+	full bool
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	if w.b.Len() < w.max {
-		left := w.max - w.b.Len()
-		if len(p) > left {
-			p = p[:left]
-		}
-		w.b.Write(p)
+	if w.full {
+		return n, nil
 	}
+	if left := w.max - w.b.Len(); len(p) > left {
+		w.b.Write(p[:left])
+		w.full = true
+		w.b.Truncate(bytes.LastIndexByte(w.b.Bytes(), '\n') + 1)
+		return n, nil
+	}
+	w.b.Write(p)
 	return n, nil
 }
 func cleanEnvironment() []string {
@@ -329,7 +338,7 @@ func (d *VectorDriver) reload(ctx context.Context) error {
 	d.mu.Lock()
 	lifetime, done := d.lifetime, d.done
 	d.mu.Unlock()
-	since := d.Log.beginCapture()
+	since := d.Log.beginCapture(false)
 	if _, err := lifetime.Write([]byte{hostCommandReload}); err != nil {
 		d.Log.endCapture()
 		return errors.New("Vector supervisor is not accepting reload requests")
@@ -384,7 +393,7 @@ func (d *VectorDriver) restart(ctx context.Context, path, overlay string) error 
 	if e != nil {
 		return e
 	}
-	since := d.Log.beginCapture()
+	since := d.Log.beginCapture(true)
 	cmd.Stdout = d.Log
 	cmd.Stderr = io.Discard
 	if e = cmd.Start(); e != nil {
