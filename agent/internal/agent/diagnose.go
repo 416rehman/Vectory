@@ -507,9 +507,26 @@ func (s *diagnosticSet) result() []Diagnostic {
 
 var httpStatus = regexp.MustCompile(`(?i)(?:status(?: code)?[: ]+|responded with (?:an error: )?|http )([1-5]\d\d)\b`)
 
+// windowsSocketReasons are Winsock error codes as Rust prints them after the
+// message ("... (os error 10061)"). Windows words the message in the system
+// language; the code is stable.
+var windowsSocketReasons = map[string]string{
+	"os error 10061": "connection_refused",
+	"os error 10060": "timeout",
+	"os error 10054": "connection_reset",
+	"os error 10051": "unreachable",
+	"os error 10065": "unreachable",
+	"os error 10048": "address_in_use",
+}
+
+var windowsSocketError = regexp.MustCompile(`os error 100\d\d`)
+
 // classifyNetwork maps an error chain to a bounded reason.
 func classifyNetwork(text string) string {
 	lower := strings.ToLower(text)
+	if reason := windowsSocketReasons[windowsSocketError.FindString(lower)]; reason != "" {
+		return reason
+	}
 	switch {
 	case strings.Contains(lower, "connection refused"):
 		return "connection_refused"

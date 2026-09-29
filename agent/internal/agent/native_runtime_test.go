@@ -128,9 +128,12 @@ func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 	if info, err := os.Stat(agentDataDir(e.Dir)); err != nil || !info.IsDir() {
 		t.Fatal("agent data directory was not created")
 	}
-	overlay, _ := os.ReadFile(hostRuntimePath(e.Dir))
-	if !strings.Contains(string(overlay), agentDataDir(e.Dir)) {
-		t.Fatalf("host runtime overlay = %s", overlay)
+	var overlay struct {
+		DataDir string `json:"data_dir"`
+	}
+	data, _ := os.ReadFile(hostRuntimePath(e.Dir))
+	if json.Unmarshal(data, &overlay) != nil || overlay.DataDir != agentDataDir(e.Dir) {
+		t.Fatalf("host runtime overlay = %s", data)
 	}
 
 	// An unreachable destination is a warning, never a rejection; Unix
@@ -222,7 +225,12 @@ func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 		t.Fatalf("stop took %s: %v", time.Since(started), err)
 	}
 	var local strings.Builder
-	if err = WriteVectorLog(ctx, e.Dir, 2000, false, LogRaw, &local); err != nil || !strings.Contains(local.String(), "Vector has reloaded.") || !strings.Contains(local.String(), "vector validate rejected the configuration") {
-		t.Fatalf("local Vector log incomplete: %v", err)
+	if err = WriteVectorLog(ctx, e.Dir, 2000, false, LogRaw, &local); err != nil {
+		t.Fatal(err)
+	}
+	// Windows has no in-place reload: the agent restarted Vector each time.
+	reloaded := runtime.GOOS == "windows" || strings.Contains(local.String(), "Vector has reloaded.")
+	if !reloaded || !strings.Contains(local.String(), "vector validate rejected the configuration") {
+		t.Fatal("local Vector log incomplete")
 	}
 }
