@@ -109,7 +109,7 @@ Keep the tab open until setup asks for the token: the token is shown only on thi
 ## 5. Deploy your first pipeline
 
 <!-- steps -->
-1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**. Pick **Try a synthetic example**, name it, and choose **Create pipeline**. The example generates demo logs and tags them with VRL. It reads no files and sends nothing anywhere.
+1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**. Pick **Try a synthetic example**, name it, and choose **Create pipeline**. The example generates demo logs and tags them with VRL, and exports Vector's own metrics on the device's loopback address so Vectory can measure delivery. It reads no files and sends nothing anywhere.
 2. Choose **Review & publish**, then **Publish version**.
 3. Select **Choose devices** and your machine, then **Review deployment** and **Deploy to devices**.
 4. Open your device. Its pipeline status moves through the rollout and ends at **Applied**.

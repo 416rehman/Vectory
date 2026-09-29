@@ -23,12 +23,21 @@ import {
   beginTokenRequest,
   checkTokenCreation,
   checkTokenStatus,
+  confirmTokenRequest,
+  confirmed,
+  enrollmentNote,
   finishTokenRequest,
   readTokenRequests,
+  resolveTokenRequests,
+  statusOutcome,
+  tokenCanStillEnroll,
   useTokenRequests,
   tokenRequestAvailable,
   dismissTokenRequestIssue,
+  when,
+  type ListedToken,
   type TokenCreateInput,
+  type TokenRecord,
   type TokenRequestOperation,
   type TokenRequestStatus,
   type TokenRequestIssue,
@@ -51,6 +60,11 @@ export type EnrollmentTokenFlowHandle = {
   finish(): void;
   /** Drop the in-page copy; the saved request stays to be checked. */
   discard(): void;
+  /**
+   * Revoke the token this page holds and drop it with its reminder. Throws
+   * a message to show when the server didn't confirm the revocation.
+   */
+  startOver(): Promise<void>;
 };
 export type ReadyToken = { token: string; record: Token };
 type Selection = {
@@ -65,12 +79,19 @@ export default forwardRef<
   {
     user: User;
     notify: Notify;
+    /**
+     * The token list, to resolve stored requests whose creation was
+     * confirmed; null while it loads or when it failed (nothing is dropped).
+     */
+    tokens?: readonly ListedToken[] | null;
     onChange(): void;
     onState(busy: boolean, blocked: boolean): void;
     onReady?(ready: ReadyToken | null): void;
+    /** A stored request is done with; says what its token enrolled. */
+    onSettled?(note: string): void;
   }
 >(function EnrollmentTokenFlow(
-  { user, notify, onChange, onState, onReady },
+  { user, notify, tokens = null, onChange, onState, onReady, onSettled },
   ref,
 ) {
   const { operations, errors } = useTokenRequests(user.id);
@@ -79,6 +100,9 @@ export default forwardRef<
   const [selection, setSelection] = useState<Selection | null>(null);
   const [damaged, setDamaged] = useState<TokenRequestIssue | null>(null);
   const [status, setStatus] = useState<TokenRequestStatus | null>(null);
+  // What an exact status check found for requests whose response never
+  // arrived here: "live" when their token could still enroll a device.
+  const [checks, setChecks] = useState<Record<string, "live" | "unknown">>({});
   const [ready, setReady] = useState<{
     operation: TokenRequestOperation;
     token: string;
@@ -97,6 +121,14 @@ export default forwardRef<
   const [, redraw] = useState(0);
   const active = useRef<Active | null>(null),
     mounted = useRef(false);
+  // Status checks run once per stored request, on their own, never for the
+  // request this page is creating; unmounting aborts them.
+  const background = useRef<AbortController | null>(null);
+  const checked = useRef(new Set<string>()),
+    settled = useRef(new Set<string>()),
+    creating = useRef<string | null>(null);
+  const tokenList = useRef(tokens);
+  tokenList.current = tokens;
   const requestOpener = useRef<HTMLElement | null>(null);
   const secretOpener = useRef<HTMLElement | null>(null);
   const revokeOpener = useRef<HTMLElement | null>(null);
@@ -130,8 +162,8 @@ export default forwardRef<
     allowed() &&
     active.current === request &&
     request.epoch === getSessionEpoch();
-  const callbacks = useRef({ notify, onChange, onState, onReady });
-  callbacks.current = { notify, onChange, onState, onReady };
+  const callbacks = useRef({ notify, onChange, onState, onReady, onSettled });
+  callbacks.current = { notify, onChange, onState, onReady, onSettled };
   useEffect(() => {
     callbacks.current.onReady?.(
       ready ? { token: ready.token, record: ready.record } : null,
@@ -139,6 +171,7 @@ export default forwardRef<
   }, [ready]);
   useEffect(() => {
     mounted.current = true;
+    background.current = new AbortController();
     const ended = () => {
       active.current?.controller.abort();
       active.current = null;
@@ -152,10 +185,121 @@ export default forwardRef<
       mounted.current = false;
       active.current?.controller.abort();
       active.current = null;
+      background.current?.abort();
       window.removeEventListener("vectory:session-ended", ended);
     };
   }, []);
-  const blocked = operations.length > 0 || errors.length > 0 || !!ready;
+  // Only a creation whose response never arrived blocks another one; a
+  // confirmed request is resolved against the token list below.
+  const unconfirmed = operations.filter((operation) => !confirmed(operation));
+  const blocked = unconfirmed.length > 0 || errors.length > 0 || !!ready;
+  /**
+   * Drop a stored request that is done with: its token enrolled something,
+   * or can't enroll anything more. Says once what it enrolled.
+   */
+  function settle(
+    operation: TokenRequestOperation,
+    token: ListedToken | null,
+    note = token ? enrollmentNote(token) : null,
+  ) {
+    if (settled.current.has(operation.id)) return;
+    settled.current.add(operation.id);
+    try {
+      finishTokenRequest(operation);
+    } catch {
+      // Kept; it resolves the same way on the next visit.
+    }
+    if (note) callbacks.current.onSettled?.(note);
+  }
+  const readyId = ready?.operation.id;
+  // Finished requests whose status arrived before the token list: they are
+  // dropped once the list can name what their token enrolled.
+  const finishedEarly = useRef(
+    new Map<
+      string,
+      { operation: TokenRequestOperation; found: TokenRequestStatus }
+    >(),
+  );
+  useEffect(() => {
+    if (!allowed()) return;
+    const known = operations.filter(
+      (operation) => confirmed(operation) && operation.id !== readyId,
+    );
+    for (const resolution of resolveTokenRequests(known, tokens))
+      if (resolution.kind === "finished")
+        settle(resolution.operation, resolution.token, resolution.note);
+    if (tokens)
+      for (const [id, { operation, found }] of finishedEarly.current) {
+        finishedEarly.current.delete(id);
+        settle(operation, withDevices(found));
+      }
+  });
+  useEffect(() => {
+    if (!allowed() || !background.current) return;
+    const signal = background.current.signal,
+      epoch = getSessionEpoch();
+    for (const operation of unconfirmed) {
+      if (
+        operation.id === creating.current ||
+        checked.current.has(operation.id)
+      )
+        continue;
+      checked.current.add(operation.id);
+      void withRequestDeadline(
+        (deadline) =>
+          api(
+            `/tokens/requests/${operation.id}`,
+            { signal: deadline },
+            TokenRequestStatusSchema,
+          ),
+        30000,
+        signal,
+      )
+        .then((result) => {
+          if (!allowed() || epoch !== getSessionEpoch()) return;
+          const found = checkTokenStatus(operation.id, result, operation);
+          const outcome = statusOutcome(found);
+          if (outcome !== "finished")
+            setChecks((previous) => ({ ...previous, [operation.id]: outcome }));
+          else if (tokenList.current) settle(operation, withDevices(found));
+          else {
+            finishedEarly.current.set(operation.id, { operation, found });
+            redraw((n) => n + 1);
+          }
+        })
+        .catch(() => {
+          // The reminder stays; Check request asks again.
+        });
+    }
+  });
+  /**
+   * The request's token as its exact status reports it, with the device
+   * names only the token list carries.
+   */
+  function withDevices(found: TokenRequestStatus): ListedToken | null {
+    const record: TokenRecord | null = found.found ? found.record : null;
+    if (!record) return null;
+    const usage = tokenList.current?.find((token) => token.id === record.id);
+    return usage
+      ? {
+          ...record,
+          devices: usage.devices,
+          device_count: usage.device_count,
+          last_used_at: usage.last_used_at,
+        }
+      : record;
+  }
+  /** What became of a request's token that no longer needs this reminder. */
+  function finishedText(token: ListedToken) {
+    const note = enrollmentNote(token);
+    if (note)
+      return tokenCanStillEnroll(token)
+        ? `${note} Its token still works until ${new Date(token.expires_at).toLocaleString()}; revoke it under Manage enrollment tokens when you no longer need it.`
+        : `${note} Its token can't enroll another device, so there is nothing to cancel.`;
+    return token.revoked
+      ? "Its token was revoked before any device used it, so there is nothing to cancel."
+      : "Its token expired before any device used it, so there is nothing to cancel.";
+  }
   useEffect(() => {
     if (!ready) return;
     const navigate = (event: Event) => {
@@ -208,7 +352,11 @@ export default forwardRef<
     options: { inline?: boolean } = {},
   ): Promise<Token | null> {
     const saved = readTokenRequests(user.id);
-    if (saved.operations.length || saved.errors.length || ready) {
+    if (
+      saved.operations.some((operation) => !confirmed(operation)) ||
+      saved.errors.length ||
+      ready
+    ) {
       setError(
         "Resolve the saved token request before creating another token.",
       );
@@ -222,6 +370,7 @@ export default forwardRef<
     let sent = false;
     try {
       operation = beginTokenRequest(user.id, input);
+      creating.current = operation.id;
       // An exact negative lookup proves protocol support, not cancellation.
       // Probe before sending so older servers never receive an untracked create.
       const support = await readStatus(operation.id, request);
@@ -265,7 +414,19 @@ export default forwardRef<
         setStatus(result);
         return null;
       }
-      setReady({ operation, token: result.token, record: result.record });
+      // The secret arrived: the reminder now tracks only its token, and
+      // never blocks another request.
+      let shown = operation;
+      try {
+        shown = confirmTokenRequest(operation, result.record);
+      } catch {
+        // Unconfirmed, it asks to be checked after a reload; the token works.
+      }
+      setReady({
+        operation: shown,
+        token: result.token,
+        record: result.record,
+      });
       setInline(!!options.inline);
       if (!options.inline) setShowSecret(true);
       // In the same update as the caller's, so its command and token appear together.
@@ -288,8 +449,55 @@ export default forwardRef<
       }
       return null;
     } finally {
+      creating.current = null;
       release(request);
     }
+  }
+  async function startOver() {
+    if (!allowed() || !ready)
+      throw Error(
+        "This page no longer holds this command's token. Revoke it under Manage enrollment tokens if it may be exposed.",
+      );
+    const { operation, record } = ready;
+    const request = claim();
+    if (!request)
+      throw Error("Wait for the current request to finish, then try again.");
+    try {
+      await withRequestDeadline(
+        (signal) =>
+          api(
+            `/tokens/${record.id}/revoke`,
+            { method: "POST", body: "{}", signal },
+            z.object({ ok: z.literal(true) }),
+          ),
+        30000,
+        request.controller.signal,
+      );
+      const records = await withRequestDeadline(
+        (signal) => api("/tokens", { signal }, z.array(TokenRecordSchema)),
+        30000,
+        request.controller.signal,
+      );
+      if (!current(request)) throw Error("interrupted");
+      const found = records.find((item) => item.id === record.id);
+      if (found && tokenCanStillEnroll(found)) throw Error("still available");
+    } catch {
+      throw Error(
+        "The server didn't confirm the revocation, so this command may still work. Try again, or revoke its token under Manage enrollment tokens.",
+      );
+    } finally {
+      release(request);
+    }
+    settled.current.add(operation.id);
+    try {
+      finishTokenRequest(operation);
+    } catch {
+      // The reminder resolves as revoked on the next visit.
+    }
+    setReady(null);
+    setShowSecret(false);
+    setError("");
+    callbacks.current.onChange();
   }
   useImperativeHandle(ref, () => ({
     create,
@@ -308,6 +516,7 @@ export default forwardRef<
       setShowSecret(false);
       setError("");
     },
+    startOver,
   }));
   async function inspect(item: Selection) {
     if (!selection) requestOpener.current = focusedElement();
@@ -321,6 +530,9 @@ export default forwardRef<
       checkTokenStatus(item.id, result, item.operation);
       if (result.found) rememberToken(item.id, result.record);
       setStatus(result);
+      const outcome = statusOutcome(result);
+      if (outcome !== "finished")
+        setChecks((previous) => ({ ...previous, [item.id]: outcome }));
     } catch (failure) {
       if (current(request)) setError((failure as Error).message);
     } finally {
@@ -371,14 +583,21 @@ export default forwardRef<
       release(request);
     }
   }
+  /** After a confirmed cancellation, or a token that is done with. */
   function clearReminder() {
-    if (!selection || !status?.found || status.state !== "cancelled") return;
+    if (!selection || !status?.found || statusOutcome(status) !== "finished")
+      return;
     try {
-      if (selection.operation) finishTokenRequest(selection.operation);
-      else if (selection.issue) dismissTokenRequestIssue(selection.issue);
+      if (selection.operation) {
+        settled.current.add(selection.operation.id);
+        finishTokenRequest(selection.operation);
+      } else if (selection.issue) dismissTokenRequestIssue(selection.issue);
+      const token = status.state === "created" ? withDevices(status) : null;
+      const note = token ? enrollmentNote(token) : null;
       setSelection(null);
       setStatus(null);
       setError("");
+      if (note) callbacks.current.onSettled?.(note);
     } catch (failure) {
       setError((failure as Error).message);
     }
@@ -470,10 +689,17 @@ export default forwardRef<
     status?.found && status.state === "cancelled"
       ? "Request cancelled"
       : "Check token request";
-  // The page shows an inline token beside its command; list the rest here.
-  const listed = operations.filter(
-    (operation) => !(inline && ready?.operation.id === operation.id),
+  // The page shows an inline token beside its command; a token saved in the
+  // dialog stays listed until it is saved. Confirmed requests aren't listed:
+  // the page says what became of them.
+  const listed = operations.filter((operation) =>
+    ready?.operation.id === operation.id ? !inline : !confirmed(operation),
   );
+  const outcome = status ? statusOutcome(status) : null;
+  const finishedToken =
+    status?.found && status.state === "created" && outcome === "finished"
+      ? withDevices(status)
+      : null;
   const pending =
     listed.length > 0 ||
     errors.length > 0 ||
@@ -503,7 +729,9 @@ export default forwardRef<
                 <p>
                   {ready?.operation.id === operation.id
                     ? "Keep a private copy before continuing."
-                    : "Check this request before creating another token. Its secret is shown only once."}
+                    : checks[operation.id] === "live"
+                      ? `A token was created ${when(operation.recorded_at)} that no device has used. Revoke it before creating another.`
+                      : `We couldn't confirm whether a token was created ${when(operation.recorded_at)}.`}
                 </p>
               </div>
               <Button
@@ -668,6 +896,8 @@ export default forwardRef<
                   ? "The token created by this request is revoked. Existing device connections are unchanged."
                   : "This request is cancelled. It cannot create a token, even if the original request arrives later."}
               </p>
+            ) : finishedToken ? (
+              <p>{finishedText(finishedToken)}</p>
             ) : (
               <p>
                 A token was created. Its secret cannot be retrieved. Cancel this
@@ -703,6 +933,8 @@ export default forwardRef<
           </Button>
           {status?.found && status.state === "cancelled" ? (
             <Button onClick={clearReminder}>Continue setup</Button>
+          ) : finishedToken ? (
+            <Button onClick={clearReminder}>Done</Button>
           ) : (
             <>
               <Button

@@ -1,6 +1,7 @@
 // Interprets live enrollment activity for one install command. Devices are
 // only ever told "refused"; these recorded reasons are for administrators.
 import type { Device, EnrollmentEvent } from "./api";
+import type { HostOS } from "./enrollmentCommands";
 
 const reasons: Record<string, { title: string; fix: string }> = {
   TOKEN_UNKNOWN: {
@@ -143,5 +144,54 @@ export function progress(
     device,
     revoked,
     checkedIn: !!device && !revoked && !!device.last_seen,
+  };
+}
+
+/**
+ * Setup's own check-ins land within seconds of each other; a check-in this
+ * long after the first one seen means something runs the agent.
+ */
+export const LATER_CHECK_IN_MS = 20000;
+
+/**
+ * What keeps a freshly connected agent running. "supervised": a service
+ * manager (or an agent too old to say); "unsupervised": no service, and no
+ * check-in since setup's own; "running": no service, but the agent checked
+ * in again later, so something runs it.
+ */
+export function supervision(
+  device: Pick<Device, "service_manager" | "last_seen">,
+  firstCheckIn: string | null,
+): "supervised" | "unsupervised" | "running" {
+  if (device.service_manager !== "none") return "supervised";
+  const first = Date.parse(firstCheckIn || ""),
+    last = Date.parse(device.last_seen || "");
+  return Number.isFinite(first) &&
+    Number.isFinite(last) &&
+    last - first >= LATER_CHECK_IN_MS
+    ? "running"
+    : "unsupervised";
+}
+
+/**
+ * The timeline line for an agent nothing keeps running: "r16-auto checked in
+ * once, but nothing keeps its agent running. Start it with …, or use a host
+ * with systemd." Without a service by choice (or on Windows, where setup
+ * always registers one unless told not to), the operator's supervisor runs it.
+ */
+export function unsupervisedLine(
+  name: string,
+  run: string,
+  os: HostOS,
+  byChoice: boolean,
+) {
+  return {
+    title: `${name} checked in once, but nothing keeps its agent running.`,
+    before: "Start it with ",
+    command: run,
+    after:
+      byChoice || os === "windows"
+        ? " and keep it running under your own supervisor."
+        : `, or use a host with ${os === "darwin" ? "launchd" : "systemd"}.`,
   };
 }

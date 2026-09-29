@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Device } from "./api";
 import DiagnosticList from "./DiagnosticList";
-import { MetricsDiagnosis } from "./TelemetryPanel";
+import { MetricsDiagnosis, agentFindsExporter } from "./TelemetryPanel";
 import VectorLogSummaryView from "./VectorLogSummary";
 
 const device = (overrides: Partial<Device> = {}): Device =>
@@ -89,15 +89,32 @@ describe("metrics empty states say exactly what is missing", () => {
     expect(html).toContain("Found the exporter at 127.0.0.1:9598");
     expect(html).toContain("every 60 seconds");
   });
-  it("explains older agents without host runtime reports", () => {
-    const html = text(
+  it("calls an agent too old only from its version, never from a missing report", () => {
+    const old = text(
       renderToStaticMarkup(
-        createElement(MetricsDiagnosis, { device: device() }),
+        createElement(MetricsDiagnosis, {
+          device: device({ agent_version: "0.0.9" }),
+        }),
       ),
     );
-    expect(html).toContain(
+    expect(old).toContain(
       "reads metrics only from a URL configured on the host",
     );
+    for (const agent_version of ["0.1.0-dev", "0.2.3", "test", ""]) {
+      const html = text(
+        renderToStaticMarkup(
+          createElement(MetricsDiagnosis, {
+            device: device({ agent_version }),
+          }),
+        ),
+      );
+      expect(html).toContain("hasn't reported how it reads metrics yet");
+      expect(html).not.toContain("Update the agent");
+    }
+    expect(agentFindsExporter("0.1.0-dev")).toBe(true);
+    expect(agentFindsExporter("v1.0.0")).toBe(true);
+    expect(agentFindsExporter("0.0.12")).toBe(false);
+    expect(agentFindsExporter("synthetic")).toBeNull();
   });
 });
 

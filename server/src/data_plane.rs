@@ -57,6 +57,14 @@ const ISSUE_REFRESH_SECONDS: i64 = 300;
 /// Issue writes (open, refresh or resolve) per evaluation. Deferred
 /// transitions keep counting in their streak and go out on the next one.
 const MAX_ISSUE_WRITES_PER_EVALUATION: usize = 3;
+/// Without metrics, Vector's log summary is the evidence: a sink's warning or
+/// error groups with one of these error types are failed deliveries.
+pub const LOG_DELIVERY_ERROR_TYPES: &[&str] = &["request_failed"];
+/// A log group seen for the first time counts only if it occurred this
+/// recently; later evaluations compare its count with the previous one.
+pub const LOG_RECENT_SECONDS: i64 = 180;
+/// What every finding measured from the log (no metrics) says, last.
+pub const LOG_EVIDENCE: &str = "measured from Vector's log (no metrics)";
 
 /// The part of detection an operator can edit (Settings → Notifications →
 /// Detection). The defaults are the constants above, so an instance that
@@ -451,6 +459,123 @@ pub fn assess_with(
     out
 }
 
+/// Judge sink delivery from Vector's log summary, for a device that reports
+/// no metrics. That is weaker evidence than a measured rate, so it only ever
+/// judges [`SINK_ERRORS`], and each finding says where it comes from.
+///
+/// The summary keeps a sink's warning and error groups for an hour, counted
+/// since the agent started. A group is a failed delivery when its
+/// `error_type` is one of [`LOG_DELIVERY_ERROR_TYPES`]. A sink is failing
+/// while those groups grow: by at least [`SINK_ERRORS_PER_MINUTE`] since the
+/// previous evaluation, or, for a group seen for the first time, when it
+/// occurred in the last [`LOG_RECENT_SECONDS`]. A sink whose groups stopped
+/// growing, or whose open issue has no group left, is clean. `previous` maps
+/// group fingerprints to their last count and the returned map replaces it;
+/// `elapsed` is the time since the previous log evaluation.
+pub fn assess_log(
+    logs: &[Value],
+    previous: &Map<String, Value>,
+    open: &[String],
+    elapsed: Option<i64>,
+    now: DateTime<Utc>,
+) -> (Vec<Finding>, Map<String, Value>) {
+    #[derive(Default)]
+    struct Sink<'a> {
+        component_type: Option<&'a str>,
+        failures: u64,
+        known: bool,
+        recent: bool,
+    }
+    let mut sinks: std::collections::BTreeMap<&str, Sink> = std::collections::BTreeMap::new();
+    let mut counts = Map::new();
+    for item in logs {
+        let (Some(id), Some(fingerprint), Some(count)) = (
+            item["component_id"].as_str(),
+            item["fingerprint"].as_str(),
+            item["count"].as_u64(),
+        ) else {
+            continue;
+        };
+        let delivery = item["error_type"]
+            .as_str()
+            .is_some_and(|kind| LOG_DELIVERY_ERROR_TYPES.contains(&kind));
+        if item["component_kind"] != "sink" || !delivery {
+            continue;
+        }
+        counts.insert(fingerprint.to_owned(), json!(count));
+        let sink = sinks.entry(id).or_default();
+        sink.component_type = sink.component_type.or(item["component_type"].as_str());
+        match previous.get(fingerprint).and_then(Value::as_u64) {
+            Some(before) => {
+                sink.known = true;
+                // A smaller count is a restarted agent counting again.
+                sink.failures += if count >= before {
+                    count - before
+                } else {
+                    count
+                };
+            }
+            None => {
+                sink.recent |= parse_time(&item["last_seen"]).is_some_and(|at| {
+                    (-SAMPLE_MAX_AHEAD_SECONDS..=LOG_RECENT_SECONDS)
+                        .contains(&now.signed_duration_since(at).num_seconds())
+                });
+            }
+        }
+    }
+    let minutes = elapsed.unwrap_or(60).max(EVALUATION_INTERVAL_SECONDS) as f64 / 60.0;
+    let mut out = Vec::new();
+    for (id, sink) in &sinks {
+        let rate = sink.failures as f64 / minutes;
+        let (verdict, failing) = if sink.failures > 0 && rate >= SINK_ERRORS_PER_MINUTE {
+            (
+                Verdict::Bad,
+                format!("is failing about {} a minute", per_minute(rate, "request")),
+            )
+        } else if sink.recent {
+            (Verdict::Bad, "is failing requests".to_owned())
+        } else if sink.failures > 0 {
+            (Verdict::Hold, "is failing some requests".to_owned())
+        } else if sink.known {
+            (Verdict::Good, "stopped failing requests".to_owned())
+        } else {
+            (Verdict::Hold, "failed requests earlier".to_owned())
+        };
+        let described = match sink.component_type {
+            Some(kind) => format!("The {kind} sink {id}"),
+            None => (*id).to_owned(),
+        };
+        let log = log_for(logs, id);
+        out.push(finding(
+            SINK_ERRORS,
+            Some(*id),
+            Some("sink"),
+            verdict,
+            "error",
+            format!("{described} {failing}{}, {LOG_EVIDENCE}.", cause(log)),
+            "Check that the destination is up and reachable from this device, and that its address and credentials are right.".into(),
+            json!({"source":"vector_log","failures":sink.failures,"errors_per_minute":rate}),
+            log,
+        ));
+    }
+    // An open issue whose sink the log no longer mentions: the log stopped
+    // reporting failures.
+    for id in open.iter().filter(|id| !sinks.contains_key(id.as_str())) {
+        out.push(finding(
+            SINK_ERRORS,
+            Some(id.as_str()),
+            Some("sink"),
+            Verdict::Good,
+            "error",
+            format!("{id} stopped failing requests, {LOG_EVIDENCE}."),
+            "Nothing to do.".into(),
+            json!({"source":"vector_log","failures":0}),
+            None,
+        ));
+    }
+    (out, counts)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Transition {
     None,
@@ -578,6 +703,17 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         );
         changed = true;
+    } else if o.sample.is_null()
+        && !reports_metrics(o.device)
+        && o.device["vector_log_summary"]["items"].is_array()
+        && parse_time(&state["evaluated_at"]).is_none_or(|last| {
+            now.signed_duration_since(last).num_seconds() >= EVALUATION_INTERVAL_SECONDS
+        })
+    {
+        // No metrics on this device: Vector's own log is the only evidence
+        // of failing deliveries.
+        evaluate_log(db, &o, running, &mut state, &thresholds).await?;
+        changed = true;
     }
     if changed {
         sqlx::query("INSERT INTO data_plane_state(device_id,data) VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET data=excluded.data")
@@ -600,6 +736,17 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
     Ok(())
 }
 
+/// Whether the agent reads Vector's metrics on this device (a metrics URL, or
+/// an exporter it found in the running pipeline). Only a device that reports
+/// none is judged from its log.
+fn reports_metrics(device: &Value) -> bool {
+    matches!(
+        device["host_runtime"]["metrics_source"].as_str(),
+        Some("explicit" | "discovered")
+    )
+}
+
+/// Judge a telemetry sample, with the log lines that explain each finding.
 async fn evaluate(
     db: &mut SqliteConnection,
     o: &Observation<'_>,
@@ -613,6 +760,75 @@ async fn evaluate(
         .unwrap_or(&empty);
     let previous = state["buffers"].as_object().cloned().unwrap_or_default();
     let findings = assess_with(o.sample, &previous, logs, thresholds);
+    let now = apply(db, o, running, state, findings, thresholds).await?;
+    let buffers: Map<String, Value> = o.sample["components"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .filter_map(|c| {
+            Some((
+                c["id"].as_str()?.to_owned(),
+                json!(c["buffer_utilization"].as_f64()?),
+            ))
+        })
+        .collect();
+    state["buffers"] = Value::Object(buffers);
+    state["evaluated_at"] = json!(now);
+    state["evaluations"] = json!(
+        state["evaluations"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .min(1_000_000)
+    );
+    Ok(())
+}
+
+/// Judge the log summary of a device without metrics. Log evaluations don't
+/// count toward `evaluations`: they don't measure delivery, so a canary
+/// never reads them as a measured, healthy data plane.
+async fn evaluate_log(
+    db: &mut SqliteConnection,
+    o: &Observation<'_>,
+    running: &str,
+    state: &mut Value,
+    thresholds: &Thresholds,
+) -> Result<()> {
+    let empty = Vec::new();
+    let logs = o.device["vector_log_summary"]["items"]
+        .as_array()
+        .unwrap_or(&empty);
+    let previous = state["log_counts"].as_object().cloned().unwrap_or_default();
+    let open: Vec<String> = state["keys"]
+        .as_object()
+        .map(|keys| {
+            keys.values()
+                .filter(|e| e["open"] == true && e["code"] == SINK_ERRORS)
+                .filter_map(|e| e["component_id"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let now = Utc::now();
+    let elapsed = parse_time(&state["log_evaluated_at"])
+        .map(|last| now.signed_duration_since(last).num_seconds());
+    let (findings, counts) = assess_log(logs, &previous, &open, elapsed, now);
+    let at = apply(db, o, running, state, findings, thresholds).await?;
+    state["log_counts"] = Value::Object(counts);
+    state["log_evaluated_at"] = json!(at);
+    state["evaluated_at"] = json!(at);
+    Ok(())
+}
+
+/// Advance each finding's streak and open, refresh or resolve its issue.
+/// Returns the evaluation time.
+async fn apply(
+    db: &mut SqliteConnection,
+    o: &Observation<'_>,
+    running: &str,
+    state: &mut Value,
+    findings: Vec<Finding>,
+    thresholds: &Thresholds,
+) -> Result<String> {
     let mut keys = state["keys"].as_object().cloned().unwrap_or_default();
     let mut open = keys.values().filter(|e| e["open"] == true).count();
     let mut seen = std::collections::BTreeSet::new();
@@ -699,28 +915,8 @@ async fn evaluate(
     keys.retain(|key, entry| {
         entry["open"] == true || (seen.contains(key) && entry["bad"].as_u64().unwrap_or(0) > 0)
     });
-    let buffers: Map<String, Value> = o.sample["components"]
-        .as_array()
-        .unwrap_or(&empty)
-        .iter()
-        .filter_map(|c| {
-            Some((
-                c["id"].as_str()?.to_owned(),
-                json!(c["buffer_utilization"].as_f64()?),
-            ))
-        })
-        .collect();
     state["keys"] = Value::Object(keys);
-    state["buffers"] = Value::Object(buffers);
-    state["evaluated_at"] = json!(now);
-    state["evaluations"] = json!(
-        state["evaluations"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_add(1)
-            .min(1_000_000)
-    );
-    Ok(())
+    Ok(now)
 }
 
 /// The public, bounded summary kept on the device record: which version was
@@ -909,6 +1105,71 @@ mod tests {
         assert_eq!(step(&mut entry, Verdict::Good, 2), Transition::None);
         assert_eq!(step(&mut entry, Verdict::Good, 2), Transition::None);
         assert_eq!(step(&mut entry, Verdict::Good, 2), Transition::Resolve);
+    }
+
+    fn log_group(fingerprint: &str, kind: &str, error_type: Option<&str>, count: u64) -> Value {
+        let mut group = json!({"fingerprint":fingerprint,"level":"warn","component_id":"out","component_kind":kind,"component_type":"http","reason":"connection_refused","message":"HTTP error. error trying to connect: tcp connect error: Connection refused (os error 111)","count":count,"first_seen":"2026-09-29T17:00:00Z","last_seen":Utc::now().to_rfc3339()});
+        if let Some(kind) = error_type {
+            group["error_type"] = json!(kind);
+        }
+        group
+    }
+
+    #[test]
+    fn without_metrics_a_failing_sink_is_read_from_vectors_log() {
+        let now = Utc::now();
+        let retrying = log_group("fedcba9876543210", "sink", None, 13);
+        let failing = |count| log_group("0123456789abcdef", "sink", Some("request_failed"), count);
+        // First seen and recent: failing, and the finding says what it's
+        // measured from.
+        let (found, counts) = assess_log(
+            &[failing(13), retrying.clone()],
+            &Map::new(),
+            &[],
+            None,
+            now,
+        );
+        assert_eq!(found.len(), 1, "only request failures count");
+        assert_eq!(found[0].verdict, Verdict::Bad);
+        assert_eq!(found[0].code, SINK_ERRORS);
+        assert_eq!(
+            found[0].diagnostics[0]["message"],
+            "The http sink out is failing requests (connection refused), measured from Vector's log (no metrics)."
+        );
+        crate::configuration_attempt::diagnostics(&found[0].diagnostics).unwrap();
+        assert_eq!(
+            counts,
+            Map::from_iter([("0123456789abcdef".to_owned(), json!(13))])
+        );
+        // 27 more a minute later: still failing, at the measured rate.
+        let (found, counts) = assess_log(&[failing(40)], &counts, &[], Some(60), now);
+        assert_eq!(found[0].verdict, Verdict::Bad);
+        assert!(
+            found[0].diagnostics[0]["message"]
+                .as_str()
+                .unwrap()
+                .ends_with("is failing about 27 requests a minute (connection refused), measured from Vector's log (no metrics).")
+        );
+        // A restarted agent counts again from one: new failures.
+        let (found, _) = assess_log(&[failing(3)], &counts, &[], Some(60), now);
+        assert_eq!(found[0].verdict, Verdict::Bad);
+        // No growth: clean. Gone while its issue is open: clean.
+        let (found, counts) = assess_log(&[failing(40)], &counts, &[], Some(60), now);
+        assert_eq!(found[0].verdict, Verdict::Good);
+        let (found, _) = assess_log(&[], &counts, &["out".into()], Some(60), now);
+        assert_eq!((found.len(), found[0].verdict), (1, Verdict::Good));
+        // A group seen first long after it happened proves nothing yet.
+        let mut stale = failing(9);
+        stale["last_seen"] = json!("2026-09-29T00:00:00Z");
+        let (found, _) = assess_log(&[stale], &Map::new(), &[], None, now);
+        assert_eq!(found[0].verdict, Verdict::Hold);
+        // Sources and warnings without a delivery error type never count.
+        let source = log_group("aaaaaaaaaaaaaaaa", "source", Some("request_failed"), 5);
+        assert!(
+            assess_log(&[source, retrying], &Map::new(), &[], None, now)
+                .0
+                .is_empty()
+        );
     }
 
     #[test]

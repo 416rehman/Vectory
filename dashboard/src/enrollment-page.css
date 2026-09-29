@@ -288,6 +288,16 @@
 [data-theme="dark"] .enroll-timeline li[data-outcome="failure"] > svg {
   color: #f4a5aa;
 }
+.enroll-timeline li[data-outcome="warning"] > svg {
+  color: var(--mark-warning);
+}
+.enroll-timeline small code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.enroll-earlier {
+  margin-bottom: 12px;
+}
 .enroll-timeline strong {
   display: block;
   font-size: 13.5px;
@@ -318,6 +328,17 @@
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
+}
+.enroll-success[data-tone="warning"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.enroll-success[data-tone="warning"] p {
+  color: var(--ink);
+}
+.enroll-success .enroll-command {
+  margin: 10px 0;
+  background: var(--surface);
 }
 .enroll-watch-help {
   margin: 16px 0 0;

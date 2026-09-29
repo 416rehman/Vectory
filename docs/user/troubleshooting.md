@@ -6,11 +6,12 @@ Find your symptom, check the likely causes in order, and fix the first one that 
 
 <!-- steps -->
 1. **Is the agent running?** On the device, `sudo vectory status`. If the service is stopped, `sudo vectory service-start`. Don't start a second agent by hand: only one can use the state directory.
-2. **Can it reach the server?** Run `sudo vectory doctor`. It checks name resolution, the TLS connection, the certificate, the clock and the device's credentials, and prints a fix for each failure.
-3. **Is the address right?** Agents use port **8443**; browsers use **443**. `--server` must be `https://` with the agent listener's name.
-4. **Is the certificate trusted?** A private CA needs the pin from **Add device** or a `--ca-file`. See [Trust the server certificate](installation.md#trust-the-server-certificate). Never turn verification off.
-5. **Is the clock right?** Certificates fail when the device's clock is far off.
-6. **Was the device revoked or replaced?** A revoked identity can't reconnect. See [Recover a device identity](agents.md#recover-a-device-identity).
+2. **Does anything keep it running?** On a host without a service manager (most containers, WSL, Alpine with OpenRC), setup checks in once and stops: it prints `[!!] Service` with the command to run and exits with code 3, and **Add device** reads "checked in once, but nothing keeps its agent running". Start the agent with that command, such as `sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, under whatever keeps processes running there. See [Keep the agent running](installation.md#keep-the-agent-running).
+3. **Can it reach the server?** Run `sudo vectory doctor`. It checks name resolution, the TLS connection, the certificate, the clock and the device's credentials, and prints a fix for each failure.
+4. **Is the address right?** Agents use port **8443**; browsers use **443**. `--server` must be `https://` with the agent listener's name.
+5. **Is the certificate trusted?** A private CA needs the pin from **Add device** or a `--ca-file`. See [Trust the server certificate](installation.md#trust-the-server-certificate). Never turn verification off.
+6. **Is the clock right?** Certificates fail when the device's clock is far off.
+7. **Was the device revoked or replaced?** A revoked identity can't reconnect. See [Recover a device identity](agents.md#recover-a-device-identity).
 
 Once fixed, the device's check-in time updates within one check-in interval. A Vector that was already running keeps running while the server is unreachable.
 
@@ -46,7 +47,8 @@ Open the device and read its issue: it names the stage and the reason.
 | `INCOMPATIBLE` | The version was built for a different Vector minor version than the device runs. Patch releases of the same minor (0.58.0, 0.58.1) are interchangeable, so a patch difference never causes this. `vectory status` names both versions. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
 | `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
 | `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, or the bytes didn't match. | Check connectivity; the agent retries on its own. |
-| `ROLLBACK_FAILED`, `ROLLBACK_UNAVAILABLE`, `RECOVERY_INVALID` | A failure left no working configuration to restore. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
+| `ROLLBACK_UNAVAILABLE` | The device's first version didn't start, so there was nothing earlier to go back to. Vector is stopped and nothing runs; the device page reads **Nothing running: Vector stopped after v1 failed to start.** | Fix the problem the issue names, such as a listener on port 514, then deploy a corrected version or choose **Retry application**. Nothing on the host needs recovering. |
+| `ROLLBACK_FAILED`, `RECOVERY_INVALID` | The new version failed and the last working configuration couldn't be restored. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
 | `MANIFEST_EXPIRED` | The approval expired before the switch. | Nothing: the agent waits for its next check-in. |
 
 The issue, the device page and `sudo vectory status --json` (under `configuration_attempt.error.diagnostics`) show Vector's own message, with secret values removed.
@@ -115,7 +117,7 @@ Removing or cancelling a deployment never stops Vector. See [Deploy and roll bac
 
 ## Metrics are missing, or no events reach a destination
 
-**No metrics:** the pipeline needs a loopback Prometheus exporter, restricted devices must allow its listener, and **Collect operational metrics** must be on. See [Enable real metrics](telemetry.md#enable-real-metrics). A rate needs two samples, and a dash means "not reported", not zero.
+**No metrics:** the pipeline needs a loopback Prometheus exporter fed by `internal_metrics` (**Add monitoring** adds one, and restricted devices run it without an allowance), and **Collect operational metrics** must be on. See [Enable real metrics](telemetry.md#enable-real-metrics). A rate needs two samples, and a dash means "not reported", not zero.
 
 **No events at the destination:** **Applied** and throughput prove Vector runs and reads events; they don't prove delivery. When the device reports metrics, Vectory checks delivery for you: see [A pipeline applies but delivers nothing](#a-pipeline-applies-but-delivers-nothing). Check that the source receives events, that no condition discards them on purpose, and that the sink's address, credentials and destination are right. Test transforms with sample events in [pipeline tests](resources.md#test-transformations).
 
@@ -137,7 +139,7 @@ The device reads **Degraded**: the version applied and Vector runs it, but its m
 
 A canary rollout checks this before it releases more devices. While Vectory takes its first measurements the gate reads **Measuring delivery**; a canary that isn't delivering counts as a failure against the rollout's failure threshold, and the rollout page shows why. A device without metrics is judged on its apply state alone.
 
-These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-metrics). A filter or route that drops events on purpose never counts as a delivery problem.
+These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-metrics). Without them the device page reads **Delivery health: not measured**, and only a sink that fails requests shows up, from Vector's own log: the same sink issue opens after two check-ins, its message ending "measured from Vector's log (no metrics)". On the host, `sudo vectory status` shows the failing sink under **Vector** and what to check next. A filter or route that drops events on purpose never counts as a delivery problem.
 
 ## The adopted Vector binary changed
 

@@ -192,7 +192,13 @@ export function describeActivity(item: ActivityItem): Part[] {
         targetPart(item, pipelineLabel(item)),
       ];
     case "device.enroll":
-      return [targetPart(item), { text: " enrolled" }];
+      // A refusal enrolled nothing: it names the attempted device, if any.
+      return item.outcome === "failure"
+        ? [
+            { text: "Enrollment refused", strong: true },
+            ...(item.target_name ? [{ text: `: ${item.target_name}` }] : []),
+          ]
+        : [targetPart(item), { text: " enrolled" }];
     case "device.revoke":
       return [actor, { text: " revoked " }, targetPart(item)];
     case "device.retry":

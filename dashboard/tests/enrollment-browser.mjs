@@ -6,7 +6,7 @@ import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -23,8 +23,9 @@ const server = await createServer({
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 0,
-    strictPort: false,
+    // A fixed port when the caller reserves one (VECTORY_HARNESS_PORT).
+    port: Number(process.env.VECTORY_HARNESS_PORT) || 0,
+    strictPort: !!process.env.VECTORY_HARNESS_PORT,
     proxy: {},
     hmr: false,
   },
@@ -154,6 +155,23 @@ const event = (overrides = {}) => ({
   ...overrides,
 });
 
+/** A token request saved by an earlier visit, as the page stores it. */
+const savedRequest = (id, overrides = {}) => ({
+  actor_id: "synthetic-admin",
+  id,
+  recorded_at: iso(-120000),
+  request: {
+    name: "r16-full install command",
+    expires_hours: 1,
+    max_uses: 1,
+    name_prefix: null,
+    request_id: id,
+  },
+  ...overrides,
+});
+const requestKey = (id) =>
+  `vectory:enrollment-token-request:synthetic-admin:${id}`;
+
 async function fixture({
   initial = [],
   failDevices = false,
@@ -163,6 +181,8 @@ async function fixture({
   role = "admin",
   tokens = [],
   platform = "Linux",
+  saved = [],
+  statuses = {},
 } = {}) {
   const context = await browser.newContext({
     viewport: { width, height: 900 },
@@ -187,6 +207,9 @@ async function fixture({
     tokenRequest: null,
     activity: [],
     revokes: [],
+    statuses,
+    lookups: [],
+    cancels: [],
   };
   await context.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -220,12 +243,46 @@ async function fixture({
       return reply({ events: state.events, now: iso() });
     }
     if (path === "/tokens" && method === "GET") return reply(state.tokens);
-    if (path.startsWith("/tokens/requests/") && method === "GET")
+    if (path.startsWith("/tokens/requests/") && method === "GET") {
+      const id = path.split("/").at(-1);
+      state.lookups.push(id);
+      // A list of answers is used in order, the last one from then on.
+      let answer = state.statuses[id];
+      if (Array.isArray(answer))
+        answer = answer.length > 1 ? answer.shift() : answer[0];
+      if (answer === "fail")
+        return reply(
+          {
+            error: {
+              code: "UNAVAILABLE",
+              message: "Synthetic status unavailable",
+            },
+          },
+          503,
+        );
+      return reply(
+        answer || {
+          request_id: id,
+          request_correlation: true,
+          found: false,
+        },
+      );
+    }
+    if (
+      path.startsWith("/tokens/requests/") &&
+      path.endsWith("/cancel") &&
+      method === "POST"
+    ) {
+      const id = path.split("/").at(-2);
+      state.cancels.push(id);
       return reply({
-        request_id: path.split("/").at(-1),
+        request_id: id,
         request_correlation: true,
-        found: false,
+        found: true,
+        state: "cancelled",
+        record: null,
       });
+    }
     if (path.endsWith("/revoke") && method === "POST") {
       const id = path.split("/")[2];
       state.revokes.push(id);
@@ -242,7 +299,8 @@ async function fixture({
           state.releaseToken = resolve;
         });
       const record = {
-        id: tokenId,
+        // The first command's token is `tokenId`; later ones are new tokens.
+        id: state.posts === 1 ? tokenId : randomUUID(),
         name: state.tokenRequest.name,
         created_at: iso(),
         expires_at: iso(3600000),
@@ -268,13 +326,40 @@ async function fixture({
     );
   });
   await page.goto(`${origin}/__enrollment-fixture`);
+  // Reminders an earlier visit left in this browser, before the page reads them.
   await page.evaluate(
-    ({ value, role }) => {
-      document.documentElement.dataset.theme = value;
-      window.mountEnrollment(role);
+    (records) => {
+      for (const [key, value] of records) localStorage.setItem(key, value);
     },
-    { value: theme, role },
+    saved.map((request) => [requestKey(request.id), JSON.stringify(request)]),
   );
+  const mount = () =>
+    page.evaluate(
+      ({ value, role }) => {
+        document.documentElement.dataset.theme = value;
+        window.mountEnrollment(role);
+      },
+      { value: theme, role },
+    );
+  await mount();
+  /**
+   * Leave (accepting "Leave site?"), let `meanwhile` change the synthetic
+   * server while no page watches, and come back to Add device.
+   */
+  const reload = async (meanwhile = () => {}) => {
+    const leave = (dialog) => void dialog.accept();
+    page.on("dialog", leave);
+    await page.reload();
+    page.off("dialog", leave);
+    meanwhile();
+    await mount();
+  };
+  const stored = () =>
+    page.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith("vectory:enrollment-token-request:"))
+        .map((key) => JSON.parse(localStorage.getItem(key))),
+    );
   const create = page.getByRole("button", {
     name: "Create install command",
     exact: true,
@@ -297,6 +382,8 @@ async function fixture({
     chooseMode,
     advanced,
     createCommand,
+    reload,
+    stored,
   };
 }
 async function check(name, run) {
@@ -806,6 +893,311 @@ try {
       }
     },
   );
+  const usedToken = (id, name, at, overrides = {}) => ({
+    id,
+    name,
+    created_at: iso(-120000),
+    expires_at: iso(3600000),
+    uses: 1,
+    max_uses: 1,
+    name_prefix: null,
+    revoked: false,
+    created_by: { id: "synthetic-admin", name: "Synthetic admin" },
+    last_used_at: at,
+    device_count: 1,
+    devices: [
+      {
+        id: deviceId,
+        name: name.split(" ")[0],
+        revoked: false,
+        enrolled_at: at,
+      },
+    ],
+    ...overrides,
+  });
+  const watchRegion = (page) =>
+    page.getByRole("region", { name: "3. Watch it connect" });
+  const requestCard = (page) =>
+    page.getByRole("region", { name: "Enrollment token requests" });
+  await check(
+    "a command shown before leaving never blocks the next one; back after it enrolled, the timeline says so once",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.advanced();
+        await f.page
+          .getByLabel("Device name", { exact: true })
+          .fill("r16-full");
+        await f.createCommand("Full Vector");
+        // The reminder names the token its command showed, never the secret.
+        const [reminder] = await f.stored();
+        expect(reminder.token_id).toBe(tokenId);
+        expect(JSON.stringify(reminder)).not.toContain(secret);
+        const lookups = f.state.lookups.length;
+        await f.reload(() => {
+          // Meanwhile, on the host, r16-full enrolled with it.
+          const at = iso(60000);
+          f.state.tokens = f.state.tokens.map((token) =>
+            token.id === tokenId
+              ? usedToken(tokenId, token.name, at, {
+                  created_at: token.created_at,
+                })
+              : token,
+          );
+          f.state.devices = [
+            device({ name: "r16-full", last_seen: iso(61000) }),
+          ];
+        });
+        await expect(watchRegion(f.page)).toContainText(
+          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}/,
+        );
+        await expect(requestCard(f.page)).toHaveCount(0);
+        await expect.poll(() => f.stored()).toEqual([]);
+        // Only a request whose response never arrived is looked up.
+        expect(f.state.lookups.length).toBe(lookups);
+        await f.chooseMode();
+        await expect(f.create).toBeEnabled();
+        await f.create.click();
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toBeVisible();
+        expect(f.state.posts).toBe(2);
+        // Said once: the next visit has nothing left to explain.
+        await f.reload();
+        await expect(watchRegion(f.page)).not.toContainText(
+          "enrolled r16-full",
+        );
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "an unused command from an earlier visit joins the unused line; revoking it drops its reminder silently",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        await f.reload();
+        const unused = f.page.locator(".enroll-unused");
+        await expect(unused).toContainText(
+          "An install command you created earlier wasn't used.",
+        );
+        await expect(requestCard(f.page)).toHaveCount(0);
+        await f.chooseMode();
+        await expect(f.create).toBeEnabled();
+        await unused.getByRole("button", { name: "Revoke it" }).click();
+        await expect.poll(() => f.state.revokes).toEqual([tokenId]);
+        await expect.poll(() => f.stored()).toEqual([]);
+        await expect(unused).toHaveCount(0);
+        await expect(watchRegion(f.page)).not.toContainText("enrolled");
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "only a creation whose response never arrived blocks, with its time, until it is checked",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.chooseMode();
+        f.state.holdToken = true;
+        await f.create.click();
+        await expect.poll(() => f.state.posts).toBe(1);
+        // The tab goes away before the server's answer arrives.
+        await f.reload();
+        const card = requestCard(f.page);
+        await expect(card).toContainText(
+          /We couldn't confirm whether a token was created at \d{1,2}:\d{2}/,
+        );
+        await f.chooseMode();
+        await expect(f.create).toBeDisabled();
+        await expect(f.page.locator(".enroll-actions")).toContainText(
+          "Check the saved token request at the top of the page first.",
+        );
+        // Looked up once on its own (after the probe before sending): the
+        // server has no result for it, so it keeps blocking.
+        await expect.poll(() => f.state.lookups.length).toBe(2);
+        await card.getByRole("button", { name: "Check request" }).click();
+        const dialog = f.page.getByRole("dialog", {
+          name: "Check token request",
+        });
+        await expect(dialog).toContainText("No result is recorded yet.");
+        await dialog.getByRole("button", { name: "Cancel request" }).click();
+        await f.page
+          .getByRole("dialog", { name: "Request cancelled" })
+          .getByRole("button", { name: "Continue setup" })
+          .click();
+        await expect(card).toHaveCount(0);
+        await expect(f.create).toBeEnabled();
+        expect(f.state.cancels).toHaveLength(1);
+      } finally {
+        f.state.releaseToken?.();
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "a reminder an earlier version left for a used-up token never asks to be revoked",
+    async () => {
+      const id = "0b6c1c55-8a53-4c4b-9f47-4a1c3a5d0e11",
+        token = "6f1f3a8e-2f0a-4a53-8c1d-7c9e1a0b2c3d",
+        at = iso(-60000);
+      const listed = usedToken(token, "r16-full install command", at);
+      const status = {
+        request_id: id,
+        request_correlation: true,
+        found: true,
+        state: "created",
+        record: {
+          id: token,
+          name: listed.name,
+          expires_at: listed.expires_at,
+          uses: 1,
+          max_uses: 1,
+          name_prefix: null,
+          revoked: false,
+          created_at: listed.created_at,
+        },
+      };
+      // Resolved on its own: dropped, and the timeline says what it enrolled.
+      let f = await fixture({
+        saved: [savedRequest(id)],
+        statuses: { [id]: status },
+        tokens: [listed],
+      });
+      try {
+        await expect(watchRegion(f.page)).toContainText(
+          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}/,
+        );
+        await expect(requestCard(f.page)).toHaveCount(0);
+        await expect.poll(() => f.stored()).toEqual([]);
+        await f.chooseMode();
+        await expect(f.create).toBeEnabled();
+      } finally {
+        await f.context.close();
+      }
+      // When the check fails, Check request says what happened and ends it.
+      f = await fixture({
+        saved: [savedRequest(id)],
+        statuses: { [id]: ["fail", status] },
+        tokens: [listed],
+      });
+      try {
+        const card = requestCard(f.page);
+        await expect(card).toContainText("We couldn't confirm whether");
+        await card.getByRole("button", { name: "Check request" }).click();
+        const dialog = f.page.getByRole("dialog", {
+          name: "Check token request",
+        });
+        await expect(dialog).toContainText(
+          /r16-full install command enrolled r16-full at \d{1,2}:\d{2}.* Its token can't enroll another device, so there is nothing to cancel\./,
+        );
+        await expect(dialog).not.toContainText("cannot be retrieved");
+        await expect(
+          dialog.getByRole("button", { name: "Revoke token and cancel" }),
+        ).toHaveCount(0);
+        await dialog.getByRole("button", { name: "Done", exact: true }).click();
+        await expect(card).toHaveCount(0);
+        await expect(watchRegion(f.page)).toContainText(
+          "r16-full install command enrolled r16-full",
+        );
+        expect(f.state.revokes).toEqual([]);
+        expect(f.state.cancels).toEqual([]);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "Start over revokes the displayed command after a confirmation, then a new one can be created",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        const startOver = f.page.getByRole("button", {
+          name: "Start over",
+          exact: true,
+        });
+        await startOver.click();
+        const dialog = f.page.getByRole("dialog", { name: "Start over?" });
+        await expect(dialog).toContainText("so no device can enroll with it");
+        await dialog
+          .getByRole("button", { name: "Keep this command", exact: true })
+          .click();
+        await expect(f.page.locator(".enroll-secret")).toBeVisible();
+        expect(f.state.revokes).toEqual([]);
+        await startOver.click();
+        await dialog
+          .getByRole("button", { name: "Revoke and start over", exact: true })
+          .click();
+        await expect(f.create).toBeVisible();
+        expect(f.state.revokes).toEqual([tokenId]);
+        await expect.poll(() => f.stored()).toEqual([]);
+        await expect(f.page.locator("body")).not.toContainText(secret);
+        await expect(f.page.locator(".enroll-unused")).toHaveCount(0);
+        await f.create.click();
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toBeVisible();
+        expect(f.state.posts).toBe(2);
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "on a host without a service manager the timeline says the agent checked in once and how to start it",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.createCommand();
+        f.state.events = [
+          event({
+            outcome: "success",
+            reason_code: null,
+            device_id: deviceId,
+            created_at: iso(900),
+          }),
+        ];
+        f.state.devices = [
+          device({ last_seen: iso(2000), service_manager: "none" }),
+        ];
+        const watch = watchRegion(f.page);
+        await expect(watch).toContainText(
+          "edge-01 checked in once, but nothing keeps its agent running.",
+        );
+        await expect(watch).toContainText(
+          "Start it with sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent, or use a host with systemd.",
+        );
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toHaveCount(0);
+        await expect(
+          f.page.getByRole("heading", { name: "Start edge-01's agent" }),
+        ).toBeVisible();
+        await expect(
+          f.page.getByLabel("Run command", { exact: true }),
+        ).toHaveText(
+          "sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent",
+        );
+        // The token did its job: it enrolled the device.
+        await expect.poll(() => f.stored()).toEqual([]);
+        // Started under the operator's supervisor: a later check-in.
+        f.state.devices = [
+          device({ last_seen: iso(62000), service_manager: "none" }),
+        ];
+        await expect(
+          f.page.getByRole("heading", { name: "edge-01 is connected" }),
+        ).toBeVisible({ timeout: 15000 });
+        await expect(watch).toContainText("Checked in again");
+        await expect(watch).not.toContainText("nothing keeps its agent");
+      } finally {
+        await f.context.close();
+      }
+    },
+  );
   await check(
     "the page stays accessible and inside the viewport at desktop and phone widths in both themes",
     async () => {
@@ -887,6 +1279,131 @@ try {
       }
     },
   );
+  /** Viewport width, Axe scan and a full-page screenshot of one state. */
+  const snapshot = async (f, width, theme, name) => {
+    const measured = await f.page.evaluate(() => ({
+      width: innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    geometry.push({ width, theme, state: name, ...measured });
+    expect(measured.scrollWidth).toBeLessThanOrEqual(width);
+    const audit = await new AxeBuilder({ page: f.page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    accessibility.push({
+      width,
+      theme,
+      state: name,
+      violations: audit.violations.map(({ id, impact, nodes }) => ({
+        id,
+        impact,
+        nodes: nodes.map(({ target }) => target),
+      })),
+    });
+    expect(audit.violations).toEqual([]);
+    const filename = `add-device-${name}-${width === 390 ? "phone" : "desktop"}-${theme}.png`;
+    await f.page.screenshot({
+      path: resolve(output, filename),
+      fullPage: true,
+      animations: "disabled",
+    });
+    screenshots.push(relative(repository, resolve(output, filename)));
+  };
+  await check(
+    "returning, start-over and service-less states stay accessible and inside the viewport",
+    async () => {
+      const done = "1d6c1c55-8a53-4c4b-9f47-4a1c3a5d0e01",
+        unused = "1d6c1c55-8a53-4c4b-9f47-4a1c3a5d0e02",
+        lost = "1d6c1c55-8a53-4c4b-9f47-4a1c3a5d0e03",
+        doneToken = "2e7d2d66-9b64-4d5d-8a58-5b2d4b6e1f01",
+        unusedToken = "2e7d2d66-9b64-4d5d-8a58-5b2d4b6e1f02";
+      const request = (id, name) => ({
+        name,
+        expires_hours: 1,
+        max_uses: 1,
+        name_prefix: null,
+        request_id: id,
+      });
+      for (const width of [1280, 390]) {
+        for (const theme of ["light", "dark"]) {
+          // Back after three commands: one enrolled r16-full, one wasn't
+          // used, and one creation's response never arrived.
+          let f = await fixture({
+            width,
+            theme,
+            saved: [
+              savedRequest(done, {
+                token_id: doneToken,
+                confirmed_at: iso(-110000),
+              }),
+              savedRequest(unused, {
+                request: request(unused, "r16-web install command"),
+                token_id: unusedToken,
+                confirmed_at: iso(-100000),
+              }),
+              savedRequest(lost, {
+                recorded_at: iso(-30000),
+                request: request(lost, "r16-db install command"),
+              }),
+            ],
+            tokens: [
+              usedToken(doneToken, "r16-full install command", iso(-60000)),
+              {
+                ...usedToken(unusedToken, "r16-web install command", null),
+                uses: 0,
+                device_count: 0,
+                devices: [],
+              },
+            ],
+          });
+          try {
+            await f.chooseMode();
+            await expect(watchRegion(f.page)).toContainText(
+              "r16-full install command enrolled r16-full",
+            );
+            await expect(f.page.locator(".enroll-unused")).toBeVisible();
+            await expect(requestCard(f.page)).toContainText(
+              "We couldn't confirm whether a token was created",
+            );
+            await snapshot(f, width, theme, "returned");
+          } finally {
+            await f.context.close();
+          }
+          f = await fixture({ width, theme });
+          try {
+            await f.createCommand();
+            await f.page
+              .getByRole("button", { name: "Start over", exact: true })
+              .click();
+            await expect(
+              f.page.getByRole("dialog", { name: "Start over?" }),
+            ).toBeVisible();
+            await snapshot(f, width, theme, "start-over");
+            await f.page
+              .getByRole("button", { name: "Keep this command", exact: true })
+              .click();
+            f.state.events = [
+              event({
+                outcome: "success",
+                reason_code: null,
+                device_id: deviceId,
+                created_at: iso(900),
+              }),
+            ];
+            f.state.devices = [
+              device({ last_seen: iso(2000), service_manager: "none" }),
+            ];
+            await expect(
+              f.page.getByRole("heading", { name: "Start edge-01's agent" }),
+            ).toBeVisible();
+            await snapshot(f, width, theme, "service-less");
+          } finally {
+            await f.context.close();
+          }
+        }
+      }
+    },
+  );
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
 } catch (error) {
@@ -901,6 +1418,7 @@ try {
     "dashboard/src/EnrollmentTokenFlow.tsx",
     "dashboard/src/enrollmentCommands.ts",
     "dashboard/src/enrollmentActivity.ts",
+    "dashboard/src/enrollmentTokenRequests.ts",
     "dashboard/tests/enrollment-browser.mjs",
   ])
     source_sha256[path] = createHash("sha256")

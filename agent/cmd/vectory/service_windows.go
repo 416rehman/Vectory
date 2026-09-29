@@ -21,7 +21,7 @@ func (h handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status c
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- agent.Run(ctx, h.dir, false, h.report) }()
+	go func() { done <- agent.RunWindowsService(ctx, h.dir, h.report) }()
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	for {
 		select {

@@ -20,7 +20,11 @@ service and waits for the first check-in. Nothing on the host changes until
 every check has passed and you've entered the token. Safe to run again: it
 resumes where it stopped, and restarts a running service on this build.
 Restricted mode is the default; full mode only when you pass --mode full.
-Ctrl-C during the wait for the check-in leaves the service running (exit 130).`,
+Ctrl-C during the wait for the check-in leaves the service running (exit 130).
+Without a service manager (a container, WSL, Alpine's OpenRC), setup checks
+in once and exits 3, because nothing keeps the agent running: run it under
+your own supervisor with the command setup prints, and pass --service none
+to say you will.`,
 	examples: []string{
 		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh",
 		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
@@ -143,24 +147,40 @@ func defineSetup(c *cli) func() int {
 		if !human {
 			c.output(result)
 		}
-		switch {
-		case err != nil && ctx.Err() != nil:
-			return exitInterrupted
-		case err != nil:
-			return exitFailed
-		case !human:
-			return exitOK
+		code := setupExitCode(result, err, ctx.Err() != nil)
+		if err != nil || !human {
+			return code
+		}
+		connected := "Connected"
+		if result.NeedsAttention {
+			// The device exists, but its agent isn't running.
+			connected = "Device"
 		}
 		if result.DeviceURL != "" {
-			fmt.Fprintf(c.stdout, "Connected: %s\n", result.DeviceURL)
+			fmt.Fprintf(c.stdout, "%s: %s\n", connected, result.DeviceURL)
 		} else if result.Device != nil && !result.DryRun {
-			fmt.Fprintf(c.stdout, "Connected: %s is in Devices in the dashboard.\n", result.Device.Name)
+			fmt.Fprintf(c.stdout, "%s: %s is in Devices in the dashboard.\n", connected, result.Device.Name)
 		}
 		if result.Next != "" {
 			fmt.Fprintf(c.stdout, "Next: %s\n", result.Next)
 		}
-		return exitOK
+		return code
 	}
+}
+
+// setupExitCode is 0 when setup finished and something keeps the agent
+// running, 3 when it finished but nothing does (no service manager, and
+// --service none wasn't passed), 130 when interrupted and 1 when it failed.
+func setupExitCode(result agent.SetupResult, err error, interrupted bool) int {
+	switch {
+	case err != nil && interrupted:
+		return exitInterrupted
+	case err != nil:
+		return exitFailed
+	case result.NeedsAttention:
+		return exitAttention
+	}
+	return exitOK
 }
 
 var stepMarks = map[string]string{"ok": "[ok]", "info": "[i] ", "warn": "[!!]", "fail": "[!!]", "plan": "[..]"}

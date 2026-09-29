@@ -3,12 +3,16 @@ import {
   completeSeries,
   checklist,
   countLabel,
+  deliveryUnmeasured,
   fleetTelemetry,
   formatRate,
+  monitoringTarget,
   niceCeiling,
   healthBucket,
   healthCounts,
+  quietSummary,
   rolloutProgress,
+  unmanagedDetail,
 } from "./overviewModel";
 
 const now = Date.parse("2026-09-29T03:00:00.000Z");
@@ -285,5 +289,66 @@ describe("fleet series", () => {
       { at: "y", devices: 1 },
     ];
     expect(completeSeries(bad, at(26))).toEqual(bad);
+  });
+});
+
+describe("delivery Vectory can and can't measure", () => {
+  const orders = { configuration_id: "p1", configuration_name: "Orders" };
+  const web = { configuration_id: "p2", configuration_name: "Web" };
+  const fresh = { sampled_at: at(30) };
+  const stale = { sampled_at: at(600) };
+  it("counts applied devices without a fresh metrics sample", () => {
+    const devices = [
+      { status: "verified", desired_version: orders, telemetry: fresh },
+      { status: "verified", desired_version: orders, telemetry: stale },
+      { status: "verified", desired_version: web },
+      { status: "failed", desired_version: web },
+    ];
+    expect(deliveryUnmeasured(devices, now)).toBe(2);
+    expect(quietSummary(2)).toBe("Nothing is failing that Vectory can measure");
+    expect(quietSummary(0)).toBe("Nothing is failing");
+    expect(deliveryUnmeasured([devices[0]], now)).toBe(0);
+  });
+  it("offers monitoring for the pipeline most devices without metrics run", () => {
+    expect(
+      monitoringTarget(
+        [
+          { status: "verified", desired_version: orders, telemetry: fresh },
+          { status: "verified", desired_version: web },
+          { status: "failed", desired_version: web },
+          { status: "verified", desired_version: orders },
+          { status: "revoked", desired_version: orders },
+        ],
+        now,
+      ),
+    ).toEqual({ id: "p2", name: "Web", count: 2 });
+    expect(monitoringTarget([{ status: "unmanaged" }], now)).toBeNull();
+  });
+  it("says what runs on devices without a pipeline", () => {
+    const fresh = { status: "unmanaged" };
+    const adopted = {
+      status: "unmanaged",
+      actual_sha256: "a".repeat(64),
+      vector_running: true,
+    };
+    expect(unmanagedDetail([fresh])).toBe(
+      "Vector starts on it when you deploy a pipeline.",
+    );
+    expect(unmanagedDetail([fresh, fresh])).toBe(
+      "Vector starts on them when you deploy a pipeline.",
+    );
+    expect(unmanagedDetail([adopted])).toBe(
+      "A local configuration adopted at setup keeps running until you deploy one.",
+    );
+    expect(unmanagedDetail([adopted, fresh, fresh])).toBe(
+      "1 runs a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.",
+    );
+    // Stopped, or on a managed version: not an adopted workload that runs.
+    expect(
+      unmanagedDetail([
+        { ...adopted, vector_running: false },
+        { status: "verified", desired_version_id: "v1" },
+      ]),
+    ).toBe("Vector starts on it when you deploy a pipeline.");
   });
 });

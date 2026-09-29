@@ -869,6 +869,33 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         "{dry:?}"
     );
     assert!(dry.contains(&"--dry-run"), "{dry:?}");
+    // The dry run checks, as the real run would, that the directory can be
+    // created there, and changes nothing: /proc refuses even root, whose
+    // `test -w` would pass.
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::remove_file(root.join("agent-args")).unwrap();
+        let nope = Path::new("/proc/vectory-dry-run-nope/bin");
+        let output = run_with(&d.mirror_linux, nope, &["--dry-run"]);
+        assert!(!output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("[!!] Agent        Can't write to /proc/vectory-dry-run-nope/bin.")
+                && stderr.contains("choose a directory with --install-dir"),
+            "{stderr}"
+        );
+        assert!(
+            !root.join("agent-args").exists(),
+            "setup ran after a failed check"
+        );
+        let writable = root.join("dry-run-probe").join("bin");
+        let output = run_with(&d.mirror_linux, &writable, &["--dry-run"]);
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            !root.join("dry-run-probe").exists(),
+            "the dry run left its probe behind"
+        );
+    }
     // Running it again verifies the installed agent instead of downloading.
     std::fs::remove_file(root.join("curl-url")).unwrap();
     let output = run(b"unused", &installed);

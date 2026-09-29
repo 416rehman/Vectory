@@ -100,20 +100,31 @@ func capabilityDiagnostic(reason string) ConfigurationDiagnostic {
 	return d
 }
 
+// firstVersionFailed is the next step when a device's first version failed
+// to start: nothing ran before it, so nothing needs recovering.
+const firstVersionFailed = "Vector isn't running: this was the device's first version, so there is nothing earlier to go back to. Fix the problem above, then deploy a corrected version or choose Retry."
+
 func applyNextAction(state State) string {
 	if state.Error == nil {
 		return "Compare the cached apply state and last heartbeat with the dashboard. This local report does not prove current process liveness or server connectivity."
 	}
+	// Only a device that verified a configuration has one that keeps running.
+	keeps := " Vector keeps running the last working configuration."
+	if state.LastGoodSHA256 == "" {
+		keeps = " Vector isn't running yet: it starts with the first version that applies."
+	}
 	switch state.Error.Code {
 	case "CAPABILITY_DENIED":
-		return "Allow what the problem names on this host, or change the pipeline and deploy again. Vector keeps running the last working configuration."
+		return "Allow what the problem names on this host, or change the pipeline and deploy again." + keeps
 	case "VALIDATION_FAILED":
-		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `vectory logs` shows Vector's full output. Vector keeps running the last working configuration."
+		return "Fix what the problem names, then deploy again or choose Retry in the dashboard. `vectory logs` shows Vector's full output." + keeps
 	case "SECRET_RESOLUTION_FAILED":
 		return "Check the host's secret bindings and the files' permissions for the service account. Never share the rendered managed configuration."
 	case "APPLY_ROLLED_BACK":
 		return "The attempted version did not become the active version; the last verified configuration was restored. Check host resources and destination health before requesting Retry or deploying a corrected version."
-	case "ROLLBACK_FAILED", "ROLLBACK_UNAVAILABLE", "RECOVERY_INVALID":
+	case "ROLLBACK_UNAVAILABLE":
+		return firstVersionFailed
+	case "ROLLBACK_FAILED", "RECOVERY_INVALID":
 		return "Recovery needs host-operator intervention. Preserve the private state directory and journal; inspect the original failure and last-good availability before restarting. Do not delete identity or generation counters."
 	case "WRITE_FAILED", "PATH_UNSAFE":
 		return "Check managed/state directory ownership, free space, permissions and links under the service account. Keep the private recovery files intact."

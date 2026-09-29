@@ -68,7 +68,7 @@ const failureReasons: Record<string, string> = {
   ROLLBACK_FAILED:
     "The update failed and the previous configuration could not be restored. Inspect the host.",
   ROLLBACK_UNAVAILABLE:
-    "The update failed and no verified configuration was available to restore. Inspect the host.",
+    "Vector stopped after this first version failed to start, and there is no earlier version to go back to, so nothing is running.",
 };
 
 /** A general sentence, then the device's own leading finding and its fix. */

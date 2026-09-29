@@ -838,6 +838,20 @@ vectory_install() {
 		if [ -n "${3:-}" ]; then printf '%17s %s\n' '' "$3" >&2; fi
 		exit 1
 	}
+	# can_install DIR: a real run creates DIR (mkdir -p) and writes the agent
+	# there. A dry run changes nothing, so it tries that with an empty probe
+	# directory, removed at once, in DIR's nearest existing ancestor: root
+	# passes `-w` even where nothing can be created (/proc), so only trying
+	# tells.
+	can_install() {
+		probe_dir=$1
+		while [ ! -e "$probe_dir" ] && [ ! -L "$probe_dir" ]; do
+			probe_dir=$(dirname "$probe_dir")
+		done
+		[ -d "$probe_dir" ] || return 1
+		probe=$(mktemp -d "$probe_dir/.vectory-dry-run.XXXXXX" 2>/dev/null) || return 1
+		rmdir "$probe"
+	}
 
 	count=$#
 	while [ "$count" -gt 0 ]; do
@@ -938,6 +952,7 @@ vectory_install() {
 		[ "$actual" = "$sha256" ] || fail Agent "The downloaded agent doesn't match its SHA-256 (expected $sha256, got $actual)." "Nothing was installed. Copy the command again from Add device; if this repeats, something is altering the download."
 		chmod 0755 "$tmp/vectory"
 		if [ -n "$dry_run" ]; then
+			can_install "$install_dir" || fail Agent "Can't write to $install_dir." "Run the installer with sudo, or choose a directory with --install-dir."
 			step '[..]' Agent "$version for $os/$arch would be installed at $target (SHA-256 $short... verified)"
 			if [ -n "$dashboard" ]; then set -- --dashboard-url "$dashboard" ${1+"$@"}; fi
 			if [ -n "$ca_sha256" ]; then set -- --ca-sha256 "$ca_sha256" ${1+"$@"}; fi

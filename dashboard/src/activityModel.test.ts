@@ -41,6 +41,35 @@ describe("device name lists", () => {
 });
 
 describe("activity sentences", () => {
+  it("never reads a refused enrollment as an item that enrolled", () => {
+    const refused = item({
+      action: "device.enroll",
+      actor_kind: "device",
+      target_kind: "device",
+      target_id: null,
+      target_name: null,
+      target_exists: false,
+      outcome: "failure",
+    });
+    expect(sentence(describeActivity(refused))).toBe("Enrollment refused");
+    expect(
+      sentence(describeActivity({ ...refused, target_name: "r16-neg-again" })),
+    ).toBe("Enrollment refused: r16-neg-again");
+    expect(links(describeActivity(refused))).toEqual([]);
+    expect(activityTone(refused)).toBe("danger");
+    expect(
+      sentence(
+        describeActivity(
+          item({
+            action: "device.enroll",
+            target_kind: "device",
+            target_name: "edge-01",
+          }),
+        ),
+      ),
+    ).toBe("edge-01 enrolled");
+  });
+
   it("names the pipeline, version and device count of a deployment", () => {
     const parts = describeActivity(
       item({

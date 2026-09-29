@@ -5,7 +5,85 @@ import {
   describeNeeds,
   fullModeRequirements,
   hostApprovals,
+  loopbackListener,
+  monitoringExporter,
 } from "./hostRequirements";
+import { pipelineTemplate } from "./pipelineTemplates";
+
+describe("the monitoring exporter restricted mode runs as is", () => {
+  const monitored = {
+    sources: {
+      demo: { type: "demo_logs", format: "json" },
+      vectory_internal_metrics: { type: "internal_metrics" },
+    },
+    sinks: {
+      out: {
+        type: "console",
+        inputs: ["demo"],
+        encoding: { codec: "json" },
+        target: "stderr",
+      },
+      vectory_metrics_exporter: {
+        type: "prometheus_exporter",
+        inputs: ["vectory_internal_metrics"],
+        address: "127.0.0.1:9598",
+      },
+    },
+  };
+  const exporter = monitored.sinks.vectory_metrics_exporter;
+  const withExporter = (patch: object, id = "vectory_metrics_exporter") => ({
+    ...monitored,
+    sinks: { ...monitored.sinks, [id]: { ...exporter, ...patch } },
+  });
+  it("needs no listener allowance, like the agent decides", () => {
+    expect(monitoringExporter(monitored)).toBe("vectory_metrics_exporter");
+    expect(hostApprovals(monitored)).toEqual({
+      destinations: [],
+      listeners: [],
+      fileRoots: [],
+    });
+    expect(describeNeeds(monitored, catalog).kind).toBe("none");
+    expect(
+      hostApprovals(withExporter({ address: "[::1]:9598" })).listeners,
+    ).toEqual([]);
+  });
+  it("still asks for anything else that listens", () => {
+    for (const [patch, listener] of [
+      [{ address: "0.0.0.0:9598" }, "0.0.0.0:9598"],
+      [{ address: "localhost:9598" }, "localhost:9598"],
+      [{ address: "10.0.0.5:9598" }, "10.0.0.5:9598"],
+      [{ inputs: ["vectory_internal_metrics", "demo"] }, "127.0.0.1:9598"],
+      [{ inputs: ["demo"] }, "127.0.0.1:9598"],
+    ] as const)
+      expect(hostApprovals(withExporter(patch)).listeners).toEqual([listener]);
+    // Only one exporter is exempt; a second one needs its allowance.
+    expect(
+      hostApprovals(withExporter({ address: "127.0.0.1:9599" }, "zz_second"))
+        .listeners,
+    ).toEqual(["127.0.0.1:9599"]);
+  });
+  it("reads loopback literals the way the agent does", () => {
+    for (const address of ["127.0.0.1:9598", "127.1.2.3:1", "[::1]:65535"])
+      expect(loopbackListener(address)).toBe(true);
+    for (const address of [
+      "localhost:9598",
+      "127.0.0.1",
+      "127.0.0.1:0",
+      "127.0.0.1:65536",
+      "0.0.0.0:9598",
+      "[::]:9598",
+      "::1:9598",
+      "127.0.0.01:9598",
+      "1270.0.0.1:9598",
+    ])
+      expect(loopbackListener(address)).toBe(false);
+  });
+  it("is exactly what the synthetic example ships", () => {
+    const example = pipelineTemplate("synthetic-demo")!.config;
+    expect(monitoringExporter(example)).not.toBeNull();
+    expect(hostApprovals(example).listeners).toEqual([]);
+  });
+});
 
 describe("restricted-host approvals", () => {
   it("finds destinations, listeners and file roots the way the agent checks them", () => {
