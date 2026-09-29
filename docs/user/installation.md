@@ -98,6 +98,8 @@ The installer and `vectory setup` then:
 
 The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, and the checksums.
 
+If you type a device name on **Add device**, the command's token enrolls only that name: a copied command can't enroll a host under another one. The token list shows it as **Only** followed by the name. A token pasted short or mangled is refused on the host before anything is sent.
+
 ### Keep tokens out of shell history
 
 | Method | Use it for |
@@ -192,7 +194,7 @@ On a manual install, pass the same options to `vectory setup` or `vectory enroll
 
 A pinned fingerprint is checked before anything is sent. The agent accepts the server only if its chain contains a certificate with exactly that fingerprint, then verifies the host name and validity with that certificate as the only trusted root. It saves the certificate, so later connections are ordinary verified TLS. It never trusts a certificate on first use and never falls back to an unverified connection.
 
-Add device shows the whole fingerprint, in rows of eight pairs, with **Copy**. If setup finds a different certificate, it prints both fingerprints in full and marks the first byte that differs, so you can compare them with the page.
+Add device shows the whole fingerprint, in rows of eight pairs, with **Copy**. If setup finds a different certificate, it prints both fingerprints in full and marks the first byte that differs, so you can compare them with the page. Without a pin, if the host doesn't trust the server's CA, setup prints the fingerprint of the certificate it was sent in the same rows of eight pairs, to compare; use the command from **Add device** rather than pinning what the host was sent.
 
 For `--ca-file`:
 
@@ -222,7 +224,7 @@ A new restricted installation can't read files, reach destinations or open liste
 - Allowances don't create folders, grant operating-system permissions or turn on full mode.
 - Never allow the agent's own state directory as a file root.
 
-**Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To change them later, see [Change local settings](agents.md#change-local-settings).
+**Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To add one later and keep the rest, run `sudo vectory allow` with the agent stopped, for example `sudo vectory allow --network logs.example.net:443`. See [Update restricted allowances](agents.md#update-restricted-allowances).
 
 > [!NOTE]
 > Allowances limit what a pipeline can ask Vector to do. They are not an operating-system sandbox, so keep using host permissions and network controls where you need stronger isolation.

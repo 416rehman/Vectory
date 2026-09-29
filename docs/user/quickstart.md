@@ -133,7 +133,7 @@ node scripts/demo.mjs --stop   # if you started the demo fleet
 scripts/preview.sh stop
 ```
 
-To remove the agent and Vector from this machine, stop and unregister the agent's service, delete its state, then remove the files and account setup created:
+To remove the agent and Vector from this machine, first revoke the device in the dashboard: open it and choose **Revoke device identity…** under **Device access** (the host can't revoke its own identity). Then stop and unregister the agent's service, delete its state, and remove the files and account setup created:
 
 ```sh
 sudo vectory service-stop
