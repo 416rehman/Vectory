@@ -682,19 +682,37 @@ pub fn repair_candidate(
     changed
 }
 
+/// Vector's `*` and `?` input wildcards. Iterative with one backtrack point,
+/// so the cost stays O(pattern × text) however many stars a draft contains.
 fn glob_match(pattern: &str, text: &str) -> bool {
-    fn matches(pattern: &[u8], text: &[u8]) -> bool {
-        match (pattern.first(), text.first()) {
-            (None, None) => true,
-            (Some(b'*'), _) => {
-                matches(&pattern[1..], text) || (!text.is_empty() && matches(pattern, &text[1..]))
+    let (pattern, text) = (pattern.as_bytes(), text.as_bytes());
+    if pattern.len() > 256 {
+        return false;
+    }
+    let (mut p, mut t) = (0, 0);
+    // The last star seen and the text position it currently absorbs up to.
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
             }
-            (Some(b'?'), Some(_)) => matches(&pattern[1..], &text[1..]),
-            (Some(p), Some(t)) if p == t => matches(&pattern[1..], &text[1..]),
-            _ => false,
+            Some(&c) if c == b'?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    star = Some((star_p, star_t + 1));
+                    p = star_p + 1;
+                    t = star_t + 1;
+                }
+                None => return false,
+            },
         }
     }
-    pattern.len() <= 256 && matches(pattern.as_bytes(), text.as_bytes())
+    pattern[p..].iter().all(|&c| c == b'*')
 }
 
 /// True when the original draft connects `id` (or its named output) to a
@@ -1494,8 +1512,7 @@ pub async fn synthetic_vrl(
     )
     .is_ok()
     {
-        let _guard = s.writer.lock().await;
-        let mut tx = s.pool.begin().await?;
+        let (_guard, mut tx) = crate::db::write_tx(&s).await?;
         crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
         crate::db::audit(
             &mut tx,
@@ -1654,8 +1671,7 @@ pub async fn pipeline_tests(
     }
     let mut result = check_result(diagnostics, tests_run, true, reasons, placeholders);
     result["vector_validated"] = json!(false);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
     crate::db::audit(
         &mut tx,
@@ -2421,6 +2437,29 @@ mod tests {
         assert!(!consumed(&config, "r", Some("_unmatched")));
         assert!(consumed(&config, "app_web", None));
         assert!(!consumed(&config, "web", None));
+    }
+
+    #[test]
+    fn wildcard_matching_is_linear_in_the_number_of_stars() {
+        assert!(glob_match("*", ""));
+        assert!(glob_match("app_*", "app_web"));
+        assert!(glob_match("a?c", "abc"));
+        assert!(!glob_match("a?c", "ac"));
+        assert!(glob_match("*.a", "r.a"));
+        assert!(!glob_match("app_*", "web"));
+        assert!(glob_match("*a*b*", "xxaxxbxx"));
+        assert!(!glob_match("*a*b", "xxaxxbxx"));
+        assert!(glob_match("a*", "a"));
+        assert!(!glob_match(&"*".repeat(257), "x"));
+        let bomb = format!("{}b", "*a".repeat(24));
+        let text = "a".repeat(60);
+        let started = std::time::Instant::now();
+        assert!(!glob_match(&bomb, &text));
+        assert!(glob_match(&bomb, &format!("{text}b")));
+        // The validator's no_consumers filter reaches the matcher through consumed().
+        let config = json!({"sources":{"aaaa":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["src", bomb]}}});
+        assert!(!consumed(&config, &text, None));
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
     }
 
     #[test]
