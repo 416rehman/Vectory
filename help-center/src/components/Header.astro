@@ -1,0 +1,9 @@
+---
+import Header from '@astrojs/starlight/components/Header.astro';
+import AppLinks from './AppLinks.astro';
+---
+<div class="help-header">
+  <Header><slot /></Header>
+  <a class="help-open-app" href="/#/overview" aria-label="Open Vectory"><span class="help-open-desktop">Open Vectory</span><span class="help-open-mobile">App</span> <span aria-hidden="true">↗</span></a>
+</div>
+<AppLinks />

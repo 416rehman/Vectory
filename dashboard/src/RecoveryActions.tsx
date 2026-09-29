@@ -1,272 +1,414 @@
-import { useState } from "react";
-import { Download, KeyRound, RefreshCw, RotateCcw, Unplug } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import {
+  APIError,
+  api,
   can,
-  download,
-  post,
+  getSessionEpoch,
+  withRequestDeadline,
   type Deployment,
   type Device,
   type User,
 } from "./api";
-import { Button, ErrorBox, Modal } from "./ui";
+import { Button, ErrorBox, RefreshButton } from "./ui";
+import AssignmentRemoval from "./AssignmentRemoval";
+import DeviceRecoveryAuthorization from "./DeviceRecoveryAuthorization";
+import ScheduledAssignmentRefresh from "./ScheduledAssignmentRefresh";
+import "./control.css";
 
-export function DeviceRecoveryActions({
-  device,
-  user,
-  onDone,
-}: {
+type DeviceRecoveryProps = {
   device: Device;
   user: User;
   onDone: (message: string) => void;
-}) {
-  const [open, setOpen] = useState(false),
-    [secret, setSecret] = useState(""),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  async function recover() {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await post<{ token: string }>(
-        `/devices/${device.id}/recover`,
-      );
-      setSecret(result.token);
-      onDone("Recovery authorized. The one-use token is shown once.");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
+  onRefresh: () => Promise<void>;
+};
+function eligibleState(snapshot: Device) {
+  return [
+    "failed",
+    "rolled_back",
+    "verification_unknown",
+    "incompatible",
+    "drift",
+    "drift_detected",
+  ].includes(snapshot.apply_state);
+}
+export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
+  const { device, user, onDone } = props;
+  // Retire each retry review permanently when its assignment or eligibility
+  // changes. Identity recovery keeps its independent review and token lifetime.
+  const review = JSON.stringify([
+    user.id,
+    can(user, "operate"),
+    device.id,
+    device.desired_version_id,
+    device.desired_generation,
+    device.status === "revoked",
+    !!device.local_paused,
+    !!device.sync_paused,
+    eligibleState(device),
+    device.retry_preconditions === true,
+  ]);
+  return (
+    <>
+      <DeviceApplicationRetry key={review} {...props} />
+      <DeviceRecoveryAuthorization
+        key={`${user.id}:${user.role}:${device.id}:${device.name}`}
+        device={device}
+        user={user}
+        onDone={onDone}
+      />
+    </>
+  );
+}
+type RetryRequest = { controller: AbortController; epoch: number };
+function DeviceApplicationRetry({
+  device,
+  user,
+  onDone,
+  onRefresh,
+}: DeviceRecoveryProps) {
+  const [busy, setBusy] = useState(false);
+  const active = useRef<RetryRequest | null>(null),
+    mounted = useRef(false);
+  const [retryState, setRetryState] = useState<{
+    blocked: boolean;
+    message: string;
+    error: string;
+  } | null>(null);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    const ended = () => {
+      active.current?.controller.abort();
+      active.current = null;
       setBusy(false);
+      setRetryState(null);
+    };
+    window.addEventListener("vectory:session-ended", ended);
+    return () => {
+      mounted.current = false;
+      active.current?.controller.abort();
+      active.current = null;
+      window.removeEventListener("vectory:session-ended", ended);
+    };
+  }, []);
+  const current = (request: RetryRequest) =>
+    mounted.current &&
+    active.current === request &&
+    request.epoch === getSessionEpoch() &&
+    can(user, "operate");
+  function claim() {
+    if (!mounted.current || active.current || !can(user, "operate"))
+      return null;
+    const request = {
+      controller: new AbortController(),
+      epoch: getSessionEpoch(),
+    };
+    active.current = request;
+    setBusy(true);
+    return request;
+  }
+  function release(request: RetryRequest) {
+    if (active.current !== request) return;
+    active.current = null;
+    if (mounted.current) setBusy(false);
+  }
+  const paused = device.local_paused || device.sync_paused;
+  function refreshPage() {
+    // The parent refresh has its own lifecycle; it must not hold this action latch.
+    void onRefresh().catch(() => {});
+  }
+  async function checkCurrentStatus(request: RetryRequest) {
+    try {
+      const fresh = await withRequestDeadline(
+        (signal) => api<Device>(`/devices/${device.id}`, { signal }),
+        30000,
+        request.controller.signal,
+      );
+      if (!current(request)) return;
+      const sameAssignment =
+        fresh.id === device.id &&
+        fresh.desired_version_id === device.desired_version_id &&
+        fresh.desired_generation === device.desired_generation;
+      const available =
+        sameAssignment &&
+        fresh.status !== "revoked" &&
+        eligibleState(fresh) &&
+        fresh.retry_preconditions === true &&
+        !fresh.local_paused &&
+        !fresh.sync_paused;
+      setRetryState((previous) =>
+        previous
+          ? {
+              ...previous,
+              blocked: !available,
+              message: available
+                ? "Status refreshed. The reviewed assignment is still eligible for retry. You can explicitly retry this assignment."
+                : !sameAssignment
+                  ? "Status refreshed. The assignment has changed. Review the current assignment before requesting a retry."
+                  : "Status refreshed. This device is not currently eligible for retry. Review its reported state and any pause.",
+              error: "",
+            }
+          : previous,
+      );
+    } catch {
+      if (current(request))
+        setRetryState((previous) =>
+          previous
+            ? {
+                ...previous,
+                blocked: true,
+                message:
+                  "Status could not be refreshed. No further retry was sent.",
+                error:
+                  "Current device status could not be refreshed. Check status before retrying.",
+              }
+            : previous,
+        );
+    } finally {
+      if (current(request)) refreshPage();
+    }
+  }
+  async function checkStatus() {
+    const request = claim();
+    if (!request) return;
+    try {
+      await checkCurrentStatus(request);
+    } finally {
+      release(request);
     }
   }
   async function retry() {
-    setBusy(true);
-    setError("");
+    if (
+      !canRetry ||
+      device.retry_preconditions !== true ||
+      paused ||
+      retryState?.blocked
+    )
+      return;
+    const request = claim();
+    if (!request) return;
+    const expected = {
+      expected_version_id: device.desired_version_id,
+      expected_generation: device.desired_generation,
+    };
+    setRetryState({ blocked: true, message: "", error: "" });
     try {
-      await post(`/devices/${device.id}/retry`);
-      onDone("A new desired generation was released for a bounded retry.");
+      const result = await withRequestDeadline(
+        (signal) =>
+          api<Device>(`/devices/${device.id}/retry`, {
+            method: "POST",
+            body: JSON.stringify(expected),
+            signal,
+          }),
+        30000,
+        request.controller.signal,
+      );
+      if (!current(request)) return;
+      if (
+        result.id !== device.id ||
+        result.desired_version_id !== expected.expected_version_id ||
+        result.desired_generation !== expected.expected_generation + 1
+      )
+        throw new APIError(
+          "CONTRACT_MISMATCH",
+          "The response did not confirm the reviewed retry.",
+          502,
+        );
+      setRetryState({
+        blocked: true,
+        message:
+          "Retry requested for the reviewed assignment. Device verification is still pending.",
+        error: "",
+      });
+      onDone(
+        "Retry requested for the reviewed assignment. Device verification is still pending.",
+      );
     } catch (e) {
-      setError((e as Error).message);
+      if (!current(request)) return;
+      const stale =
+        e instanceof APIError &&
+        [
+          "STALE_DEVICE_REVIEW",
+          "DEVICE_NOT_RETRYABLE",
+          "DEVICE_SYNC_PAUSED",
+        ].includes(e.code);
+      const rejected =
+        e instanceof APIError &&
+        e.serverRejection &&
+        e.status >= 400 &&
+        e.status < 500 &&
+        e.status !== 408;
+      if (stale || !rejected) {
+        setRetryState({
+          blocked: true,
+          message: stale
+            ? "The device or assignment changed. Review its refreshed status before retrying."
+            : "We could not confirm whether the retry was accepted. Checking current device status; no retry is sent automatically.",
+          error: "",
+        });
+        await checkCurrentStatus(request);
+      } else {
+        setRetryState({
+          blocked: false,
+          message: "",
+          error: (e as Error).message,
+        });
+      }
     } finally {
-      setBusy(false);
+      release(request);
     }
   }
+  const canRetry =
+    can(user, "operate") &&
+    device.desired_version_id &&
+    Number.isSafeInteger(device.desired_generation) &&
+    device.desired_generation > 0 &&
+    device.status !== "revoked" &&
+    eligibleState(device);
+  if (!can(user, "operate") || (!canRetry && !retryState)) return null;
   return (
     <>
-      <div className="action-row">
-        {can(user, "operate") && (
+      {canRetry && (
+        <div className="control-inline-actions">
           <Button
             variant="secondary"
             icon={RotateCcw}
             busy={busy}
-            disabled={!device.desired_version_id || device.status === "revoked"}
+            disabled={
+              !!paused ||
+              !!retryState?.blocked ||
+              device.retry_preconditions !== true
+            }
             onClick={retry}
           >
             Retry application
           </Button>
-        )}
-        {can(user, "admin") && (
-          <Button
-            variant="secondary"
-            icon={KeyRound}
-            onClick={() => {
-              setError("");
-              setOpen(true);
-            }}
-          >
-            Authorize device recovery
-          </Button>
-        )}
-      </div>
-      {error && !open && <ErrorBox message={error} />}
-      <Modal
-        open={open}
-        onClose={() => {
-          setOpen(false);
-          setSecret("");
-        }}
-        title={
-          secret
-            ? "Save this one-time recovery token"
-            : "Authorize device recovery"
-        }
-        description="For an expired or lost identity. The host operator must explicitly complete recovery."
-      >
-        <div className="modal-body">
-          {error && <ErrorBox message={error} />}
-          <p>
-            Recovery is restricted to <strong>{device.name}</strong> and expires
-            after one hour. Using the token revokes the old credential and
-            creates a new device UUID with no inherited groups or assignments.
+        </div>
+      )}
+      {canRetry && device.retry_preconditions !== true && (
+        <p className="control-muted">
+          Retry requires a newer server. You can still deploy a published
+          version after reviewing its targets.
+        </p>
+      )}
+      {canRetry && paused && (
+        <p className="control-muted">
+          {device.local_paused
+            ? "Resume local sync on this device before retrying. The dashboard cannot clear a host-owned pause."
+            : "Resume server sync before retrying. Retry does not change the pause policy."}
+        </p>
+      )}
+      {retryState?.message && (
+        <div className="control-section-space">
+          <p className="control-muted" role="status">
+            {retryState.message}
           </p>
-          {secret ? (
-            <>
-              <code className="block-code wrap">{secret}</code>
-              <Button
-                variant="secondary"
-                icon={Download}
-                onClick={() => download("vectory-recovery-token.txt", secret)}
-              >
-                Download token file
-              </Button>
-              <p className="muted section-space">
-                Use the local agent’s{" "}
-                <code>recover-enrollment --token-stdin</code> command, then
-                review and explicitly target the new device. Store the
-                downloaded file privately and delete it after use.
-              </p>
-            </>
-          ) : (
-            <p className="muted">
-              A regular enrollment token cannot take over an existing name. This
-              action creates a one-use recovery authorization and an audit
-              event.
-            </p>
-          )}
+          <RefreshButton busy={busy} onClick={checkStatus}>
+            Check status
+          </RefreshButton>
         </div>
-        <div className="modal-footer">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setOpen(false);
-              setSecret("");
-            }}
-          >
-            {secret ? "I’ve saved the token" : "Cancel"}
-          </Button>
-          {!secret && (
-            <Button busy={busy} icon={KeyRound} onClick={recover}>
-              Authorize recovery
-            </Button>
-          )}
-        </div>
-      </Modal>
+      )}
+      {retryState?.error && <ErrorBox message={retryState.error} />}
     </>
   );
 }
 
 export function AssignmentActions({
   deployment,
+  user,
   onDone,
+  onCommittingChange,
+  onReviewRemoval,
+  onReviewScheduled,
 }: {
-  deployment: Deployment;
-  onDone: (message: string) => void;
+  deployment: Pick<Deployment, "id" | "status">;
+  user: User;
+  onDone(message: string): void;
+  onCommittingChange?(busy: boolean): void;
+  onReviewRemoval?(): void;
+  onReviewScheduled?(): void;
 }) {
-  const [action, setAction] = useState<"refresh" | "unassign" | null>(null),
-    [preview, setPreview] = useState<any>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  async function review(name: "refresh" | "unassign") {
-    setAction(name);
-    setPreview(null);
-    setBusy(true);
-    setError("");
-    try {
-      setPreview(
-        await post(
-          `/deployments/${deployment.id}/${name === "refresh" ? "refresh-preview" : "unassign-preview"}`,
-        ),
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function commit() {
-    setBusy(true);
-    setError("");
-    try {
-      await post(
-        `/deployments/${deployment.id}/${action}`,
-        action === "refresh"
-          ? { expected_device_ids: preview.devices.map((d: Device) => d.id) }
-          : {},
-      );
-      setAction(null);
-      onDone(
-        action === "refresh"
-          ? "Schedule target snapshot refreshed."
-          : "Assignment removed. Last working local configuration is retained where no assignment remains.",
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const [removalOpen, setRemovalOpen] = useState(false);
+  const [scheduledOpen, setScheduledOpen] = useState(false);
+  const removalOpener = useRef<HTMLButtonElement | null>(null);
+  const scheduledOpener = useRef<HTMLButtonElement | null>(null);
+  if (!can(user, "operate")) return null;
   return (
     <>
-      <div className="action-row">
-        {deployment.status === "scheduled" ? (
-          <Button
-            variant="secondary"
-            icon={RefreshCw}
-            onClick={() => void review("refresh")}
-          >
-            Refresh scheduled targets
-          </Button>
-        ) : (
-          !["missed", "unassigned"].includes(deployment.status) && (
+      {deployment.status === "scheduled" && (
+        <details className="control-disclosure">
+          <summary>Update scheduled devices</summary>
+          <div className="control-disclosure-content">
+            <p className="control-muted">
+              Compare the saved device selection with current group membership
+              before the schedule activates.
+            </p>
             <Button
               variant="secondary"
-              icon={Unplug}
-              onClick={() => void review("unassign")}
+              onClick={(event) => {
+                if (onReviewScheduled) {
+                  onReviewScheduled();
+                  return;
+                }
+                scheduledOpener.current = event.currentTarget;
+                setScheduledOpen(true);
+              }}
             >
-              Remove assignment
+              Review scheduled devices
             </Button>
-          )
-        )}
-      </div>
-      <Modal
-        open={!!action}
-        onClose={() => setAction(null)}
-        title={
-          action === "refresh"
-            ? "Review refreshed schedule targets"
-            : "Review assignment removal"
-        }
-        description={
-          action === "refresh"
-            ? "Confirm a new concrete membership snapshot before activation. Membership is checked again at commit."
-            : "Re-resolve each affected device. Without another assignment, the device keeps its working Vector workload and becomes unmanaged."
-        }
-        wide
-      >
-        <div className="modal-body">
-          {error && <ErrorBox message={error} />}
-          <p>{preview?.devices?.length ?? 0} affected devices</p>
-          {preview?.warnings?.map((w: string) => (
-            <p className="muted" key={w}>
-              {w}
-            </p>
-          ))}
-          {preview?.conflicts?.map((c: any, i: number) => (
-            <ErrorBox
-              key={i}
-              message={typeof c === "string" ? c : JSON.stringify(c)}
-            />
-          ))}
-          <div className="preview-devices">
-            {preview?.devices?.map((d: Device) => (
-              <span key={d.id}>
-                {d.name} · generation {d.desired_generation}
-              </span>
-            ))}
           </div>
-        </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={() => setAction(null)}>
-            Keep current assignment
-          </Button>
-          <Button
-            busy={busy}
-            disabled={!preview || !!preview.conflicts?.length}
-            onClick={commit}
-          >
-            Confirm {action === "refresh" ? "new snapshot" : "removal"}
-          </Button>
-        </div>
-      </Modal>
+        </details>
+      )}
+      {!["scheduled", "missed", "unassigned"].includes(deployment.status) && (
+        <details className="control-disclosure">
+          <summary>Remove this assignment</summary>
+          <div className="control-disclosure-content">
+            <p className="control-muted">
+              Review what each device will use after this assignment is removed.
+              Removing a configuration assignment does not stop Vector.
+            </p>
+            <Button
+              variant="secondary"
+              onClick={(event) => {
+                if (onReviewRemoval) {
+                  onReviewRemoval();
+                  return;
+                }
+                removalOpener.current = event.currentTarget;
+                setRemovalOpen(true);
+              }}
+            >
+              Review assignment removal
+            </Button>
+          </div>
+        </details>
+      )}
+      {!onReviewRemoval && (
+        <AssignmentRemoval
+          key={`${user.id}:${deployment.id}`}
+          deploymentId={deployment.id}
+          actorId={user.id}
+          allowed={can(user, "operate")}
+          open={removalOpen}
+          onClose={() => setRemovalOpen(false)}
+          onDone={onDone}
+          onCommittingChange={onCommittingChange}
+          returnFocusRef={removalOpener}
+        />
+      )}
+      {!onReviewScheduled && (
+        <ScheduledAssignmentRefresh
+          key={`${user.id}:${deployment.id}`}
+          deploymentId={deployment.id}
+          actorId={user.id}
+          allowed={can(user, "operate")}
+          open={scheduledOpen}
+          onClose={() => setScheduledOpen(false)}
+          onDone={onDone}
+          onCommittingChange={onCommittingChange}
+          returnFocusRef={scheduledOpener}
+        />
+      )}
     </>
   );
 }

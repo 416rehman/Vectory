@@ -19,6 +19,15 @@ pub struct PeerCertificate(pub Option<String>);
 fn text<'a>(v: &'a Value, k: &str) -> &'a str {
     v[k].as_str().unwrap_or("")
 }
+fn configuration_mode(v: &Value) -> Result<&str> {
+    match v.get("configuration_mode") {
+        None => Ok("restricted"),
+        Some(Value::String(mode)) if mode == "restricted" || mode == "full" => Ok(mode),
+        _ => Err(ApiError::invalid(
+            "configuration_mode must be restricted or full",
+        )),
+    }
+}
 pub fn router(s: State) -> Router {
     Router::new()
         .route("/agent/v1/enroll", post(enroll))
@@ -80,6 +89,7 @@ pub async fn enroll(AppState(s): AppState<State>, Json(v): Json<Value>) -> Resul
     result
 }
 async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
+    let mode = configuration_mode(&v).map_err(|_| ApiError::enrollment())?;
     if v["protocol_version"] != 1 {
         return Err(ApiError::enrollment());
     }
@@ -171,18 +181,14 @@ async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
             .bind(existing)
             .execute(&mut *tx)
             .await?;
-        for mut group in db::records(&mut tx, "group").await? {
-            if let Some(members) = group["device_ids"].as_array_mut() {
-                members.retain(|d| d != existing);
-            }
-            db::update(&mut tx, "group", &group).await?;
-        }
+        crate::groups::remove_device(&mut tx, existing).await?;
+        crate::rollout::retire_persistent_targets(&mut tx, existing).await?;
     } else if record["recovery_device_id"].is_string() {
         return Err(ApiError::enrollment());
     }
     let id = db::id();
     let issued = s.keys.issue(&id, csr)?;
-    let device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
+    let device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"configuration_mode":mode,"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
     sqlx::query("INSERT INTO devices(id,name,data) VALUES(?,?,?)")
         .bind(&id)
         .bind(&name)
@@ -391,6 +397,7 @@ pub async fn heartbeat(
         30,
         std::time::Duration::from_secs(60),
     )?;
+    let mode = configuration_mode(&v)?;
     if v["protocol_version"] != 1 {
         return Err(ApiError::invalid("Unsupported protocol"));
     }
@@ -403,11 +410,11 @@ pub async fn heartbeat(
     }
     let reported = v["reported_generation"]
         .as_i64()
-        .filter(|n| *n >= 0)
+        .filter(|n| (0..=9_007_199_254_740_991).contains(n))
         .ok_or_else(|| ApiError::invalid("Invalid reported_generation"))?;
     let reported_policy = v["policy_generation"]
         .as_i64()
-        .filter(|n| *n >= 0)
+        .filter(|n| (0..=9_007_199_254_740_991).contains(n))
         .ok_or_else(|| ApiError::invalid("Invalid policy_generation"))?;
     let state = text(&v, "apply_state");
     if ![
@@ -442,7 +449,7 @@ pub async fn heartbeat(
     } else {
         v["secret_revision"]
             .as_i64()
-            .filter(|n| *n >= 0)
+            .filter(|n| (0..=9_007_199_254_740_991).contains(n))
             .ok_or_else(|| ApiError::invalid("Invalid secret_revision"))?
     };
     if !sha.is_empty()
@@ -457,6 +464,7 @@ pub async fn heartbeat(
         return Err(ApiError::invalid("Pause flags must be booleans"));
     }
     let sample = telemetry(&v["telemetry"])?;
+    let attempt = crate::configuration_attempt::parse(&v)?;
     let mut tx = s.pool.begin().await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)
@@ -464,7 +472,12 @@ pub async fn heartbeat(
         .await?;
     let generation: i64 = row.get("desired_generation");
     let policy_generation: i64 = row.get("policy_generation");
-    if reported > generation || reported_policy > policy_generation {
+    if reported > generation
+        || reported_policy > policy_generation
+        || attempt
+            .as_ref()
+            .is_some_and(|a| a["generation"].as_i64().unwrap() > generation)
+    {
         return Err(ApiError::conflict(
             "Server state predates device generations; authorized restore recovery is required",
         ));
@@ -472,17 +485,51 @@ pub async fn heartbeat(
     let policy = db::parse(row.get("policy"))?;
     let desired_version: Option<String> = row.get("desired_version_id");
     let mut uses_local_secrets = false;
-    let desired = if let Some(ref version) = desired_version {
-        let metadata = sqlx::query("SELECT json_extract(data,'$.id') AS version_id,json_extract(data,'$.sha256') AS sha256,json_extract(data,'$.size') AS size,json_extract(data,'$.uses_local_secrets') AS uses_local_secrets FROM records WHERE kind='version' AND id=?").bind(version).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
-        uses_local_secrets = metadata
-            .get::<Option<bool>, _>("uses_local_secrets")
-            .unwrap_or(false);
-        let sha256: String = metadata.get("sha256");
-        json!({"version_id":metadata.get::<String,_>("version_id"),"sha256":sha256,"size":metadata.get::<i64,_>("size"),"artifact_path":format!("/agent/v1/artifacts/{sha256}"),"vector_version":crate::validation::VECTOR_VERSION})
+    let desired = if let Some(ref version_id) = desired_version {
+        let version = db::record(&mut tx, "version", version_id).await?;
+        uses_local_secrets = version["uses_local_secrets"] == true;
+        let artifact = match crate::variables::current(&mut tx, &id, generation, version_id).await?
+        {
+            Some(snapshot) => snapshot,
+            None if version["variables"].as_array().is_none_or(Vec::is_empty) => {
+                crate::variables::render(&version, &Value::Null, &id)?
+            }
+            None => {
+                return Err(ApiError::conflict(
+                    "Target artifact is missing; reconcile this deployment before retrying",
+                ));
+            }
+        };
+        let sha256 = artifact.sha256;
+        json!({"version_id":version_id,"sha256":sha256,"size":artifact.size,"artifact_path":format!("/agent/v1/artifacts/{sha256}"),"vector_version":crate::validation::VECTOR_VERSION})
     } else {
         Value::Null
     };
     let mut device = db::parse(row.get("data"))?;
+    if !desired.is_null()
+        && device["desired_artifact_sha256"]
+            .as_str()
+            .is_some_and(|sha| sha != text(&desired, "sha256"))
+    {
+        return Err(ApiError::conflict(
+            "Current artifact identity changed without a new desired generation",
+        ));
+    }
+    crate::canary_gate::invalidate_unproven_device(&mut tx, &id).await?;
+    let old_mode = device["configuration_mode"]
+        .as_str()
+        .unwrap_or("restricted");
+    if old_mode != mode {
+        db::audit(
+            &mut tx,
+            &id,
+            "device.configuration_mode_reported",
+            &id,
+            mode,
+        )
+        .await?;
+    }
+    device["configuration_mode"] = json!(mode);
     let old_state = device["apply_state"].clone();
     let old_reported = device["reported_generation"].clone();
     let old_secret_revision = device["secret_revision"].as_i64().unwrap_or(0);
@@ -492,6 +539,55 @@ pub async fn heartbeat(
         ));
     }
     let old_actual = device["actual_sha256"].clone();
+    let verified_attempt = device["verified_configuration_attempt"].clone();
+    let mut current_attempt = attempt
+        .as_ref()
+        .filter(|a| {
+            crate::configuration_attempt::identity_matches(a, generation, &desired)
+                && (!uses_local_secrets
+                    || a["secret_revision"].as_i64().unwrap_or(0) == secret_revision)
+        })
+        .cloned();
+    let verified_claim = current_attempt
+        .as_ref()
+        .is_none_or(|a| a["state"] == "verified_applied");
+    let previous_attempt = &device["terminal_configuration_attempt"];
+    if let Some(a) = current_attempt.as_mut() {
+        let same = previous_attempt["generation"] == a["generation"]
+            && previous_attempt["version_id"] == a["version_id"]
+            && previous_attempt["sha256"] == a["sha256"]
+            && previous_attempt["secret_revision"].as_i64().unwrap_or(0)
+                == a["secret_revision"].as_i64().unwrap_or(0);
+        if same
+            && ["failed", "rolled_back", "verification_unknown"]
+                .contains(&text(previous_attempt, "state"))
+            && [
+                "desired",
+                "downloaded",
+                "validated",
+                "written",
+                "reload_requested",
+                "paused",
+            ]
+            .contains(&text(a, "state"))
+        {
+            *a = previous_attempt.clone();
+        }
+    }
+    if current_attempt.is_none() {
+        for previous in [previous_attempt, &device["configuration_attempt"]] {
+            if crate::configuration_attempt::identity_matches(previous, generation, &desired)
+                && (!uses_local_secrets
+                    || previous["secret_revision"].as_i64().unwrap_or(0) == secret_revision)
+            {
+                current_attempt = Some(previous.clone());
+                break;
+            }
+        }
+    }
+    let terminal_attempt = current_attempt.as_ref().is_some_and(|a| {
+        crate::configuration_attempt::was_verified(&verified_attempt, a, uses_local_secrets)
+    });
     for key in ["agent_version", "vector_version", "local_paused"] {
         device[key] = v[key].clone()
     }
@@ -525,15 +621,61 @@ pub async fn heartbeat(
     };
     device["secret_revision"] = json!(secret_revision);
     device["uses_local_secrets"] = json!(uses_local_secrets);
-    if exact && state == "verified_applied" {
+    let verified = exact && state == "verified_applied" && verified_claim;
+    if verified {
         device["verified_effective_sha256"] = json!(sha);
         device["verified_secret_revision"] = json!(secret_revision);
+        device["verified_configuration_attempt"] = json!({"generation":generation,"version_id":desired["version_id"],"sha256":desired["sha256"],"secret_revision":secret_revision});
+        device
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_configuration_attempt");
     }
-    device["apply_state"] = json!(if state == "verified_applied" && !exact {
+    // Keep the actual workload observation distinct from candidate progress.
+    // A stale candidate can never reattach failure to a newer retry generation.
+    device["reported_apply_state"] = json!(state);
+    device
+        .as_object_mut()
+        .unwrap()
+        .remove("configuration_attempt");
+    let attempt_stage = current_attempt.as_ref().map(|a| text(a, "state"));
+    let stage = if verified {
+        "verified_applied"
+    } else if terminal_attempt {
+        "verification_unknown"
+    } else if let Some(stage) = attempt_stage {
+        if stage == "verified_applied" {
+            "verification_unknown"
+        } else {
+            stage
+        }
+    } else if !desired.is_null() && (attempt.is_some() || reported != generation) {
+        "desired"
+    } else if state == "verified_applied" && !exact {
         "failed"
     } else {
         state
-    });
+    };
+    if let Some(a) = current_attempt.as_ref() {
+        // Never expose stale terminal failure as the current candidate outcome.
+        let mut a = a.clone();
+        if verified {
+            a["state"] = json!("verified_applied");
+            a.as_object_mut().unwrap().remove("error");
+        }
+        if terminal_attempt && !verified {
+            a["state"] = json!("verification_unknown");
+            a.as_object_mut().unwrap().remove("error");
+        }
+        if !verified
+            && !terminal_attempt
+            && ["failed", "rolled_back", "verification_unknown"].contains(&text(&a, "state"))
+        {
+            device["terminal_configuration_attempt"] = a.clone();
+        }
+        device["configuration_attempt"] = a;
+    }
+    device["apply_state"] = json!(stage);
     device["pause_acknowledged"] = json!(
         reported_policy == policy_generation
             && v["remote_pause_acknowledged"] == true
@@ -552,19 +694,39 @@ pub async fn heartbeat(
     if policy["telemetry_enabled"] == true && !sample.is_null() {
         sqlx::query("INSERT INTO telemetry(device_id,bucket,data) VALUES(?,?,?) ON CONFLICT(device_id,bucket) DO UPDATE SET data=excluded.data").bind(&id).bind(Utc::now().timestamp()/60).bind(sample.to_string()).execute(&mut *tx).await?;
     }
-    if reported == generation {
+    let prior_verified_current =
+        crate::configuration_attempt::identity_matches(&verified_attempt, generation, &desired);
+    let target_stage = if verified {
+        Some("verified_applied")
+    } else if terminal_attempt || prior_verified_current && current_attempt.is_none() {
+        Some("verification_unknown")
+    } else if current_attempt.is_some() {
+        Some(stage)
+    } else if reported == generation && state == "verified_applied" && !exact {
+        Some("verification_unknown")
+    } else {
+        None
+    };
+    if let Some(stage) = target_stage {
         if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
-            let stage = text(&device, "apply_state");
-            sqlx::query("UPDATE deployment_targets SET state=?,verified_at=CASE WHEN ?='verified_applied' THEN COALESCE(verified_at,?) ELSE NULL END WHERE deployment_id=? AND device_id=? AND generation=?").bind(stage).bind(stage).bind(db::now()).bind(assignment).bind(&id).bind(generation).execute(&mut *tx).await?;
+            let error = crate::configuration_attempt::target_error(stage, current_attempt.as_ref());
+            sqlx::query("UPDATE deployment_targets SET state=?,error=?,verified_at=CASE WHEN ?='verified_applied' THEN COALESCE(verified_at,?) ELSE NULL END WHERE deployment_id=? AND device_id=? AND generation=? AND state<>'removed'").bind(stage).bind(error).bind(stage).bind(db::now()).bind(assignment).bind(&id).bind(generation).execute(&mut *tx).await?;
         }
+    } else if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
+        // Also cover upgraded targets whose success predates the private marker.
+        // An unverified workload observation may halt success, but cannot invent
+        // a candidate failure for clients without explicit attempt evidence.
+        sqlx::query("UPDATE deployment_targets SET state='verification_unknown',error=?,verified_at=NULL WHERE deployment_id=? AND device_id=? AND generation=? AND state='verified_applied'")
+            .bind(crate::configuration_attempt::UNVERIFIED_MESSAGE).bind(assignment).bind(&id).bind(generation).execute(&mut *tx).await?;
     }
     if reported_policy == policy_generation
         && (policy["sync_paused"] == false || v["remote_pause_acknowledged"] == true)
     {
         if let Some(assignment) = row.get::<Option<String>, _>("policy_assignment_id") {
-            sqlx::query("UPDATE deployment_targets SET state='verified_applied',verified_at=COALESCE(verified_at,?) WHERE deployment_id=? AND device_id=?").bind(db::now()).bind(assignment).bind(&id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE deployment_targets SET state='verified_applied',verified_at=COALESCE(verified_at,?) WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(db::now()).bind(assignment).bind(&id).execute(&mut *tx).await?;
         }
     }
+    crate::canary_gate::invalidate_unproven_device(&mut tx, &id).await?;
     if old_state != device["apply_state"] || old_reported != device["reported_generation"] {
         db::audit(
             &mut tx,
@@ -581,80 +743,58 @@ pub async fn heartbeat(
         let event = json!({"id":db::id(),"actor":id,"action":"device.secret_reconciliation","target":id,"outcome":device["apply_state"],"created_at":db::now(),"secret_revision":secret_revision,"previous_secret_revision":old_secret_revision,"actual_sha256":device["actual_sha256"],"applied_template_sha256":device["applied_template_sha256"]});
         db::insert(&mut tx, "audit", &event).await?;
     }
-    if !v["error"].is_null() || device["apply_state"] == "failed" {
-        let code = v["error"]["code"]
-            .as_str()
-            .filter(|x| {
-                [
-                    "RECOVERY_INVALID",
-                    "CAPABILITY_DENIED",
-                    "WRITE_FAILED",
-                    "VALIDATION_FAILED",
-                    "ACTIVATION_FAILED",
-                    "DRIFT",
-                    "PROCESS_EXITED",
-                    "INCOMPATIBLE",
-                    "ADOPTION_REQUIRED",
-                    "DOWNLOAD_FAILED",
-                    "DIGEST_MISMATCH",
-                    "PATH_UNSAFE",
-                    "ROLLBACK_UNAVAILABLE",
-                    "ROLLBACK_FAILED",
-                    "APPLY_ROLLED_BACK",
-                    "PROCESS_STOPPED",
-                    "TELEMETRY_UNAVAILABLE",
-                    "APPLY_FAILED",
-                ]
-                .contains(x)
-            })
-            .unwrap_or("APPLY_FAILED");
-        let stage = v["error"]["stage"]
-            .as_str()
-            .filter(|x| {
-                [
-                    "fetch",
-                    "download",
-                    "validation",
-                    "apply",
-                    "reload",
-                    "verification",
-                    "rollback",
-                    "telemetry",
-                    "credentials",
-                    "recovery",
-                    "capability",
-                    "startup",
-                    "observation",
-                    "compatibility",
-                    "preflight",
-                    "staging",
-                    "commit",
-                ]
-                .contains(x)
-            })
-            .unwrap_or("apply");
+    let candidate_error = current_attempt
+        .as_ref()
+        .filter(|a| {
+            !verified
+                && !terminal_attempt
+                && ["failed", "rolled_back", "verification_unknown"].contains(&text(a, "state"))
+        })
+        .map(|a| &a["error"]);
+    let issue_error = candidate_error.unwrap_or(&v["error"]);
+    if !issue_error.is_null() || device["apply_state"] == "failed" {
+        let safe = crate::configuration_attempt::safe_error(issue_error);
+        let code = text(&safe, "code");
+        let stage = text(&safe, "stage");
         let issue_id = db::hash(format!("{id}:{code}:{stage}"));
-        let mut issue = match db::record(&mut tx, "issue", &issue_id).await {
-            Ok(v) => v,
-            Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => {
-                json!({"id":issue_id,"device_id":id,"code":code,"stage":stage,"message":"Device reported an operational failure. Inspect the local agent status for sanitized diagnostics.","count":0,"first_seen":db::now(),"resolved":false})
-            }
+        let (mut issue, new) = match db::record(&mut tx, "issue", &issue_id).await {
+            Ok(v) => (v, false),
+            Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => (
+                json!({"id":issue_id,"device_id":id,"code":code,"stage":stage,"message":crate::issues::MESSAGE,"count":0,"first_seen":db::now(),"resolved":false,"revision":1}),
+                true,
+            ),
             Err(e) => return Err(e),
         };
-        let new = issue["count"] == 0;
-        issue["count"] = json!(issue["count"].as_u64().unwrap_or(0).saturating_add(1));
+        if !new {
+            crate::issues::advance_revision(&mut issue)?;
+        }
+        crate::issues::clear_acknowledgement(&mut issue);
+        issue["count"] = json!(
+            issue["count"]
+                .as_u64()
+                .unwrap_or(0)
+                .checked_add(1)
+                .filter(|n| *n <= 9_007_199_254_740_991)
+                .ok_or_else(|| ApiError::conflict("Issue occurrence count is exhausted"))?
+        );
         issue["last_seen"] = json!(db::now());
         issue["resolved"] = json!(false);
-        issue["desired_version_id"] = json!(desired_version);
+        issue["desired_version_id"] =
+            if candidate_error.is_some() || attempt.is_none() && reported == generation {
+                json!(desired_version)
+            } else {
+                Value::Null
+            };
         if new {
             db::insert(&mut tx, "issue", &issue).await?
         } else {
             db::update(&mut tx, "issue", &issue).await?
         }
     } else if device["apply_state"] == "verified_applied" {
-        let own_issues=sqlx::query("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND json_extract(data,'$.resolved')=0").bind(&id).fetch_all(&mut *tx).await?;
+        let own_issues=sqlx::query("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0").bind(&id).fetch_all(&mut *tx).await?;
         for row in own_issues {
             let mut issue = db::parse(row.get("data"))?;
+            crate::issues::advance_revision(&mut issue)?;
             issue["resolved"] = json!(true);
             db::update(&mut tx, "issue", &issue).await?;
         }
@@ -692,11 +832,13 @@ pub async fn artifact(
     {
         return Err(ApiError::missing());
     }
-    let version: Option<String> =
-        sqlx::query_scalar("SELECT desired_version_id FROM devices WHERE id=?")
-            .bind(id)
+    let row =
+        sqlx::query("SELECT desired_version_id,desired_generation,data FROM devices WHERE id=?")
+            .bind(&id)
             .fetch_one(&s.pool)
             .await?;
+    let version: Option<String> = row.get("desired_version_id");
+    let generation: i64 = row.get("desired_generation");
     let mut conn = s.pool.acquire().await?;
     let version = db::record(
         &mut conn,
@@ -704,10 +846,23 @@ pub async fn artifact(
         &version.ok_or_else(ApiError::forbidden)?,
     )
     .await?;
-    if text(&version, "sha256") != sha {
+    let artifact =
+        match crate::variables::current(&mut conn, &id, generation, text(&version, "id")).await? {
+            Some(snapshot) => snapshot,
+            None if version["variables"].as_array().is_none_or(Vec::is_empty) => {
+                crate::variables::render(&version, &Value::Null, &id)?
+            }
+            None => return Err(ApiError::forbidden()),
+        };
+    let device = db::parse(row.get("data"))?;
+    if device["desired_artifact_sha256"]
+        .as_str()
+        .is_some_and(|stored| stored != artifact.sha256)
+        || artifact.sha256 != sha
+    {
         return Err(ApiError::forbidden());
     }
-    let mut response = text(&version, "artifact").to_owned().into_response();
+    let mut response = artifact.bytes.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),

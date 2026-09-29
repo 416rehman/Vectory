@@ -1,0 +1,19 @@
+.device-revocation-dialog {
+  overflow-wrap: anywhere;
+}
+.device-revocation-dialog .modal-header > div {
+  min-width: 0;
+}
+.device-revocation-dialog .modal-header > button {
+  flex-shrink: 0;
+}
+.device-revocation-reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+}
+.device-revocation-reminder svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}

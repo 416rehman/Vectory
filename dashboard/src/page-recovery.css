@@ -1,0 +1,54 @@
+.page-recovery {
+  width: min(100%, 580px);
+  margin: clamp(32px, 8vh, 88px) auto;
+  padding: 28px;
+  color: var(--ink);
+}
+.page-recovery-icon {
+  display: inline-flex;
+  margin-bottom: 16px;
+  color: var(--muted);
+}
+.page-recovery h1 {
+  margin: 0 0 12px;
+  font-size: clamp(24px, 3vw, 30px);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+.page-recovery h1:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+}
+.page-recovery p {
+  margin: 0 0 16px;
+  line-height: 1.65;
+}
+.page-recovery-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+.page-recovery-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  margin-top: 24px;
+}
+.page-recovery-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.page-recovery .page-recovery-canceled {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  .page-recovery {
+    padding: 20px 16px;
+    margin-top: 24px;
+  }
+}

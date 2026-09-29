@@ -1,0 +1,130 @@
+.editor-draft-workspace {
+  position: relative;
+}
+.editor-file-drop-hint {
+  position: absolute;
+  inset: 8px;
+  z-index: 50;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+}
+.editor-file-drop-hint > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.editor-redesigned .editor-code-view {
+  display: flex;
+  flex-direction: column;
+}
+.editor-code-view > .editor-code-toolbar,
+.editor-code-view > .editor-code-footer {
+  flex: none;
+}
+.editor-code-view .editor-code-toolbar {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+.editor-code-view .editor-code-toolbar .field {
+  flex-direction: row;
+}
+.editor-code-view .editor-code-footer {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.editor-code-view .editor-code-footer > span {
+  flex: 1;
+}
+.editor-code-view .editor-code-toolbar select {
+  width: 94px;
+}
+.editor-code-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.editor-code-view > .configuration-code-editor {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+.editor-code-view .configuration-code-editor .cm-editor {
+  min-height: 0;
+}
+.editor-code-diagnostics {
+  flex: none;
+  border-top: 1px solid var(--line);
+  padding: 8px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.editor-code-diagnostics summary {
+  cursor: pointer;
+  color: var(--ink);
+  width: fit-content;
+}
+.editor-code-diagnostics ul {
+  max-height: 130px;
+  overflow: auto;
+  margin: 10px 0 2px;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+.editor-code-diagnostics li + li {
+  margin-top: 5px;
+}
+.editor-code-diagnostics li > span {
+  font-weight: 600;
+  color: var(--ink);
+}
+@media (max-width: 600px) {
+  .editor-redesigned .editor-code-view {
+    margin: 8px;
+  }
+  .editor-code-view .editor-code-toolbar {
+    padding: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .editor-code-view .editor-code-toolbar .field {
+    gap: 6px;
+    font-size: 12px;
+  }
+  .editor-code-view .editor-code-toolbar select {
+    width: 83px;
+    padding-left: 7px;
+  }
+  .editor-code-actions {
+    margin-left: auto;
+    gap: 0;
+  }
+  .editor-code-actions .button {
+    font-size: 12px;
+    padding: 8px 6px;
+    gap: 4px;
+  }
+  .editor-code-view .editor-code-footer {
+    padding: 10px;
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+  .editor-code-view .editor-code-footer .button {
+    margin-left: auto;
+  }
+  .editor-code-view .editor-code-footer > span {
+    flex-basis: 100%;
+  }
+  .editor-code-diagnostics {
+    padding: 8px 10px;
+  }
+}

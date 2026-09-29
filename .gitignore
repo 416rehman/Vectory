@@ -1,5 +1,12 @@
 node_modules/
 dashboard/dist/
+help-center/dist/
+help-center/.astro/
+dashboard/.astro/
+help-center/src/content/docs/
+help-center/public/fonts/
+help-center/public/favicon.svg
+help-center/public/_markdown/
 server/target/
 target/
 *.log
@@ -9,6 +16,7 @@ artifacts/
 agent/vectory
 agent/vectory.exe
 *.exe~
+*.tsbuildinfo
 playwright-report/
 test-results/
 __pycache__/

@@ -130,11 +130,11 @@ pub async fn recover_generations(
                 ("policy_assignment_id", "policy_generation"),
             ] {
                 if let Some(assignment) = row.get::<Option<String>, _>(column) {
-                    sqlx::query("UPDATE deployment_targets SET generation=?,state='desired',verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=?").bind(item[counter].as_i64().unwrap()).bind(&assignment).bind(id).execute(&mut *tx).await?;
+                    let changed=sqlx::query("UPDATE deployment_targets SET generation=?,state='desired',verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(item[counter].as_i64().unwrap()).bind(&assignment).bind(id).execute(&mut *tx).await?.rows_affected()>0;
                     let mut deployment = db::record(&mut tx, "deployment", &assignment)
                         .await
                         .map_err(|e| anyhow::anyhow!(e.message))?;
-                    if deployment["status"] == "completed" {
+                    if changed && deployment["status"] == "completed" {
                         deployment["status"] = json!("active");
                         deployment["observation_started_at"] = Value::Null;
                         db::update(&mut tx, "deployment", &deployment)

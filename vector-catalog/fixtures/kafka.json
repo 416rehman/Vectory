@@ -1,0 +1,27 @@
+{
+  "sources": {
+    "events": {
+      "type": "kafka",
+      "bootstrap_servers": "127.0.0.1:19092",
+      "group_id": "vectory-schema-fixture",
+      "topics": [
+        "vectory-browser-fixture"
+      ],
+      "decoding": {
+        "codec": "json"
+      }
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "console",
+      "inputs": [
+        "events"
+      ],
+      "target": "stderr",
+      "encoding": {
+        "codec": "json"
+      }
+    }
+  }
+}

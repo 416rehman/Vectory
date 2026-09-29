@@ -10,13 +10,13 @@ An open-source, self-hosted control plane for [Vector](https://vector.dev/). Bui
 
 - Secure first-administrator bootstrap, local role-based accounts, MFA/recovery codes, CSRF-protected cookie sessions, and audit export.
 - Fleet, static groups, enrollment/downloads, policies, deployments, schedules, issues and device recovery. No default credentials or fake release links.
-- React Flow editor with 13 curated Vector components, named outputs, compatibility checks, YAML/TOML/JSON import/export, raw fields, VRL sample testing in an isolated worker, draft autosave/concurrency handling, immutable history and diffs.
+- Full-page visual pipeline editor with a right-hand component inspector, 128 versioned source/transform/sink entries, schema-driven controls, YAML/TOML/JSON editing, native pipeline and VRL sample tests, explicit draft saving with revision conflict protection, immutable history and diffs. Global options, enrichment tables and secret providers are editable alongside component settings. See [catalog coverage](vector-catalog/README.md).
 - Explicit selector previews, priorities/conflicts, durable scheduled snapshots, persistent group targeting, canary/batch observation gates, rollback, retry, unassignment and local/remote pause.
 - Outbound TLS enrollment and mTLS heartbeats, device-bound signed manifests, active revocation, key renewal, monotonic state, actual-file drift detection, journaled apply/verified rollback and local capability restrictions.
-- Real native Vector activation, device-local secret references and journaled rotation at the same configuration generation. Secret values stay on the managed host.
+- Real native Vector activation, device-local secret references and journaled rotation at the same configuration generation. Secret values stay on the managed host. Host operators can explicitly enable full Vector mode for native components, providers, environment references and device resources; remote policy cannot widen that local permission.
 - Optional bounded loopback metrics with component counters and persisted minute history. Unavailable telemetry stays unavailable. The server does not ingest your pipeline events.
 
-The dashboard uses an original visual design inspired by Base44: warm neutral surfaces, bold type, orange/cobalt accents and geometric pipeline artwork. It includes responsive layouts, a dark theme, keyboard controls and automated accessibility checks. No runtime font/CDN, analytics, billing, hosted identity, license server or cloud account is required.
+The dashboard has four main destinations: Overview, Pipelines, Devices and Activity. Warm neutral surfaces, self-hosted Instrument Sans, charcoal actions and cobalt selection give the interface a consistent visual language. Device details are separate pages; advanced settings are disclosed when needed. It includes responsive layouts, a dark theme, keyboard controls and automated accessibility checks. The bundled Help center provides full-text search, task guides, troubleshooting and administration procedures. Links beside unfamiliar terms open exact explanations without disturbing the editor. The API reference is a separate developer appendix. No external font/CDN, analytics, billing, hosted identity, license server or cloud account is required.
 
 ## Run it
 
@@ -32,6 +32,7 @@ Vector is never silently installed, replaced or upgraded. Adoption requires the 
 | --- | --- |
 | `server/` | Axum/Tokio API, SQLx SQLite migrations, device listener, validation worker, maintenance CLI |
 | `dashboard/` | React/TypeScript UI, unit and real-server Playwright tests |
+| `help-center/` | Bundled Astro Starlight platform documentation, local Pagefind search and browser acceptance |
 | `agent/` | Go agent, native adapters, protocol/recovery and real Vector tests |
 | `contracts/` | Shared JSON Schema, generated OpenAPI, protocol/state contract |
 | `vector-catalog/` | Versioned component metadata and actual Vector validation fixtures |
@@ -39,7 +40,9 @@ Vector is never silently installed, replaced or upgraded. Adoption requires the 
 | `tests/`, `docs/` | Independent TLS/security/load checks, evidence, architecture and operator guides |
 
 ```sh
-cd dashboard
+cd help-center
+npm ci
+cd ../dashboard
 npm ci
 npm run build
 npm test

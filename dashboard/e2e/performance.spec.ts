@@ -1,10 +1,8 @@
 import { test, expect } from "@playwright/test";
+import { readConfigurationCode } from "./code-editor";
 import fs from "node:fs";
 import path from "node:path";
 const root = path.resolve(import.meta.dirname, "../..");
-const credentials = JSON.parse(
-  fs.readFileSync(path.join(root, ".local/preview/credentials.json"), "utf8"),
-);
 test("load and edit a real persisted 201-component pipeline", async ({
   page,
 }) => {
@@ -57,12 +55,10 @@ test("load and edit a real persisted 201-component pipeline", async ({
   const initialRenderMs = performance.now() - start;
   const interaction = performance.now();
   await page.getByRole("button", { name: "Code", exact: true }).click();
-  await page.getByLabel("Configuration format").selectOption("json");
+  await page.getByLabel("Format", { exact: true }).selectOption("json");
   await expect(page.getByLabel("Vector configuration code")).toBeVisible();
   const codeViewMs = performance.now() - interaction;
-  expect(
-    JSON.parse(await page.getByLabel("Vector configuration code").inputValue()),
-  ).toEqual(config);
+  expect(JSON.parse(await readConfigurationCode(page))).toEqual(config);
   fs.writeFileSync(
     path.join(root, "docs/evidence/browser-performance.json"),
     JSON.stringify(

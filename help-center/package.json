@@ -1,0 +1,15 @@
+{
+  "name": "vectory-help",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/prepare.mjs && astro dev --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.4",
+    "astro": "7.3.5",
+    "parse5": "8.0.0"
+  }
+}

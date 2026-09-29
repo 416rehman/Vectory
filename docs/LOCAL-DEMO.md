@@ -7,6 +7,9 @@ Prerequisites: Node.js 22/npm, Rust 1.94+, pinned Go 1.26.8 (Go can fetch the de
 From the repository root, in PowerShell:
 
 ```powershell
+Push-Location help-center
+npm ci
+Pop-Location
 Push-Location dashboard
 npm ci
 npm run build

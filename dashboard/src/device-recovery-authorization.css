@@ -1,0 +1,11 @@
+.device-recovery-dialog {
+  overflow-wrap: anywhere;
+}
+
+.device-recovery-dialog .modal-header > div {
+  min-width: 0;
+}
+
+.device-recovery-dialog .modal-header > button {
+  flex-shrink: 0;
+}

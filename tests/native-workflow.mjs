@@ -440,7 +440,8 @@ try {
     if (body.includes(firstSecret) || body.includes(secondSecret))
       throw Error("Local secret appeared in server response");
   }
-  await api(`/deployments/${secretDeployment.id}/unassign`, {});
+  const removalReview = await api(`/deployments/${secretDeployment.id}/unassign-preview`, {});
+  await api(`/deployments/${secretDeployment.id}/unassign`, { review_token: removalReview.review_token });
   await until(
     "remove secret assignment restores the original console pipeline",
     (d) =>
@@ -508,7 +509,9 @@ try {
   if (!keepPreview) {
     if (daemon && daemon.exitCode === null) daemon.kill();
     for (const id of createdDeployments.reverse())
-      await api(`/deployments/${id}/unassign`, {}).catch(() => {});
+      await api(`/deployments/${id}/unassign-preview`, {})
+        .then(review => api(`/deployments/${id}/unassign`, { review_token: review.review_token }))
+        .catch(() => {});
   }
   receiver.closeAllConnections();
   if (receiver.listening)

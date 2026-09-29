@@ -1,0 +1,51 @@
+/* Category identity is shared by the graph, picker, and properties header. */
+:root {
+  --pipeline-grid-dot: #aaa6b2;
+}
+[data-theme="dark"] {
+  --pipeline-grid-dot: #706a78;
+}
+[data-pipeline-category="sources"] {
+  --pipeline-category-ink: #2459ad;
+  --pipeline-category-soft: #edf3ff;
+  --pipeline-category-border: #6f8cb7;
+}
+[data-pipeline-category="transforms"] {
+  --pipeline-category-ink: #7251a3;
+  --pipeline-category-soft: #f4effb;
+  --pipeline-category-border: #9a81b9;
+}
+[data-pipeline-category="sinks"] {
+  --pipeline-category-ink: #1f7367;
+  --pipeline-category-soft: #eaf6f2;
+  --pipeline-category-border: #558f82;
+}
+[data-theme="dark"] [data-pipeline-category="sources"] {
+  --pipeline-category-ink: #9abfff;
+  --pipeline-category-soft: #283449;
+  --pipeline-category-border: #678aba;
+}
+[data-theme="dark"] [data-pipeline-category="transforms"] {
+  --pipeline-category-ink: #c7aff5;
+  --pipeline-category-soft: #383045;
+  --pipeline-category-border: #9c81bd;
+}
+[data-theme="dark"] [data-pipeline-category="sinks"] {
+  --pipeline-category-ink: #89d2c4;
+  --pipeline-category-soft: #233d37;
+  --pipeline-category-border: #599f90;
+}
+.pipeline-category-label,
+.pipeline-category-icon {
+  color: var(--pipeline-category-ink, var(--muted));
+}
+.editor-inspector[data-pipeline-category] > header {
+  border-top: 2px solid var(--pipeline-category-border);
+  background: var(--pipeline-category-soft);
+}
+.editor-inspector .pipeline-category-label {
+  display: block;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+}

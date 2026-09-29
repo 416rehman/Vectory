@@ -1,0 +1,798 @@
+{
+  "components": [
+    {
+      "git_blob_sha": "f668630f104f39f78e20678bc8d136e4f8f953b3",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/amqp.cue",
+      "type": "amqp"
+    },
+    {
+      "git_blob_sha": "63aba710db15f28cc1ecf6c308659e0fe8f91337",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/apache_metrics.cue",
+      "type": "apache_metrics"
+    },
+    {
+      "git_blob_sha": "30c34015871c571b6f721b210690a64ff1de5ed1",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/aws_ecs_metrics.cue",
+      "type": "aws_ecs_metrics"
+    },
+    {
+      "git_blob_sha": "ac0bcbaf799b752a5da66b533b7a552e0789703d",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/aws_kinesis_firehose.cue",
+      "type": "aws_kinesis_firehose"
+    },
+    {
+      "git_blob_sha": "34d459293cb347288cf39bf1c0c2474c4316af94",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/aws_s3.cue",
+      "type": "aws_s3"
+    },
+    {
+      "git_blob_sha": "af04280e6783ad8e8ee1d829c9eb89f9433eb849",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/aws_sqs.cue",
+      "type": "aws_sqs"
+    },
+    {
+      "git_blob_sha": "61d77b1837079ce55f1257ea53dcdd93bfc1812c",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/datadog_agent.cue",
+      "type": "datadog_agent"
+    },
+    {
+      "git_blob_sha": "725e59104327ec69a374535b3779be166d0bf8ee",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/demo_logs.cue",
+      "type": "demo_logs"
+    },
+    {
+      "git_blob_sha": "1467e5cb04b91d62ea144c0a76962a2859cf1f85",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/dnstap.cue",
+      "type": "dnstap"
+    },
+    {
+      "git_blob_sha": "21882bd7e14a3165134d5951501ea468f4f4dd84",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/docker_logs.cue",
+      "type": "docker_logs"
+    },
+    {
+      "git_blob_sha": "421a91ab5e07418cb9af6dbc3c6e3dd40afb9a45",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/eventstoredb_metrics.cue",
+      "type": "eventstoredb_metrics"
+    },
+    {
+      "git_blob_sha": "f8032941198cdec9b29242010742a1956dcb3fb5",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/exec.cue",
+      "type": "exec"
+    },
+    {
+      "git_blob_sha": "f9beaeecc621c541c7ca421a69d2fd412ec8065b",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/file.cue",
+      "type": "file"
+    },
+    {
+      "git_blob_sha": "353fba195ddeadc95966d08c3af315469ae4f53c",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/file_descriptor.cue",
+      "type": "file_descriptor"
+    },
+    {
+      "git_blob_sha": "8a327fc7627ea1f482fec0eee5069447fda614d3",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/fluent.cue",
+      "type": "fluent"
+    },
+    {
+      "git_blob_sha": "b1dbfa21b4603189a4c9c940daabaff0e3011522",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/gcp_pubsub.cue",
+      "type": "gcp_pubsub"
+    },
+    {
+      "git_blob_sha": "3ea91413bae325996c8c21cd05bc08f42a88a00b",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/heroku_logs.cue",
+      "type": "heroku_logs"
+    },
+    {
+      "git_blob_sha": "2a461fdec453e0081e339c3acb007ad632600574",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/host_metrics.cue",
+      "type": "host_metrics"
+    },
+    {
+      "git_blob_sha": "f5e81208c7479dd78ddc9821f411ab5969c5ca3e",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/http.cue",
+      "type": "http"
+    },
+    {
+      "git_blob_sha": "1a09deeeb1510c57d6de924586e6528316f971f1",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/http_client.cue",
+      "type": "http_client"
+    },
+    {
+      "git_blob_sha": "266d553d89e011df0ec68dedb24b6d8d11790141",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/http_server.cue",
+      "type": "http_server"
+    },
+    {
+      "git_blob_sha": "f8bbda59b7ef90ce50410e2d9c0bc47ccd10afa4",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/internal_logs.cue",
+      "type": "internal_logs"
+    },
+    {
+      "git_blob_sha": "ca5fddecb605677d91ab4fefcf45812a2516ed99",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/internal_metrics.cue",
+      "type": "internal_metrics"
+    },
+    {
+      "git_blob_sha": "c2eeba7a99806dc0b89e98e0c209207e22a2feef",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/journald.cue",
+      "type": "journald"
+    },
+    {
+      "git_blob_sha": "448063cc0ac95644034c952ec90406b5f3485f2a",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/kafka.cue",
+      "type": "kafka"
+    },
+    {
+      "git_blob_sha": "ffa50a16daac5390968b2aae28ad17aca7b44040",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/kubernetes_logs.cue",
+      "type": "kubernetes_logs"
+    },
+    {
+      "git_blob_sha": "5a31e6d77710acd6874af7bb405d0eabae93439a",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/logstash.cue",
+      "type": "logstash"
+    },
+    {
+      "git_blob_sha": "d168961a84c0c56806b9235907ae772bd5ac205d",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/mongodb_metrics.cue",
+      "type": "mongodb_metrics"
+    },
+    {
+      "git_blob_sha": "c5d375db30cdb31948adb6c5e4cc38dc1bd2e1c6",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/mqtt.cue",
+      "type": "mqtt"
+    },
+    {
+      "git_blob_sha": "273c2fa0710f1c112ecdc64d432caba879377fc7",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/nats.cue",
+      "type": "nats"
+    },
+    {
+      "git_blob_sha": "900b5219784f195980e83889b61912bba522feb4",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/nginx_metrics.cue",
+      "type": "nginx_metrics"
+    },
+    {
+      "git_blob_sha": "07339d9294d8865ab2009c06fac19614370cc8bb",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/okta.cue",
+      "type": "okta"
+    },
+    {
+      "git_blob_sha": "82859ea7dfb1952817095fdf6e064edbcec25050",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/opentelemetry.cue",
+      "type": "opentelemetry"
+    },
+    {
+      "git_blob_sha": "f3611315496ae9584389d773c2436cea7bd4a901",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/postgresql_metrics.cue",
+      "type": "postgresql_metrics"
+    },
+    {
+      "git_blob_sha": "4cc08a4f8680299dfbe13a1d405af3fa37dc26f2",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/prometheus_pushgateway.cue",
+      "type": "prometheus_pushgateway"
+    },
+    {
+      "git_blob_sha": "bef41adbf81b6ac6a722789e231301705272d57f",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/prometheus_remote_write.cue",
+      "type": "prometheus_remote_write"
+    },
+    {
+      "git_blob_sha": "e6685e12af0e5c8f1a4156fcd37065ccaca5d466",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/prometheus_scrape.cue",
+      "type": "prometheus_scrape"
+    },
+    {
+      "git_blob_sha": "10b93611327a2e4e47c844dc78d2cfed23dc0686",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/pulsar.cue",
+      "type": "pulsar"
+    },
+    {
+      "git_blob_sha": "6f65095dd3f1610ea47147081c0c8438cf5aea11",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/redis.cue",
+      "type": "redis"
+    },
+    {
+      "git_blob_sha": "9973b86d622ab459d3ff8f0c46bfb04b3adf0e7d",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/socket.cue",
+      "type": "socket"
+    },
+    {
+      "git_blob_sha": "ac865b14d02ce138ce255f531d9ab8241fbf089e",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/splunk_hec.cue",
+      "type": "splunk_hec"
+    },
+    {
+      "git_blob_sha": "328a76860a050a26f6af28dfbcae6e7946f1af29",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/static_metrics.cue",
+      "type": "static_metrics"
+    },
+    {
+      "git_blob_sha": "c171d2e4299d3931739422ea5b868d07239988bc",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/statsd.cue",
+      "type": "statsd"
+    },
+    {
+      "git_blob_sha": "74394b17ae62d8b9b6e33cf23a006e747ffe2ae2",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/stdin.cue",
+      "type": "stdin"
+    },
+    {
+      "git_blob_sha": "1242300ad9fa037f42f091bcdc501b9eff00acb2",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/syslog.cue",
+      "type": "syslog"
+    },
+    {
+      "git_blob_sha": "2a0980dfc5a98423a7c8e08801adb1d631a0b80c",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/unit_test.cue",
+      "type": "unit_test"
+    },
+    {
+      "git_blob_sha": "8a84d245f2e5c5fbec9b1483cda6b0740e4aa143",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/unit_test_stream.cue",
+      "type": "unit_test_stream"
+    },
+    {
+      "git_blob_sha": "3f50fa7b5153895a852190a0f206075284e8c460",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/vector.cue",
+      "type": "vector"
+    },
+    {
+      "git_blob_sha": "d209869789e6422a6b9dbf8a3d862ce5d2fc395b",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/websocket.cue",
+      "type": "websocket"
+    },
+    {
+      "git_blob_sha": "491b37359bd695ca808d287d4cf74ad55933e314",
+      "kind": "sources",
+      "path": "website/cue/reference/components/sources/generated/windows_event_log.cue",
+      "type": "windows_event_log"
+    },
+    {
+      "git_blob_sha": "8b4f796100cbb48498e4b68c98b742683c27f9f4",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/aggregate.cue",
+      "type": "aggregate"
+    },
+    {
+      "git_blob_sha": "833b2794d0f4f7a3108bee0339ec8a4a8268f592",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/aws_ec2_metadata.cue",
+      "type": "aws_ec2_metadata"
+    },
+    {
+      "git_blob_sha": "9b4f1b9ce0d185b0b3640b3fb00db94bf23dfeee",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/dedupe.cue",
+      "type": "dedupe"
+    },
+    {
+      "git_blob_sha": "8cffcaebec3b99a1f1198885cc9e8a262d66a920",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/delay.cue",
+      "type": "delay"
+    },
+    {
+      "git_blob_sha": "70d7b45f14335f5888530e9e4b3bd81cfcc0c726",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/exclusive_route.cue",
+      "type": "exclusive_route"
+    },
+    {
+      "git_blob_sha": "7ec8ffe61ebab86da1f3c6ed9a74b7d599532da1",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/filter.cue",
+      "type": "filter"
+    },
+    {
+      "git_blob_sha": "3182d466fbbf24fa3be1b1fb5cd7e6bc21055da2",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/incremental_to_absolute.cue",
+      "type": "incremental_to_absolute"
+    },
+    {
+      "git_blob_sha": "aa277b95b20247e26fb1241399c5dac5939fd6fa",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/log_to_metric.cue",
+      "type": "log_to_metric"
+    },
+    {
+      "git_blob_sha": "f77757db0ad5c9866ffea7a140170a7f0bd0db2c",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/lua.cue",
+      "type": "lua"
+    },
+    {
+      "git_blob_sha": "77cfce4359347deb4c5f4cf082e19f50dae72444",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/metric_to_log.cue",
+      "type": "metric_to_log"
+    },
+    {
+      "git_blob_sha": "8f494c884e0bd714d0842be7cdd64d2324badf20",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/reduce.cue",
+      "type": "reduce"
+    },
+    {
+      "git_blob_sha": "2fc57208affb82ed47e3b52db6cd0b0f19a5538b",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/remap.cue",
+      "type": "remap"
+    },
+    {
+      "git_blob_sha": "43d3c69b79290442e13070e5f9df160a4f6a200b",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/route.cue",
+      "type": "route"
+    },
+    {
+      "git_blob_sha": "3f3246210ab51f2083e1e650c5d2e14429ef96a2",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/sample.cue",
+      "type": "sample"
+    },
+    {
+      "git_blob_sha": "59a6698244a1627951708c30c0de5267b40660f1",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/tag_cardinality_limit.cue",
+      "type": "tag_cardinality_limit"
+    },
+    {
+      "git_blob_sha": "4a93795f5240eaf4fbc1fb75dd6f98026945f0bf",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/throttle.cue",
+      "type": "throttle"
+    },
+    {
+      "git_blob_sha": "eaf087edfadd661797b83eb9dd3ff975859550a3",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/trace_to_log.cue",
+      "type": "trace_to_log"
+    },
+    {
+      "git_blob_sha": "531a00fdb3a21162f7a9760142c5601103479318",
+      "kind": "transforms",
+      "path": "website/cue/reference/components/transforms/generated/window.cue",
+      "type": "window"
+    },
+    {
+      "git_blob_sha": "aa7306957c785b4c63adfefa752c57a7758b15a6",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/amqp.cue",
+      "type": "amqp"
+    },
+    {
+      "git_blob_sha": "786414bf49824f17d184c64605ed79a3a5994e12",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/appsignal.cue",
+      "type": "appsignal"
+    },
+    {
+      "git_blob_sha": "d782f532530c0e1d1909cc3551cc9d3040f348ac",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_cloudwatch_logs.cue",
+      "type": "aws_cloudwatch_logs"
+    },
+    {
+      "git_blob_sha": "61c27b8ceb7da6af9d454dd29083f17257752d52",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_cloudwatch_metrics.cue",
+      "type": "aws_cloudwatch_metrics"
+    },
+    {
+      "git_blob_sha": "b55d8541510334d6ddf316329fbd67d22a0cd787",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_kinesis_firehose.cue",
+      "type": "aws_kinesis_firehose"
+    },
+    {
+      "git_blob_sha": "86de3371a587c9be4cb7c34b8075eb10f06da7c4",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_kinesis_streams.cue",
+      "type": "aws_kinesis_streams"
+    },
+    {
+      "git_blob_sha": "cee5d30f73bc94b53913d29aea7e106cf2672078",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_s3.cue",
+      "type": "aws_s3"
+    },
+    {
+      "git_blob_sha": "2a4cb27d39e87d02ec3cf126e9b2cb2f5e8d1e61",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_sns.cue",
+      "type": "aws_sns"
+    },
+    {
+      "git_blob_sha": "927c964accce2388fa2f4b2cabcafd8d755f2d1a",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/aws_sqs.cue",
+      "type": "aws_sqs"
+    },
+    {
+      "git_blob_sha": "ba951fd6c4a98dd4015f918f83b21c4f8eb77e96",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/axiom.cue",
+      "type": "axiom"
+    },
+    {
+      "git_blob_sha": "f0c73256d132f00032b7f581148a59cc521b3784",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/azure_blob.cue",
+      "type": "azure_blob"
+    },
+    {
+      "git_blob_sha": "9300dd205df640b6ec1aa3aee15260d473d24fd0",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/azure_logs_ingestion.cue",
+      "type": "azure_logs_ingestion"
+    },
+    {
+      "git_blob_sha": "f5771f7cc6c88596e24b2fd4cfe95da0786c1adf",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/blackhole.cue",
+      "type": "blackhole"
+    },
+    {
+      "git_blob_sha": "8f2f7e976c52eca9543a9ab3f175b78654887e81",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/clickhouse.cue",
+      "type": "clickhouse"
+    },
+    {
+      "git_blob_sha": "6d4f9b0039d3cb5a272f40049523ff2543a62dfc",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/console.cue",
+      "type": "console"
+    },
+    {
+      "git_blob_sha": "681513bb77699b18ad4b251e9e9ac6bb86204ffc",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/databend.cue",
+      "type": "databend"
+    },
+    {
+      "git_blob_sha": "282992a1085d5324602d1d176ad62427acc4e8cf",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/databricks_zerobus.cue",
+      "type": "databricks_zerobus"
+    },
+    {
+      "git_blob_sha": "efc2bfd51d4da31398a7f83f78ce2075f1f096ec",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/datadog_events.cue",
+      "type": "datadog_events"
+    },
+    {
+      "git_blob_sha": "e8133642bf948edd9c103846bdca0f4721855d29",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/datadog_logs.cue",
+      "type": "datadog_logs"
+    },
+    {
+      "git_blob_sha": "68ff8223663da9d2e5e8473ac35b10b9716853b4",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/datadog_metrics.cue",
+      "type": "datadog_metrics"
+    },
+    {
+      "git_blob_sha": "1416353f5706522fca7a9b57e3ee3c58b6c5aa68",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/datadog_traces.cue",
+      "type": "datadog_traces"
+    },
+    {
+      "git_blob_sha": "2ca92d695eb7051eab1f4ff7ee7d26e93442700d",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/doris.cue",
+      "type": "doris"
+    },
+    {
+      "git_blob_sha": "0ef5c2d21d7a7027bb73c3cd29957ac9c94aa503",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/elasticsearch.cue",
+      "type": "elasticsearch"
+    },
+    {
+      "git_blob_sha": "683e99e443fbc9750a1f7949be53d908511901a6",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/file.cue",
+      "type": "file"
+    },
+    {
+      "git_blob_sha": "1a426e0c7a08684f96cd9b90176b42952fc187fe",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/gcp_chronicle_unstructured.cue",
+      "type": "gcp_chronicle_unstructured"
+    },
+    {
+      "git_blob_sha": "7a49130aae88402df9872f73e44c43a2cbcd6300",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/gcp_cloud_storage.cue",
+      "type": "gcp_cloud_storage"
+    },
+    {
+      "git_blob_sha": "4c824e03e0cb2f40257672b36a1f90f8505cd361",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/gcp_pubsub.cue",
+      "type": "gcp_pubsub"
+    },
+    {
+      "git_blob_sha": "05bc25494c944a6c892932c9f5150b292cc0e20f",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/gcp_stackdriver_logs.cue",
+      "type": "gcp_stackdriver_logs"
+    },
+    {
+      "git_blob_sha": "d9897bbaf092e4bc7aff2a23dad86859dd4b84c1",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/gcp_stackdriver_metrics.cue",
+      "type": "gcp_stackdriver_metrics"
+    },
+    {
+      "git_blob_sha": "bcf00b1e0cb4ff6ee8ddf393cda5796973f8e3e1",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/greptimedb.cue",
+      "type": "greptimedb"
+    },
+    {
+      "git_blob_sha": "be0d49372ce448626c12bd889fede560fc693cc6",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/greptimedb_logs.cue",
+      "type": "greptimedb_logs"
+    },
+    {
+      "git_blob_sha": "88ce80177f71bc8c94f66f73dc4e95be4e89da98",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/greptimedb_metrics.cue",
+      "type": "greptimedb_metrics"
+    },
+    {
+      "git_blob_sha": "14fa23ccab5ee4dbacdf501926db11ecdf176453",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/honeycomb.cue",
+      "type": "honeycomb"
+    },
+    {
+      "git_blob_sha": "e8b13061069ce6923f113ef4470884def6422e55",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/http.cue",
+      "type": "http"
+    },
+    {
+      "git_blob_sha": "412f6d049e4b5f493f1db86a8b0c8e7eacf0e7fa",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/humio_logs.cue",
+      "type": "humio_logs"
+    },
+    {
+      "git_blob_sha": "8b443fd1f24e836cf5a4462dfafc61d6eacb72a8",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/humio_metrics.cue",
+      "type": "humio_metrics"
+    },
+    {
+      "git_blob_sha": "3ada6768e1d64cef8b40eb4ef044607a97a5d6f1",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/influxdb_logs.cue",
+      "type": "influxdb_logs"
+    },
+    {
+      "git_blob_sha": "c960d21685cf721fb52b9ac4c49da4b7ff7e44ab",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/influxdb_metrics.cue",
+      "type": "influxdb_metrics"
+    },
+    {
+      "git_blob_sha": "7a73d9966258b3dd16c18c7a09928905e9d2580a",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/kafka.cue",
+      "type": "kafka"
+    },
+    {
+      "git_blob_sha": "43b8500746291224894eb100ef0f38181ea176a8",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/keep.cue",
+      "type": "keep"
+    },
+    {
+      "git_blob_sha": "2c9ecf749075e3f9a0cbb4e2881ee691151a5625",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/loki.cue",
+      "type": "loki"
+    },
+    {
+      "git_blob_sha": "b7782e7738a5519a9b430d0c2c9c53e9f262c3c4",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/mezmo.cue",
+      "type": "mezmo"
+    },
+    {
+      "git_blob_sha": "4712238f4cc9643e95fd58c94b1676715f719d5c",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/mqtt.cue",
+      "type": "mqtt"
+    },
+    {
+      "git_blob_sha": "0f4c28675c3ee579c1529cd04177e8b4156a88e6",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/nats.cue",
+      "type": "nats"
+    },
+    {
+      "git_blob_sha": "9e956e111103b9be67e55e2bfd6172f280c6b083",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/new_relic.cue",
+      "type": "new_relic"
+    },
+    {
+      "git_blob_sha": "9d0861fe7271455fddf9cfaa6e2e68c71d545474",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/opentelemetry.cue",
+      "type": "opentelemetry"
+    },
+    {
+      "git_blob_sha": "94f60a89d182e0569dd5f0d57aca0adc1ebfa2d3",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/papertrail.cue",
+      "type": "papertrail"
+    },
+    {
+      "git_blob_sha": "17c019a25969d2916e5725b9d7a13a9dfe7b000e",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/postgres.cue",
+      "type": "postgres"
+    },
+    {
+      "git_blob_sha": "07cba61cf4c9e902b8cb8582a56db2d5e0c2b35c",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/prometheus_exporter.cue",
+      "type": "prometheus_exporter"
+    },
+    {
+      "git_blob_sha": "da0ca9dfe889a527abe12f77b7f1f93de25b95fd",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/prometheus_remote_write.cue",
+      "type": "prometheus_remote_write"
+    },
+    {
+      "git_blob_sha": "102529af06b88fa8d23eb19fd299a6ef2ad7a8e2",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/pulsar.cue",
+      "type": "pulsar"
+    },
+    {
+      "git_blob_sha": "cde116aceecb30b882ec402037b030c38d39e3c4",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/redis.cue",
+      "type": "redis"
+    },
+    {
+      "git_blob_sha": "f3ebd8c96894fcb1d0dfc76177b34eb805e6092f",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/sematext_logs.cue",
+      "type": "sematext_logs"
+    },
+    {
+      "git_blob_sha": "91555089d234768dd5b776c4b442e64dd22d27df",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/sematext_metrics.cue",
+      "type": "sematext_metrics"
+    },
+    {
+      "git_blob_sha": "584838616be01e7c357fb1eb7a11f99c666545ea",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/socket.cue",
+      "type": "socket"
+    },
+    {
+      "git_blob_sha": "0f098429391958b97f59dc70806f1dc8d54968b9",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/splunk_hec_logs.cue",
+      "type": "splunk_hec_logs"
+    },
+    {
+      "git_blob_sha": "6262cecbc5f06fa7cbdbf50f41e6d07e846fc571",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/splunk_hec_metrics.cue",
+      "type": "splunk_hec_metrics"
+    },
+    {
+      "git_blob_sha": "a83d06d0621b0656be2dcb2fe336c561e79e3361",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/statsd.cue",
+      "type": "statsd"
+    },
+    {
+      "git_blob_sha": "86cd6fffbf538938fd87c096e0e2d6f0d1079d6d",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/unit_test.cue",
+      "type": "unit_test"
+    },
+    {
+      "git_blob_sha": "6485b3c65681a0e5b2ea8c0cd10c63a7976011c8",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/unit_test_stream.cue",
+      "type": "unit_test_stream"
+    },
+    {
+      "git_blob_sha": "8d30f011da220e316b5ee6d254be9330494fa13b",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/vector.cue",
+      "type": "vector"
+    },
+    {
+      "git_blob_sha": "e7706a23b1cb92fe1b21eb62afed53918fb72fd6",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/webhdfs.cue",
+      "type": "webhdfs"
+    },
+    {
+      "git_blob_sha": "b8b92fdb765570d00a6944abba06d1e6dffc8b5c",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/websocket.cue",
+      "type": "websocket"
+    },
+    {
+      "git_blob_sha": "98f6f804f600547654ab7c662c105030ef625088",
+      "kind": "sinks",
+      "path": "website/cue/reference/components/sinks/generated/websocket_server.cue",
+      "type": "websocket_server"
+    }
+  ],
+  "source": "https://api.github.com/repos/vectordotdev/vector/git/trees/2bcad9bbb84e201dcfd58c22b1f779290101b728?recursive=1",
+  "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728"
+}

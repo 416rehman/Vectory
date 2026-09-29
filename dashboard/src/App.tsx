@@ -1,108 +1,127 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
-  ArrowRight,
-  Bell,
-  BookOpen,
-  CalendarDays,
-  Check,
-  ChevronDown,
+  CalendarClock,
+  ChevronLeft,
   ChevronRight,
-  CircleHelp,
-  Command,
+  CircleAlert,
   ExternalLink,
-  Github,
   Home,
-  KeyRound,
   Layers,
-  LayoutDashboard,
-  LogOut,
   Menu,
-  Moon,
-  PanelLeftClose,
-  Radio,
+  Rocket,
+  ScrollText,
   Search,
   Server,
   Settings,
-  Settings2,
-  ShieldCheck,
-  Sun,
-  Users,
+  SlidersHorizontal,
+  UsersRound,
   Workflow,
   X,
 } from "lucide-react";
-import { api, post, SessionSchema, setCSRF, type User } from "./api";
 import {
-  Badge,
-  Breadcrumb,
-  Button,
-  ErrorBox,
-  Field,
-  IconButton,
-  Modal,
-  Spinner,
-} from "./ui";
-import Editor, { Configurations } from "./Editor";
+  APIError,
+  api,
+  can,
+  getCSRFVersion,
+  getSessionEpoch,
+  invalidateSession,
+  isSessionValid,
+  LoginSchema,
+  SessionSchema,
+  setCSRF,
+  withRequestDeadline,
+  type LoginChallenge,
+  type User,
+} from "./api";
+import {
+  authAuthorityUnchanged,
+  authUserMatches,
+  isDefinitiveAuthRejection,
+  isMissingSession,
+  useAuthRequest,
+} from "./authRequests";
+import { Button, ErrorBox, Field, IconButton, Modal, Spinner } from "./ui";
+import { helpHref } from "./DocLink";
+import TabLabel from "./TabLabel";
+import AccountMenu from "./AccountMenu";
+import PageFinder from "./PageFinder";
+import DeploymentRecoveryCenter from "./DeploymentRecovery";
+import { useAppearance } from "./appearance";
+import PageBoundary from "./PageBoundary";
+import { loadPage } from "./pageLoading";
+const Editor = lazy(() => loadPage(() => import("./Editor")));
+const Configurations = lazy(() => loadPage(() => import("./PipelineLibrary")));
+const Documentation = lazy(() => loadPage(() => import("./Documentation")));
 import { Devices, Groups, Overview } from "./Fleet";
-import {
-  AuditLog,
-  Deployments,
-  Enrollment,
-  Issues,
-  Policies,
-  Settings as InstanceSettings,
-  UsersSecurity,
-} from "./Control";
-
-const navigation = [
-  {
-    label: "WORKSPACE",
-    items: [
-      { id: "overview", name: "Overview", icon: LayoutDashboard },
-      { id: "devices", name: "Devices", icon: Server },
-      { id: "groups", name: "Device groups", icon: Layers },
-    ],
-  },
-  {
-    label: "PIPELINES",
-    items: [
-      { id: "configurations", name: "Configurations", icon: Workflow },
-      { id: "deployments", name: "Deployments", icon: Radio },
-      { id: "schedules", name: "Schedules", icon: CalendarDays },
-      { id: "policies", name: "Agent policies", icon: Settings2 },
-    ],
-  },
-  {
-    label: "MANAGE",
-    items: [
-      { id: "enrollment", name: "Agents & enrollment", icon: KeyRound },
-      { id: "issues", name: "Issues", icon: Activity },
-      { id: "audit", name: "Audit log", icon: BookOpen },
-      { id: "users", name: "Users & security", icon: Users },
-      { id: "settings", name: "Instance settings", icon: Settings },
-    ],
-  },
+import { Enrollment, Policies, Settings as InstanceSettings } from "./Control";
+import Deployments, { type DeploymentQuery } from "./Deployments";
+import { readDeploymentQuery } from "./deploymentRouting";
+import AuditLog from "./AuditLog";
+import { readAuditQuery, type AuditQuery } from "./auditModel";
+import Issues from "./Issues";
+import { UsersSecurity } from "./UsersSecurity";
+import { PasswordReset } from "./AccountAccess";
+import type { PipelineLibraryQuery } from "./PipelineLibrary";
+import { readPipelineDestination } from "./pipelineDestination";
+const primary = [
+  { id: "overview", name: "Overview", icon: Home },
+  { id: "configurations", name: "Pipelines", icon: Workflow },
+  { id: "devices", name: "Devices", icon: Server },
+  { id: "deployments", name: "Activity", icon: Activity },
+];
+const devicePages = [
+  { id: "devices", name: "Devices", icon: Server },
+  { id: "groups", name: "Groups", icon: Layers },
+  { id: "policies", name: "Agent settings", icon: SlidersHorizontal },
+];
+const activityPages = [
+  { id: "deployments", name: "Deployments", icon: Rocket },
+  { id: "schedules", name: "Scheduled", icon: CalendarClock },
+  { id: "issues", name: "Issues", icon: CircleAlert },
+  { id: "audit", name: "Audit log", icon: ScrollText },
+];
+const settingsPages = [
+  { id: "settings", name: "General", icon: Settings },
+  { id: "users", name: "People & security", icon: UsersRound },
 ];
 export function Brand({ small = false }: { small?: boolean }) {
   return (
     <span className={`brand ${small ? "small" : ""}`}>
-      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
-        <path d="m2 5 13 23h5L7 5zM20 5l-6 11 5 9L30 5z" fill="currentColor" />
+      <svg
+        className="brand-mark"
+        viewBox="0 0 28 30"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          fill="currentColor"
+          d="M1 3h6.2l7 18.6L21.2 3H27L16.4 28h-5.2L1 3Z"
+        />
+        <path fill="currentColor" d="M11.4 3H17l-2.8 7.3L11.4 3Z" />
       </svg>
-      <strong>vectory</strong>
+      <span className="brand-word">Vectory</span>
     </span>
   );
 }
-
 function Auth({
   initialized,
   error: connectionError,
   onAuthenticated,
+  onSetupDetected,
   retry,
 }: {
   initialized: boolean | null;
   error: string;
   onAuthenticated: (u: User) => void;
+  onSetupDetected: () => void;
   retry: () => void;
 }) {
   const [name, setName] = useState(""),
@@ -113,224 +132,451 @@ function Auth({
     [recovery, setRecovery] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [reset, setReset] = useState(false),
+    [message, setMessage] = useState("");
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
+  const requests = useAuthRequest();
+  const [unknown, setUnknown] = useState<{
+    kind: "login" | "mfa" | "setup";
+    email: string;
+  } | null>(null);
+  const [recoveryChecked, setRecoveryChecked] = useState(false);
+  const [setupFound, setSetupFound] = useState(false);
+  const recoveryHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (unknown) recoveryHeading.current?.focus();
+  }, [unknown]);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const passwordInput = useRef<HTMLInputElement>(null);
+  const [returnToPassword, setReturnToPassword] = useState(false);
+  useEffect(() => {
+    if (busy) return;
+    if (challenge) codeInput.current?.focus();
+    else if (returnToPassword) {
+      passwordInput.current?.focus();
+      setReturnToPassword(false);
+    }
+  }, [challenge, recovery, busy, returnToPassword]);
+  function backToSignIn(notice = "") {
+    setChallenge(null);
+    setPassword("");
+    setTotp("");
+    setRecovery(false);
+    setError("");
+    setMessage(notice);
+    setReturnToPassword(true);
+  }
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (initialized === null || connectionError || unknown) return;
+    const request = requests.claim();
+    if (!request) return;
+    const kind = challenge ? "mfa" : initialized ? "login" : "setup";
+    const submittedEmail = email;
     setBusy(true);
     setError("");
+    setMessage("");
     try {
-      const result = await post<any>(initialized ? "/login" : "/bootstrap", {
-        name,
-        email,
-        password,
-        ...(!initialized ? { bootstrap_secret: secret } : {}),
-        ...(totp
-          ? recovery
-            ? { recovery_code: totp }
-            : { totp_code: totp }
-          : {}),
-      });
-      const parsed = SessionSchema.parse(result);
+      const path = challenge
+        ? "/login/mfa"
+        : initialized
+          ? "/login"
+          : "/bootstrap";
+      const body = challenge
+        ? {
+            challenge_token: challenge.challenge_token,
+            ...(recovery
+              ? { recovery_code: totp.trim() }
+              : { totp_code: totp.trim() }),
+          }
+        : {
+            name,
+            email,
+            password,
+            ...(!initialized ? { bootstrap_secret: secret } : {}),
+          };
+      const login = await withRequestDeadline(
+        (signal) =>
+          api(
+            path,
+            { method: "POST", body: JSON.stringify(body), signal },
+            kind === "login" ? LoginSchema : SessionSchema,
+          ),
+        30000,
+        request.controller.signal,
+      );
+      if (!requests.current(request)) return;
+      if (!authAuthorityUnchanged(request))
+        throw new Error("The browser's sign-in state changed while waiting.");
+      if ("mfa_required" in login) {
+        setPassword("");
+        setTotp("");
+        setRecovery(false);
+        setChallenge(login);
+        return;
+      }
+      const parsed = SessionSchema.parse(login);
+      if (!authUserMatches(parsed.user, submittedEmail))
+        throw new Error("The returned account did not match this sign-in.");
       setCSRF(parsed.csrf_token);
       setPassword("");
       setSecret("");
+      setTotp("");
+      setChallenge(null);
       onAuthenticated(parsed.user);
     } catch (e) {
-      setError((e as Error).message);
+      if (!requests.current(request)) return;
+      if (!isDefinitiveAuthRejection(e) || !authAuthorityUnchanged(request)) {
+        setPassword("");
+        setSecret("");
+        setTotp("");
+        setChallenge(null);
+        setRecovery(false);
+        setRecoveryChecked(false);
+        setSetupFound(false);
+        setUnknown({ kind, email: submittedEmail });
+        return;
+      }
+      if (
+        challenge &&
+        e instanceof APIError &&
+        e.code === "MFA_CHALLENGE_EXPIRED"
+      ) {
+        backToSignIn(
+          "This verification has expired. Sign in again to get a new one.",
+        );
+        return;
+      }
+      if (challenge && e instanceof APIError && e.code === "INVALID_MFA_CODE")
+        setTotp("");
+      setError(
+        initialized && e instanceof APIError && e.code === "UNAUTHENTICATED"
+          ? "Check your email and password."
+          : challenge && e instanceof APIError && e.code === "INVALID_MFA_CODE"
+            ? recovery
+              ? "That recovery code is invalid or has already been used. Try an unused code."
+              : "That code is invalid or has already been used. Enter a new code from your authenticator app."
+            : (e as Error).message,
+      );
     } finally {
-      setBusy(false);
+      if (requests.finish(request)) setBusy(false);
     }
   }
+  async function checkSignIn() {
+    if (!unknown) return;
+    const request = requests.claim();
+    if (!request) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setRecoveryChecked(false);
+    try {
+      const result = await withRequestDeadline(
+        async (signal) => {
+          try {
+            return {
+              session: await api("/session", { signal }, SessionSchema),
+            };
+          } catch (failure) {
+            if (!isMissingSession(failure)) throw failure;
+            // A 401 is a current cookie snapshot, not proof the earlier POST failed.
+            if (unknown.kind === "setup") {
+              const status = await api<{ initialized: boolean }>("/status", {
+                signal,
+              });
+              return { initialized: status.initialized };
+            }
+            return { initialized: true };
+          }
+        },
+        30000,
+        request.controller.signal,
+      );
+      if (!requests.current(request)) return;
+      if (result.session) {
+        if (!authAuthorityUnchanged(request))
+          throw new Error(
+            "Sign-in state changed. Check again to read the current session.",
+          );
+        if (!authUserMatches(result.session.user, unknown.email)) {
+          setMessage(
+            result.session.user.enabled
+              ? `This browser is signed in as ${result.session.user.email}, not ${unknown.email}. Start a new sign-in to choose your account.`
+              : "This account is disabled. Ask an administrator to restore access.",
+          );
+          setSetupFound(unknown.kind === "setup");
+          setRecoveryChecked(true);
+          return;
+        }
+        setCSRF(result.session.csrf_token);
+        onAuthenticated(result.session.user);
+        return;
+      }
+      if (request.csrfVersion !== getCSRFVersion())
+        throw new Error(
+          "Sign-in state changed. Check again to read the current session.",
+        );
+      setRecoveryChecked(true);
+      setSetupFound(unknown.kind === "setup" && result.initialized);
+      setMessage(
+        unknown.kind === "setup"
+          ? result.initialized
+            ? "This instance is set up. Sign in with your account to continue."
+            : "No completed setup is visible yet. The earlier request may still finish. Check again before starting another setup."
+          : "No active sign-in was found. The earlier request may still finish. Start a new sign-in with your password; use a fresh authenticator code or an unused recovery code if asked.",
+      );
+    } catch (failure) {
+      if (requests.current(request))
+        setError(
+          `Could not check sign-in status. ${(failure as Error).message}`,
+        );
+    } finally {
+      if (requests.finish(request)) setBusy(false);
+    }
+  }
+  if (reset && initialized)
+    return (
+      <main className="auth-page">
+        <div className="auth-card">
+          <Brand />
+          <PasswordReset
+            onBack={(text) => {
+              setReset(false);
+              setError("");
+              setMessage(text || "");
+            }}
+          />
+        </div>
+      </main>
+    );
   return (
-    <div className="auth-page">
-      <div className="auth-story">
+    <main className="auth-page">
+      <div className="auth-card">
         <Brand />
-        <div className="auth-story-content">
-          <span className="eyebrow">THE OPEN-SOURCE VECTOR CONTROL PLANE</span>
-          <h1>
-            Every pipeline
-            <br />
-            needs a <span>home.</span>
-          </h1>
-          <p>
-            Build it visually. Deploy it confidently.
-            <br />
-            Keep your entire fleet in sync.
+        <h1 ref={recoveryHeading} tabIndex={unknown ? -1 : undefined}>
+          {unknown
+            ? unknown.kind === "setup"
+              ? "Setup result unknown"
+              : "Sign-in result unknown"
+            : challenge
+              ? "Verify your identity"
+              : initialized === false
+                ? "Set up Vectory"
+                : "Sign in"}
+        </h1>
+        <p>
+          {unknown
+            ? "The server did not return a complete result. Check the current status before trying again."
+            : challenge
+              ? recovery
+                ? `Enter an unused recovery code to finish signing in as ${email}.`
+                : `Enter the code from your authenticator app to finish signing in as ${email}.`
+              : initialized === false
+                ? "Create the administrator account for this instance."
+                : "Use your Vectory account to continue."}
+        </p>
+        {connectionError && (
+          <ErrorBox message={connectionError} retry={retry} />
+        )}
+        {message && (
+          <p className="account-notice" role="status">
+            {message}
           </p>
-          <div className="auth-art" aria-hidden="true">
-            <div className="art-label">YOUR DATA. YOUR DIRECTION.</div>
-            <div className="auth-art-grid">
-              <div className="art-tile tile-blue">
-                <Workflow size={59} strokeWidth={1.2} />
-                <span>BUILD</span>
-              </div>
-              <div className="art-tile tile-orange">
-                <ArrowRight size={67} strokeWidth={1.2} />
-                <span>DEPLOY</span>
-              </div>
-              <div className="art-tile tile-cream">
-                <Radio size={57} strokeWidth={1.3} />
-                <span>OBSERVE</span>
-              </div>
-            </div>
-            <div className="art-caption">
-              <span>[ SOURCES → TRANSFORMS → SINKS ]</span>
-              <span>01 — ∞</span>
-            </div>
-          </div>
-        </div>
-        <div className="auth-footer">
-          <ShieldCheck size={16} /> Self-hosted. Outbound only. Fully yours.
-        </div>
-      </div>
-      <main className="auth-form-side">
-        <div className="auth-top">
-          <span>Independent. Open source.</span>
-          <Badge status="neutral">APACHE 2.0</Badge>
-        </div>
-        <div className="auth-form">
-          <span className="auth-form-eyebrow">LET’S GET THINGS FLOWING</span>
-          <h2>
-            {initialized === false
-              ? "A fresh start."
-              : initialized === true
-                ? "Welcome back."
-                : "Your control plane."}
-          </h2>
-          <p>
-            {initialized === false
-              ? "Create the first administrator for your Vectory instance."
-              : initialized === true
-                ? "Sign in to manage your pipelines and devices."
-                : "Connecting to your Vectory server…"}
-          </p>
-          {connectionError && (
-            <ErrorBox message={connectionError} retry={retry} />
-          )}
+        )}
+        {unknown ? (
+          <section className="auth-recovery" aria-label="Sign-in recovery">
+            <p>
+              {unknown.kind === "setup"
+                ? "Your account may have been created. Checking status will not submit setup again."
+                : unknown.kind === "mfa"
+                  ? "You may already be signed in, and your verification code may have been used. Checking status will not submit it again."
+                  : "You may already be signed in. Checking status will not send your password again."}
+            </p>
+            {error && <ErrorBox message={error} />}
+            <Button
+              busy={busy}
+              className="full-width"
+              onClick={() => void checkSignIn()}
+            >
+              {unknown.kind === "setup"
+                ? "Check setup status"
+                : "Check sign-in status"}
+            </Button>
+            {recoveryChecked && (
+              <Button
+                variant="ghost"
+                className="full-width"
+                disabled={busy}
+                onClick={() => {
+                  if (setupFound) onSetupDetected();
+                  setUnknown(null);
+                  setRecoveryChecked(false);
+                  backToSignIn(
+                    setupFound
+                      ? "This instance is set up. Sign in with your account."
+                      : "",
+                  );
+                }}
+              >
+                {unknown.kind === "setup"
+                  ? setupFound
+                    ? "Go to sign in"
+                    : "Return to setup"
+                  : "Start a new sign-in"}
+              </Button>
+            )}
+          </section>
+        ) : (
           <form onSubmit={submit}>
             {error && <ErrorBox message={error} />}
-            <fieldset disabled={initialized === null || busy}>
-              {initialized === false && (
+            <fieldset
+              disabled={initialized === null || !!connectionError || busy}
+            >
+              {challenge ? (
                 <>
                   <Field
-                    label="One-time bootstrap secret"
-                    hint="Read the locally provisioned secret on your server. No default password is created."
+                    label={recovery ? "Recovery code" : "Authenticator code"}
                   >
                     <input
+                      key={recovery ? "recovery" : "authenticator"}
+                      ref={codeInput}
                       required
-                      autoComplete="off"
-                      type="password"
-                      value={secret}
-                      onChange={(e) => setSecret(e.target.value)}
-                      placeholder="Your local initialization secret"
+                      type="text"
+                      inputMode={recovery ? "text" : "numeric"}
+                      autoComplete="one-time-code"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      pattern={recovery ? undefined : "[0-9]{6}"}
+                      maxLength={recovery ? 80 : 6}
+                      value={totp}
+                      onChange={(e) => setTotp(e.target.value)}
                     />
                   </Field>
-                  <Field label="Your name">
+                  <button
+                    type="button"
+                    className="text-link auth-method"
+                    onClick={() => {
+                      setRecovery(!recovery);
+                      setTotp("");
+                      setError("");
+                    }}
+                  >
+                    {recovery
+                      ? "Use an authenticator code"
+                      : "Use a recovery code instead"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {initialized === false && (
+                    <>
+                      <Field
+                        label="Setup secret"
+                        hint="The one-time secret provisioned on your server."
+                      >
+                        <input
+                          required
+                          type="password"
+                          autoComplete="off"
+                          value={secret}
+                          onChange={(e) => setSecret(e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Your name">
+                        <input
+                          required
+                          autoComplete="name"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                        />
+                      </Field>
+                    </>
+                  )}
+                  <Field label="Email address">
                     <input
-                      autoComplete="name"
                       required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Alex Morgan"
+                      type="email"
+                      autoComplete="username"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    label="Password"
+                    hint={
+                      initialized === false
+                        ? "At least 12 characters."
+                        : undefined
+                    }
+                  >
+                    <input
+                      ref={passwordInput}
+                      required
+                      type="password"
+                      minLength={initialized === false ? 12 : undefined}
+                      autoComplete={
+                        initialized === false
+                          ? "new-password"
+                          : "current-password"
+                      }
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
                     />
                   </Field>
                 </>
               )}
-              <Field label="Email address">
-                <input
-                  required
-                  type="email"
-                  autoComplete="username"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@your-company.com"
-                />
-              </Field>
-              <Field
-                label="Password"
-                hint={
-                  initialized === false
-                    ? "Use at least 12 characters."
-                    : undefined
-                }
-              >
-                <input
-                  required
-                  type="password"
-                  minLength={initialized === false ? 12 : undefined}
-                  autoComplete={
-                    initialized === false ? "new-password" : "current-password"
-                  }
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                />
-              </Field>
-              {initialized && (
-                <Field
-                  label={
-                    recovery
-                      ? "Recovery code"
-                      : "Authenticator code (if enabled)"
-                  }
-                >
-                  <input
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={recovery ? 80 : 6}
-                    value={totp}
-                    onChange={(e) => setTotp(e.target.value)}
-                    placeholder={
-                      recovery ? "One-time recovery code" : "6-digit code"
-                    }
-                  />
-                </Field>
-              )}
-              {initialized && (
-                <button
-                  className="text-link auth-recovery"
-                  type="button"
-                  onClick={() => {
-                    setRecovery((v) => !v);
-                    setTotp("");
-                  }}
-                >
-                  {recovery
-                    ? "Use an authenticator code"
-                    : "Use a recovery code instead"}
-                </button>
-              )}
               <Button
                 type="submit"
-                icon={ArrowRight}
                 busy={busy}
                 className="full-width auth-submit"
               >
-                {initialized === false
-                  ? "Initialize workspace"
-                  : "Sign in to Vectory"}
+                {challenge
+                  ? "Verify and sign in"
+                  : initialized === false
+                    ? "Create account"
+                    : "Sign in"}
               </Button>
             </fieldset>
           </form>
-          <div className="auth-note">
-            <LockIcon />
-            <p>
-              Your browser session stays on this instance.
-              <br />
-              No external identity provider required.
-            </p>
-          </div>
-        </div>
-        <footer className="auth-legal">
-          Vectory is an independent project for Vector by Datadog.
-        </footer>
-      </main>
-    </div>
+        )}
+        {!unknown &&
+          (challenge ? (
+            <Button
+              variant="ghost"
+              className="auth-reset-link"
+              disabled={busy}
+              onClick={() => backToSignIn()}
+            >
+              Back to sign in
+            </Button>
+          ) : (
+            initialized && (
+              <Button
+                variant="ghost"
+                className="auth-reset-link"
+                disabled={busy}
+                onClick={() => {
+                  setPassword("");
+                  setTotp("");
+                  setReset(true);
+                }}
+              >
+                Reset password
+              </Button>
+            )
+          ))}
+        <a
+          className="auth-help"
+          href="/help/getting-started/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Vectory documentation <ExternalLink size={14} aria-hidden="true" />
+        </a>
+      </div>
+    </main>
   );
 }
-function LockIcon() {
-  return <ShieldCheck size={16} />;
-}
-
 export default function App() {
   const [user, setUser] = useState<User | null>(null),
     [initialized, setInitialized] = useState<boolean | null>(null),
@@ -339,57 +585,318 @@ export default function App() {
     [route, setRoute] = useState(location.hash.slice(2) || "overview"),
     [toast, setToast] = useState(""),
     [sidebar, setSidebar] = useState(false),
-    [dark, setDark] = useState(
-      localStorage.getItem("vectory-theme") === "dark",
-    ),
     [commandOpen, setCommandOpen] = useState(false),
-    [query, setQuery] = useState(""),
-    [help, setHelp] = useState(false);
-  const [instanceName, setInstanceName] = useState("My workspace");
+    [commandRequest, setCommandRequest] = useState(0),
+    [accountOpen, setAccountOpen] = useState(false);
+  const [appearance, setAppearance] = useAppearance();
+  const accountOpenRef = useRef(accountOpen);
+  accountOpenRef.current = accountOpen;
+  const [collapsedPreference, setCollapsedPreference] = useState<
+    boolean | null
+  >(() => {
+    try {
+      const saved = localStorage.getItem("vectory-sidebar-collapsed");
+      return saved === "true" ? true : saved === "false" ? false : null;
+    } catch {
+      return null;
+    }
+  });
+  const [mobileNavigation, setMobileNavigation] = useState(
+    () => window.matchMedia("(max-width: 760px)").matches,
+  );
+  const navigationRef = useRef<HTMLElement>(null);
+  const navigationToggle = useRef<HTMLButtonElement>(null);
+  const shellModalReturnFocus = useRef<HTMLElement | null>(null);
+  function openShellModal(kind: "search", opener?: HTMLElement) {
+    if (!commandOpen) {
+      shellModalReturnFocus.current = mobileNavigation
+        ? navigationToggle.current
+        : opener ||
+          (accountOpen
+            ? navigationRef.current?.querySelector<HTMLButtonElement>(
+                ".account-button",
+              )
+            : null) ||
+          (document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null);
+    }
+    setSidebar(false);
+    setAccountOpen(false);
+    setCommandOpen(kind === "search");
+    setCommandRequest((request) => request + 1);
+  }
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const changed = () => {
+      setMobileNavigation(media.matches);
+      setSidebar(false);
+      setAccountOpen(false);
+    };
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  useEffect(() => {
+    if (mobileNavigation && !sidebar) setAccountOpen(false);
+  }, [mobileNavigation, sidebar]);
+  useEffect(() => {
+    if (!user) {
+      setSidebar(false);
+      setAccountOpen(false);
+      setCommandOpen(false);
+    }
+  }, [user]);
+  useEffect(() => {
+    if (!user || !mobileNavigation || !sidebar) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = requestAnimationFrame(() =>
+      navigationRef.current
+        ?.querySelector<HTMLButtonElement>(".sidebar-close")
+        ?.focus({ preventScroll: true }),
+    );
+    const containFocus = (event: KeyboardEvent) => {
+      if (accountOpenRef.current || event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSidebar(false);
+      }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(
+        navigationRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], [tabindex="0"]',
+        ) || [],
+      ).filter((element) => element.getClientRects().length > 0);
+      const first = controls[0],
+        last = controls.at(-1);
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          !navigationRef.current?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last?.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last ||
+          !navigationRef.current?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", containFocus);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", containFocus);
+      document.body.style.overflow = overflow;
+      navigationToggle.current?.focus();
+    };
+  }, [mobileNavigation, sidebar, user?.id]);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const [libraryView, setLibraryView] = useState<{
+    userId: string;
+    query: PipelineLibraryQuery;
+  } | null>(null);
+  const [deploymentViews, setDeploymentViews] = useState<{
+    userId: string;
+    deployments?: DeploymentQuery;
+    schedules?: DeploymentQuery;
+  } | null>(null);
+  const [auditView, setAuditView] = useState<{
+    userId: string;
+    query: AuditQuery;
+  } | null>(null);
+  const rememberAudit = useCallback(
+    (query: AuditQuery) => {
+      if (user) setAuditView({ userId: user.id, query });
+    },
+    [user?.id],
+  );
+  const rememberDeployments = useCallback(
+    (query: DeploymentQuery) => {
+      if (user)
+        setDeploymentViews((old) => ({
+          ...(old?.userId === user.id ? old : {}),
+          userId: user.id,
+          deployments: query,
+        }));
+    },
+    [user?.id],
+  );
+  const rememberSchedules = useCallback(
+    (query: DeploymentQuery) => {
+      if (user)
+        setDeploymentViews((old) => ({
+          ...(old?.userId === user.id ? old : {}),
+          userId: user.id,
+          schedules: query,
+        }));
+    },
+    [user?.id],
+  );
+  const rememberLibraryView = useCallback(
+    (query: PipelineLibraryQuery) => {
+      if (user) setLibraryView({ userId: user.id, query });
+    },
+    [user?.id],
+  );
+  useEffect(() => {
+    if (!user) {
+      setLibraryView(null);
+      setDeploymentViews(null);
+      setAuditView(null);
+    }
+  }, [user?.id]);
+  useEffect(() => {
+    const ended = () => {
+      invalidateSession();
+      setSessionEnded(true);
+    };
+    window.addEventListener("vectory:session-ended", ended);
+    return () => window.removeEventListener("vectory:session-ended", ended);
+  }, []);
   useEffect(() => {
     if (!user) return;
-    let active = true;
-    api<{ instance_name: string }>("/settings")
-      .then((value) => {
-        if (active) setInstanceName(value.instance_name);
-      })
-      .catch(() => {});
+    const expectedUser = user.id;
+    let active = true,
+      requestId = 0;
+    let controller: AbortController | null = null;
+    async function refreshSession() {
+      if (!isSessionValid()) return;
+      controller?.abort();
+      const currentController = new AbortController();
+      controller = currentController;
+      const request = ++requestId,
+        version = getCSRFVersion(),
+        epoch = getSessionEpoch();
+      try {
+        const session = await withRequestDeadline(
+          (signal) => api("/session", { signal }, SessionSchema),
+          30000,
+          currentController.signal,
+        );
+        if (
+          !active ||
+          request !== requestId ||
+          version !== getCSRFVersion() ||
+          epoch !== getSessionEpoch() ||
+          !isSessionValid()
+        )
+          return;
+        if (session.user.id !== expectedUser || !session.user.enabled) {
+          invalidateSession();
+          setSessionEnded(true);
+          return;
+        }
+        setCSRF(session.csrf_token);
+        setUser((previous) =>
+          previous && JSON.stringify(previous) === JSON.stringify(session.user)
+            ? previous
+            : session.user,
+        );
+        setSessionEnded(false);
+      } catch {
+        /* An expired session is handled by the shared API event. */
+      }
+    }
+    const stored = (event: StorageEvent) => {
+      if (event.key === "vectory-session-change") void refreshSession();
+    };
+    const focused = () => {
+      void refreshSession();
+    };
+    const visible = () => {
+      if (document.visibilityState === "visible") void refreshSession();
+    };
+    window.addEventListener("storage", stored);
+    window.addEventListener("focus", focused);
+    document.addEventListener("visibilitychange", visible);
     return () => {
       active = false;
+      controller?.abort();
+      window.removeEventListener("storage", stored);
+      window.removeEventListener("focus", focused);
+      document.removeEventListener("visibilitychange", visible);
     };
   }, [user?.id]);
   const notify = useCallback((message: string) => setToast(message), []);
+  const initialization = useRef<AbortController | null>(null);
   const initialize = useCallback(async () => {
+    initialization.current?.abort();
+    const controller = new AbortController();
+    initialization.current = controller;
+    const epoch = getSessionEpoch(),
+      version = getCSRFVersion();
+    const current = () =>
+      initialization.current === controller && !controller.signal.aborted;
     setChecking(true);
     setConnectionError("");
     try {
-      const status = await api<{ initialized: boolean }>("/status");
-      setInitialized(status.initialized);
-      if (status.initialized) {
-        try {
-          const session = await api("/session", {}, SessionSchema);
-          setCSRF(session.csrf_token);
-          setUser(session.user);
-        } catch {
-          setUser(null);
-        }
+      const result = await withRequestDeadline(
+        async (signal) => {
+          const status = await api<{ initialized: boolean }>("/status", {
+            signal,
+          });
+          if (!status.initialized) return { initialized: false, session: null };
+          try {
+            return {
+              initialized: true,
+              session: await api("/session", { signal }, SessionSchema),
+            };
+          } catch (failure) {
+            if (!isMissingSession(failure)) throw failure;
+            return { initialized: true, session: null };
+          }
+        },
+        30000,
+        controller.signal,
+      );
+      if (!current()) return;
+      if (
+        version !== getCSRFVersion() ||
+        (result.session && epoch !== getSessionEpoch())
+      )
+        throw new Error("Sign-in state changed. Try connecting again.");
+      if (result.session && !result.session.user.enabled)
+        throw new Error(
+          "This account is disabled. Ask an administrator to restore access.",
+        );
+      setInitialized(result.initialized);
+      if (result.session) {
+        setCSRF(result.session.csrf_token);
+        setSessionEnded(false);
+        setUser(result.session.user);
+      } else {
+        setUser(null);
       }
     } catch (e) {
-      setConnectionError((e as Error).message);
+      if (!current()) return;
+      setInitialized(null);
+      setConnectionError(
+        `Could not connect to Vectory. ${(e as Error).message}`,
+      );
     } finally {
-      setChecking(false);
+      if (current()) {
+        initialization.current = null;
+        setChecking(false);
+      }
     }
   }, []);
   useEffect(() => {
     void initialize();
+    return () => {
+      initialization.current?.abort();
+      initialization.current = null;
+    };
   }, [initialize]);
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("vectory-theme", dark ? "dark" : "light");
-  }, [dark]);
-  useEffect(() => {
     const changed = () => {
+      const nextRoute = location.hash.slice(2) || "overview";
       if (
+        nextRoute !== route &&
+        (nextRoute.split("?")[0] !== route.split("?")[0] ||
+          /^(deployments|schedules|issues|audit)(?:[/?]|$)/.test(route)) &&
         !window.dispatchEvent(
           new Event("vectory:before-navigate", { cancelable: true }),
         )
@@ -397,54 +904,118 @@ export default function App() {
         history.replaceState(null, "", "#/" + route);
         return;
       }
-      setRoute(location.hash.slice(2) || "overview");
+      setRoute(nextRoute);
       setSidebar(false);
+      setAccountOpen(false);
     };
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, [route]);
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(""), 6000);
+    const timer = setTimeout(() => setToast(""), 5000);
     return () => clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
-        setCommandOpen((v) => !v);
+        if (commandOpen) setCommandOpen(false);
+        else openShellModal("search");
       }
+      if (e.key === "Escape" && !accountOpenRef.current && !e.defaultPrevented)
+        setSidebar(false);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, []);
+  }, [commandOpen, accountOpen, mobileNavigation]);
   const navigate = useCallback((path: string) => {
-    location.hash = "/" + path;
+    if (path.startsWith("docs/")) {
+      window.open(helpHref(path.slice(5)), "_blank", "noopener,noreferrer");
+    } else {
+      location.hash = "/" + path;
+    }
     setCommandOpen(false);
     setSidebar(false);
+    setAccountOpen(false);
   }, []);
-  async function logout() {
-    if (
-      !window.dispatchEvent(
-        new Event("vectory:before-navigate", { cancelable: true }),
-      )
-    )
-      return;
+  function beforeSignOut() {
+    return window.dispatchEvent(
+      new Event("vectory:before-navigate", { cancelable: true }),
+    );
+  }
+  function finishSignOut() {
+    setUser(null);
+    setCSRF("");
+    setAccountOpen(false);
+    setSidebar(false);
+  }
+  function reloadSignIn() {
+    finishSignOut();
+    void initialize();
+  }
+  const routePath = route.split("?")[0];
+  const [page, id] = routePath.split("/");
+  const selectedDeviceId =
+    new URLSearchParams(route.split("?")[1] || "").get("device") || undefined;
+  const pipelineDestination = readPipelineDestination(
+    route.split("?")[1] || "",
+  );
+  const editorPage = page === "configurations" && !!id;
+  const sidebarCollapsed = collapsedPreference ?? editorPage;
+  const mobileMenuOpen = mobileNavigation && sidebar;
+  function toggleSidebarWidth() {
+    const next = !sidebarCollapsed;
+    setCollapsedPreference(next);
     try {
-      await post("/logout");
-      setUser(null);
-      setCSRF("");
-      notify("Signed out.");
-    } catch (e) {
-      notify((e as Error).message);
+      localStorage.setItem("vectory-sidebar-collapsed", String(next));
+    } catch {
+      /* The current choice still works when browser storage is unavailable. */
     }
+  }
+  if (page === "docs" && !user) {
+    return (
+      <div className="public-docs">
+        <header>
+          <a href="#/overview" aria-label="Vectory sign in">
+            <Brand />
+          </a>
+          <Button onClick={() => navigate("overview")}>Sign in</Button>
+        </header>
+        <main className="page-content">
+          <PageBoundary resetKey={`public:${route}`}>
+            <Suspense
+              fallback={
+                <div className="loading">
+                  <Spinner />
+                  Loading documentation
+                </div>
+              }
+            >
+              <Documentation topic={id} navigate={navigate} />
+            </Suspense>
+          </PageBoundary>
+        </main>
+      </div>
+    );
   }
   if (checking)
     return (
       <div className="app-loading">
         <Brand />
         <Spinner />
-        <p>Connecting to your control plane</p>
+        <p role="status">Loading Vectory…</p>
+        <Button variant="ghost" onClick={() => void initialize()}>
+          Retry connection
+        </Button>
+        <a
+          className="auth-help"
+          href="/help/getting-started/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Vectory documentation <ExternalLink size={14} aria-hidden="true" />
+        </a>
       </div>
     );
   if (!user)
@@ -452,24 +1023,38 @@ export default function App() {
       <Auth
         initialized={initialized}
         error={connectionError}
+        onSetupDetected={() => setInitialized(true)}
         onAuthenticated={(u) => {
           setInitialized(true);
+          setSessionEnded(false);
           setUser(u);
         }}
         retry={() => void initialize()}
       />
     );
-  const [page, id] = route.split("/");
-  const title =
-    navigation.flatMap((g) => g.items).find((n) => n.id === page)?.name ||
-    "Workspace";
-  const allowed = (item: { id: string }) =>
-    item.id !== "enrollment" || user.role === "admin";
+  const section = [...devicePages.map((p) => p.id), "enrollment"].includes(page)
+    ? "devices"
+    : activityPages.some((p) => p.id === page)
+      ? "deployments"
+      : settingsPages.some((p) => p.id === page)
+        ? "settings"
+        : page;
+  const tabs =
+    section === "devices" && !id && page !== "enrollment"
+      ? devicePages
+      : section === "deployments"
+        ? activityPages
+        : section === "settings"
+          ? settingsPages
+          : [];
   return (
-    <div className={`app-shell ${sidebar ? "sidebar-open" : ""}`}>
+    <div
+      className={`app-shell ${sidebar ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${editorPage ? "editor-shell" : ""}`}
+    >
       <a
         className="skip-link"
         href="#main-content"
+        tabIndex={mobileMenuOpen ? -1 : undefined}
         onClick={(e) => {
           e.preventDefault();
           document.getElementById("main-content")?.focus();
@@ -477,175 +1062,279 @@ export default function App() {
       >
         Skip to main content
       </a>
-      <aside className="sidebar">
-        <button
-          className="brand-link"
-          onClick={() => navigate("overview")}
-          aria-label="Vectory overview"
-        >
-          <Brand />
-        </button>
-        <button
-          className="workspace-switch"
-          onClick={() => navigate("settings")}
-        >
-          <span className="workspace-initial">V</span>
-          <span>
-            <strong title={instanceName}>{instanceName}</strong>
-            <small>Self-hosted instance</small>
-          </span>
-          <ChevronRight size={15} />
-        </button>
-        <button className="sidebar-search" onClick={() => setCommandOpen(true)}>
-          <Search size={15} />
-          <span>Jump to…</span>
-          <kbd>⌘ K</kbd>
-        </button>
-        <nav aria-label="Main navigation">
-          {navigation.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <div className="nav-label">{group.label}</div>
-              {group.items.filter(allowed).map((item) => (
-                <button
-                  aria-current={page === item.id ? "page" : undefined}
-                  key={item.id}
-                  className={page === item.id ? "active" : ""}
-                  onClick={() => navigate(item.id)}
-                >
-                  <item.icon size={18} strokeWidth={1.7} />
-                  <span>{item.name}</span>
-                  {page === item.id && <span className="nav-active-dot" />}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <button className="help-link" onClick={() => setHelp(true)}>
-            <CircleHelp size={17} />
-            <span>A little guidance</span>
-            <ArrowRight size={15} />
-          </button>
-          <div className="sidebar-instance">
-            <span className="live-dot" />
-            <span>Your infrastructure. Your rules.</span>
-          </div>
-        </div>
-      </aside>
-      {sidebar && (
+      {mobileMenuOpen && (
         <button
           className="sidebar-scrim"
           aria-label="Close navigation"
+          tabIndex={-1}
           onClick={() => setSidebar(false)}
         />
       )}
-      <div className="app-main">
-        <header className="topbar">
-          <div>
-            <IconButton
-              icon={Menu}
-              label="Toggle navigation"
-              className="mobile-menu"
-              onClick={() => setSidebar((v) => !v)}
-            />
-            <Breadcrumb>
-              {title}
-              {id && (
-                <>
-                  <ChevronRight size={12} />
-                  Editor
-                </>
-              )}
-            </Breadcrumb>
+      <aside
+        id="main-navigation"
+        ref={navigationRef}
+        className="sidebar"
+        role={mobileMenuOpen ? "dialog" : undefined}
+        aria-modal={mobileMenuOpen && !accountOpen ? true : undefined}
+        aria-label="Navigation"
+      >
+        <div className="sidebar-heading">
+          <button
+            className="brand-link"
+            onClick={() => navigate("overview")}
+            aria-label="Vectory overview"
+          >
+            <Brand />
+          </button>
+          <IconButton
+            className="sidebar-close"
+            icon={X}
+            label="Close navigation"
+            onClick={() => setSidebar(false)}
+          />
+        </div>
+        <IconButton
+          className="sidebar-collapse"
+          icon={sidebarCollapsed ? ChevronRight : ChevronLeft}
+          label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!sidebarCollapsed}
+          aria-controls="main-navigation"
+          onClick={toggleSidebarWidth}
+        />
+        <button
+          className="sidebar-search"
+          aria-label="Find a page"
+          title="Find a page (Ctrl K)"
+          onClick={(event) => openShellModal("search", event.currentTarget)}
+        >
+          <Search size={16} />
+          <span>Find a page</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <nav aria-label="Main navigation">
+          {primary.map((item) => (
+            <button
+              key={item.id}
+              aria-current={section === item.id ? "page" : undefined}
+              className={section === item.id ? "active" : ""}
+              onClick={() => navigate(item.id)}
+              aria-label={item.name}
+              title={item.name}
+            >
+              <item.icon size={18} strokeWidth={1.7} />
+              <span className="nav-label">{item.name}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <AccountMenu
+            key={user.id}
+            user={user}
+            open={accountOpen}
+            onOpenChange={setAccountOpen}
+            theme={appearance}
+            onThemeChange={setAppearance}
+            onNavigate={navigate}
+            onBeforeSignOut={beforeSignOut}
+            onSignedOut={finishSignOut}
+            onReload={reloadSignIn}
+            mobile={mobileNavigation}
+            currentPage={page}
+          />
+        </div>
+      </aside>
+      <div className="app-main" inert={mobileMenuOpen}>
+        {sessionEnded && (
+          <div className="session-ended" role="alert">
+            <span>Your session ended. Sign in again to continue.</span>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (
+                  !window.dispatchEvent(
+                    new Event("vectory:before-navigate", { cancelable: true }),
+                  )
+                )
+                  return;
+                setCSRF("");
+                setUser(null);
+                setAccountOpen(false);
+              }}
+            >
+              Sign in again
+            </Button>
           </div>
-          <div className="topbar-actions">
-            <span className="instance-pill">
-              <span className="live-dot" />
-              SELF-HOSTED WORKSPACE
-            </span>
-            <span className="topbar-divider" />
-            <IconButton
-              icon={dark ? Sun : Moon}
-              label={dark ? "Use light theme" : "Use dark theme"}
-              onClick={() => setDark((v) => !v)}
-            />
-            <IconButton
-              icon={CircleHelp}
-              label="Help and documentation"
-              onClick={() => setHelp(true)}
-            />
-            <div className="user-menu">
-              <span className="user-avatar">
-                {user.name?.slice(0, 2).toUpperCase() || "V"}
-              </span>
-              <div>
-                <strong>{user.name}</strong>
-                <small>{user.role}</small>
-              </div>
-              <IconButton
-                icon={LogOut}
-                label="Sign out"
-                onClick={() => void logout()}
-              />
-            </div>
-          </div>
+        )}
+        <header className="mobile-header">
+          <button
+            ref={navigationToggle}
+            className="icon-button"
+            aria-label="Toggle navigation"
+            title="Toggle navigation"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="main-navigation"
+            onClick={() => setSidebar((v) => !v)}
+          >
+            <Menu size={17} />
+          </button>
+          <Brand small />
         </header>
+        {tabs.length > 0 && (
+          <nav
+            className="section-tabs"
+            aria-label={
+              section === "devices"
+                ? "Device sections"
+                : section === "deployments"
+                  ? "Activity sections"
+                  : "Settings sections"
+            }
+          >
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                aria-current={page === tab.id ? "page" : undefined}
+                className={page === tab.id ? "active" : ""}
+                onClick={() => navigate(tab.id)}
+              >
+                <TabLabel icon={tab.icon}>{tab.name}</TabLabel>
+              </button>
+            ))}
+          </nav>
+        )}
+        <DeploymentRecoveryCenter key={user.id} user={user} notify={notify} />
         <main
-          key={route}
+          key={
+            page === "deployments" || page === "schedules" || page === "audit"
+              ? page
+              : routePath
+          }
           id="main-content"
           tabIndex={-1}
           className={`page-content ${page === "configurations" && id ? "editor-content" : ""}`}
         >
-          {page === "overview" ? (
-            <Overview user={user} navigate={navigate} />
-          ) : page === "devices" ? (
-            <Devices
-              user={user}
-              notify={notify}
-              navigate={navigate}
-              deviceId={id}
-            />
-          ) : page === "groups" ? (
-            <Groups user={user} notify={notify} />
-          ) : page === "configurations" ? (
-            id ? (
-              <Editor
-                key={id}
-                id={id}
-                user={user}
-                notify={notify}
-                navigate={navigate}
-              />
-            ) : (
-              <Configurations user={user} notify={notify} navigate={navigate} />
-            )
-          ) : page === "deployments" || page === "schedules" ? (
-            <Deployments
-              user={user}
-              scheduled={page === "schedules"}
-              notify={notify}
-              navigate={navigate}
-            />
-          ) : page === "policies" ? (
-            <Policies user={user} notify={notify} />
-          ) : page === "enrollment" && user.role === "admin" ? (
-            <Enrollment user={user} notify={notify} navigate={navigate} />
-          ) : page === "issues" ? (
-            <Issues navigate={navigate} />
-          ) : page === "audit" ? (
-            <AuditLog />
-          ) : page === "users" ? (
-            <UsersSecurity user={user} notify={notify} />
-          ) : page === "settings" ? (
-            <InstanceSettings />
-          ) : (
-            <ErrorBox message="This page is unavailable for your account." />
-          )}
+          <PageBoundary resetKey={`${user.id}:${user.role}:${route}`}>
+            <Suspense
+              fallback={
+                <div className="loading">
+                  <Spinner />
+                  Loading page…
+                </div>
+              }
+            >
+              {page === "docs" ? (
+                <Documentation topic={id} navigate={navigate} />
+              ) : page === "overview" ? (
+                <Overview user={user} navigate={navigate} />
+              ) : page === "devices" ? (
+                <Devices
+                  user={user}
+                  notify={notify}
+                  navigate={navigate}
+                  deviceId={id}
+                />
+              ) : page === "groups" ? (
+                <Groups user={user} notify={notify} />
+              ) : page === "configurations" ? (
+                id ? (
+                  <Editor
+                    initialDeviceId={selectedDeviceId}
+                    destination={pipelineDestination}
+                    key={`${user.id}:${user.role}:${id}`}
+                    id={id}
+                    user={user}
+                    notify={notify}
+                    navigate={navigate}
+                  />
+                ) : (
+                  <Configurations
+                    key={`${user.id}:${user.role}`}
+                    initialDeviceId={selectedDeviceId}
+                    destination={pipelineDestination}
+                    initialQuery={
+                      libraryView?.userId === user.id
+                        ? libraryView.query
+                        : undefined
+                    }
+                    onQueryChange={rememberLibraryView}
+                    user={user}
+                    notify={notify}
+                    navigate={navigate}
+                  />
+                )
+              ) : page === "deployments" || page === "schedules" ? (
+                <Deployments
+                  key={page}
+                  selectedDeploymentId={id || null}
+                  routeKey={route}
+                  routeQuery={
+                    readDeploymentQuery(route.split("?")[1] || "") ??
+                    (deploymentViews?.userId === user.id
+                      ? deploymentViews[page]
+                      : undefined)
+                  }
+                  initialQuery={
+                    deploymentViews?.userId === user.id
+                      ? deploymentViews[page]
+                      : undefined
+                  }
+                  onQueryChange={
+                    page === "schedules"
+                      ? rememberSchedules
+                      : rememberDeployments
+                  }
+                  user={user}
+                  scheduled={page === "schedules"}
+                  notify={notify}
+                  navigate={navigate}
+                />
+              ) : page === "policies" ? (
+                <Policies user={user} notify={notify} />
+              ) : page === "enrollment" && can(user, "operate") ? (
+                <Enrollment user={user} notify={notify} navigate={navigate} />
+              ) : page === "issues" ? (
+                <Issues
+                  user={user}
+                  notify={notify}
+                  navigate={navigate}
+                  deviceId={selectedDeviceId}
+                />
+              ) : page === "audit" ? (
+                <AuditLog
+                  selectedAuditId={id || null}
+                  routeKey={route}
+                  routeQuery={
+                    readAuditQuery(route.split("?")[1] || "") ??
+                    (auditView?.userId === user.id
+                      ? auditView.query
+                      : undefined)
+                  }
+                  initialQuery={
+                    auditView?.userId === user.id ? auditView.query : undefined
+                  }
+                  initialDeviceId={selectedDeviceId}
+                  onQueryChange={rememberAudit}
+                  navigate={navigate}
+                />
+              ) : page === "users" ? (
+                <UsersSecurity
+                  user={user}
+                  notify={notify}
+                  onUserChanged={setUser}
+                  onSignIn={finishSignOut}
+                  onReload={reloadSignIn}
+                />
+              ) : page === "settings" ? (
+                <InstanceSettings />
+              ) : (
+                <ErrorBox message="This page is unavailable for your account." />
+              )}
+            </Suspense>
+          </PageBoundary>
         </main>
       </div>
       {toast && (
         <div role="status" className="toast">
-          <Check size={18} />
           <span>{toast}</span>
           <IconButton
             icon={X}
@@ -656,78 +1345,16 @@ export default function App() {
       )}
       <Modal
         open={commandOpen}
+        returnFocusRef={shellModalReturnFocus}
         onClose={() => setCommandOpen(false)}
-        title="Jump to a page"
-        description="Find a workspace view. Keyboard shortcut: Control or Command + K."
+        title="Find a page"
       >
-        <div className="modal-body command-palette">
-          <div className="search-field">
-            <Search size={17} />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Where would you like to go?"
-              aria-label="Find a page"
-            />
-          </div>
-          {navigation
-            .flatMap((g) => g.items)
-            .filter(allowed)
-            .filter((i) => i.name.toLowerCase().includes(query.toLowerCase()))
-            .map((item) => (
-              <button key={item.id} onClick={() => navigate(item.id)}>
-                <item.icon size={18} />
-                {item.name}
-                <ArrowRight size={16} />
-              </button>
-            ))}
-        </div>
-      </Modal>
-      <Modal
-        open={help}
-        onClose={() => setHelp(false)}
-        title="A little guidance"
-        description="From your first device to a confidently deployed pipeline."
-      >
-        <div className="modal-body help-content">
-          <p>
-            <strong>1. Connect a device.</strong> Download an available native
-            agent, create a scoped enrollment token, and enroll over verified
-            HTTPS.
-          </p>
-          <p>
-            <strong>2. Build a pipeline.</strong> Create a configuration,
-            connect components visually, or import YAML, JSON, or TOML. Unknown
-            fields are preserved.
-          </p>
-          <p>
-            <strong>3. Publish and deploy.</strong> Publish an immutable
-            version, select devices or groups, and review conflicts before
-            activating.
-          </p>
-          <p>
-            <strong>4. Observe what actually happened.</strong> The agent
-            validates, applies, and verifies. An offline or verification-unknown
-            device is never counted as a successful rollout.
-          </p>
-          <div className="hint-box">
-            <ShieldCheck size={20} />
-            <span>
-              For installation, backups, recovery, and native compatibility, use
-              the documentation shipped in this repository’s <code>docs/</code>{" "}
-              directory.
-            </span>
-          </div>
-          <a
-            className="text-link"
-            target="_blank"
-            rel="noreferrer"
-            href="https://vector.dev/docs/"
-          >
-            Vector documentation <ExternalLink size={14} />
-          </a>
-        </div>
+        <PageFinder
+          key={commandRequest}
+          user={user}
+          currentPage={page}
+          navigate={navigate}
+        />
       </Modal>
     </div>
   );

@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-09-26T08:59:45.561Z",
+  "timestamp": "2026-09-26T23:22:41.758Z",
   "component_count": 201,
   "edge_count": 200,
-  "initial_render_ms": 408,
-  "code_view_ms": 184,
+  "initial_render_ms": 688,
+  "code_view_ms": 247,
   "browser": "Chromium via Playwright",
   "platform": "win32",
   "note": "One local cold-navigation sample including API fetch and browser rendering. Not a production capacity guarantee."

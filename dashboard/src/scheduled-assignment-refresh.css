@@ -1,0 +1,99 @@
+.scheduled-refresh-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.scheduled-refresh-modal > .modal-header,
+.scheduled-refresh-modal > .modal-footer {
+  flex-shrink: 0;
+}
+.scheduled-refresh-modal > .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.scheduled-refresh-loading,
+.scheduled-refresh-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scheduled-refresh-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.scheduled-refresh-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.scheduled-refresh-heading > span,
+.scheduled-refresh-filter-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.scheduled-refresh-notice {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-hover);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.scheduled-refresh-notice ul {
+  padding-left: 18px;
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+.scheduled-refresh-device,
+.scheduled-refresh-change {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.scheduled-refresh-device strong,
+.scheduled-refresh-change strong {
+  font-weight: 500;
+}
+.scheduled-refresh-device > span,
+.scheduled-refresh-change > span,
+.scheduled-refresh-device summary {
+  color: var(--muted);
+}
+.scheduled-refresh-device summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+.scheduled-refresh code {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.scheduled-refresh .data-table-scroll > table.data-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+.scheduled-refresh .data-table :is(th, td) {
+  min-width: 0;
+  max-width: none;
+  vertical-align: top;
+}
+.scheduled-refresh .data-table :is(th, td):first-child {
+  width: 52%;
+}
+@media (max-width: 600px) {
+  .scheduled-refresh-modal > .modal-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .scheduled-refresh .data-table :is(th, td) {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .scheduled-refresh .data-table :is(th, td):first-child {
+    width: 46%;
+  }
+}

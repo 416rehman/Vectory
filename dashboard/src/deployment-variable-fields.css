@@ -1,0 +1,95 @@
+.deployment-variable-fields {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+.deployment-variable-heading h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.deployment-variable-heading p,
+.deployment-variable-overrides > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.deployment-variable-defaults {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.deployment-variable-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.deployment-variable-card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.deployment-variable-card-heading span,
+.deployment-variable-card > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.deployment-variable-card > small {
+  overflow-wrap: anywhere;
+}
+.deployment-variable-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.deployment-variable-toggle input {
+  accent-color: var(--accent);
+}
+.deployment-variable-overrides {
+  display: grid;
+  gap: 12px;
+}
+.deployment-variable-overrides[open] {
+  padding-bottom: 12px;
+}
+.deployment-variable-device-search,
+.deployment-variable-device-select {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 550;
+}
+.deployment-variable-device-values {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.deployment-variable-device-values h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.deployment-variable-device-values > div {
+  display: grid;
+  gap: 7px;
+}
+.deployment-variable-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -67,33 +69,63 @@ func recoverIdentityTransition(dir string, cred Credentials, st State) (State, e
 }
 
 func Unenroll(dir string) error {
-	unlock, err := Lock(dir)
+	unlock, err := lockSettingsMaintenance(dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	s, err := LoadSettings(dir)
+	doc, err := loadSettingsDocument(dir)
 	if err != nil {
 		return err
 	}
-	st, err := LoadState(dir)
+	s := doc.value
+	stateDoc, err := loadMaintenanceDocument(filepath.Join(dir, "state.json"))
 	if err != nil {
 		return err
+	}
+	var st State
+	if err = json.Unmarshal(stateDoc.raw, &st); err != nil {
+		return err
+	}
+	s.Name, s.Server = "", ""
+	settingsUpdate, err := doc.prepare(s)
+	if err != nil {
+		return err
+	}
+	defer settingsUpdate.close()
+	nextState, err := json.MarshalIndent(resetForReplacement(st, ""), "", "  ")
+	if err != nil {
+		return err
+	}
+	stateUpdate, err := prepareMaintenanceWrite(stateDoc.path, stateDoc.raw, append(nextState, '\n'))
+	if err != nil {
+		return err
+	}
+	defer stateUpdate.close()
+	if err = settingsUpdate.check(); err != nil {
+		return err
+	}
+	// Both file replacements and metadata are prepared before identity removal.
+	// Deletion and two renames are not a multi-file transaction; later failures
+	// must not be represented as an untouched installation.
+	partial := func(err error) error {
+		return fmt.Errorf("unenrollment may be partially applied; preserve local files and inspect settings and status before continuing: %w", err)
 	}
 	for _, name := range []string{"identity.json", "credentials.json", "private-key.pem", "enrollment.json", "renewal-key.pem", "recovery-commit.json", "journal.json"} {
 		if err = os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
-			return err
+			return partial(err)
 		}
 	}
 	if err = cleanupPendingRecovery(filepath.Join(dir, "pending-recovery")); err != nil {
-		return err
+		return partial(err)
 	}
-	if err = SaveState(dir, resetForReplacement(st, "")); err != nil {
-		return err
+	if err = stateUpdate.commit(); err != nil {
+		return partial(err)
 	}
-	s.Name = ""
-	s.Server = ""
-	return WriteJSON(filepath.Join(dir, "settings.json"), s)
+	if err = settingsUpdate.commit(); err != nil {
+		return partial(err)
+	}
+	return nil
 }
 
 // Recovery requires an administrator-issued single-device recovery token and
@@ -104,6 +136,98 @@ func RecoverEnrollment(ctx context.Context, dir string, s Settings, token string
 		return err
 	}
 	defer unlock()
+	s, token, err = enrollmentInput(s, token)
+	if err != nil {
+		return err
+	}
+	if err = recoveryEnrollmentPreflight(dir, s, token); err != nil {
+		return err
+	}
+	client, err := NewClient(s, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return recoverEnrollmentPrepared(ctx, dir, s, token, client)
+}
+
+// Validate local recovery ownership without completing an old transition,
+// removing staging files, rewriting settings or allocating a new identity.
+func recoveryEnrollmentPreflight(dir string, s Settings, token string) error {
+	old, _, err := ReadIdentity(dir)
+	if err != nil || old.DeviceID == "" {
+		return errors.New("existing device identity is required for recovery")
+	}
+	stateDoc, err := loadMaintenanceDocument(filepath.Join(dir, "state.json"))
+	if err != nil {
+		return errors.New("existing durable state is required for recovery")
+	}
+	var st State
+	if err = json.Unmarshal(stateDoc.raw, &st); err != nil {
+		return err
+	}
+	var transition identityTransition
+	transitionExists, err := readOptionalEnrollmentJSON(filepath.Join(dir, "recovery-commit.json"), &transition)
+	if err != nil {
+		return err
+	}
+	if transitionExists {
+		if transition.OldDeviceID == "" || transition.NewDeviceID == "" || transition.OldDeviceID == transition.NewDeviceID || old.DeviceID != transition.OldDeviceID && old.DeviceID != transition.NewDeviceID {
+			return errors.New("recovery identity journal does not match credential")
+		}
+		if old.DeviceID == transition.NewDeviceID {
+			st = resetForReplacement(st, old.DeviceID)
+		}
+	} else if st.DeviceID != "" && st.DeviceID != old.DeviceID {
+		return errors.New("credential identity differs from durable generation owner; explicit recovery required")
+	}
+	pending := filepath.Join(dir, "pending-recovery")
+	var origin pendingRecovery
+	exists, err := readOptionalEnrollmentJSON(filepath.Join(pending, "origin.json"), &origin)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if origin.OldDeviceID == "" || !approvedDigest.MatchString(origin.TokenSHA256) {
+			return errors.New("pending recovery origin is invalid; preserve local files")
+		}
+		if origin.OldDeviceID != old.DeviceID {
+			if origin.NewDeviceID != old.DeviceID || st.DeviceID != old.DeviceID {
+				return errors.New("pending recovery belongs to a different identity; inspect local state")
+			}
+			// An already committed recovery is cleaned by the existing commit
+			// path only after all prospective input/trust checks have succeeded.
+			return nil
+		}
+		if origin.TokenSHA256 != Digest([]byte(token)) {
+			return errors.New("pending recovery must retry its original token before starting another request")
+		}
+	} else {
+		for _, name := range []string{"identity.json", "credentials.json", "private-key.pem", "enrollment.json"} {
+			if _, err := os.Lstat(filepath.Join(pending, name)); err == nil {
+				return errors.New("pending recovery files have no origin; preserve them for inspection")
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	next, key, err := ReadIdentity(pending)
+	if err == nil {
+		if !exists || next.DeviceID == old.DeviceID {
+			return errors.New("pending replacement identity has no matching recovery origin")
+		}
+		return validateCredentials(next, key, "")
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return enrollmentPreflight(pending, s)
+}
+
+func recoverEnrollmentPrepared(ctx context.Context, dir string, s Settings, token string, client *Client) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	old, _, err := ReadIdentity(dir)
 	if err != nil {
 		return errors.New("existing device identity is required for recovery")
@@ -147,7 +271,18 @@ func RecoverEnrollment(ctx context.Context, dir string, s Settings, token string
 	}
 	next, key, err := ReadIdentity(pending)
 	if os.IsNotExist(err) {
-		if err = Enroll(ctx, pending, s, token); err != nil {
+		// The caller owns the root lock and has validated prospective trust.
+		// Retain the staging lock for direct frozen-settings API callers.
+		unlock, lockErr := Lock(pending)
+		if lockErr != nil {
+			return lockErr
+		}
+		err = enrollmentPreflight(pending, s)
+		if err == nil {
+			err = enrollPrepared(ctx, pending, s, token, client)
+		}
+		unlock()
+		if err != nil {
 			return err
 		}
 		next, key, err = ReadIdentity(pending)

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
@@ -79,7 +80,48 @@ func syncDir(path string) error {
 	defer f.Close()
 	return f.Sync()
 }
-func Lock(dir string) (func(), error) {
+
+// The parent directory remains after a state purge. Locking it briefly while
+// opening agent.lock prevents a second process from locking a newly-created
+// agent.lock after purge has unlinked the original one.
+func lockLifecycle(dir string) (func(), error) {
+	parent := filepath.Dir(filepath.Clean(dir))
+	if err := SafePath(parent); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(parent)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.IsDir() {
+		f.Close()
+		return nil, errors.New("state parent is not a directory")
+	}
+	if err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		return nil, errors.New("another agent lifecycle operation is running")
+	}
+	return func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() }, nil
+}
+
+func purgeNeedsAgentUnlock() bool { return false }
+
+func purgeMarkerIdentity(dir string) (string, error) { return filepath.Clean(dir), nil }
+
+func stateDirectoryIdentity(dir string) (string, error) {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok {
+		return "", errors.New("state path is not a directory")
+	}
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino), nil
+}
+
+func lockAgentFile(dir string) (func(), error) {
 	p := dir + "/agent.lock"
 	if e := SafePath(p); e != nil {
 		return nil, e

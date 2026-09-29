@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/control.tsx","./src/editor.tsx","./src/fleet.tsx","./src/recoveryactions.tsx","./src/synthetictester.tsx","./src/targetdialog.tsx","./src/telemetrypanel.tsx","./src/api.ts","./src/catalog.test.ts","./src/catalog.ts","./src/main.tsx","./src/ui.tsx","./vite.config.ts"],"version":"5.9.3"}

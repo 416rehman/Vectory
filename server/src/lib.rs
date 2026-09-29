@@ -1,13 +1,40 @@
+pub mod access_requests;
+pub mod accounts;
 pub mod api;
+pub mod assignment_removal;
+pub mod audit;
+pub mod audit_exports;
 pub mod auth;
+pub mod canary_gate;
+pub mod configuration_attempt;
 pub mod crypto;
 pub mod db;
+pub mod deployment_history;
+pub mod deployment_requests;
 pub mod device;
+pub mod device_recovery_requests;
+pub mod device_revocation;
 pub mod error;
+pub mod group_requests;
+pub mod groups;
+pub mod issues;
+pub mod login_challenges;
 pub mod maintenance;
 pub mod mfa;
+pub mod pipeline_library;
+pub mod pipeline_requests;
+pub mod pipelines;
+pub mod policy_requests;
+pub mod publication_requests;
+pub mod reset_requests;
+pub mod restored_access;
+pub mod rollback_review;
 pub mod rollout;
+pub mod scheduled_refresh;
+pub mod token_requests;
+pub mod user_requests;
 pub mod validation;
+pub mod variables;
 #[cfg(windows)]
 mod windows_acl;
 
@@ -39,6 +66,7 @@ pub struct App {
     pub writer: Mutex<()>,
     pub settings: Settings,
     pub keys: crypto::Keys,
+    pub audit_exports: Arc<audit_exports::Store>,
     pub validation_slots: tokio::sync::Semaphore,
     pub agent_request_slots: tokio::sync::Semaphore,
     pub instance_lock: std::fs::File,
@@ -70,6 +98,11 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         .connect_with(options)
         .await?;
     sqlx::migrate!().run(&pool).await?;
+    // A restart or point-in-time restore must never resume a password-verified
+    // pre-session capability. The exclusive instance lock makes this safe.
+    sqlx::query("DELETE FROM login_challenges")
+        .execute(&pool)
+        .await?;
     let mfa_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM user_mfa")
         .fetch_one(&pool)
         .await?;
@@ -95,11 +128,13 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
             "Active credentials reference missing manifest signing keys; restore the matching keys/signing-history directory"
         )
     }
+    let audit_exports = audit_exports::Store::initialize(&settings.data_dir)?;
     Ok(Arc::new(App {
         pool,
         writer: Mutex::new(()),
         settings,
         keys,
+        audit_exports,
         limits: Default::default(),
         device_limits: Default::default(),
         agent_request_slots: tokio::sync::Semaphore::new(128),

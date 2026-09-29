@@ -1,0 +1,369 @@
+"""Independent stopped-installation metrics-endpoint lifecycle proof, using only newly-created synthetic state.
+
+Never enrolls, runs a daemon/workload, registers a service, or reads existing state.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+from contextlib import contextmanager
+import ctypes
+from ctypes import wintypes
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_snapshot() -> dict[str, str]:
+    names = ["agent/cmd/vectory/main.go", "agent/internal/agent/reconcile.go",
+             "agent/internal/agent/recovery.go", "agent/internal/agent/secrets.go",
+             "agent/internal/agent/telemetry.go", "agent/internal/agent/storage.go",
+             "agent/internal/agent/types.go", "agent/internal/agent/platform_windows.go",
+             "agent/internal/agent/platform_unix.go", "agent/internal/agent/settings_update.go", "agent/internal/agent/install_options.go"]
+    paths = [ROOT / name for name in names]
+    paths += list((ROOT / "agent/internal/agent").glob("readoption*.go"))
+    paths += list((ROOT / "agent/internal/agent").glob("install_options*.go"))
+    paths += list((ROOT / "agent/internal/agent").glob("metrics*.go"))
+    paths += list((ROOT / "agent/cmd/vectory").glob("metrics*.go"))
+    paths += [ROOT / "agent/cmd/vectory/install_test.go", ROOT / "agent/internal/agent/settings_update_test.go"]
+    return {path.relative_to(ROOT).as_posix(): sha(path) for path in sorted(paths)}
+
+
+@contextmanager
+def deny_delete(path: Path):
+    """Allow reading/writing the existing file, but deny replacement via sharing."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(path), 0x80000000, 3, None, 3, 0, None)
+    assert handle != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+    try:
+        yield
+    finally:
+        assert kernel.CloseHandle(handle)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agent", type=Path, required=True)
+    parser.add_argument("--phase", choices=["before", "after"], required=True)
+    parser.add_argument("--vector", type=Path, default=ROOT / ".local/tools/vector-0.58.0/bin/vector.exe")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    assert os.name == "nt", "This harness qualifies Windows only"
+    agent, output = args.agent.resolve(), args.output.resolve()
+    assert output.is_relative_to(ROOT / ".local")
+    assert output.name.startswith("metrics-endpoint-"), "Use this slice's new bounded output namespace"
+    output.mkdir(parents=True, exist_ok=True)
+    fixture = output / ("fixture-" + str(uuid.uuid4()))
+    binary_dir, state_dir, managed_dir = fixture / "bin", fixture / "state", fixture / "managed"
+    binary_dir.mkdir(parents=True)
+    managed_dir.mkdir()
+    binary, managed = binary_dir / "vector.exe", managed_dir / "managed.json"
+    shutil.copyfile(args.vector, binary)
+    managed.write_text('{"sources":{"fixture":{"type":"demo_logs","format":"json"}},"sinks":{"discard":{"type":"blackhole","inputs":["fixture"]}}}\n', encoding="utf-8")
+    commands, groups = [], []
+    report = {"recorded_at": datetime.now(timezone.utc).isoformat(), "passed": False,
+              "scope": "Independent Windows CLI on newly-created synthetic local state. Passive private loopback connection sentinels only; no Vectory server, real credentials, enrollment, daemon, workload, services, or global trust changes.",
+              "agent": {"path": str(agent), "sha256": sha(agent)},
+              "vector": {"path": str(args.vector), "sha256": sha(args.vector)},
+              "commands": commands, "groups": groups, "harness": {"path": str(Path(__file__).resolve()), "sha256": sha(Path(__file__))},
+              "harness_sha256": sha(Path(__file__)),
+              "source_sha256": source_snapshot(), "phase": args.phase, "fixture_path": str(fixture), "fixture_removed": False}
+
+    def call(*arguments):
+        started = time.monotonic()
+        result = subprocess.run([str(agent), *map(str, arguments)], capture_output=True, text=True,
+                                timeout=35, creationflags=subprocess.CREATE_NO_WINDOW)
+        commands.append({"arguments": [str(arg).replace(str(fixture), "<private-fixture>") for arg in arguments],
+                         "exit_code": result.returncode, "elapsed_seconds": round(time.monotonic() - started, 3),
+                         "stdout": result.stdout.strip(), "stderr": result.stderr.strip()})
+        return result
+
+    def success(*arguments):
+        result = call(*arguments)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
+    def read(path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write(path, value):
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    def snapshot():
+        return {p.relative_to(fixture).as_posix(): sha(p) for p in sorted(fixture.rglob("*"))
+                if p.is_file() and p.name != "agent.lock" and not p.is_relative_to(binary_dir)}
+
+    def dacl(path, add=False):
+        assert path.resolve().is_relative_to(fixture.resolve())
+        if add:
+            changed = subprocess.run(["icacls", str(path), "/grant", "*S-1-5-32-544:(R)"],
+                                     capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+            assert changed.returncode == 0, changed.stderr
+        script = "$ErrorActionPreference='Stop'; (Get-Acl -LiteralPath '" + str(path).replace("'", "''") + "').Sddl"
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                                capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def label(path, add=False):
+        assert path.resolve().is_relative_to(fixture.resolve())
+        advapi, kernel = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32", use_last_error=True)
+        pointer = ctypes.c_void_p
+        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD)]
+        advapi.GetSecurityDescriptorSacl.argtypes = [pointer, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(pointer), ctypes.POINTER(wintypes.BOOL)]
+        advapi.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer]
+        advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, ctypes.POINTER(pointer), ctypes.POINTER(pointer)]
+        advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [pointer, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD)]
+        kernel.LocalFree.argtypes = [pointer]
+        if add:
+            descriptor = pointer()
+            assert advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW("S:(ML;;NWNR;;;ME)", 1, ctypes.byref(descriptor), None)
+            try:
+                present, defaulted, sacl = wintypes.BOOL(), wintypes.BOOL(), pointer()
+                assert advapi.GetSecurityDescriptorSacl(descriptor, ctypes.byref(present), ctypes.byref(sacl), ctypes.byref(defaulted)) and present.value
+                assert advapi.SetNamedSecurityInfoW(str(path), 1, 0x10, None, None, None, sacl) == 0
+            finally:
+                kernel.LocalFree(descriptor)
+        sacl, descriptor, rendered = pointer(), pointer(), pointer()
+        assert advapi.GetNamedSecurityInfoW(str(path), 1, 0x10, None, None, None, ctypes.byref(sacl), ctypes.byref(descriptor)) == 0
+        try:
+            assert advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, 0x10, ctypes.byref(rendered), None)
+            return ctypes.wstring_at(rendered)
+        finally:
+            if rendered:
+                kernel.LocalFree(rendered)
+            kernel.LocalFree(descriptor)
+
+    def access():
+        return {path.relative_to(fixture).as_posix(): {"owner_group_dacl": dacl(path), "mandatory_label": label(path)}
+                for path in [state_dir, state_dir / "settings.json", state_dir / "state.json", state_dir / "agent.lock"]}
+
+    def check_access():
+        assert access() == expected_access, "An existing directory/settings/state/lock descriptor changed"
+
+    def preserved(before, allowed=()):
+        after = snapshot()
+        assert {p: h for p, h in before.items() if p not in allowed} == {p: h for p, h in after.items() if p not in allowed}, "Unrelated protected fixture bytes changed"
+        check_access()
+
+    def accept_group(name, before, allowed=(), **details):
+        preserved(before, allowed)
+        groups.append({"name": name, "passed": True, **details})
+
+    def reject_unchanged(name, *arguments):
+        before = snapshot()
+        result = call(*arguments)
+        assert result.returncode != 0, name + " unexpectedly succeeded"
+        accept_group(name, before, rejected=True)
+        return result
+
+    listeners = []
+    def sentinel():
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.setblocking(False)
+        listeners.append(listener)
+        return f"http://127.0.0.1:{listener.getsockname()[1]}/metrics"
+    endpoint = sentinel()
+    report["synthetic_observed_endpoint"] = endpoint
+    try:
+        success("install", "--state-dir", state_dir, "--vector-binary", binary, "--managed-config", managed, "--adopt", "--metrics-url", endpoint)
+        settings_path, state_path = state_dir / "settings.json", state_dir / "state.json"
+        settings = read(settings_path)
+        future = {"exact": 18446744073709551615, "list": [None, False, 9007199254740993]}
+        settings["future_extension"] = future
+        settings["capability_policy"]["future_allowance"] = future
+        settings["server"] = "https://synthetic-instance.invalid"
+        settings["name"] = "synthetic-preserved-identity"
+        write(settings_path, settings)
+        initial_state = read(state_path)
+        initial_state.update({"device_id": "0bf8c5e2-9a45-457a-a887-8028798a1810", "highest_generation": 34,
+                              "highest_policy_generation": 28, "reported_generation": 33, "accepted": True,
+                              "apply_state": "failed", "failed_generation": 34, "failed_effective_sha256": "b" * 64,
+                              "actual_sha256": "a" * 64, "last_good_sha256": "a" * 64, "secret_revision": 24,
+                              "applied_secret_revision": 23, "future_state": future,
+                              "policy": {"heartbeat_seconds": 90, "sync_paused": True, "telemetry_enabled": False},
+                              "error": {"code": "VALIDATION_FAILED", "stage": "validation", "message": "Synthetic retained rejection"}})
+        write(state_path, initial_state)
+        (state_dir / "paused").write_bytes(b"Synthetic durable local pause\n")
+        (state_dir / "fixture-identity.txt").write_bytes(b"Synthetic marker, not a credential\n")
+        for path in [state_dir, settings_path, state_path, state_dir / "agent.lock"]:
+            dacl(path, True)
+            label(path, True)
+        expected_access = access()
+        report["fixture_access"] = expected_access
+        assert settings["metrics_url"] == endpoint
+        if args.phase == "before":
+            report["classification"] = "expected_missing_workflow_observation"
+            report["correctness_acceptance"] = False
+            before = snapshot()
+            success("install", "--state-dir", state_dir)
+            assert read(settings_path)["metrics_url"] == endpoint
+            accept_group("Omitted install metrics option preserves configured endpoint", before, expected_observation=True)
+            reject_unchanged("Empty install metrics option cannot clear endpoint", "install", "--state-dir", state_dir, "--metrics-url=")
+            reject_unchanged("Standalone configure-metrics command is unavailable", "configure-metrics", "--state-dir", state_dir, "--metrics-url", endpoint)
+            reject_unchanged("Standalone explicit metrics clear is unavailable", "configure-metrics", "--state-dir", state_dir, "--clear-metrics-url")
+            reject_unchanged("Install explicit metrics clear flag is unavailable", "install", "--state-dir", state_dir, "--clear-metrics-url")
+            assert read(settings_path)["metrics_url"] == endpoint
+        else:
+            report["classification"] = "correctness_acceptance"
+            next_endpoint = sentinel()
+            current_expected = read(settings_path)
+            configure = ("configure-metrics", "--state-dir", state_dir)
+            install = ("install", "--state-dir", state_dir)
+
+            def saved(name, value, *arguments, notice=False):
+                before = snapshot()
+                result = success(*arguments)
+                if value:
+                    current_expected["metrics_url"] = value
+                else:
+                    current_expected.pop("metrics_url", None)
+                assert read(settings_path) == current_expected, "Metrics operation changed unrelated settings"
+                if notice:
+                    output_text = (result.stdout + result.stderr).lower()
+                    assert "restart" in output_text and "pipeline" in output_text and "exporter" in output_text
+                    assert ("cleared" if not value else "saved") in output_text
+                accept_group(name, before, ("state/settings.json",), endpoint_present=bool(value))
+
+            before = snapshot()
+            success(*install)
+            accept_group("Omitted install option preserves configured endpoint and exact bytes", before)
+            before = snapshot()
+            success(*configure, "--metrics-url", endpoint)
+            accept_group("Same standalone URL is a byte-identical no-op", before)
+            saved("Standalone set replaces endpoint without resetting state", next_endpoint, *configure, "--metrics-url", next_endpoint, notice=True)
+            before = snapshot()
+            success(*configure, "--metrics-url", next_endpoint)
+            accept_group("Repeated standalone set remains a byte-identical no-op", before)
+            saved("Explicit standalone clear removes only metrics URL", None, *configure, "--clear-metrics-url", notice=True)
+            before = snapshot()
+            success(*configure, "--clear-metrics-url")
+            accept_group("Repeated standalone clear preserves exact bytes and metadata", before)
+            saved("Install can explicitly set metrics after clear", endpoint, *install, "--metrics-url", endpoint)
+            saved("Install explicit clear removes only metrics URL", None, *install, "--clear-metrics-url")
+            before = snapshot()
+            success(*install, "--clear-metrics-url")
+            accept_group("Repeated install clear is a byte-identical no-op", before)
+            saved("Standalone can re-enable previously cleared metrics", next_endpoint, *configure, "--metrics-url", next_endpoint)
+
+            invalid_arguments = [
+                ("Missing standalone action", configure),
+                ("Empty standalone URL", (*configure, "--metrics-url=")),
+                ("Missing URL flag value", (*configure, "--metrics-url")),
+                ("Explicit false clear is not an action", (*configure, "--clear-metrics-url=false")),
+                ("Standalone URL and clear conflict", (*configure, "--metrics-url", endpoint, "--clear-metrics-url")),
+                ("Standalone URL conflicts even with false clear", (*configure, "--metrics-url", endpoint, "--clear-metrics-url=false")),
+                ("Unexpected positional input is refused", (*configure, "--clear-metrics-url", "unexpected")),
+                ("Unknown flag is refused", (*configure, "--clear-metrics")),
+            ]
+            for name, arguments in invalid_arguments:
+                reject_unchanged(name, *arguments)
+            port = endpoint.split(":")[-1].split("/")[0]
+            invalid_urls = {
+                "HTTPS is unsupported": f"https://127.0.0.1:{port}/metrics",
+                "Non-loopback address is refused": f"http://192.0.2.1:{port}/metrics",
+                "Hostname is refused without resolution": f"http://localhost:{port}/metrics",
+                "Port zero is refused": "http://127.0.0.1:0/metrics",
+                "Out-of-range port is refused": "http://127.0.0.1:65536/metrics",
+                "Missing explicit port is refused": "http://127.0.0.1/metrics",
+                "Wrong scrape path is refused": endpoint.replace("/metrics", "/other"),
+                "Query is refused": endpoint + "?unsafe=fixture",
+                "Fragment is refused": endpoint + "#fixture",
+                "User information is refused": endpoint.replace("http://", "http://synthetic:fixture-only@"),
+            }
+            for name, value in invalid_urls.items():
+                reject_unchanged(name, *configure, "--metrics-url", value)
+            reject_unchanged("Install false clear is refused", *install, "--clear-metrics-url=false")
+            reject_unchanged("Install URL and clear conflict", *install, "--metrics-url", endpoint, "--clear-metrics-url")
+            reject_unchanged("Install empty URL still cannot mean clear", *install, "--metrics-url=")
+            policy_input = fixture / "invalid-policy.json"
+            policy_input.write_bytes(b"null")
+            reject_unchanged("Invalid composed capability option cannot clear metrics", *install, "--clear-metrics-url", "--capability-policy", policy_input)
+            binding_input = fixture / "invalid-bindings.json"
+            binding_input.write_bytes(b'{"INVALID":false}')
+            reject_unchanged("Invalid composed binding option cannot clear metrics", *install, "--clear-metrics-url", "--secret-files", binding_input)
+            fresh = fixture / "fresh-refused"
+            fresh_command = ("install", "--state-dir", fresh, "--vector-binary", binary, "--managed-config", fixture / "fresh-managed" / "managed.json", "--adopt")
+            reject_unchanged("Fresh invalid URL creates no installation or backup", *fresh_command, "--metrics-url", "http://127.0.0.1:0/metrics")
+            assert not fresh.exists() and not (fixture / "fresh-managed").exists()
+            reject_unchanged("Fresh conflicting metrics actions create no installation or backup", *fresh_command, "--metrics-url", endpoint, "--clear-metrics-url")
+            assert not fresh.exists() and not (fixture / "fresh-managed").exists()
+            import msvcrt
+            with (state_dir / "agent.lock").open("r+b") as held:
+                held.seek(0)
+                msvcrt.locking(held.fileno(), msvcrt.LK_NBLCK, 1)
+                try:
+                    reject_unchanged("Held operation lock refuses endpoint replacement", *configure, "--metrics-url", endpoint)
+                    reject_unchanged("Held operation lock refuses endpoint clear", *configure, "--clear-metrics-url")
+                finally:
+                    held.seek(0)
+                    msvcrt.locking(held.fileno(), msvcrt.LK_UNLCK, 1)
+            with deny_delete(settings_path):
+                reject_unchanged("Held settings file refuses endpoint replacement without effects", *configure, "--metrics-url", endpoint)
+                reject_unchanged("Held settings file refuses endpoint clear without effects", *configure, "--clear-metrics-url")
+            saved("Later explicit clear succeeds after local refusal resolves", None, *configure, "--clear-metrics-url", notice=True)
+            before = snapshot()
+            result = success(*configure, "--clear-metrics-url", "--json")
+            receipt = json.loads(result.stdout)
+            assert receipt["command"] == "configure-metrics" and receipt["status"] == "ok"
+            assert receipt["metrics_collection_configured"] is False
+            assert "restart" in receipt["next_action"].lower() and "unchanged" in receipt["next_action"].lower()
+            accept_group("JSON receipt reports a saved setting and restart boundary without endpoint data", before)
+            assert read(settings_path) == current_expected
+            for command in commands:
+                assert endpoint not in command["stdout"] + command["stderr"]
+                assert next_endpoint not in command["stdout"] + command["stderr"]
+            report["configured_urls_absent_from_outputs"] = True
+        assert read(state_path) == initial_state
+        for listener in listeners:
+            try:
+                connected, _ = listener.accept()
+                connected.close()
+                raise AssertionError("Maintenance attempted to contact the synthetic endpoint")
+            except BlockingIOError:
+                pass
+        report["endpoint_contact_count"] = 0
+        report["source_end_sha256"] = source_snapshot()
+        assert report["source_sha256"] == report["source_end_sha256"], "Source changed during execution"
+        report["passed"] = True
+        report["counts"] = {"groups": len(groups), "commands": len(commands)}
+        report["limits"] = ["Synthetic protected files, private loopback connection sentinel and seeded state only; no credential material, enrollment, workload or service.",
+                            "Before groups are expected observations, excluded from correctness acceptance counts; the final after matrix is a separate run.",
+                            "Metadata check uses current operator and synthetic grants/MIC, not SCM impersonation or Unix runtime proof."]
+    except Exception as error:
+        report["error"] = repr(error)
+        raise
+    finally:
+        for listener in listeners:
+            listener.close()
+        if report["passed"]:
+            assert fixture.resolve().parent == output and fixture.name.startswith("fixture-")
+            shutil.rmtree(fixture)
+            report["fixture_removed"] = not fixture.exists()
+        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"passed": report["passed"], "phase": args.phase, "groups": len(groups), "report": str(output / "report.json")}))
+
+
+if __name__ == "__main__":
+    main()
+

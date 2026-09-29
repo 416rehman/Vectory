@@ -1,0 +1,1726 @@
+// Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
+import { createServer } from "vite";
+import { chromium, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { resolve, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import net from "node:net";
+import { createHash } from "node:crypto";
+const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dashboard, "..");
+const output = resolve(
+  root,
+  process.env.VECTORY_ROLLBACK_RECOVERY_OUTPUT || ".local/rollback-recovery",
+);
+await mkdir(output, { recursive: true });
+const virtual = "\0virtual:rollback-recovery";
+const reservation = net.createServer();
+await new Promise((resolve, reject) => {
+  reservation.once("error", reject);
+  reservation.listen(0, "127.0.0.1", resolve);
+});
+const port = reservation.address().port;
+await new Promise((resolve) => reservation.close(resolve));
+const server = await createServer({
+  root: dashboard,
+  cacheDir: resolve(output, "vite-cache"),
+  configFile: resolve(dashboard, "vite.config.ts"),
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {}, hmr: false },
+  plugins: [
+    {
+      name: "isolated-rollback-recovery",
+      resolveId(id) {
+        if (id === "virtual:rollback-recovery") return virtual;
+      },
+      load(id) {
+        if (id === virtual)
+          return `import React from 'react';import{createRoot}from'react-dom/client';import App from'/src/App.tsx';import TargetDialog from'/src/TargetDialog.tsx';import{setCSRF}from'/src/api.ts';import'/src/styles.css';setCSRF('synthetic');const root=createRoot(document.getElementById('root'));let key=0;window.mount=(name,props={})=>{window.notices=[];window.fixtureClosed=false;root.render(name==='app'?React.createElement(App,{key:++key}):React.createElement(TargetDialog,{key:++key,onDone:x=>window.notices.push(x),onClose:()=>window.fixtureClosed=true,...props}));};window.ready=true;`;
+      },
+      configureServer(vite) {
+        vite.middlewares.use(async (req, res, next) => {
+          const stream = state?.streams?.get(req.url);
+          if (stream) {
+            state.streams.delete(req.url);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.write(stream.slice(0, 5));
+            state.bodyHolds.push(() => res.end(stream.slice(5)));
+            res.on("close", () => {
+              if (!res.writableEnded) state.abortedBodies++;
+            });
+            return;
+          }
+          if (req.url !== "/__rollback-recovery") return next();
+          res.setHeader("Content-Type", "text/html");
+          res.end(
+            await vite.transformIndexHtml(
+              req.url,
+              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic table verification</title></head><body><div id="root"></div><script type="module">import "virtual:rollback-recovery";</script></body></html>',
+            ),
+          );
+        });
+      },
+    },
+  ],
+});
+await server.listen();
+const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+const browser = await chromium.launch();
+const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const created = "2026-09-27T12:00:00Z";
+function correlatedReceipt(record) {
+  return {
+    selector: { device_ids: [id(1), id(2)], group_ids: [], exclude_ids: [] },
+    rollout: {
+      kind: "all",
+      canary_size: 1,
+      batch_size: 1,
+      observation_seconds: 0,
+      failure_threshold: 0,
+    },
+    request_correlation: true,
+    ...record.result,
+    request_id: record.body.request_id,
+    operation: record.path ? "rollback" : "create",
+    source_deployment_id: record.path ? record.path.split("/")[2] : null,
+  };
+}
+function corruptCorrelation(value, fault) {
+  const changed = structuredClone(value);
+  const receipt = changed.found ? changed.deployment : changed;
+  if (fault === "missing") {
+    for (const field of ["request_id", "operation", "source_deployment_id"]) {
+      delete changed[field];
+      delete receipt[field];
+    }
+  } else if (fault === "key") {
+    changed.request_id = id(998);
+    receipt.request_id = id(998);
+  } else if (fault === "kind") {
+    changed.operation = receipt.operation === "create" ? "rollback" : "create";
+    receipt.operation = changed.operation;
+  } else if (fault === "source") {
+    changed.source_deployment_id = id(997);
+    receipt.source_deployment_id = id(997);
+  } else if (fault === "inner") {
+    receipt.request_id = id(998);
+  } else if (fault === "unrelated") {
+    receipt.id = id(999);
+    changed.request_id = id(998);
+    receipt.request_id = id(998);
+    changed.operation = receipt.operation === "create" ? "rollback" : "create";
+    receipt.operation = changed.operation;
+    changed.source_deployment_id = id(997);
+    receipt.source_deployment_id = id(997);
+  } else if (fault === "source-result") {
+    receipt.id = id(40);
+  }
+  return changed;
+}
+
+const reviewToken = "a".repeat(64);
+const policy = {
+  heartbeat_seconds: 60,
+  sync_paused: true,
+  telemetry_enabled: true,
+};
+const config = {
+  sources: { seed: { type: "demo_logs", format: "json" } },
+  sinks: { discard: { type: "blackhole", inputs: ["seed"] } },
+};
+const pipeline = {
+  id: id(10),
+  name: "Synthetic deployment handoff",
+  description: "Never sent to a real device",
+  revision: 1,
+  archived: false,
+  archived_at: null,
+  created_at: created,
+  updated_at: created,
+  config,
+  graph: { nodes: [], edges: [] },
+};
+const version = {
+  id: id(11),
+  configuration_id: pipeline.id,
+  number: 1,
+  config,
+  graph: pipeline.graph,
+  sha256: "0".repeat(64),
+  artifact: JSON.stringify(config),
+  size: JSON.stringify(config).length,
+  created_at: created,
+  message: "Synthetic published version",
+  validation: { valid: true },
+};
+function device(n, extra = {}) {
+  return {
+    id: id(n),
+    name: n === 1 ? "Synthetic alpha" : "Synthetic beta",
+    os: "linux",
+    arch: "amd64",
+    vector_version: "0.58.0",
+    agent_version: "synthetic",
+    status: "verified",
+    apply_state: "verified_applied",
+    desired_generation: 1,
+    reported_generation: 1,
+    desired_version_id: version.id,
+    configuration_mode: "full",
+    labels: {},
+    sync_paused: false,
+    local_paused: false,
+    effective_policy: { ...policy, sync_paused: false },
+    created_at: created,
+    ...extra,
+  };
+}
+const results = [],
+  correlationObservations = [],
+  cleanupObservations = [],
+  requests = [],
+  unexpected = [],
+  errors = [],
+  accessibility = [],
+  measurements = [];
+let context, page, state, failure;
+async function load({
+  kind = "policy",
+  app = true,
+  width = 899,
+  theme = "light",
+  devices,
+  storageBlocked = false,
+  extra = {},
+} = {}) {
+  if (context) await context.close();
+  state = {
+    devices: devices || [
+      device(1, {
+        assignment: {
+          id: id(80),
+          priority: 50,
+          reason: "Synthetic configuration winner",
+        },
+        policy_assignment: {
+          id: id(81),
+          priority: 200,
+          reason: "Synthetic policy winner",
+        },
+      }),
+      device(2),
+    ],
+    actor: id(90),
+    role: "admin",
+    rollbackSupported: true,
+    rollbackReviewSupported: true,
+    rollbackMode: "normal",
+    rollbacks: [],
+    streams: new Map(),
+    bodyHolds: [],
+    abortedBodies: 0,
+    createMode: "normal",
+    lookupMode: "normal",
+    committed: [],
+    lookups: [],
+    blockers: [],
+    previews: [],
+    creates: [],
+    holds: [],
+    failCreate: false,
+    holdCreate: false,
+    holdPreview: false,
+    conflicts: [],
+    receipt: { version_id: version.id },
+    responseId: id(40),
+    detailReads: 0,
+    legacyPreview: false,
+    correlationSupported: true,
+    outcomeOverride: null,
+  };
+  const current = state;
+  context = await browser.newContext({
+    viewport: { width, height: 920 },
+    reducedMotion: "reduce",
+  });
+  await context.addInitScript((theme) => {
+    localStorage.setItem("vectory-theme", theme);
+    localStorage.setItem("vectory-sidebar-collapsed", "true");
+  }, theme);
+  if (storageBlocked)
+    await context.addInitScript(() =>
+      Object.defineProperty(window, "localStorage", {
+        get() {
+          throw new DOMException("Synthetic storage disabled", "SecurityError");
+        },
+      }),
+    );
+  await context.route("**/*", async (route) => {
+    const req = route.request(),
+      url = new URL(req.url()),
+      method = req.method();
+    if (url.origin !== origin) {
+      unexpected.push(`External ${url.origin}`);
+      return route.abort();
+    }
+    if (!url.pathname.startsWith("/api/v1/")) return route.continue();
+    const path = url.pathname.slice(7);
+    requests.push({ method, path, query: url.search });
+    const reply = (json, status = 200) => route.fulfill({ status, json });
+    if (method === "GET") {
+      if (path.startsWith("/deployments/requests/")) {
+        const requestId = path.split("/").pop();
+        if (!["admin", "operator"].includes(current.role))
+          return reply(
+            {
+              error: {
+                code: "FORBIDDEN",
+                message: "Synthetic role cannot recover",
+              },
+            },
+            403,
+          );
+        current.lookups.push({ actor: current.actor, requestId });
+        if (current.lookupMode === "failed")
+          return reply(
+            {
+              error: {
+                code: "SYNTHETIC_UNAVAILABLE",
+                message: "Synthetic lookup unavailable",
+              },
+            },
+            503,
+          );
+        if (current.lookupMode === "hold")
+          await new Promise((resolve) => current.holds.push(resolve));
+        const match = current.committed.find(
+          (x) => x.actor === current.actor && x.body.request_id === requestId,
+        );
+        const answer = match
+          ? {
+              found: true,
+              request_id: requestId,
+              operation: correlatedReceipt(match).operation,
+              source_deployment_id:
+                correlatedReceipt(match).source_deployment_id,
+              deployment: correlatedReceipt(match),
+            }
+          : { found: false, request_id: requestId };
+        if (current.correlationStage === "lookup") {
+          current.substituted = corruptCorrelation(
+            answer,
+            current.correlationFault,
+          );
+          return reply(current.substituted);
+        }
+        if (current.lookupMode === "heldBody") {
+          current.streams.set(url.pathname, JSON.stringify(answer));
+          return route.continue();
+        }
+        return reply(answer);
+      }
+      if (path === "/status")
+        return reply({ initialized: true, version: "synthetic" });
+      if (path === "/session")
+        return reply({
+          user: {
+            id: current.actor,
+            name: "Synthetic administrator",
+            email: "fixture@example.test",
+            role: current.role,
+            enabled: true,
+            revision: 1,
+          },
+          csrf_token: "synthetic",
+        });
+      if (path === "/settings")
+        return reply({ instance_name: "Synthetic handoff" });
+      if (path === "/devices") return reply(current.devices);
+      if (path === `/devices/${id(1)}`) {
+        current.detailReads++;
+        return reply(current.devices[0]);
+      }
+      if (path === "/groups")
+        return reply([
+          {
+            id: id(20),
+            name: "Synthetic group",
+            description: "Fixture only",
+            device_ids: current.devices.map((d) => d.id),
+          },
+        ]);
+      if (path === "/mfa") return reply({ enabled: false });
+      if (path === "/policies")
+        return reply([
+          {
+            id: id(21),
+            name: "Synthetic pause policy",
+            policy,
+            created_at: created,
+          },
+        ]);
+      if (path === `/configurations/${pipeline.id}`) return reply(pipeline);
+      if (path === `/configurations/${pipeline.id}/history`)
+        return reply({
+          items: [
+            {
+              id: version.id,
+              configuration_id: pipeline.id,
+              created_at: created,
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size")),
+          kind: "versions",
+        });
+      if (path === `/versions/${version.id}`) return reply(version);
+      if (path === "/deployments/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: Number(url.searchParams.get("page") || 1),
+          page_size: 12,
+        });
+      if (path === `/deployments/${id(40)}/rollback-preview`)
+        return reply({
+          source_deployment_id: id(40),
+          source_version_id: version.id,
+          source_status: "active",
+          source_action: "cancel",
+          previous_version_id: version.id,
+          previous_version_number: 1,
+          previous_configuration_id: pipeline.id,
+          previous_configuration_name: pipeline.name,
+          priority: 101,
+          eligible_devices: current.devices.map((d) => ({
+            device_id: d.id,
+            device_name: d.name,
+            artifact_sha256: "a".repeat(64),
+          })),
+          excluded_devices: [],
+          blockers: [],
+          review_token: reviewToken,
+          ready: true,
+        });
+      const summaryMatch = /^\/deployments\/([^/]+)\/summary$/.exec(path);
+      if (summaryMatch) {
+        const deploymentId = summaryMatch[1];
+        const replacement = current.committed.find(
+          (x) => x.result.id === deploymentId,
+        )?.result;
+        return reply({
+          id: deploymentId,
+          name: replacement
+            ? "Synthetic rollback replacement"
+            : "Synthetic original deployment",
+          configuration_id: pipeline.id,
+          configuration_name: pipeline.name,
+          version_id: version.id,
+          version_number: replacement ? 1 : 2,
+          policy: null,
+          priority: replacement ? 101 : 100,
+          target_mode: "snapshot",
+          status: replacement
+            ? "active"
+            : current.rollbacks.length
+              ? "cancelled"
+              : "active",
+          scheduled_at: null,
+          created_at: created,
+          rollout: { kind: "all" },
+          target_count: 2,
+          verified_count: 0,
+          state_counts: { pending: 2 },
+          ...(current.rollbackSupported ? { rollback_idempotency: true } : {}),
+          ...(current.correlationSupported
+            ? { request_correlation: true }
+            : {}),
+          ...(current.rollbackReviewSupported ? { rollback_review: true } : {}),
+        });
+      }
+      if (/^\/deployments\/[^/]+\/targets$/.test(path))
+        return reply({ items: [], total: 0, page: 1, page_size: 12 });
+    }
+    const rollbackMatch = /^\/deployments\/([^/]+)\/rollback$/.exec(path);
+    if (method === "POST" && rollbackMatch) {
+      expect(req.headers()["x-csrf-token"]).toBe("synthetic");
+      const body = req.postDataJSON();
+      current.rollbacks.push({ path, body: structuredClone(body) });
+      if (current.initialRejection && current.rollbacks.length === 1) {
+        const status = current.initialRejection;
+        await new Promise((resolve) => current.holds.push(resolve));
+        return reply(
+          {
+            error: {
+              code: status === 403 ? "FORBIDDEN" : "INVALID_INPUT",
+              message:
+                "Synthetic initial rollback rejected. This intentionally long, synthetic server explanation verifies that the earlier attempt remains readable at narrow widths while request status is unavailable. It contains no real account, device, credential or production details.",
+            },
+          },
+          status,
+        );
+      }
+      if (current.rollbackMode === "definite400")
+        return reply(
+          {
+            error: {
+              code: "INVALID_REQUEST",
+              message: "Synthetic rollback rejected",
+            },
+          },
+          400,
+        );
+      if (current.rollbackMode === "forbidden")
+        return reply(
+          { error: { code: "FORBIDDEN", message: "Synthetic role changed" } },
+          403,
+        );
+      if (current.rollbackMode === "uncommitted") return route.abort("failed");
+      const old = current.committed.find(
+        (x) =>
+          x.actor === current.actor &&
+          x.body.request_id &&
+          x.body.request_id === body.request_id,
+      );
+      if (old) {
+        expect(old.path).toBe(path);
+        expect(old.body).toEqual(body);
+      }
+      const result = old?.result || {
+        id: id(50 + current.committed.length),
+        version_id: version.id,
+        priority: 101,
+        status: "active",
+        target_mode: "snapshot",
+        created_at: created,
+        targets: [
+          { device_id: id(1), state: "desired", generation: 2 },
+          { device_id: id(2), state: "desired", generation: 2 },
+        ],
+      };
+      if (!old)
+        current.committed.push({
+          actor: current.actor,
+          path,
+          body: structuredClone(body),
+          result,
+        });
+      const response = correlatedReceipt({ body, result, path });
+      if (current.rollbackMode === "heldBody") {
+        current.streams.set(url.pathname, JSON.stringify(response));
+        return route.continue();
+      }
+      if (current.rollbackMode === "hold")
+        await new Promise((resolve) => current.holds.push(resolve));
+      if (current.rollbackMode === "lost") return route.abort("failed");
+      if (current.rollbackMode === "unparseable")
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "{lost reply",
+        });
+      if (current.rollbackMode === "malformed") return reply({ id: "invalid" });
+      if (current.correlationStage === "post") {
+        current.substituted = corruptCorrelation(
+          response,
+          current.correlationFault,
+        );
+        return reply(current.substituted);
+      }
+      return reply(response);
+    }
+    if (method === "POST" && path === "/deployments/preview") {
+      const body = req.postDataJSON();
+      current.previews.push(body);
+      if (current.holdPreview)
+        await new Promise((resolve) => current.holds.push(resolve));
+      const selected = new Set(
+        [
+          ...body.selector.device_ids,
+          ...(body.selector.group_ids.length
+            ? current.devices.map((d) => d.id)
+            : []),
+        ].filter((key) => !body.selector.exclude_ids.includes(key)),
+      );
+      return reply({
+        devices: current.devices.filter((d) => selected.has(d.id)),
+        ...(!current.legacyPreview
+          ? {
+              create_idempotency: true,
+              ...(current.correlationSupported
+                ? { request_correlation: true }
+                : {}),
+              blockers: current.blockers,
+            }
+          : {}),
+        warnings: [],
+        conflicts: current.conflicts,
+        ...(!current.legacyPreview
+          ? {
+              outcomes:
+                current.outcomeOverride ||
+                current.devices
+                  .filter((d) => selected.has(d.id))
+                  .map((d) => {
+                    const resource = body.policy ? "policy" : "configuration";
+                    const assignment = body.policy
+                      ? d.policy_assignment
+                      : d.assignment;
+                    return {
+                      device_id: d.id,
+                      resource,
+                      outcome:
+                        assignment && assignment.priority > body.priority
+                          ? "higher_priority"
+                          : "requested",
+                      ...(assignment && assignment.priority > body.priority
+                        ? { assignment }
+                        : {}),
+                    };
+                  }),
+            }
+          : {}),
+      });
+    }
+    if (method === "POST" && path === "/deployments") {
+      expect(req.headers()["x-csrf-token"]).toBe("synthetic");
+      const body = req.postDataJSON();
+      current.creates.push(body);
+      if (current.holdCreate)
+        await new Promise((resolve) => current.holds.push(resolve));
+      if (current.createMode === "forbidden")
+        return reply(
+          { error: { code: "FORBIDDEN", message: "Synthetic access changed" } },
+          403,
+        );
+      if (current.createMode === "definite400")
+        return reply(
+          {
+            error: {
+              code: "VALIDATION_ERROR",
+              message: "Synthetic request rejected before commit",
+            },
+          },
+          400,
+        );
+      if (current.createMode === "server500")
+        return reply(
+          {
+            error: {
+              code: "SYNTHETIC_UNAVAILABLE",
+              message: "Synthetic create unavailable",
+            },
+          },
+          500,
+        );
+      if (current.createMode === "uncommitted") return route.abort("failed");
+      const old = current.committed.find(
+        (x) =>
+          x.actor === current.actor &&
+          x.body.request_id &&
+          x.body.request_id === body.request_id,
+      );
+      if (old) expect(old.body).toEqual(body);
+      const result = old?.result || {
+        id: id(40 + current.committed.length),
+        ...body,
+        status: body.scheduled_at ? "scheduled" : "active",
+        created_at: created,
+        targets: body.expected_device_ids.map((device_id) => ({
+          device_id,
+          state: "pending",
+          generation: 0,
+        })),
+      };
+      if (!old)
+        current.committed.push({
+          actor: current.actor,
+          body: structuredClone(body),
+          result,
+        });
+      const response = correlatedReceipt({ body, result });
+      current.receipt = body;
+      if (current.createMode === "heldBody") {
+        current.streams.set(url.pathname, JSON.stringify(response));
+        return route.continue();
+      }
+      if (current.createMode === "lost") return route.abort("failed");
+      if (current.createMode === "unparseable")
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "{lost successful response",
+        });
+      if (current.createMode === "unreadable400")
+        return route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: "{",
+        });
+      if (current.createMode === "errorShape400") return reply({}, 400);
+      if (current.createMode === "malformed")
+        return reply({ id: "not-a-uuid" });
+      return reply(response);
+    }
+    unexpected.push(`${method} ${path}`);
+    return reply(
+      {
+        error: {
+          code: "UNEXPECTED_REQUEST",
+          message: "Synthetic transport rejected request",
+        },
+      },
+      500,
+    );
+  });
+  page = await context.newPage();
+  page.setDefaultTimeout(7000);
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(
+    origin +
+      "/__rollback-recovery" +
+      (app ? `#/deployments/${id(40)}?page=1` : ""),
+  );
+  await page.waitForFunction(() => window.ready, undefined, { timeout: 30000 });
+  await page.evaluate((theme) => {
+    document.documentElement.dataset.theme = theme;
+  }, theme);
+  await page.evaluate(
+    ({ app, kind, policy, version, extra }) =>
+      window.mount(app ? "app" : "target", {
+        open: true,
+        userId: "00000000-0000-4000-8000-000000000090",
+        ...(kind === "policy" ? { policy } : { version }),
+        ...extra,
+      }),
+    { app, kind, policy, version, extra },
+  );
+  if (!app)
+    await expect(
+      page.getByRole("checkbox", {
+        name: "Select Synthetic alpha",
+        exact: true,
+      }),
+    ).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+}
+const dialog = () =>
+  page.getByRole("dialog").filter({ has: page.locator(".target-flow") });
+const table = () =>
+  page.getByRole("table", { name: "Deployment review devices", exact: true });
+async function preview({ both = true, scheduled = false } = {}) {
+  await page
+    .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+    .check();
+  if (both)
+    await page
+      .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
+      .check();
+  if (scheduled) {
+    await page.getByText("Advanced options", { exact: true }).click();
+    await page
+      .getByLabel("Schedule (optional)", { exact: true })
+      .fill("2030-01-01T12:30");
+  }
+  await page
+    .getByRole("button", { name: "Review deployment", exact: true })
+    .click();
+  await expect(table()).toBeVisible();
+}
+async function check(name, run) {
+  const focus = process.env.VECTORY_ROLLBACK_RECOVERY_FOCUS;
+  if (focus && !name.toLowerCase().includes(focus.toLowerCase())) return;
+  const began = Date.now();
+  await run();
+  results.push({ name, passed: true, milliseconds: Date.now() - began });
+  console.log("PASS", name);
+}
+const details = () =>
+  page.getByRole("dialog", { name: "Deployment details", exact: true });
+const rollbackConfirm = () =>
+  page.getByRole("dialog", { name: "Review rollback", exact: true });
+const recovery = () =>
+  page.getByRole("dialog", { name: "Confirm rollback", exact: true });
+const confirmed = () =>
+  page.getByRole("dialog", { name: "Rollback confirmed", exact: true });
+const operations = () =>
+  page.evaluate(() =>
+    Object.entries(localStorage)
+      .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
+      .map(([key, value]) => ({ key, value: JSON.parse(value) })),
+  );
+async function beginRollback() {
+  await details()
+    .getByRole("button", { name: "Roll back", exact: true })
+    .click();
+  await expect(rollbackConfirm()).toBeVisible();
+}
+async function sendRollback() {
+  await rollbackConfirm()
+    .getByRole("button", { name: "Roll back 2 devices", exact: true })
+    .click();
+}
+async function lost({ mode = "lost", ...options } = {}) {
+  await load(options);
+  await beginRollback();
+  state.rollbackMode = mode;
+  state.lookupMode = "failed";
+  await sendRollback();
+  await expect(recovery()).toBeVisible();
+  await expect(recovery()).toContainText("Synthetic lookup unavailable");
+}
+async function reloadApp() {
+  await page.reload();
+  await page.waitForFunction(() => window.ready, undefined, { timeout: 30000 });
+  await page.evaluate(() => window.mount("app"));
+  await expect(
+    page.getByRole("heading", { name: "Deployments", exact: true }),
+  ).toBeVisible();
+}
+async function leaveDetails() {
+  await expect(details()).toBeVisible();
+  await details()
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await expect(details()).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/deployments\?page=1$/);
+}
+try {
+  await check(
+    "Correlation rejects wrong keyed POST receipts without losing the frozen request",
+    async () => {
+      for (const fault of [
+        "unrelated",
+        "key",
+        "kind",
+        "source",
+        "missing",
+        "source-result",
+      ]) {
+        await load();
+        await beginRollback();
+        state.correlationStage = "post";
+        state.correlationFault = fault;
+        state.lookupMode = "failed";
+        await sendRollback();
+        await expect(recovery()).toBeVisible();
+        await expect(recovery()).toContainText("Synthetic lookup unavailable");
+        await expect(recovery()).toContainText(
+          /identity|different deployment request|does not match this dashboard/i,
+        );
+        const saved = (await operations())[0].value;
+        expect(saved.id).toBe(state.rollbacks[0].body.request_id);
+        expect(await operations()).toHaveLength(1);
+        expect(state.rollbacks).toHaveLength(1);
+        expect(state.committed).toHaveLength(1);
+        await expect(page.locator('a[href*="' + id(999) + '"]')).toHaveCount(0);
+        if (fault === "unrelated") {
+          const scan = await new AxeBuilder({ page }).analyze();
+          expect(scan.violations).toEqual([]);
+          accessibility.push({
+            case: "correlation-post",
+            width: 899,
+            theme: "light",
+            violations: scan.violations,
+          });
+          await page.screenshot({
+            path: resolve(output, "correlation-post-899-light.png"),
+          });
+        }
+        correlationObservations.push({
+          stage: "post",
+          fault,
+          request_id: saved.id,
+          reminder_preserved: true,
+          post_count: 1,
+          substituted_response: structuredClone(state.substituted),
+        });
+        state.correlationStage = null;
+        state.lookupMode = "normal";
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(confirmed()).toBeVisible();
+        await expect(
+          confirmed().getByRole("link", {
+            name: "View rollback deployment",
+            exact: true,
+          }),
+        ).toHaveAttribute("href", `#/deployments/${id(50)}?page=1`);
+        expect(await operations()).toEqual([]);
+        expect(state.rollbacks).toHaveLength(1);
+      }
+    },
+  );
+  await check(
+    "Correlation rejects wrong lookup envelopes and nested receipts then accepts only exact identity",
+    async () => {
+      for (const fault of [
+        "unrelated",
+        "key",
+        "kind",
+        "source",
+        "missing",
+        "inner",
+        "source-result",
+      ]) {
+        await lost();
+        const saved = (await operations())[0].value;
+        state.lookupMode = "normal";
+        state.correlationStage = "lookup";
+        state.correlationFault = fault;
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(recovery()).toContainText(
+          /identity|different deployment request|does not match this dashboard/i,
+        );
+        await expect(
+          recovery().getByRole("button", {
+            name: "Retry same request",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        expect((await operations())[0].value).toEqual(saved);
+        expect(state.rollbacks).toHaveLength(1);
+        await expect(confirmed()).toHaveCount(0);
+        await expect(page.locator('a[href*="' + id(999) + '"]')).toHaveCount(0);
+        if (fault === "unrelated") {
+          await page.setViewportSize({ width: 375, height: 920 });
+          await page.evaluate(
+            () => (document.documentElement.dataset.theme = "dark"),
+          );
+          const scan = await new AxeBuilder({ page }).analyze();
+          expect(scan.violations).toEqual([]);
+          accessibility.push({
+            case: "correlation-lookup",
+            width: 375,
+            theme: "dark",
+            violations: scan.violations,
+          });
+          await page.screenshot({
+            path: resolve(output, "correlation-lookup-375-dark.png"),
+          });
+        }
+        correlationObservations.push({
+          stage: "lookup",
+          fault,
+          request_id: saved.id,
+          reminder_preserved: true,
+          post_count: 1,
+          substituted_response: structuredClone(state.substituted),
+        });
+        state.correlationStage = null;
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(confirmed()).toBeVisible();
+        expect(await operations()).toEqual([]);
+        expect(state.rollbacks).toHaveLength(1);
+      }
+    },
+  );
+  await check(
+    "Correlation requires an exact absent-result echo before frozen retry and rechecks after incompatibility",
+    async () => {
+      await lost({ mode: "uncommitted" });
+      const saved = (await operations())[0].value;
+      for (const fault of ["key", "missing"]) {
+        state.lookupMode = "normal";
+        state.correlationStage = "lookup";
+        state.correlationFault = fault;
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(recovery()).toContainText(
+          /identity|different deployment request|does not match this dashboard/i,
+        );
+        await expect(
+          recovery().getByRole("button", {
+            name: "Retry same request",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        expect((await operations())[0].value).toEqual(saved);
+        expect(state.rollbacks).toHaveLength(1);
+        state.correlationStage = null;
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(
+          recovery().getByRole("button", {
+            name: "Retry same request",
+            exact: true,
+          }),
+        ).toBeEnabled();
+      }
+      state.rollbackMode = "normal";
+      state.correlationStage = "post";
+      state.correlationFault = "key";
+      await recovery()
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
+      await expect(recovery()).toContainText(/different deployment request/i);
+      expect((await operations())[0].value).toEqual(saved);
+      expect(state.rollbacks).toHaveLength(2);
+      expect(state.rollbacks[0].body).toEqual(state.rollbacks[1].body);
+      await expect(
+        recovery().getByRole("button", {
+          name: "Retry same request",
+          exact: true,
+        }),
+      ).toBeDisabled();
+      state.correlationStage = null;
+      await recovery()
+        .getByRole("button", { name: "Check status", exact: true })
+        .click();
+      await expect(confirmed()).toBeVisible();
+      expect(state.committed).toHaveLength(1);
+      expect(state.rollbacks).toHaveLength(2);
+    },
+  );
+  await check(
+    "Correlation accepts the current mutable result for the exact original request",
+    async () => {
+      await lost();
+      const saved = (await operations())[0].value;
+      Object.assign(state.committed[0].result, {
+        version_id: id(211),
+        priority: 350,
+        status: "cancelled",
+        target_mode: "persistent",
+        targets: [{ device_id: id(3), state: "removed", generation: 9 }],
+      });
+      state.lookupMode = "normal";
+      await recovery()
+        .getByRole("button", { name: "Check status", exact: true })
+        .click();
+      await expect(confirmed()).toBeVisible();
+      await expect(
+        confirmed().getByRole("link", {
+          name: "View rollback deployment",
+          exact: true,
+        }),
+      ).toHaveAttribute("href", `#/deployments/${id(50)}?page=1`);
+      expect(await operations()).toEqual([]);
+      expect(state.rollbacks).toHaveLength(1);
+      correlationObservations.push({
+        stage: "current-result",
+        request_id: saved.id,
+        current_snapshot_changed: true,
+        original_result_id: state.committed[0].result.id,
+        post_count: 1,
+      });
+    },
+  );
+  await check(
+    "Cleanup retains keyed rollback rejection and peer-commit uncertainty",
+    async () => {
+      const before = process.env.VECTORY_RECOVERY_CLEANUP_BEFORE === "1";
+      for (const status of [400, 403]) {
+        for (const peerCommit of [false, true]) {
+          await load();
+          await beginRollback();
+          state.initialRejection = status;
+          await sendRollback();
+          await expect.poll(() => state.holds.length).toBe(1);
+          const originalPage = page;
+          const saved = (await operations())[0].value;
+          let peer;
+          if (peerCommit) {
+            // Invoke the production pagehide lease release: it cannot cancel a
+            // POST already at the server. The peer still uses actual recovery UI.
+            await page.evaluate(() =>
+              window.dispatchEvent(new Event("pagehide")),
+            );
+            peer = await context.newPage();
+            peer.setDefaultTimeout(7000);
+            await peer.goto(origin + "/__rollback-recovery");
+            await peer.waitForFunction(() => window.ready);
+            await peer.evaluate(
+              ({ policy, actor }) =>
+                window.mount("target", {
+                  open: true,
+                  policy,
+                  userId: actor,
+                }),
+              { policy, actor: id(90) },
+            );
+            page = peer;
+            await expect(
+              recovery().getByRole("button", {
+                name: "Retry same request",
+                exact: true,
+              }),
+            ).toBeEnabled();
+            state.rollbackMode = "lost";
+            await recovery()
+              .getByRole("button", { name: "Retry same request", exact: true })
+              .click();
+            await expect.poll(() => state.committed.length).toBe(1);
+            await expect
+              .poll(() =>
+                peer.evaluate(
+                  () =>
+                    Object.keys(localStorage).filter((key) =>
+                      key.startsWith("vectory:deployment-operation-lease:"),
+                    ).length,
+                ),
+              )
+              .toBe(0);
+            expect(state.rollbacks).toHaveLength(2);
+            expect(state.rollbacks.map((x) => x.body)).toEqual([
+              saved.request,
+              saved.request,
+            ]);
+            page = originalPage;
+          }
+          state.lookupMode = "failed";
+          state.holds.shift()();
+          if (before) {
+            await expect(rollbackConfirm()).toContainText(
+              "Synthetic initial rollback rejected",
+            );
+            await expect.poll(async () => (await operations()).length).toBe(0);
+          } else {
+            await expect(recovery()).toBeVisible();
+            await expect(recovery()).toContainText(
+              "Synthetic lookup unavailable",
+            );
+            await expect(recovery()).toContainText("Previous attempt");
+            await expect(recovery()).toContainText(
+              "Synthetic initial rollback rejected",
+            );
+            if (status === 400 && peerCommit) {
+              for (const [width, theme] of [
+                [375, "dark"],
+                [899, "light"],
+              ]) {
+                await page.setViewportSize({ width, height: 920 });
+                await page.evaluate((theme) => {
+                  document.documentElement.dataset.theme = theme;
+                }, theme);
+                const screenshot =
+                  "docs/screenshots/shared-request-rollback-" +
+                  width +
+                  "-" +
+                  theme +
+                  ".png";
+                await mkdir(resolve(root, "docs/screenshots"), {
+                  recursive: true,
+                });
+                await page.screenshot({
+                  path: resolve(root, screenshot),
+                  fullPage: true,
+                });
+                const bounds = await recovery().boundingBox();
+                expect(bounds.x).toBeGreaterThanOrEqual(0);
+                expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+                measurements.push({
+                  stage: "long previous rejection with unavailable lookup",
+                  width,
+                  theme,
+                  screenshot,
+                  bounds,
+                });
+              }
+            }
+            expect((await operations())[0].value).toEqual(saved);
+            state.lookupMode = "normal";
+            await recovery()
+              .getByRole("button", { name: "Check status", exact: true })
+              .click();
+            if (peerCommit) {
+              await expect(confirmed()).toBeVisible();
+              expect(await operations()).toEqual([]);
+            } else {
+              await expect(
+                recovery().getByRole("button", {
+                  name: "Retry same request",
+                  exact: true,
+                }),
+              ).toBeEnabled();
+              state.rollbackMode = "normal";
+              await recovery()
+                .getByRole("button", {
+                  name: "Retry same request",
+                  exact: true,
+                })
+                .click();
+              await expect(confirmed()).toBeVisible();
+              expect(state.rollbacks.map((x) => x.body)).toEqual([
+                saved.request,
+                saved.request,
+              ]);
+            }
+          }
+          if (!before)
+            await expect(confirmed()).not.toContainText(
+              "Synthetic initial rollback rejected",
+            );
+          cleanupObservations.push({
+            original_rejection_visible_during_uncertainty: !before,
+            original_rejection_hidden_after_confirmation: !before,
+            status,
+            peer_commit: peerCommit,
+            expected_defect_before: before,
+            operation: saved,
+            posts: structuredClone(state.rollbacks),
+            post_count: state.rollbacks.length,
+            committed_count: state.committed.length,
+            lookups: structuredClone(state.lookups),
+            reminder_count_after: (await operations()).length,
+            peer_result_recovered_by_read_only_lookup: !before && peerCommit,
+          });
+          if (peer) await peer.close();
+        }
+      }
+    },
+  );
+  await check(
+    "Normal rollback keeps a receipt and explicitly opens the exact replacement",
+    async () => {
+      await load();
+      await beginRollback();
+      const before = page.url();
+      await sendRollback();
+      const link = confirmed().getByRole("link", {
+        name: "View rollback deployment",
+        exact: true,
+      });
+      await expect(link).toHaveAttribute(
+        "href",
+        `#/deployments/${id(50)}?page=1`,
+      );
+      await expect
+        .poll(() =>
+          confirmed().evaluate((element) =>
+            element.contains(document.activeElement),
+          ),
+        )
+        .toBe(true);
+      for (
+        let step = 0;
+        step < 4 &&
+        !(await link.evaluate((element) => element === document.activeElement));
+        step++
+      )
+        await page.keyboard.press("Tab");
+      await expect(link).toBeFocused();
+      await expect(page.getByRole("dialog")).toHaveCount(1);
+      expect(page.url()).toBe(before);
+      expect(state.rollbacks).toHaveLength(1);
+      expect(state.rollbacks[0].body.review_token).toBe(reviewToken);
+      expect(state.rollbacks[0].body.request_id).toMatch(
+        /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/,
+      );
+      expect(state.committed).toHaveLength(1);
+      expect(await operations()).toEqual([]);
+      expect(state.lookups).toHaveLength(0);
+      await page.evaluate(() => {
+        window.fixtureVeto = (e) => e.preventDefault();
+        window.addEventListener("vectory:before-navigate", window.fixtureVeto);
+      });
+      await link.click();
+      await expect(page).toHaveURL(before);
+      await expect(confirmed()).toBeVisible();
+      await page.evaluate(() =>
+        window.removeEventListener(
+          "vectory:before-navigate",
+          window.fixtureVeto,
+        ),
+      );
+      await link.click();
+      await expect(page).toHaveURL(
+        new RegExp(`#/deployments/${id(50)}\\?page=1$`),
+      );
+      await expect(details()).toContainText("Synthetic rollback replacement");
+      expect(state.rollbacks).toHaveLength(1);
+    },
+  );
+  await check(
+    "Lost unreadable and malformed successful rollback replies recover only the original replacement",
+    async () => {
+      for (const mode of ["lost", "unparseable", "malformed"]) {
+        await lost({ mode });
+        const operation = (await operations())[0].value;
+        expect(operation.kind).toBe("rollback");
+        expect(operation.deployment_id).toBe(id(40));
+        expect(operation.request).toEqual(state.rollbacks[0].body);
+        expect(operation.request.review_token).toBe(reviewToken);
+        expect(operation.review.device_ids).toEqual([id(1), id(2)]);
+        state.lookupMode = "normal";
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(
+          confirmed().getByRole("link", {
+            name: "View rollback deployment",
+            exact: true,
+          }),
+        ).toHaveAttribute("href", `#/deployments/${id(50)}?page=1`);
+        expect(state.rollbacks).toHaveLength(1);
+        expect(state.committed).toHaveLength(1);
+      }
+    },
+  );
+  await check(
+    "Not-found and forbidden retry retain one source-bound frozen operation",
+    async () => {
+      await lost({ mode: "uncommitted" });
+      const original = structuredClone(state.rollbacks[0]);
+      expect(original.body.review_token).toBe(reviewToken);
+      state.lookupMode = "normal";
+      await recovery()
+        .getByRole("button", { name: "Check status", exact: true })
+        .click();
+      await expect(recovery()).toContainText(
+        "No completed request was found yet",
+      );
+      state.rollbackMode = "forbidden";
+      await recovery()
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
+      await expect(recovery()).toContainText("Synthetic role changed");
+      expect((await operations())[0].value.request).toEqual(original.body);
+      state.rollbackMode = "normal";
+      await recovery()
+        .getByRole("button", { name: "Check status", exact: true })
+        .click();
+      await recovery()
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
+      await expect(confirmed()).toBeVisible();
+      expect(state.rollbacks).toEqual([original, original, original]);
+      expect(state.committed).toHaveLength(1);
+    },
+  );
+  await check(
+    "Structured rejection legacy support absence and storage denial do not blindly resend",
+    async () => {
+      await load();
+      await beginRollback();
+      state.rollbackMode = "definite400";
+      await sendRollback();
+      await expect(recovery()).toBeVisible();
+      await expect(recovery()).toContainText(
+        "No completed request was found yet",
+      );
+      expect(await operations()).toHaveLength(1);
+      expect(state.committed).toHaveLength(0);
+      const old = state.rollbacks[0].body.request_id;
+      state.rollbackMode = "normal";
+      await recovery()
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
+      await expect(confirmed()).toBeVisible();
+      expect(state.rollbacks[1].body.request_id).toBe(old);
+      for (const absentCapability of [
+        "rollbackSupported",
+        "rollbackReviewSupported",
+        "correlationSupported",
+      ]) {
+        await load();
+        state[absentCapability] = false;
+        await page.reload();
+        await page.waitForFunction(() => window.ready, undefined, {
+          timeout: 30000,
+        });
+        await page.evaluate(() => window.mount("app"));
+        await expect(details()).toBeVisible();
+        await beginRollback();
+        await expect(
+          rollbackConfirm().getByRole("button", {
+            name: "Roll back",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        await expect(rollbackConfirm()).toContainText("Update the server");
+        expect(state.rollbacks).toHaveLength(0);
+      }
+      // Existing records retain their original protocol; an upgrade never adds
+      // a new review token or request key to an uncertain legacy operation.
+      for (const retrySupported of [false, true]) {
+        await load();
+        await leaveDetails();
+        const key = id(retrySupported ? 98 : 97);
+        const request = retrySupported ? { request_id: key } : {};
+        const record = {
+          kind: "rollback",
+          actor_id: id(90),
+          id: key,
+          label: "Older synthetic rollback",
+          recorded_at: created,
+          retry_supported: retrySupported,
+          deployment_id: id(40),
+          request,
+        };
+        await page.evaluate((record) => {
+          localStorage.setItem(
+            `vectory:deployment-operation:${record.actor_id}:${record.id}`,
+            JSON.stringify(record),
+          );
+        }, record);
+        await reloadApp();
+        await page
+          .getByRole("button", { name: "Confirm rollback", exact: true })
+          .click();
+        if (retrySupported) {
+          await expect(recovery()).toContainText(
+            "No completed request was found yet",
+          );
+          await recovery()
+            .getByRole("button", { name: "Retry same request", exact: true })
+            .click();
+          await expect(confirmed()).toBeVisible();
+          expect(state.rollbacks).toHaveLength(1);
+          expect(state.rollbacks[0].body).toEqual(request);
+        } else {
+          await expect(recovery()).toContainText("cannot safely retry");
+          await expect(
+            recovery().getByRole("button", {
+              name: "Retry same request",
+              exact: true,
+            }),
+          ).toHaveCount(0);
+          expect(state.lookups).toHaveLength(0);
+          expect(state.rollbacks).toHaveLength(0);
+        }
+      }
+      await load({ storageBlocked: true });
+      await details().getByRole("button", { name: "Roll back", exact: true }).click();
+      await expect(page.getByRole("dialog", { name: "Review saved deployment reminder" })).toContainText(
+        "Browser storage is unavailable",
+      );
+      expect(state.rollbacks).toHaveLength(0);
+    },
+  );
+  await check(
+    "Close reload account and role boundaries preserve the original pending rollback",
+    async () => {
+      await lost();
+      await expect(page.getByRole("dialog")).toHaveCount(1);
+      await recovery()
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+      await expect(details()).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(1);
+      await expect
+        .poll(() =>
+          details().evaluate((element) =>
+            element.contains(document.activeElement),
+          ),
+        )
+        .toBe(true);
+      await leaveDetails();
+      await reloadApp();
+      await expect(
+        page.getByRole("button", { name: "Confirm rollback", exact: true }),
+      ).toBeVisible();
+      expect(state.rollbacks).toHaveLength(1);
+      state.actor = id(91);
+      await reloadApp();
+      await expect(
+        page.getByRole("button", { name: "Confirm rollback", exact: true }),
+      ).toHaveCount(0);
+      expect(state.rollbacks).toHaveLength(1);
+      state.actor = id(90);
+      state.role = "viewer";
+      const lookupsBeforeViewer = state.lookups.length;
+      await reloadApp();
+      await expect(
+        page.getByRole("button", { name: "Confirm rollback", exact: true }),
+      ).toHaveCount(0);
+      await expect(recovery()).toHaveCount(0);
+      expect(state.lookups).toHaveLength(lookupsBeforeViewer);
+      expect(await operations()).toHaveLength(1);
+      expect(state.rollbacks).toHaveLength(1);
+      state.role = "operator";
+      state.lookupMode = "normal";
+      await reloadApp();
+      await page
+        .getByRole("button", { name: "Confirm rollback", exact: true })
+        .click();
+      await expect(confirmed()).toBeVisible();
+      expect(state.rollbacks).toHaveLength(1);
+    },
+  );
+  await check(
+    "Old persisted create records without kind still reconcile after the recovery upgrade",
+    async () => {
+      await load();
+      await leaveDetails();
+      const key = id(96),
+        request = {
+          policy,
+          selector: { device_ids: [id(1)], group_ids: [], exclude_ids: [] },
+          expected_device_ids: [id(1)],
+          priority: 100,
+          target_mode: "snapshot",
+          scheduled_at: null,
+          rollout: {
+            kind: "all",
+            canary_size: 1,
+            batch_size: 10,
+            observation_seconds: 60,
+            failure_threshold: 0,
+          },
+          request_id: key,
+        };
+      const record = {
+        actor_id: id(90),
+        id: key,
+        label: "Older synthetic create",
+        recorded_at: created,
+        retry_supported: true,
+        request,
+      };
+      state.committed.push({
+        actor: id(90),
+        body: request,
+        result: {
+          ...request,
+          id: id(51),
+          status: "active",
+          created_at: created,
+          targets: [{ device_id: id(1), state: "desired", generation: 1 }],
+        },
+      });
+      await page.evaluate(
+        (record) =>
+          sessionStorage.setItem(
+            `vectory:deployment-request:${record.actor_id}`,
+            JSON.stringify(record),
+          ),
+        record,
+      );
+      await reloadApp();
+      await page
+        .getByRole("button", { name: "Confirm deployment", exact: true })
+        .click();
+      await expect(
+        page
+          .getByRole("dialog", { name: "Deployment confirmed", exact: true })
+          .getByRole("link", { name: "View deployment", exact: true }),
+      ).toHaveAttribute("href", `#/deployments/${id(51)}?page=1`);
+      expect(state.rollbacks).toHaveLength(0);
+      expect(state.creates).toHaveLength(0);
+    },
+  );
+  await check(
+    "Rollback lookup and retry deadlines cover stalled response bodies without claiming cancellation",
+    async () => {
+      for (const stage of ["rollback", "lookup", "retry"]) {
+        await load();
+        await page.clock.install();
+        await beginRollback();
+        state.lookupMode = stage === "lookup" ? "heldBody" : "failed";
+        state.rollbackMode =
+          stage === "rollback"
+            ? "heldBody"
+            : stage === "retry"
+              ? "uncommitted"
+              : "lost";
+        await sendRollback();
+        if (stage === "retry") {
+          await expect(recovery()).toContainText(
+            "Synthetic lookup unavailable",
+          );
+          state.lookupMode = "normal";
+          await recovery()
+            .getByRole("button", { name: "Check status", exact: true })
+            .click();
+          state.rollbackMode = "heldBody";
+          await recovery()
+            .getByRole("button", { name: "Retry same request", exact: true })
+            .click();
+        }
+        await expect.poll(() => state.bodyHolds.length).toBe(1);
+        expect(state.committed).toHaveLength(1);
+        await page.clock.fastForward(30_050);
+        await page.clock.runFor(100);
+        await expect(recovery()).toBeVisible();
+        if (stage !== "rollback")
+          await expect(recovery()).toContainText(
+            "server may still be processing",
+          );
+        await expect(
+          recovery().getByRole("button", { name: "Check status", exact: true }),
+        ).toBeEnabled();
+        expect(await operations()).toHaveLength(1);
+        state.bodyHolds.shift()();
+        state.lookupMode = "normal";
+        await recovery()
+          .getByRole("button", { name: "Check status", exact: true })
+          .click();
+        await expect(confirmed()).toBeVisible();
+        expect(state.committed).toHaveLength(1);
+        expect(state.rollbacks).toHaveLength(stage === "retry" ? 2 : 1);
+        measurements.push({
+          deadline_stage: stage,
+          headers_and_partial_body_received: true,
+          synthetic_server_commit_retained: true,
+          aborted_body_connections: state.abortedBodies,
+        });
+      }
+    },
+  );
+  await check(
+    "Create and preview deadlines preserve mutation uncertainty or a clean editable review",
+    async () => {
+      await load({ app: false, kind: "policy" });
+      await page.clock.install();
+      await preview();
+      state.createMode = "heldBody";
+      state.lookupMode = "failed";
+      await page
+        .getByRole("button", { name: "Apply settings", exact: true })
+        .click();
+      await expect.poll(() => state.bodyHolds.length).toBe(1);
+      await page.clock.fastForward(30_050);
+      await page.clock.runFor(100);
+      const createRecovery = page.getByRole("dialog", {
+        name: "Confirm deployment",
+        exact: true,
+      });
+      await expect(createRecovery).toBeVisible();
+      expect(state.committed).toHaveLength(1);
+      expect(await operations()).toHaveLength(1);
+      state.bodyHolds.shift()();
+      state.lookupMode = "normal";
+      await createRecovery
+        .getByRole("button", { name: "Check status", exact: true })
+        .click();
+      await expect(
+        page.getByRole("dialog", { name: "Deployment confirmed", exact: true }),
+      ).toBeVisible();
+      expect(state.creates).toHaveLength(1);
+      await load({ app: false, kind: "policy" });
+      await page.clock.install();
+      state.holdPreview = true;
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await page
+        .getByRole("button", { name: "Review deployment", exact: true })
+        .click();
+      await expect.poll(() => state.holds.length).toBe(1);
+      await page.clock.fastForward(30_050);
+      await page.clock.runFor(100);
+      await expect(
+        page.getByText(/server may still be processing/),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Review deployment", exact: true }),
+      ).toBeEnabled();
+      expect(state.creates).toHaveLength(0);
+      expect(await operations()).toEqual([]);
+      state.holds.shift()();
+    },
+  );
+  await check(
+    "Rollback uncertainty and replacement receipts fit 899 and 375 light/dark with accessible controls",
+    async () => {
+      for (const width of [899, 375])
+        for (const theme of ["light", "dark"]) {
+          await lost({ width, theme });
+          for (const stage of ["uncertain", "confirmed"]) {
+            if (stage === "confirmed") {
+              state.lookupMode = "normal";
+              await recovery()
+                .getByRole("button", { name: "Check status", exact: true })
+                .click();
+              await expect(confirmed()).toBeVisible();
+            }
+            const modal = stage === "uncertain" ? recovery() : confirmed();
+            const box = await modal.boundingBox();
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
+            const scan = await new AxeBuilder({ page })
+              .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+              .analyze();
+            accessibility.push({
+              width,
+              theme,
+              stage,
+              violations: scan.violations.map((v) => ({
+                id: v.id,
+                targets: v.nodes.map((n) => n.target),
+              })),
+            });
+            expect(scan.violations).toEqual([]);
+            measurements.push({ width, theme, stage, box });
+            await page.screenshot({
+              path: resolve(
+                output,
+                `rollback-recovery-${stage}-${width}-${theme}.png`,
+              ),
+            });
+          }
+        }
+    },
+  );
+  expect(unexpected).toEqual([]);
+  expect(errors).toEqual([]);
+} catch (error) {
+  failure = error;
+  throw error;
+} finally {
+  const source_sha256 = {};
+  for (const path of [
+    "src/TargetDialog.tsx",
+    "src/Deployments.tsx",
+    "src/deploymentRequests.ts",
+    "src/RollbackReviewPanel.tsx",
+    "src/rollbackReview.ts",
+    "src/DeploymentRecovery.tsx",
+    "src/deploymentReceipt.ts",
+    "src/deployment-recovery.css",
+    "src/App.tsx",
+    "src/Editor.tsx",
+    "src/Control.tsx",
+    "src/Fleet.tsx",
+    "src/deploymentRouting.ts",
+    "src/api.ts",
+    "src/control.css",
+    "tests/rollback-recovery-browser.mjs",
+  ])
+    source_sha256[`dashboard/${path}`] = createHash("sha256")
+      .update(await readFile(resolve(dashboard, path)))
+      .digest("hex");
+  await writeFile(
+    resolve(output, "report.json"),
+    JSON.stringify(
+      {
+        recorded_at: new Date().toISOString(),
+        scope:
+          "Actual Deployments/Recovery/App with intercepted synthetic API and actor/request/source-bound in-memory replay. Does not prove real SQL rollback/idempotency, host operations or activation. No live sessions, native processes or real mutations.",
+        passed: !failure,
+        results,
+        requests,
+        unexpected,
+        errors,
+        accessibility,
+        measurements,
+        cleanup_observations: cleanupObservations,
+        correlation_observations: correlationObservations,
+        source_sha256,
+        ...(failure
+          ? {
+              failure: failure.message,
+              body_at_failure: await page.locator("body").innerText(),
+              active_at_failure: await page.evaluate(
+                () => document.activeElement?.outerHTML,
+              ),
+            }
+          : {}),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  await browser.close();
+  await server.close();
+  console.log("Evidence: " + relative(root, resolve(output, "report.json")));
+}

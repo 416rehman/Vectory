@@ -29,6 +29,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 subtle = "2"
 time = "0.3.47"
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

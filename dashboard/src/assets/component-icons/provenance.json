@@ -1,0 +1,180 @@
+{
+  "retrieved_at": "2026-09-26",
+  "assets": [
+    {
+      "name": "aws_s3",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/aws_s3.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "8280adb4e28e71a2f9287f482c551819a46dde85cb2be5b28167ac1fd826e530",
+      "bytes": 1492
+    },
+    {
+      "name": "aws_cloudwatch",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/aws_cloudwatch.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "8987019f39cc93ecdf7d65cf8ba242f6f5db8b129ddcb58b333ad29870e6c0b2",
+      "bytes": 1542
+    },
+    {
+      "name": "aws_kinesis_firehose",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/aws_kinesis_firehose.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "765a8963faad375487f58a4a1bb37653c313e3c70387e7280aa96080b3cae308",
+      "bytes": 1694
+    },
+    {
+      "name": "aws_kinesis_streams",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/aws_kinesis_streams.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "ef530c59ba8319e8c169fa16a5e6f6efc3476ed5d949d92440f47cfdaa3a0398",
+      "bytes": 2075
+    },
+    {
+      "name": "clickhouse",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/clickhouse.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "52c06f9219ebf7e93a943dea1931bb151ef8bbbbcaa15cc5f87ced1b127cd5ef",
+      "bytes": 361
+    },
+    {
+      "name": "datadog",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/datadog.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "3a702c3ad2203eb8b4d6b1494d65a0082effc76bb32f92343652d338b1c735df",
+      "bytes": 3642
+    },
+    {
+      "name": "docker",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/docker.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "f464cd5fe161bb77047e78f57c1977c95dc0eb94c571328b167cab6a78916498",
+      "bytes": 9178
+    },
+    {
+      "name": "elasticsearch",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/elasticsearch.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "cc0f7dadfe0fcbf6850b6e576ff67b347d0faa0f83b2f7010ee28641a31a7e63",
+      "bytes": 973
+    },
+    {
+      "name": "gcp_big_query",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/gcp_big_query.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "caba5911b1f3ba5136b661546740ca6d3e4a17b03b2bd86994934b0901efc90e",
+      "bytes": 1107
+    },
+    {
+      "name": "gcp_cloud_storage",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/gcp_cloud_storage.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "733ac2b99d2e27db33a3871dbb7308ef35a6534ff7a3ff27ede3c56ed7b86f93",
+      "bytes": 941
+    },
+    {
+      "name": "gcp_pubsub",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/gcp_pubsub.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "543812b1d15542376030ce1d074f0ef8cf2985d8b0f63d78bf2b44a6326a154a",
+      "bytes": 1328
+    },
+    {
+      "name": "gcp_stackdriver",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/gcp_stackdriver.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "aaa0d978a851ba2ef622f308c5c87c9b92fb598feaead9c2352f908d0a2192dd",
+      "bytes": 849
+    },
+    {
+      "name": "honeycomb",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/honeycomb.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "3a8c9ff53d789a800a162b9b7a4f083de974933f44038227671a3ad7bde20c7b",
+      "bytes": 524
+    },
+    {
+      "name": "influxdb",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/influxdb.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "7724d17ae3c396532b5a2e7bd5536187888a7eeb4a5f754db4a84c9e27642b7c",
+      "bytes": 1648
+    },
+    {
+      "name": "kafka",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/kafka.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "45761794bd61d689ff8a5977df3b43deb4dc779a77999cefe7cc267eda74c471",
+      "bytes": 1544
+    },
+    {
+      "name": "loki",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/loki.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "4fa0a3706ea7fd343ad0b401b4517325e8e7d3224ac09b4ee784e52b38fcfd4f",
+      "bytes": 4706
+    },
+    {
+      "name": "new_relic",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/new_relic.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "df323c381ec6fe16af13a8c262e1c7da3fc488d988a6c6406cbbec8c46542a68",
+      "bytes": 2905
+    },
+    {
+      "name": "pulsar",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/pulsar.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "6245ef64393cb7ea718e8f1d834a9a5efe57a169ae9a0080906e789866200f01",
+      "bytes": 744
+    },
+    {
+      "name": "splunk_hec",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/splunk_hec.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "ef2a92af3b9e22f93c935fe8ad24447ed3296ea07aa96349cd8c4c12689ab938",
+      "bytes": 198
+    },
+    {
+      "name": "vector",
+      "source": "https://raw.githubusercontent.com/vectordotdev/vector/v0.58.0/website/static/img/logos/vector.svg",
+      "provider": "Vector v0.58.0 bundled service artwork",
+      "sha256": "829317de2532d2794add8c5ed608be796305ca881b91544fd0cb13e81e0edfba",
+      "bytes": 287
+    },
+    {
+      "name": "opentelemetry",
+      "source": "https://raw.githubusercontent.com/cncf/artwork/main/projects/opentelemetry/icon/color/opentelemetry-icon-color.svg",
+      "provider": "CNCF official project artwork",
+      "sha256": "f19d3aa81895ba0d2102df6bbd76371e55664f8f6714c6ed355f971b7b013906",
+      "bytes": 1113
+    },
+    {
+      "name": "prometheus",
+      "source": "https://raw.githubusercontent.com/cncf/artwork/main/projects/prometheus/icon/color/prometheus-icon-color.svg",
+      "provider": "CNCF official project artwork",
+      "sha256": "a96d48cc7f1c91de940dacbf30581850fd2c0ed4afaf1b0b94fb86eb1d0aef6e",
+      "bytes": 1389
+    },
+    {
+      "name": "kubernetes",
+      "source": "https://raw.githubusercontent.com/cncf/artwork/main/projects/kubernetes/icon/color/kubernetes-icon-color.svg",
+      "provider": "CNCF official project artwork",
+      "sha256": "ff5427cfeeff39e82834ab1b4fe3ed61fc08596225a17eed56adc04f7cc1f712",
+      "bytes": 9286
+    },
+    {
+      "name": "nats",
+      "source": "https://raw.githubusercontent.com/cncf/artwork/main/projects/nats/icon/color/nats-icon-color.svg",
+      "provider": "CNCF official project artwork",
+      "sha256": "aeac64fac2ef4226a921508afc8097bd6300cdc9361779acdd19ec650a961992",
+      "bytes": 606
+    },
+    {
+      "name": "fluentd",
+      "source": "https://raw.githubusercontent.com/cncf/artwork/main/projects/fluentd/icon/color/fluentd-icon-color.svg",
+      "provider": "CNCF official project artwork",
+      "sha256": "bd92f3c942e4e275b0f7338022ffcfcde0b7e58a1b1bb6ea580fe201cf6dff4a",
+      "bytes": 4204
+    }
+  ]
+}

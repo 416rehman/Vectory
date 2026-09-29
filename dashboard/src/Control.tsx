@@ -1,387 +1,92 @@
-import { useState } from "react";
-import {
-  AlertTriangle,
-  ArrowDownToLine,
-  ArrowRight,
-  CalendarDays,
-  Check,
-  CheckCircle2,
-  Clipboard,
-  Clock3,
-  Copy,
-  Download,
-  FileText,
-  History,
-  KeyRound,
-  LockKeyhole,
-  Pause,
-  Play,
-  Plus,
-  Radio,
-  RefreshCw,
-  Rocket,
-  RotateCcw,
-  Server,
-  Settings2,
-  Shield,
-  ShieldCheck,
-  Terminal,
-  Trash2,
-  Users,
-  Workflow,
-  X,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Copy, Download, Plus } from "lucide-react";
+import { DataTable } from "./DataTable";
 import {
   api,
   can,
-  download,
-  post,
   when,
-  type Audit,
-  type Deployment,
   type Device,
-  type Issue,
   type Policy,
   type Release,
+  type SavedPolicy,
   type Token,
   type User,
 } from "./api";
 import {
-  Badge,
   Button,
   DateCell,
-  Empty,
   ErrorBox,
   Field,
   Modal,
   PageHeader,
-  Pagination,
-  Panel,
+  RefreshButton,
   SearchBox,
   Spinner,
   useResource,
 } from "./ui";
 import TargetDialog from "./TargetDialog";
-import { AssignmentActions } from "./RecoveryActions";
+import AgentSettingsCreation, {
+  type AgentSettingsCreationHandle,
+} from "./AgentSettingsCreation";
+import DocLink from "./DocLink";
+import {
+  ConfigurationModePicker,
+  RestrictedPolicyFile,
+  ServerCertificateTrust,
+  isAbsoluteLocalFilePath,
+  type ConfigurationMode,
+} from "./EnrollmentConnection";
+import EnrollmentTokenFlow, {
+  type EnrollmentTokenFlowHandle,
+} from "./EnrollmentTokenFlow";
+import "./control.css";
 
-export function Deployments({
-  scheduled = false,
-  user,
-  notify,
-  navigate,
-}: {
-  scheduled?: boolean;
-  user: User;
-  notify: (m: string) => void;
-  navigate: (p: string) => void;
-}) {
-  const { data, error, loading, reload } = useResource<Deployment[]>(
-    "/deployments",
-    [],
-  );
-  const devices = useResource<Device[]>("/devices", []);
-  const [search, setSearch] = useState(""),
-    [detail, setDetail] = useState<Deployment | null>(null),
-    [action, setAction] = useState<{
-      deployment: Deployment;
-      name: string;
-    } | null>(null),
-    [busy, setBusy] = useState(false),
-    [actionError, setActionError] = useState("");
-  const list = data.filter(
-    (d) =>
-      (!scheduled || d.scheduled_at) &&
-      (d.name || d.version_id || d.id)
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
-  const activeDetail = detail
-    ? data.find((d) => d.id === detail.id) || detail
-    : null;
-  async function perform() {
-    if (!action) return;
-    setBusy(true);
-    setActionError("");
-    try {
-      await post(`/deployments/${action.deployment.id}/${action.name}`);
-      setAction(null);
-      notify(`Deployment ${action.name} requested.`);
-      void reload();
-    } catch (e) {
-      setActionError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+const words = (value: string) =>
+  value.replaceAll("_", " ").replaceAll(".", " ");
+const stateText: Record<string, string> = {
+  active: "In progress",
+  completed: "Complete",
+  scheduled: "Scheduled",
+  paused: "Paused",
+  failed: "Needs attention",
+  cancelled: "Cancelled",
+  unassigned: "Removed",
+  missed: "Schedule missed",
+  verified_applied: "Applied and verified",
+  desired: "Waiting for agent",
+  pending: "Waiting",
+  downloaded: "Downloaded",
+  validated: "Validated",
+  written: "Applying",
+  reload_requested: "Restarting Vector",
+  verification_unknown: "Verification needed",
+  rolled_back: "Rolled back",
+  incompatible: "Incompatible",
+  removed: "No longer targeted",
+  revoked: "Revoked",
+};
+function Status({ state }: { state: string }) {
   return (
-    <>
-      <PageHeader
-        eyebrow="RELEASE & OBSERVE"
-        title={scheduled ? "Schedules" : "Deployments"}
-        description={
-          scheduled
-            ? "Release at the right time. Scheduled targets are frozen when you create the deployment."
-            : "Follow each version from desired state to verified application."
-        }
-      >
-        <Button icon={Plus} onClick={() => navigate("configurations")}>
-          Deploy a version
-        </Button>
-      </PageHeader>
-      {error && <ErrorBox message={error} retry={reload} />}
-      <div className="toolbar">
-        <SearchBox
-          value={search}
-          onChange={setSearch}
-          placeholder={scheduled ? "Search schedules…" : "Search deployments…"}
-        />
-        <Button variant="secondary" icon={RefreshCw} onClick={reload}>
-          Refresh
-        </Button>
-      </div>
-      {scheduled && (
-        <div className="hint-box">
-          <Clock3 size={19} />
-          <span>
-            Times are displayed in{" "}
-            {Intl.DateTimeFormat().resolvedOptions().timeZone}. Offline devices
-            remain pending; a scheduled activation does not mean they have
-            applied it.
-          </span>
-        </div>
-      )}
-      {loading ? (
-        <div className="loading">
-          <Spinner />
-          Loading deployments
-        </div>
-      ) : list.length ? (
-        <div className="deployment-list">
-          {list.map((d) => {
-            const verified = (d.targets || []).filter(
-                (t) => t.state === "verified_applied",
-              ).length,
-              total = d.targets?.length || 0;
-            return (
-              <button
-                className="deployment-card"
-                key={d.id}
-                onClick={() => setDetail(d)}
-              >
-                <span className="square-icon">
-                  {d.scheduled_at ? (
-                    <CalendarDays size={22} />
-                  ) : (
-                    <Rocket size={22} />
-                  )}
-                </span>
-                <div className="deployment-card-main">
-                  <div>
-                    <h3>
-                      {d.name ||
-                        (d.policy
-                          ? "Agent policy"
-                          : "Configuration deployment")}
-                    </h3>
-                    <Badge status={d.status} />
-                  </div>
-                  <p>
-                    {d.version_id
-                      ? `Version ${d.version_id.slice(0, 8)}`
-                      : "Complete agent policy"}{" "}
-                    <span>·</span>{" "}
-                    {d.rollout?.kind === "canary"
-                      ? "Canary + batches"
-                      : "All at once"}{" "}
-                    <span>·</span> Priority {d.priority}
-                  </p>
-                  <div className="rollout-progress">
-                    <span
-                      style={{
-                        width: `${total ? (verified / total) * 100 : 0}%`,
-                      }}
-                    />
-                  </div>
-                  <small>
-                    {verified} of {total} verified <span>·</span>{" "}
-                    {d.scheduled_at
-                      ? `Scheduled ${when(d.scheduled_at)}`
-                      : `Created ${when(d.created_at)}`}
-                  </small>
-                </div>
-                <ArrowRight size={18} />
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <Empty
-          icon={scheduled ? CalendarDays : Rocket}
-          title={
-            scheduled
-              ? "A thoughtful release has good timing"
-              : "Ready when you are"
-          }
-          action={
-            <Button icon={Workflow} onClick={() => navigate("configurations")}>
-              Open configurations
-            </Button>
-          }
-        >
-          {scheduled
-            ? "Publish a version, choose your targets, and set an activation time from the deploy dialog."
-            : "Publish a configuration and preview its targets. Track every device through validation, activation, and verification here."}
-        </Empty>
-      )}
-      <Modal
-        open={!!activeDetail}
-        onClose={() => setDetail(null)}
-        title="Deployment progress"
-        description="Only verified application counts toward rollout success."
-        wide
-      >
-        {activeDetail && (
-          <div className="modal-body">
-            <div className="deployment-detail-top">
-              <Badge status={activeDetail.status} />
-              <span className="mono">{activeDetail.id}</span>
-            </div>
-            <dl className="detail-list">
-              <div>
-                <dt>Target mode</dt>
-                <dd>{activeDetail.target_mode}</dd>
-              </div>
-              <div>
-                <dt>Priority</dt>
-                <dd>{activeDetail.priority}</dd>
-              </div>
-              <div>
-                <dt>Strategy</dt>
-                <dd>{activeDetail.rollout?.kind}</dd>
-              </div>
-              <div>
-                <dt>Scheduled activation</dt>
-                <dd>{when(activeDetail.scheduled_at)}</dd>
-              </div>
-            </dl>
-            <h3>Original target snapshot</h3>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Device</th>
-                    <th>State</th>
-                    <th>Generation</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeDetail.targets?.map((t) => (
-                    <tr key={t.device_id}>
-                      <td>
-                        {devices.data.find((d) => d.id === t.device_id)?.name ||
-                          t.device_id}
-                      </td>
-                      <td>
-                        <Badge status={t.state} />
-                      </td>
-                      <td>{t.generation}</td>
-                      <td>{t.error || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {can(user, "operate") && (
-              <div className="action-row">
-                {["active", "paused"].includes(activeDetail.status) && (
-                  <>
-                    <Button
-                      icon={activeDetail.status === "paused" ? Play : Pause}
-                      variant="secondary"
-                      onClick={() => {
-                        setActionError("");
-                        setAction({
-                          deployment: activeDetail,
-                          name:
-                            activeDetail.status === "paused"
-                              ? "resume"
-                              : "pause",
-                        });
-                      }}
-                    >
-                      {activeDetail.status === "paused" ? "Resume" : "Pause"}{" "}
-                      rollout
-                    </Button>
-                  </>
-                )}
-                {["active", "paused", "scheduled"].includes(
-                  activeDetail.status,
-                ) && (
-                  <Button
-                    icon={X}
-                    variant="danger-ghost"
-                    onClick={() => {
-                      setActionError("");
-                      setAction({ deployment: activeDetail, name: "cancel" });
-                    }}
-                  >
-                    Cancel rollout
-                  </Button>
-                )}
-                {activeDetail.status !== "unassigned" && (
-                  <Button
-                    icon={RotateCcw}
-                    variant="secondary"
-                    onClick={() => {
-                      setActionError("");
-                      setAction({ deployment: activeDetail, name: "rollback" });
-                    }}
-                  >
-                    Roll back
-                  </Button>
-                )}
-              </div>
-            )}
-            {can(user, "operate") && (
-              <AssignmentActions
-                deployment={activeDetail}
-                onDone={(message) => {
-                  notify(message);
-                  void reload();
-                }}
-              />
-            )}
-          </div>
-        )}
-      </Modal>
-      <Modal
-        open={!!action}
-        onClose={() => setAction(null)}
-        title={`${action?.name || "Change"} deployment`}
-        description={
-          action?.name === "rollback"
-            ? "Rollback releases an older immutable artifact under a new generation. Agents will validate and apply it."
-            : "Stopping admissions does not undo already released generations. Agents may apply them until they receive a superseding generation."
-        }
-      >
-        <div className="modal-body">
-          {actionError && <ErrorBox message={actionError} />}
-          <p>
-            Apply this action to deployment <code>{action?.deployment.id}</code>{" "}
-            and its {action?.deployment.targets?.length || 0} original targets?
-          </p>
-        </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={() => setAction(null)}>
-            Keep current state
-          </Button>
-          <Button busy={busy} onClick={perform}>
-            Confirm {action?.name}
-          </Button>
-        </div>
-      </Modal>
-    </>
+    <span className="control-status" data-state={state}>
+      {stateText[state] || words(state)}
+    </span>
+  );
+}
+function Quiet({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="control-empty">
+      <h2>{title}</h2>
+      <p>{children}</p>
+      {action}
+    </div>
   );
 }
 
@@ -390,1224 +95,1370 @@ export function Policies({
   notify,
 }: {
   user: User;
-  notify: (m: string) => void;
+  notify: (message: string) => void;
 }) {
-  const { data, error, reload } = useResource<
-    { id: string; name: string; policy: Policy; created_at: string }[]
-  >("/policies", []);
-  const [open, setOpen] = useState(false),
-    [name, setName] = useState(""),
-    [heartbeat, setHeartbeat] = useState(60),
-    [paused, setPaused] = useState(false),
-    [telemetry, setTelemetry] = useState(true),
-    [busy, setBusy] = useState(false),
-    [formError, setFormError] = useState(""),
-    [deploy, setDeploy] = useState<Policy | null>(null);
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setFormError("");
-    try {
-      await post("/policies", {
-        name,
-        policy: {
-          heartbeat_seconds: heartbeat,
-          sync_paused: paused,
-          telemetry_enabled: telemetry,
-        },
-      });
-      setOpen(false);
-      notify("Policy saved. Deploy it to apply changes.");
-      void reload();
-    } catch (e) {
-      setFormError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { data, error, loading, reload } = useResource<SavedPolicy[]>(
+    "/policies",
+    [],
+  );
+  const creation = useRef<AgentSettingsCreationHandle>(null);
+  const [deploy, setDeploy] = useState<Policy | null>(null);
   return (
-    <>
+    <div className="control-page">
       <PageHeader
-        eyebrow="FLEET MANAGEMENT"
-        title="Agent policies"
-        description="Set bounded agent behavior with the same targeting used for your pipelines."
+        title="Agent settings"
+        help={{
+          topic: "glossary",
+          section: "devices-permissions-and-credentials",
+        }}
+        description="Save a set of agent settings, then apply it to selected devices."
       >
         {can(user, "operate") && (
-          <Button icon={Plus} onClick={() => setOpen(true)}>
-            Create policy
+          <Button
+            icon={Plus}
+            onClick={(event) =>
+              creation.current?.openCreate(event.currentTarget)
+            }
+          >
+            New settings
           </Button>
         )}
       </PageHeader>
+      <AgentSettingsCreation
+        key={`${user.id}:${user.role}`}
+        ref={creation}
+        user={user}
+        onCreated={() => {
+          notify("Agent settings saved. Choose devices to apply them.");
+          void reload();
+        }}
+        onApply={(setting) => {
+          setDeploy(setting.policy);
+          return true;
+        }}
+      />
       {error && <ErrorBox message={error} retry={reload} />}
-      <div className="hint-box">
-        <Shield size={19} />
-        <span>
-          Policies cannot disable authentication, select executables, or
-          override a local emergency pause. Remote pause is effective only after
-          an agent acknowledges it.
-        </span>
-      </div>
-      {data.length ? (
-        <div className="config-grid">
-          {data.map((p) => (
-            <section className="config-card policy-card" key={p.id}>
-              <div className="config-card-top">
-                <span className="square-icon">
-                  <Settings2 size={21} />
-                </span>
-                <Badge status={p.policy.sync_paused ? "paused" : "active"}>
-                  {p.policy.sync_paused ? "Pause requested" : "Sync enabled"}
-                </Badge>
-              </div>
-              <h3>{p.name}</h3>
-              <dl className="detail-list">
-                <div>
-                  <dt>Heartbeat</dt>
-                  <dd>{p.policy.heartbeat_seconds}s</dd>
-                </div>
-                <div>
-                  <dt>Telemetry</dt>
-                  <dd>{p.policy.telemetry_enabled ? "Enabled" : "Disabled"}</dd>
-                </div>
-              </dl>
-              {can(user, "operate") && (
-                <Button
-                  variant="secondary"
-                  icon={Rocket}
-                  onClick={() => setDeploy(p.policy)}
-                >
-                  Select targets & deploy
-                </Button>
-              )}
-            </section>
-          ))}
-        </div>
-      ) : (
-        <Empty
-          icon={Settings2}
-          title="A consistent rhythm for your fleet"
-          action={
-            can(user, "operate") ? (
-              <Button icon={Plus} onClick={() => setOpen(true)}>
-                Create your first policy
-              </Button>
-            ) : undefined
+      <div className="control-table">
+        <DataTable
+          data={error ? [] : data}
+          rowKey={(setting) => setting.id}
+          label="Agent settings"
+          loading={loading}
+          columns={[
+            {
+              id: "name",
+              header: "Name",
+              value: (setting) => setting.name,
+              filter: { placeholder: "Filter settings names" },
+              cell: (setting) => <strong>{setting.name}</strong>,
+            },
+            {
+              id: "interval",
+              header: "Check-in interval",
+              value: (setting) => setting.policy.heartbeat_seconds,
+              filter: { placeholder: "Filter seconds" },
+              cell: (setting) => `${setting.policy.heartbeat_seconds} seconds`,
+            },
+            {
+              id: "sync",
+              header: "Configuration sync",
+              value: (setting) =>
+                setting.policy.sync_paused ? "Paused" : "Enabled",
+              filter: {
+                options: [
+                  { value: "Paused", label: "Paused" },
+                  { value: "Enabled", label: "Enabled" },
+                ],
+              },
+              cell: (setting) =>
+                setting.policy.sync_paused ? "Paused" : "Enabled",
+            },
+            {
+              id: "metrics",
+              header: "Metrics",
+              value: (setting) =>
+                setting.policy.telemetry_enabled ? "Collected" : "Off",
+              filter: {
+                options: [
+                  { value: "Collected", label: "Collected" },
+                  { value: "Off", label: "Off" },
+                ],
+              },
+              cell: (setting) =>
+                setting.policy.telemetry_enabled ? "Collected" : "Off",
+            },
+            {
+              id: "actions",
+              header: <span className="sr-only">Apply settings</span>,
+              cell: (setting) =>
+                can(user, "operate") && (
+                  <Button
+                    variant="secondary compact"
+                    onClick={() => setDeploy(setting.policy)}
+                  >
+                    Apply to devices
+                  </Button>
+                ),
+            },
+          ]}
+          empty={
+            error ? (
+              "Agent settings could not be loaded."
+            ) : data.length ? (
+              "No settings match these filters."
+            ) : (
+              <Quiet
+                title="No saved agent settings"
+                action={
+                  can(user, "operate") ? (
+                    <Button
+                      onClick={(event) =>
+                        creation.current?.openCreate(event.currentTarget)
+                      }
+                    >
+                      Create settings
+                    </Button>
+                  ) : undefined
+                }
+              >
+                Control how often agents check in, collect metrics, and sync
+                pipeline changes.
+              </Quiet>
+            )
           }
-        >
-          Set heartbeat frequency, telemetry collection, and sync pause. The
-          default heartbeat is 60 seconds, with jitter.
-        </Empty>
-      )}
-      <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        title="Create an agent policy"
-        description="A policy is complete and versioned. The highest-priority applicable policy wins."
-      >
-        <form onSubmit={save}>
-          <div className="modal-body">
-            {formError && <ErrorBox message={formError} />}
-            <Field label="Policy name">
-              <input
-                value={name}
-                required
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Standard production agents"
-              />
-            </Field>
-            <Field
-              label="Heartbeat interval (seconds)"
-              hint="Allowed range: 10–3,600 seconds. Jitter prevents synchronized requests."
-            >
-              <input
-                type="number"
-                min={10}
-                max={3600}
-                value={heartbeat}
-                onChange={(e) => setHeartbeat(+e.target.value)}
-              />
-            </Field>
-            <label className="toggle-row">
-              <span>
-                <strong>Pause configuration sync</strong>
-                <small>Heartbeats and policy retrieval continue.</small>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                checked={paused}
-                onChange={(e) => setPaused(e.target.checked)}
-              />
-            </label>
-            <label className="toggle-row">
-              <span>
-                <strong>Operational telemetry</strong>
-                <small>Bounded health metrics; no pipeline payloads.</small>
-              </span>
-              <input
-                type="checkbox"
-                role="switch"
-                checked={telemetry}
-                onChange={(e) => setTelemetry(e.target.checked)}
-              />
-            </label>
-            {!paused && (
-              <p className="muted">
-                Resuming managed sync can replace local edits with the latest
-                assigned configuration. Local emergency pause remains in effect.
-              </p>
-            )}
-          </div>
-          <div className="modal-footer">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" busy={busy}>
-              Save policy
-            </Button>
-          </div>
-        </form>
-      </Modal>
-      {deploy && (
+        />
+      </div>
+      <p className="control-muted">
+        Changes take effect after each agent checks in. A local emergency pause
+        always stays in effect until cleared on that device.
+      </p>
+      {deploy && can(user, "operate") && (
         <TargetDialog
+          key={user.id}
+          userId={user.id}
           open
           onClose={() => setDeploy(null)}
           policy={deploy}
           onDone={notify}
         />
       )}
-    </>
+    </div>
   );
 }
 
+function tokenStatus(token: Token) {
+  return token.revoked
+    ? "Revoked"
+    : Date.parse(token.expires_at) < Date.now()
+      ? "Expired"
+      : token.max_uses && token.uses >= token.max_uses
+        ? "Used up"
+        : "Available";
+}
+
+function localPaths(os: string) {
+  return os === "windows"
+    ? {
+        state: "C:\\ProgramData\\Vectory",
+        vector: "C:\\Program Files\\Vector\\bin\\vector.exe",
+        config: "C:\\ProgramData\\VectoryConfig\\managed.json",
+      }
+    : os === "darwin"
+      ? {
+          state: "/Library/Application Support/Vectory",
+          vector: "/opt/homebrew/bin/vector",
+          config: "/Library/Application Support/VectoryConfig/managed.json",
+        }
+      : {
+          state: "/var/lib/vectory",
+          vector: "/usr/bin/vector",
+          config: "/etc/vector/vectory-managed/managed.json",
+        };
+}
 export function Enrollment({
   user,
   notify,
   navigate,
 }: {
   user: User;
-  notify: (m: string) => void;
-  navigate: (p: string) => void;
+  notify: (message: string) => void;
+  navigate: (path: string) => void;
 }) {
   const tokens = useResource<Token[]>("/tokens", []),
-    releases = useResource<Release[]>("/releases", []);
-  const [os, setOs] = useState("linux"),
-    [arch, setArch] = useState("amd64"),
+    releases = useResource<Release[]>("/releases", []),
+    devices = useResource<Device[]>("/devices", []);
+  const [os, setOs] = useState(() =>
+      navigator.platform.toLowerCase().includes("win")
+        ? "windows"
+        : navigator.platform.toLowerCase().includes("mac")
+          ? "darwin"
+          : "linux",
+    ),
+    [arch, setArch] = useState(() =>
+      navigator.platform.toLowerCase().includes("mac") ? "arm64" : "amd64",
+    ),
+    [step, setStep] = useState(1),
+    [workload, setWorkload] = useState("existing"),
+    [runMode, setRunMode] = useState<"foreground" | "service">("foreground"),
+    [serviceUser, setServiceUser] = useState(""),
+    [configurationMode, setConfigurationMode] = useState<
+      ConfigurationMode | ""
+    >(""),
+    [policyFile, setPolicyFile] = useState(""),
     [server, setServer] = useState(`https://${location.hostname}:8443`),
     [machine, setMachine] = useState("edge-01"),
-    [open, setOpen] = useState(false),
+    [privateCA, setPrivateCA] = useState(false),
+    [caFile, setCaFile] = useState(""),
+    [paths, setPaths] = useState(() =>
+      localPaths(
+        navigator.platform.toLowerCase().includes("win")
+          ? "windows"
+          : navigator.platform.toLowerCase().includes("mac")
+            ? "darwin"
+            : "linux",
+      ),
+    ),
     [name, setName] = useState(""),
     [hours, setHours] = useState(24),
     [prefix, setPrefix] = useState(""),
-    [limit, setLimit] = useState(""),
-    [secret, setSecret] = useState(""),
+    [limit, setLimit] = useState("1"),
+    [issuedToken, setIssuedToken] = useState<{
+      record: Token;
+      settings: string;
+    } | null>(null),
+    [tokenOpen, setTokenOpen] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [revoking, setRevoking] = useState<Token | null>(null);
-  const release = releases.data.find((r) => r.os === os && r.arch === arch);
-  const command = `vectory enroll --server ${/^https:\/\/[^\s"'`]+$/.test(server) ? server : "https://vectory.example.com:8443"} --id ${/^[a-zA-Z0-9_-]+$/.test(machine) ? machine : "edge-01"} --token-stdin`;
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const result = await post<{ token: string; record: Token }>("/tokens", {
-        name,
-        expires_hours: hours,
-        name_prefix: prefix || null,
-        max_uses: limit ? Number(limit) : null,
-      });
-      setSecret(result.token);
-      setOpen(false);
-      notify("Enrollment token created. Copy it now; it is shown once.");
-      void tokens.reload();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+    [tokenBlocked, setTokenBlocked] = useState(false),
+    [initialDeviceIds, setInitialDeviceIds] = useState<Set<string> | null>(
+      null,
+    );
+  const tokenFlow = useRef<EnrollmentTokenFlowHandle>(null);
+  useEffect(() => {
+    // Establish the baseline only after a successful inventory request. Browser
+    // and server clocks need not agree, and a failed request is not an empty fleet.
+    if (initialDeviceIds === null && !devices.loading && !devices.error)
+      setInitialDeviceIds(new Set(devices.data.map((device) => device.id)));
+  }, [initialDeviceIds, devices.loading, devices.error, devices.data]);
+  const release = releases.data.find((r) => r.os === os && r.arch === arch),
+    unsupported = os === "darwin" && arch === "amd64";
+  let origin = "";
+  try {
+    const url = new URL(server);
+    if (
+      url.protocol === "https:" &&
+      url.port !== "0" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname === "/"
+    )
+      origin = url.origin;
+  } catch {}
+  const loopbackServer =
+    !!origin &&
+    /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(new URL(origin).hostname);
+  const validName = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(machine),
+    matched = devices.data.find(
+      (d) => d.name.toLowerCase() === machine.trim().toLowerCase(),
+    ),
+    freshMatch =
+      matched &&
+      initialDeviceIds !== null &&
+      !initialDeviceIds.has(matched.id) &&
+      matched.status !== "revoked";
+  const quote = (value: string) =>
+    "'" + value.replaceAll("'", os === "windows" ? "''" : "'\"'\"'") + "'";
+  const managedConfigIsLocal = isAbsoluteLocalFilePath(paths.config, os);
+  const managedConfigIsValid =
+    managedConfigIsLocal && paths.config.endsWith(".json");
+  const vectorBinaryIsValid = isAbsoluteLocalFilePath(paths.vector, os);
+  const stateDirectoryIsValid = isAbsoluteLocalFilePath(paths.state, os);
+  const installPathsValid =
+    managedConfigIsValid && vectorBinaryIsValid && stateDirectoryIsValid;
+  const absolutePathHint =
+    os === "windows"
+      ? "Use an absolute path on a local drive, not a network share or relative path."
+      : "Use an absolute path on this device, not a relative path.";
+  const executable = os === "windows" ? ".\\vectory.exe" : "./vectory";
+  const install = `${executable} install --state-dir ${quote(paths.state)} --vector-binary ${quote(paths.vector)} --managed-config ${quote(paths.config)} --adopt --allow-full-vector-config=${configurationMode === "full" ? "true" : "false"}${configurationMode === "restricted" && policyFile ? ` --capability-policy ${quote(policyFile)}` : ""}`;
+  const enroll = `${executable} enroll --state-dir ${quote(paths.state)} --server ${quote(origin)} --id ${quote(machine)}${privateCA ? ` --ca-file ${quote(caFile)}` : " --ca-file="}`;
+  const run = `${executable} run --state-dir ${quote(paths.state)}`;
+  const serviceUserValid =
+    os === "windows" ||
+    ((os === "linux"
+      ? /^[a-z_][a-z0-9_-]{0,31}$/.test(serviceUser)
+      : /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(serviceUser)) &&
+      serviceUser !== "root");
+  const servicePrefix = os === "windows" ? "" : "sudo ";
+  const serviceInstall = `${servicePrefix}${executable} service-install --state-dir ${quote(paths.state)}${os === "windows" ? "" : ` --service-user ${quote(serviceUser)}`}`;
+  const serviceStart = `${servicePrefix}${executable} service-start`;
+  const prefixMatches = !prefix || machine.toLowerCase().startsWith(prefix);
+  const tokenSettings = JSON.stringify({ hours, prefix, limit });
+  const currentToken =
+    issuedToken &&
+    tokens.data.find((token) => token.id === issuedToken.record.id);
+  const reusableToken =
+    !tokens.error &&
+    !tokens.loading &&
+    !!currentToken &&
+    issuedToken?.settings === tokenSettings &&
+    !currentToken.revoked &&
+    Date.parse(currentToken.expires_at) > Date.now() &&
+    (currentToken.max_uses == null ||
+      currentToken.uses < currentToken.max_uses);
+  const validConnection =
+    initialDeviceIds !== null &&
+    !devices.error &&
+    !!origin &&
+    !!configurationMode &&
+    validName &&
+    prefixMatches &&
+    (!privateCA || isAbsoluteLocalFilePath(caFile, os)) &&
+    (configurationMode !== "restricted" ||
+      !policyFile ||
+      isAbsoluteLocalFilePath(policyFile, os)) &&
+    (!matched || freshMatch);
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      notify("Copied to clipboard.");
+      notify("Copied.");
     } catch {
-      notify("Clipboard unavailable. Select and copy the text manually.");
+      notify(
+        "Select and copy the command manually; clipboard access is unavailable.",
+      );
     }
   }
-  async function revoke() {
-    if (!revoking) return;
-    setBusy(true);
-    setError("");
-    try {
-      await post(`/tokens/${revoking.id}/revoke`);
-      setRevoking(null);
-      notify("Token revoked. Existing device identities are unchanged.");
-      void tokens.reload();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
+  async function create(event: React.FormEvent, replaceToken = false) {
+    event.preventDefault();
+    const wizard = step === 2 && !tokenOpen;
+    if (wizard && !validConnection) {
+      setError(
+        prefixMatches
+          ? "Complete the connection settings before continuing."
+          : "The token's name prefix must match this machine name.",
+      );
+      return;
     }
+    if (wizard && reusableToken && !replaceToken) {
+      setError("");
+      setStep(3);
+      return;
+    }
+    const result = await tokenFlow.current?.create({
+      name: name.trim() || `${machine} enrollment`,
+      expires_hours: hours,
+      name_prefix: prefix || null,
+      max_uses: limit ? Number(limit) : null,
+    });
+    setTokenOpen(false);
+    if (result && wizard) {
+      setIssuedToken({ record: result, settings: tokenSettings });
+      setStep(3);
+    }
+  }
+  function tokenFields() {
+    return (
+      <fieldset disabled={busy}>
+        <Field label="Token name">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            placeholder={`${machine} enrollment`}
+          />
+        </Field>
+        <div className="control-two-col">
+          <Field label="Expires in (hours)">
+            <input
+              type="number"
+              min={1}
+              max={720}
+              required
+              value={hours}
+              onChange={(e) => setHours(+e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Maximum uses"
+            hint="Leave blank for reusable enrollment until expiry."
+          >
+            <input
+              type="number"
+              min={1}
+              max={100000}
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="Unlimited"
+            />
+          </Field>
+        </div>
+        <Field
+          label="Allowed machine name prefix (optional)"
+          hint="Use lowercase letters, numbers or hyphens, up to 80 characters."
+        >
+          <input
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value)}
+            maxLength={80}
+            pattern={"[a-z0-9\\-]*"}
+            placeholder="For example, edge-"
+          />
+        </Field>
+      </fieldset>
+    );
+  }
+  function commandBlock(command: string, label: string) {
+    if (!installPathsValid)
+      return (
+        <p className="control-muted">
+          Correct the local paths above to show this command.
+        </p>
+      );
+    return (
+      <div className="control-command">
+        <code>{command}</code>
+        <Button
+          variant="secondary compact"
+          icon={Copy}
+          onClick={() => void copy(command)}
+          aria-label={`Copy ${label}`}
+        >
+          Copy command
+        </Button>
+      </div>
+    );
   }
   return (
-    <>
+    <div className="control-page">
       <PageHeader
-        eyebrow="CONNECT YOUR INFRASTRUCTURE"
-        title="Agents & enrollment"
-        description="A lightweight agent. An outbound connection. Your next managed device."
+        title="Add device"
+        help={{ topic: "installation", section: "install-and-enroll" }}
+        description="Connect a Vector installation and choose whether to keep its current workload."
       >
-        <Button
-          variant="secondary"
-          icon={Server}
-          onClick={() => navigate("devices")}
-        >
-          View enrolled devices
+        <Button variant="secondary" onClick={() => navigate("devices")}>
+          Back to devices
         </Button>
       </PageHeader>
-      {(tokens.error || releases.error) && (
-        <ErrorBox message={tokens.error || releases.error} />
-      )}
-      <div className="enrollment-grid">
-        <Panel title="01 · Get the agent" aside={<Download size={17} />}>
-          <div className="panel-body">
-            <p className="muted">
-              Choose your platform. Downloads are served from this instance’s
-              local release catalog.
-            </p>
-            <div className="os-options">
-              {["linux", "darwin", "windows"].map((value) => (
-                <button
-                  className={os === value ? "selected" : ""}
-                  onClick={() => setOs(value)}
-                  key={value}
+      <div className="enroll-layout">
+        <EnrollmentTokenFlow
+          key={`${user.id}:${user.role}`}
+          ref={tokenFlow}
+          user={user}
+          notify={notify}
+          onChange={() => void tokens.reload()}
+          onState={(waiting, blocked) => {
+            setBusy(waiting);
+            setTokenBlocked(blocked);
+          }}
+        />
+        {(tokens.error || releases.error || devices.error) && (
+          <ErrorBox
+            message={tokens.error || releases.error || devices.error}
+            retry={() => {
+              void tokens.reload();
+              void releases.reload();
+              void devices.reload();
+            }}
+          />
+        )}
+        <div className="control-card enroll-wizard">
+          <ol className="control-steps" aria-label="Add device steps">
+            {["Download", "Connection", "Install", "Verify"].map(
+              (label, index) => (
+                <li
+                  key={label}
+                  aria-current={step === index + 1 ? "step" : undefined}
                 >
-                  {value === "darwin"
-                    ? "macOS"
-                    : value === "linux"
-                      ? "Linux"
-                      : "Windows"}
-                </button>
-              ))}
-            </div>
-            <Field label="Architecture">
-              <select value={arch} onChange={(e) => setArch(e.target.value)}>
-                <option value="amd64">x86-64 / Intel</option>
-                <option value="arm64">ARM64 / Apple Silicon</option>
-              </select>
-            </Field>
-            {release ? (
-              <>
-                <a className="button full-width" href={release.url}>
-                  <ArrowDownToLine size={16} />
-                  Download {release.name}
-                </a>
-                <div className="download-meta">
-                  <Badge status={release.signed ? "valid" : "warning"}>
-                    {release.signed
-                      ? "Signed release"
-                      : "Unsigned development build"}
-                  </Badge>
-                  <small>
-                    v{release.version} · {(release.size / 1048576).toFixed(1)}{" "}
-                    MB
-                  </small>
-                </div>
-                <details>
-                  <summary>Verify SHA-256 checksum</summary>
-                  <code className="block-code wrap">{release.sha256}</code>
+                  <span>{index + 1}</span>
+                  {label}
+                </li>
+              ),
+            )}
+          </ol>
+          {error && !tokenOpen && <ErrorBox message={error} />}
+          {step === 1 && (
+            <>
+              <h2>Get the agent</h2>
+              <p className="control-muted">
+                Choose the operating system of the device you want to connect.
+                Vector 0.58.0 must already be installed.
+              </p>
+              <fieldset
+                className="enroll-platforms"
+                aria-label="Operating system"
+              >
+                {[
+                  ["windows", "Windows"],
+                  ["linux", "Linux"],
+                  ["darwin", "macOS"],
+                ].map(([value, label]) => (
+                  <label className="enroll-platform" key={value}>
+                    <input
+                      type="radio"
+                      name="agent-os"
+                      value={value}
+                      checked={os === value}
+                      onChange={() => {
+                        setOs(value);
+                        setPaths(localPaths(value));
+                        setServiceUser("");
+                        setArch(value === "darwin" ? "arm64" : "amd64");
+                      }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </fieldset>
+              <Field label="Architecture">
+                <select value={arch} onChange={(e) => setArch(e.target.value)}>
+                  <option value="amd64">x86-64 / Intel</option>
+                  <option value="arm64">ARM64 / Apple Silicon</option>
+                </select>
+              </Field>
+              {releases.loading ? (
+                <p className="control-muted" role="status">
+                  Checking available downloads...
+                </p>
+              ) : unsupported ? (
+                <p className="control-note">
+                  Vector 0.58.0 is not distributed for Intel Macs. The available
+                  agent binary is build-only and is not a supported setup.
+                </p>
+              ) : release ? (
+                <>
+                  <div className="enroll-download">
+                    <div>
+                      <strong>Vectory {release.version}</strong>
+                      <small>
+                        {(release.size / 1048576).toFixed(1)} MB,{" "}
+                        {release.signed
+                          ? "Signed release"
+                          : "Unsigned development build"}
+                      </small>
+                    </div>
+                    <a
+                      className="button"
+                      href={release.url}
+                      download={os === "windows" ? "vectory.exe" : "vectory"}
+                    >
+                      <Download size={16} />
+                      Download agent
+                    </a>
+                  </div>
+                  <p className="control-muted">
+                    Rename the downloaded file to{" "}
+                    <code>{os === "windows" ? "vectory.exe" : "vectory"}</code>.
+                    Keep it in a dedicated folder and open a terminal there.
+                  </p>
+                  <details className="control-disclosure">
+                    <summary>Checksum and compatibility</summary>
+                    <p className="control-muted">
+                      Verify the downloaded bytes against a trusted copy of this
+                      SHA-256 checksum before running.{" "}
+                      {os === "windows"
+                        ? "Native foreground operation was tested on Windows 11. Service installation and other Windows versions remain unverified."
+                        : "This artifact is cross-compiled; native installation and service operation are not yet verified."}
+                    </p>
+                    <code className="control-wrap-code">{release.sha256}</code>
+                  </details>
+                </>
+              ) : (
+                <p className="control-note">
+                  No release is available for this platform. Ask the host
+                  administrator to add a verified artifact to the release
+                  catalog.
+                </p>
+              )}
+              <div className="enroll-footer">
+                <span className="control-muted">
+                  Download the agent before continuing.
+                </span>
+                <Button
+                  variant="secondary"
+                  disabled={!release || unsupported || releases.loading}
+                  onClick={() => setStep(2)}
+                >
+                  Continue
+                </Button>
+              </div>
+            </>
+          )}
+          {step === 2 && (
+            <form onSubmit={create}>
+              <fieldset disabled={busy}>
+                <h2>Set up the connection</h2>
+                <p className="control-muted">
+                  Use a unique device name and the trusted HTTPS address of this
+                  instance's agent listener.
+                </p>
+                <Field
+                  label="Machine name"
+                  hint={
+                    !validName
+                      ? "Use up to 100 letters, numbers, dots, hyphens or underscores. Start with a letter or number."
+                      : undefined
+                  }
+                >
+                  <input
+                    value={machine}
+                    maxLength={100}
+                    aria-invalid={!validName}
+                    onChange={(e) => setMachine(e.target.value)}
+                    required
+                    autoComplete="off"
+                  />
+                </Field>
+                {initialDeviceIds === null && !devices.error && (
+                  <p className="control-muted" role="status">
+                    Checking existing device names before creating a token...
+                  </p>
+                )}
+                {matched && !freshMatch && (
+                  <div className="control-note">
+                    <p>
+                      {matched.status === "revoked"
+                        ? "This device's access is revoked. A regular enrollment token cannot restore its identity."
+                        : "A device with this name already exists. Open it to continue setup or review its connection."}{" "}
+                      For replacement credentials,{" "}
+                      {can(user, "admin")
+                        ? "authorize recovery from its device page"
+                        : "ask an administrator to authorize recovery from its device page"}
+                      . Use a different name to add another device.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      onClick={() => navigate(`devices/${matched.id}`)}
+                    >
+                      Open existing device
+                    </Button>
+                  </div>
+                )}
+                <Field
+                  label="Server URL"
+                  hint={
+                    !origin
+                      ? "Enter an HTTPS address with a valid port (1–65535), no path, username or password."
+                      : loopbackServer
+                        ? "This address works only when the agent runs on this server. For another device, use a reachable listener hostname that matches the HTTPS certificate."
+                        : undefined
+                  }
+                >
+                  <input
+                    value={server}
+                    onChange={(e) => setServer(e.target.value)}
+                    type="url"
+                    aria-invalid={!origin}
+                    required
+                    placeholder="https://vectory.example.com:8443"
+                  />
+                </Field>
+                <ServerCertificateTrust
+                  privateCA={privateCA}
+                  onPrivateCAChange={setPrivateCA}
+                  caFile={caFile}
+                  onCaFileChange={setCaFile}
+                  os={os}
+                  disabled={busy}
+                />
+                <ConfigurationModePicker
+                  value={configurationMode}
+                  onChange={setConfigurationMode}
+                  disabled={busy}
+                />
+                {configurationMode === "restricted" && (
+                  <RestrictedPolicyFile
+                    value={policyFile}
+                    onChange={setPolicyFile}
+                    os={os}
+                    disabled={busy}
+                  />
+                )}
+                <p className="control-muted">
+                  <DocLink
+                    topic="installation"
+                    section="choose-configuration-capabilities"
+                  >
+                    Understand configuration modes and device permissions
+                  </DocLink>
+                </p>
+                <details className="control-disclosure">
+                  <summary>Token settings</summary>
+                  <div className="control-disclosure-content">
+                    {tokenFields()}
+                  </div>
                 </details>
-              </>
-            ) : (
-              <div className="download-unavailable">
-                <Download size={23} />
-                <strong>No verified download available</strong>
+                {!prefixMatches && (
+                  <ErrorBox
+                    message={`The token prefix "${prefix}" does not match "${machine}". Change the prefix or machine name before continuing.`}
+                  />
+                )}
+                <p className="control-muted">
+                  The default token permits one enrollment and expires in 24
+                  hours. You will see it once. New devices have no pipeline
+                  assignment.
+                </p>
+                {reusableToken && (
+                  <p className="control-muted">
+                    Your saved token is still valid. Continue with it, or create
+                    a new token if you no longer have it.
+                  </p>
+                )}
+                <div className="enroll-footer">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => setStep(1)}
+                  >
+                    Back
+                  </Button>
+                  {reusableToken && (
+                    <Button
+                      variant="secondary"
+                      disabled={
+                        busy ||
+                        tokenBlocked ||
+                        !validConnection ||
+                        !can(user, "operate")
+                      }
+                      onClick={(event) => void create(event, true)}
+                    >
+                      Create a new token
+                    </Button>
+                  )}
+                  <Button
+                    type="submit"
+                    busy={busy}
+                    disabled={
+                      tokenBlocked || !validConnection || !can(user, "operate")
+                    }
+                  >
+                    {reusableToken
+                      ? "Continue with saved token"
+                      : "Create enrollment token"}
+                  </Button>
+                </div>
+              </fieldset>
+            </form>
+          )}
+          {step === 3 && (
+            <>
+              <h2>Run the agent on {machine}</h2>
+              <p className="control-muted">
+                Run the install and enrollment commands on the device under an
+                authorized host account. If you choose a service below, give its
+                separate service identity access to the managed workload.
+              </p>
+              <Field label="Starting workload">
+                <select
+                  value={workload}
+                  onChange={(event) => setWorkload(event.target.value)}
+                >
+                  <option value="existing">
+                    Keep an existing Vector workload
+                  </option>
+                  <option value="new">Start without a workload</option>
+                </select>
+              </Field>
+              <Field
+                label="Managed configuration file"
+                hint={
+                  !managedConfigIsLocal
+                    ? absolutePathHint
+                    : !managedConfigIsValid
+                      ? "The managed configuration file must end in .json."
+                      : "One JSON document in a dedicated directory containing no unrelated files."
+                }
+              >
+                <input
+                  value={paths.config}
+                  onChange={(e) =>
+                    setPaths({ ...paths, config: e.target.value })
+                  }
+                  aria-invalid={!managedConfigIsValid}
+                  required
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </Field>
+              <details className="control-disclosure">
+                <summary>
+                  Other local paths
+                  {(!vectorBinaryIsValid || !stateDirectoryIsValid) && (
+                    <span className="enroll-path-summary-error">
+                      Fix invalid paths
+                    </span>
+                  )}
+                </summary>
+                <div className="control-disclosure-content">
+                  <Field
+                    label="Existing Vector executable"
+                    hint={vectorBinaryIsValid ? undefined : absolutePathHint}
+                  >
+                    <input
+                      value={paths.vector}
+                      onChange={(e) =>
+                        setPaths({ ...paths, vector: e.target.value })
+                      }
+                      aria-invalid={!vectorBinaryIsValid}
+                      required
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field
+                    label="Agent state directory"
+                    hint={stateDirectoryIsValid ? undefined : absolutePathHint}
+                  >
+                    <input
+                      value={paths.state}
+                      onChange={(e) =>
+                        setPaths({ ...paths, state: e.target.value })
+                      }
+                      aria-invalid={!stateDirectoryIsValid}
+                      required
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </Field>
+                </div>
+              </details>
+              {!installPathsValid && (
+                <p className="enroll-path-warning">
+                  Correct the device paths before copying commands or checking
+                  the connection. This form checks their syntax; the agent
+                  checks the files and directories on the device during install.
+                </p>
+              )}
+              <div
+                className="enroll-command-step"
+                data-enrollment-preparation={workload}
+              >
+                {workload === "existing" ? (
+                  <>
+                    <h3>1. Prepare the workload before stopping Vector</h3>
+                    {configurationMode === "restricted" && !policyFile && (
+                      <div className="control-note">
+                        No local allowance file was selected. Restricted mode
+                        supports a limited component set and denies file,
+                        network, and listener access unless the host has
+                        approved those resources. Check the existing
+                        configuration before stopping Vector. If it needs these
+                        resources, go back and provide an approved allowance
+                        file on the device. An allowance file cannot enable an
+                        unsupported component; choosing full mode requires a
+                        separate host decision.
+                      </div>
+                    )}
+                    <ol className="control-muted">
+                      <li>
+                        Back up the current configuration and service definition
+                        outside the managed directory.
+                      </li>
+                      <li>
+                        While Vector is still running, copy or combine all its
+                        configuration files into the managed JSON file above.
+                        Include configuration-directory files and check access
+                        to data, credentials and other local dependencies.
+                      </li>
+                      <li>
+                        Only after that file is ready, stop and disable the old
+                        supervisor for this Vector instance.
+                      </li>
+                    </ol>
+                    <p>
+                      The agent does not discover or copy the old configuration.
+                      It starts only the selected file. Review the{" "}
+                      <DocLink
+                        topic="installation"
+                        section="keep-an-existing-workload"
+                      >
+                        adoption preparation steps
+                      </DocLink>
+                      , including local permissions for restricted mode.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3>1. Choose an empty managed path</h3>
+                    <p>
+                      Use a new path that does not contain an existing workload.
+                      The managed file may be absent: the agent can enroll and
+                      check in without starting Vector. It waits for you to
+                      explicitly deploy a pipeline.
+                    </p>
+                    <p>
+                      No pipeline is assigned automatically. To retain a running
+                      workload, choose{" "}
+                      <strong>Keep an existing Vector workload</strong> instead.
+                      See{" "}
+                      <DocLink
+                        topic="installation"
+                        section="start-without-a-workload"
+                      >
+                        preparing a new device
+                      </DocLink>
+                      .
+                    </p>
+                  </>
+                )}
+              </div>
+              {os !== "windows" && (
+                <p className="control-muted">
+                  First make the downloaded agent executable:{" "}
+                  <code>chmod +x ./vectory</code>.
+                </p>
+              )}
+              <div className="enroll-command-step">
+                <h3>2. Install the agent</h3>
+                {commandBlock(install, "installation command")}
                 <p>
-                  Publish a tested {os}/{arch} agent artifact into this
-                  instance’s release catalog. The dashboard never invents
-                  download links.
+                  Installation records the managed paths; it does not start
+                  Vector.
                 </p>
               </div>
-            )}
-          </div>
-        </Panel>
-        <Panel title="02 · Enroll your device" aside={<Terminal size={17} />}>
-          <div className="panel-body">
-            <p className="muted">
-              Vector must already be installed. Generate a token, then run the
-              enrollment command on your device.
-            </p>
-            <div className="form-row">
-              <Field label="Server URL">
-                <input
-                  value={server}
-                  onChange={(e) => setServer(e.target.value)}
-                  placeholder="https://vectory.example.com:8443"
-                />
-              </Field>
-              <Field label="Machine name">
-                <input
-                  value={machine}
-                  onChange={(e) => setMachine(e.target.value)}
-                  placeholder="edge-01"
-                />
-              </Field>
-            </div>
-            <div className="command-block">
-              <code>{command}</code>
-              <button
-                aria-label="Copy enrollment command"
-                title="Copy command"
-                onClick={() => void copy(command)}
-              >
-                <Copy size={17} />
-              </button>
-            </div>
-            <p className="muted">
-              For a private CA, add{" "}
-              <code>--ca-file /path/to/trusted-ca.pem</code>. Obtain that file
-              through a separately trusted channel. HTTPS verification is always
-              required.
-            </p>
-            <div className="hint-box">
-              <LockKeyhole size={18} />
-              <span>
-                Paste the token through standard input. Tokens passed as command
-                arguments may appear in shell history or process listings.
-              </span>
-            </div>
-            {can(user, "admin") && (
-              <Button
-                icon={KeyRound}
-                onClick={() => {
-                  setError("");
-                  setOpen(true);
-                }}
-              >
-                Create enrollment token
-              </Button>
-            )}
-          </div>
-        </Panel>
-      </div>
-      <Panel
-        title="Enrollment tokens"
-        aside={<span className="panel-label">REUSABLE UNTIL EXPIRY</span>}
-      >
-        {tokens.data.length ? (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Status</th>
-                  <th>Uses</th>
-                  <th>Name scope</th>
-                  <th>Expires</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {tokens.data.map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      <strong>{t.name}</strong>
-                    </td>
-                    <td>
-                      <Badge
-                        status={
-                          t.revoked
-                            ? "revoked"
-                            : new Date(t.expires_at).valueOf() < Date.now()
-                              ? "offline"
-                              : "active"
+              <div className="enroll-command-step">
+                <h3>3. Enroll this device</h3>
+                <p>
+                  Paste the saved token into the terminal's hidden prompt. The
+                  token stays out of the command and shell history.
+                </p>
+                {commandBlock(enroll, "enrollment command")}
+              </div>
+              <div className="enroll-command-step">
+                <h3>4. Keep the agent running</h3>
+                <fieldset className="enroll-run-modes">
+                  <legend>How should the agent run?</legend>
+                  <label className="enroll-run-mode">
+                    <input
+                      type="radio"
+                      name="agent-run-mode"
+                      value="foreground"
+                      checked={runMode === "foreground"}
+                      onChange={() => setRunMode("foreground")}
+                    />
+                    <span>
+                      <strong>In this terminal</strong>
+                      <small>For setup or testing; stops when it closes.</small>
+                    </span>
+                  </label>
+                  <label className="enroll-run-mode">
+                    <input
+                      type="radio"
+                      name="agent-run-mode"
+                      value="service"
+                      checked={runMode === "service"}
+                      onChange={() => setRunMode("service")}
+                    />
+                    <span>
+                      <strong>As an OS service</strong>
+                      <small>For unattended operation after host setup.</small>
+                    </span>
+                  </label>
+                </fieldset>
+                {runMode === "foreground" ? (
+                  <>
+                    {commandBlock(run, "run command")}
+                    <p>
+                      Keep this terminal open. Closing it stops the agent and
+                      its supervised Vector process.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    {os !== "windows" ? (
+                      <Field
+                        label="Existing service account"
+                        hint={
+                          serviceUserValid
+                            ? "This account must be able to run Vector and access its local data and credentials."
+                            : "Enter an existing, unprivileged, non-root account name before copying service commands."
                         }
                       >
-                        {t.revoked
-                          ? "Revoked"
-                          : new Date(t.expires_at).valueOf() < Date.now()
-                            ? "Expired"
-                            : "Active"}
-                      </Badge>
-                    </td>
-                    <td>
-                      {t.uses}
-                      {t.max_uses ? ` / ${t.max_uses}` : ""}
-                    </td>
-                    <td className="mono">
-                      {t.name_prefix || "Any unique name"}
-                    </td>
-                    <td>
-                      <DateCell value={t.expires_at} />
-                    </td>
-                    <td>
-                      {!t.revoked && can(user, "admin") && (
-                        <Button
-                          variant="danger-ghost compact"
-                          onClick={() => setRevoking(t)}
-                        >
-                          Revoke
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        <input
+                          value={serviceUser}
+                          onChange={(event) =>
+                            setServiceUser(event.target.value)
+                          }
+                          aria-invalid={!serviceUserValid}
+                          autoComplete="off"
+                          placeholder={os === "darwin" ? "_vectory" : "vectory"}
+                        />
+                      </Field>
+                    ) : (
+                      <p>
+                        Run these commands from an elevated PowerShell. The
+                        service uses the dedicated{" "}
+                        <code>NT SERVICE\Vectory</code> account; grant it access
+                        to the agent executable, Vector and required local
+                        resources.
+                      </p>
+                    )}
+                    {os !== "windows" && (
+                      <p>
+                        Run these commands with administrator privileges. Keep
+                        the agent executable at a stable path accessible by the
+                        service account; registration records that path and
+                        updates ownership of the agent state and managed file.{" "}
+                        {os === "linux"
+                          ? "This service uses systemd; use an existing supervisor if systemd is unavailable."
+                          : "This service uses launchd."}
+                      </p>
+                    )}
+                    {serviceUserValid && (
+                      <>
+                        {commandBlock(
+                          serviceInstall,
+                          "service installation command",
+                        )}
+                        {commandBlock(serviceStart, "service start command")}
+                      </>
+                    )}
+                    <p>
+                      Registration does not prove the service started or Vector
+                      applied a configuration. Check the local service status,
+                      then a fresh device check-in and the reported apply state.{" "}
+                      <DocLink
+                        topic="installation"
+                        section="keep-the-agent-running"
+                      >
+                        Service setup guide
+                      </DocLink>
+                    </p>
+                  </>
+                )}
+                <p>
+                  {workload === "existing"
+                    ? "Once running, the agent validates the prepared configuration before attempting to start Vector. A missing file starts no Vector process."
+                    : "Once running without a managed file, the agent checks in and waits for an assignment."}
+                </p>
+              </div>
+              <div className="enroll-footer">
+                <Button variant="secondary" onClick={() => setStep(2)}>
+                  Back
+                </Button>
+                <Button
+                  disabled={
+                    !installPathsValid ||
+                    (runMode === "service" && !serviceUserValid)
+                  }
+                  onClick={() => {
+                    setStep(4);
+                    void devices.reload();
+                  }}
+                >
+                  Check connection
+                </Button>
+              </div>
+            </>
+          )}
+          {step === 4 && (
+            <>
+              <h2>Verify the device</h2>
+              <div className="enroll-proof">
+                {freshMatch ? (
+                  <>
+                    <h3>{machine} is enrolled</h3>
+                    <p className="control-muted">
+                      {matched.last_seen
+                        ? `Last check-in ${when(matched.last_seen)}.`
+                        : "Waiting for the first agent check-in. Keep the agent running."}{" "}
+                      No pipeline is assigned automatically.
+                    </p>
+                    <dl className="control-summary-list">
+                      <div>
+                        <dt>Connection</dt>
+                        <dd>
+                          {matched.last_seen
+                            ? matched.status === "offline"
+                              ? "Offline"
+                              : "Agent has checked in"
+                            : "Enrollment confirmed"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Platform</dt>
+                        <dd>
+                          {matched.os} / {matched.arch}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Reported configuration mode</dt>
+                        <dd>
+                          {matched.configuration_mode === "full"
+                            ? "Full Vector mode"
+                            : "Restricted mode"}
+                        </dd>
+                      </div>
+                    </dl>
+                    {(matched.configuration_mode || "restricted") !==
+                      configurationMode && (
+                      <ErrorBox
+                        message={`The device reports ${matched.configuration_mode === "full" ? "full" : "restricted"} mode, but you selected ${configurationMode}. Check the local installation command and wait for a new agent check-in. The dashboard cannot change this permission.`}
+                      />
+                    )}
+                  </>
+                ) : matched?.status === "revoked" ? (
+                  <>
+                    <h3>{machine} access is revoked</h3>
+                    <p className="control-muted">
+                      This identity cannot connect. Open the device to review
+                      its access and{" "}
+                      {can(user, "admin")
+                        ? "authorize recovery"
+                        : "ask an administrator to authorize recovery"}
+                      ; a regular enrollment token cannot restore it.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3>Waiting for {machine}</h3>
+                    <p className="control-muted">
+                      Run the enrollment and agent commands on the device. This
+                      page checks for enrollment every 15 seconds.
+                    </p>
+                    <details className="control-disclosure">
+                      <summary>Connection troubleshooting</summary>
+                      <p className="control-muted">
+                        Check the server address, certificate trust, token
+                        expiry and device name. Keep the agent running and
+                        inspect its terminal for a sanitized error. Do not
+                        bypass TLS verification.
+                      </p>
+                    </details>
+                  </>
+                )}
+              </div>
+              <div className="enroll-footer">
+                <Button variant="secondary" onClick={() => setStep(3)}>
+                  Back to commands
+                </Button>
+                {freshMatch || matched?.status === "revoked" ? (
+                  <Button onClick={() => navigate(`devices/${matched.id}`)}>
+                    Open device
+                  </Button>
+                ) : (
+                  <RefreshButton
+                    busy={devices.loading}
+                    onClick={devices.reload}
+                  >
+                    Check again
+                  </RefreshButton>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <details className="enroll-token-management">
+          <summary>Manage enrollment tokens ({tokens.data.length})</summary>
+          <div className="control-card">
+            <div className="control-section-head">
+              <div>
+                <h3>Enrollment tokens</h3>
+                <p>
+                  Revoking a token prevents new enrollments. Existing devices
+                  stay connected.
+                </p>
+              </div>
+              {can(user, "operate") && (
+                <Button
+                  variant="secondary"
+                  disabled={busy || tokenBlocked}
+                  onClick={() => {
+                    setError("");
+                    setTokenOpen(true);
+                  }}
+                >
+                  Create token
+                </Button>
+              )}
+            </div>
+            {tokens.error && (
+              <ErrorBox message={tokens.error} retry={tokens.reload} />
+            )}
+            <DataTable
+              data={tokens.error ? [] : tokens.data}
+              rowKey={(token) => token.id}
+              label="Enrollment tokens"
+              loading={tokens.loading}
+              columns={[
+                {
+                  id: "name",
+                  header: "Name",
+                  value: (token) => token.name,
+                  filter: { placeholder: "Filter token names" },
+                  cell: (token) => (
+                    <>
+                      <strong>{token.name}</strong>
+                      <small>
+                        {token.name_prefix
+                          ? `Names starting with ${token.name_prefix}`
+                          : "Any unique device name"}
+                      </small>
+                    </>
+                  ),
+                },
+                {
+                  id: "status",
+                  header: "Status",
+                  value: tokenStatus,
+                  filter: {
+                    options: ["Available", "Revoked", "Expired", "Used up"].map(
+                      (value) => ({ value, label: value }),
+                    ),
+                  },
+                  cell: tokenStatus,
+                },
+                {
+                  id: "uses",
+                  header: "Uses",
+                  value: (token) => token.uses,
+                  cell: (token) => (
+                    <>
+                      {token.uses}
+                      {token.max_uses ? ` / ${token.max_uses}` : ""}
+                    </>
+                  ),
+                },
+                {
+                  id: "expires",
+                  header: "Expires",
+                  value: (token) => token.expires_at,
+                  sortValue: (token) => Date.parse(token.expires_at),
+                  cell: (token) => <DateCell value={token.expires_at} />,
+                },
+                {
+                  id: "actions",
+                  header: <span className="sr-only">Token actions</span>,
+                  cell: (token) =>
+                    !token.revoked &&
+                    can(user, "operate") && (
+                      <Button
+                        variant="secondary compact"
+                        onClick={() => {
+                          tokenFlow.current?.openRevoke(token);
+                        }}
+                      >
+                        Revoke
+                      </Button>
+                    ),
+                },
+              ]}
+              empty={
+                tokens.error
+                  ? "Enrollment tokens could not be loaded."
+                  : tokens.data.length
+                    ? "No tokens match these filters."
+                    : "No tokens have been created."
+              }
+            />
           </div>
-        ) : (
-          <div className="quiet-state">
-            <KeyRound size={25} />
-            <h3>No enrollment tokens yet</h3>
-            <p>
-              Create a token when you are ready to connect devices. New
-              enrollments begin unmanaged.
-            </p>
-          </div>
-        )}
-      </Panel>
+        </details>
+      </div>
       <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        title="Create an enrollment token"
-        description="Enrollment-only, reusable, and time limited. This token will be displayed once."
+        open={tokenOpen}
+        onClose={() => !busy && setTokenOpen(false)}
+        title="Create enrollment token"
+        description="This token is shown once and can only enroll new devices."
       >
         <form onSubmit={create}>
           <div className="modal-body">
-            {error && <ErrorBox message={error} />}
-            <Field label="Token name">
-              <input
-                value={name}
-                required
-                maxLength={120}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Edmonton edge rollout"
-              />
-            </Field>
-            <div className="form-row">
-              <Field label="Expires in (hours)">
-                <input
-                  type="number"
-                  min={1}
-                  max={720}
-                  value={hours}
-                  onChange={(e) => setHours(+e.target.value)}
-                />
-              </Field>
-              <Field label="Maximum uses (optional)">
-                <input
-                  type="number"
-                  min={1}
-                  value={limit}
-                  onChange={(e) => setLimit(e.target.value)}
-                  placeholder="Unlimited"
-                />
-              </Field>
-            </div>
-            <Field label="Allowed machine name prefix (optional)">
-              <input
-                value={prefix}
-                onChange={(e) => setPrefix(e.target.value)}
-                placeholder="e.g. edge-"
-              />
-            </Field>
-            <div className="hint-box">
-              <ShieldCheck size={19} />
-              <span>
-                Enrollment never grants group membership or production
-                assignments. Anyone holding this token may enroll within its
-                scope until it expires or is revoked.
-              </span>
-            </div>
+            {error && <ErrorBox message={error} />} {tokenFields()}
           </div>
           <div className="modal-footer">
             <Button
               type="button"
               variant="secondary"
-              onClick={() => setOpen(false)}
+              disabled={busy}
+              onClick={() => setTokenOpen(false)}
             >
               Cancel
             </Button>
-            <Button type="submit" busy={busy} icon={KeyRound}>
+            <Button type="submit" busy={busy} disabled={tokenBlocked}>
               Create token
             </Button>
           </div>
         </form>
       </Modal>
-      <Modal
-        open={!!secret}
-        onClose={() => setSecret("")}
-        title="Copy your enrollment token"
-        description="This is the only time this token will be shown. Store it in a secure place."
-      >
-        <div className="modal-body">
-          <div className="secret-display">
-            <code>{secret}</code>
-            <Button
-              icon={Copy}
-              variant="secondary"
-              onClick={() => void copy(secret)}
-            >
-              Copy token
-            </Button>
-          </div>
-          <p className="muted">
-            This token is kept only in this dialog’s memory. Closing it clears
-            the display. If lost, revoke it and create a new token.
-          </p>
-        </div>
-        <div className="modal-footer">
-          <Button onClick={() => setSecret("")}>I’ve saved the token</Button>
-        </div>
-      </Modal>
-      <Modal
-        open={!!revoking}
-        onClose={() => setRevoking(null)}
-        title="Revoke enrollment token"
-        description="This prevents future enrollments. It does not revoke already enrolled devices."
-      >
-        <div className="modal-body">
-          {error && <ErrorBox message={error} />}
-          <p>
-            Revoke <strong>{revoking?.name}</strong>?
-          </p>
-        </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={() => setRevoking(null)}>
-            Cancel
-          </Button>
-          <Button variant="danger" busy={busy} onClick={revoke}>
-            Revoke token
-          </Button>
-        </div>
-      </Modal>
-    </>
+    </div>
   );
 }
 
-export function Issues({ navigate }: { navigate: (p: string) => void }) {
-  const { data, error, reload } = useResource<Issue[]>("/issues", []),
-    devices = useResource<Device[]>("/devices", []);
-  const [search, setSearch] = useState(""),
-    [resolved, setResolved] = useState(false);
-  const list = data.filter(
-    (i) =>
-      (resolved || !i.resolved) &&
-      (i.message + " " + i.code + " " + i.stage)
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
-  return (
-    <>
-      <PageHeader
-        eyebrow="OBSERVE & RESOLVE"
-        title="Issues"
-        description="Actionable signals from enrollment, validation, deployment, and reconciliation."
-      >
-        <Button variant="secondary" icon={RefreshCw} onClick={reload}>
-          Refresh
-        </Button>
-      </PageHeader>
-      {error && <ErrorBox message={error} retry={reload} />}
-      <div className="toolbar">
-        <SearchBox
-          value={search}
-          onChange={setSearch}
-          placeholder="Search issue codes or messages…"
-        />
-        <label className="inline-check">
-          <input
-            type="checkbox"
-            checked={resolved}
-            onChange={(e) => setResolved(e.target.checked)}
-          />
-          Include resolved
-        </label>
-      </div>
-      {list.length ? (
-        <div className="issues-list">
-          {list.map((i) => (
-            <article className="issue-card" key={i.id}>
-              <span className="issue-symbol">
-                <AlertTriangle size={21} />
-              </span>
-              <div>
-                <div className="issue-heading">
-                  <h3>{i.code.replaceAll("_", " ")}</h3>
-                  <Badge status={i.resolved ? "completed" : "failed"}>
-                    {i.resolved ? "Resolved" : i.stage}
-                  </Badge>
-                </div>
-                <p>{i.message}</p>
-                <div className="issue-meta">
-                  <button
-                    className="text-link"
-                    onClick={() => navigate(`devices/${i.device_id}`)}
-                  >
-                    {devices.data.find((d) => d.id === i.device_id)?.name ||
-                      i.device_id}
-                  </button>
-                  <span>{i.count} occurrences</span>
-                  <span>First {when(i.first_seen)}</span>
-                  <span>Last {when(i.last_seen)}</span>
-                </div>
-                <details>
-                  <summary>Remediation guidance</summary>
-                  <p>
-                    Run <code>vectory doctor</code> on the affected device.
-                    Check the reported stage, local capability policy, installed
-                    Vector version, available disk, and trusted CA. Correct the
-                    underlying problem and publish a new version when
-                    configuration changes are needed. A healthy old process is
-                    not proof a new configuration was applied.
-                  </p>
-                </details>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <Empty icon={CheckCircle2} title="Nothing needs your attention">
-          {data.length
-            ? "No issues match the current filters."
-            : "No issues have been reported. Telemetry availability and device connectivity are shown separately on the Devices page."}
-        </Empty>
-      )}
-    </>
-  );
-}
-
-export function AuditLog() {
-  const { data, error, reload } = useResource<Audit[]>("/audit", []);
-  const [search, setSearch] = useState(""),
-    [page, setPage] = useState(1);
-  const list = data.filter((a) =>
-    (a.action + " " + a.actor + " " + a.target)
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  return (
-    <>
-      <PageHeader
-        eyebrow="WORKSPACE"
-        title="Audit log"
-        description="A durable record of who changed what, when, and with which result."
-      >
-        <Button
-          variant="secondary"
-          icon={Download}
-          onClick={() =>
-            download(
-              "vectory-audit.json",
-              JSON.stringify(list, null, 2),
-              "application/json",
-            )
-          }
-        >
-          Export results
-        </Button>
-      </PageHeader>
-      {error && <ErrorBox message={error} retry={reload} />}
-      <div className="toolbar">
-        <SearchBox
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            setPage(1);
-          }}
-          placeholder="Search actor, action, or target…"
-        />
-        <span className="muted">{list.length} events</span>
-      </div>
-      {list.length ? (
-        <div className="table-panel">
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Action</th>
-                  <th>Actor</th>
-                  <th>Target</th>
-                  <th>Outcome</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.slice((page - 1) * 12, page * 12).map((a) => (
-                  <tr key={a.id}>
-                    <td>
-                      <strong>{a.action.replaceAll("_", " ")}</strong>
-                    </td>
-                    <td>{a.actor}</td>
-                    <td className="mono ellipsis" title={a.target}>
-                      {a.target || "—"}
-                    </td>
-                    <td>
-                      <Badge status={a.outcome} />
-                    </td>
-                    <td>
-                      <DateCell value={a.created_at} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination count={list.length} page={page} onPage={setPage} />
-        </div>
-      ) : (
-        <Empty icon={History} title="Your workspace history lives here">
-          Enrollment, publishing, targeting, policies, and security changes
-          leave an audit trail. Credentials and configuration secrets do not.
-        </Empty>
-      )}
-    </>
-  );
-}
-
-export function UsersSecurity({
-  user,
-  notify,
-}: {
-  user: User;
-  notify: (m: string) => void;
-}) {
-  const { data, error, reload } = useResource<User[]>(
-    can(user, "admin") ? "/users" : null,
-    [],
-  );
-  const mfaStatus = useResource<{ enabled: boolean }>("/mfa", {
-    enabled: false,
-  });
-  const [open, setOpen] = useState(false),
-    [name, setName] = useState(""),
-    [email, setEmail] = useState(""),
-    [password, setPassword] = useState(""),
-    [role, setRole] = useState("viewer"),
-    [busy, setBusy] = useState(false),
-    [formError, setFormError] = useState(""),
-    [mfa, setMfa] = useState<any>(null),
-    [code, setCode] = useState(""),
-    [mfaPassword, setMfaPassword] = useState(""),
-    [mfaAction, setMfaAction] = useState<"setup" | "disable" | null>(null),
-    [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setFormError("");
-    try {
-      await post("/users", { name, email, password, role });
-      setPassword("");
-      setOpen(false);
-      notify("Workspace user created.");
-      void reload();
-    } catch (e) {
-      setFormError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function setupMfa() {
-    setBusy(true);
-    setFormError("");
-    try {
-      if (mfaAction === "disable") {
-        await post("/mfa/disable", { password: mfaPassword, code });
-        notify(
-          "Multi-factor authentication disabled. Other browser sessions were revoked.",
-        );
-      } else setMfa(await post("/mfa/setup", { password: mfaPassword }));
-      setMfaAction(null);
-      setMfaPassword("");
-      setCode("");
-      void mfaStatus.reload();
-    } catch (e) {
-      setFormError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function confirmMfa() {
-    setBusy(true);
-    setFormError("");
-    try {
-      const result = await post<{ recovery_codes: string[] }>("/mfa/confirm", {
-        code,
-      });
-      setRecoveryCodes(result.recovery_codes);
-      setMfa(null);
-      setCode("");
-      notify("Multi-factor authentication enabled.");
-      void mfaStatus.reload();
-    } catch (e) {
-      setFormError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <PageHeader
-        eyebrow="WORKSPACE"
-        title="Users & security"
-        description="Give each person the access they need. Keep privileged actions explicit."
-      >
-        {can(user, "admin") && (
-          <Button icon={Plus} onClick={() => setOpen(true)}>
-            Add user
-          </Button>
-        )}
-      </PageHeader>
-      {(error || formError) && <ErrorBox message={error || formError} />}
-      <div className="table-panel">
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Email</th>
-                <th>Role</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((u) => (
-                <tr key={u.id}>
-                  <td>
-                    <div className="user-cell">
-                      <span className="user-avatar">
-                        {u.name?.slice(0, 2).toUpperCase()}
-                      </span>
-                      <strong>{u.name}</strong>
-                      {u.id === user.id && <span className="muted">(you)</span>}
-                    </div>
-                  </td>
-                  <td>{u.email}</td>
-                  <td>
-                    <Badge status="neutral">{u.role}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div className="security-grid">
-        <Panel title="Permissions, by role">
-          <div className="panel-body role-list">
-            <p>
-              <strong>Viewer</strong>
-              <span>Read fleet state, versions, and deployments.</span>
-            </p>
-            <p>
-              <strong>Editor</strong>
-              <span>Create and save configuration drafts.</span>
-            </p>
-            <p>
-              <strong>Operator</strong>
-              <span>Publish, deploy, schedule, and manage groups.</span>
-            </p>
-            <p>
-              <strong>Administrator</strong>
-              <span>Manage users, enrollment, and device identities.</span>
-            </p>
-          </div>
-        </Panel>
-        <Panel title="Multi-factor authentication">
-          <div className="panel-body">
-            <ShieldCheck size={28} />
-            <h3>Protect your account</h3>
-            <p className="muted">
-              Add a time-based authenticator code to your local login. Keep your
-              recovery material in an operator-controlled secure location.
-            </p>
-            <Button
-              variant="secondary"
-              icon={Shield}
-              busy={busy}
-              onClick={() => {
-                setFormError("");
-                setMfaAction(mfaStatus.data.enabled ? "disable" : "setup");
-              }}
-            >
-              {mfaStatus.data.enabled
-                ? "Disable authenticator"
-                : "Set up authenticator"}
-            </Button>
-          </div>
-        </Panel>
-      </div>
-      <Modal
-        open={open}
-        onClose={() => {
-          setOpen(false);
-          setPassword("");
-        }}
-        title="Add a workspace user"
-        description="There is no public signup. Administrators create local accounts."
-      >
-        <form onSubmit={create}>
-          <div className="modal-body">
-            {formError && <ErrorBox message={formError} />}
-            <Field label="Full name">
-              <input
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </Field>
-            <Field label="Email">
-              <input
-                required
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
-            <Field
-              label="Initial password"
-              hint="At least 12 characters. Share through a protected channel."
-            >
-              <input
-                required
-                minLength={12}
-                type="password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </Field>
-            <Field label="Role">
-              <select value={role} onChange={(e) => setRole(e.target.value)}>
-                {["viewer", "editor", "operator", "admin"].map((r) => (
-                  <option value={r} key={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <div className="modal-footer">
-            <Button
-              variant="secondary"
-              type="button"
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button busy={busy} type="submit">
-              Create user
-            </Button>
-          </div>
-        </form>
-      </Modal>
-      <Modal
-        open={!!mfa}
-        onClose={() => setMfa(null)}
-        title="Connect your authenticator"
-        description="Add this secret to your authenticator, then confirm with the current six-digit code."
-      >
-        <div className="modal-body">
-          {formError && <ErrorBox message={formError} />}
-          <code className="block-code wrap">
-            {mfa?.secret || mfa?.otpauth_url}
-          </code>
-          <Field label="Authenticator code">
-            <input
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              pattern="[0-9]{6}"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              maxLength={6}
-            />
-          </Field>
-        </div>
-        <div className="modal-footer">
-          <Button busy={busy} disabled={code.length !== 6} onClick={confirmMfa}>
-            Enable multi-factor authentication
-          </Button>
-        </div>
-      </Modal>
-      <Modal
-        open={!!mfaAction}
-        onClose={() => {
-          setMfaAction(null);
-          setMfaPassword("");
-          setCode("");
-        }}
-        title={
-          mfaAction === "disable"
-            ? "Disable multi-factor authentication"
-            : "Verify your password"
-        }
-        description="Re-enter your current password to change account authentication."
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void setupMfa();
-          }}
-        >
-          <div className="modal-body">
-            {formError && <ErrorBox message={formError} />}
-            <Field label="Current password">
-              <input
-                type="password"
-                autoComplete="current-password"
-                required
-                value={mfaPassword}
-                onChange={(e) => setMfaPassword(e.target.value)}
-              />
-            </Field>
-            {mfaAction === "disable" && (
-              <Field label="Current authenticator code">
-                <input
-                  inputMode="numeric"
-                  required
-                  maxLength={6}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-              </Field>
-            )}
-          </div>
-          <div className="modal-footer">
-            <Button type="submit" busy={busy}>
-              Continue
-            </Button>
-          </div>
-        </form>
-      </Modal>
-      <Modal
-        open={recoveryCodes.length > 0}
-        onClose={() => setRecoveryCodes([])}
-        title="Save your recovery codes"
-        description="These single-use codes are shown once. Keep them outside this server in a secure place."
-      >
-        <div className="modal-body">
-          <pre className="block-code">{recoveryCodes.join("\n")}</pre>
-          <Button
-            variant="secondary"
-            icon={Download}
-            onClick={() =>
-              download("vectory-recovery-codes.txt", recoveryCodes.join("\n"))
-            }
-          >
-            Download recovery codes
-          </Button>
-        </div>
-        <div className="modal-footer">
-          <Button onClick={() => setRecoveryCodes([])}>
-            I’ve saved my recovery codes
-          </Button>
-        </div>
-      </Modal>
-    </>
-  );
-}
+export { default as AuditLog } from "./AuditLog";
 
 export function Settings() {
-  const { data, error } = useResource<any>("/settings", null);
+  const { data, error, loading } = useResource<any>("/settings", null);
   return (
-    <>
+    <div className="control-page">
       <PageHeader
-        eyebrow="WORKSPACE"
-        title="Instance settings"
-        description="The operational boundaries of your self-hosted control plane."
+        title="General"
+        help={{ topic: "administer", section: "monitor-the-instance" }}
+        description="Instance information and host-managed defaults."
       />
       {error && <ErrorBox message={error} />}
-      <div className="settings-grid">
-        <Panel title="Instance">
-          <div className="panel-body">
-            <dl className="detail-list">
-              <div>
-                <dt>Name</dt>
-                <dd>{data?.instance_name || "Vectory"}</dd>
-              </div>
-              <div>
-                <dt>Server version</dt>
-                <dd>{data?.version || "Unavailable"}</dd>
-              </div>
-              <div>
-                <dt>Vector catalog</dt>
-                <dd>{data?.vector_version || "0.58.0"}</dd>
-              </div>
-              <div>
-                <dt>Default heartbeat</dt>
-                <dd>
-                  {data?.heartbeat_seconds
-                    ? `${data.heartbeat_seconds} seconds`
-                    : "Unavailable"}
-                </dd>
-              </div>
-              <div>
-                <dt>Telemetry retention</dt>
-                <dd>
-                  {data?.telemetry_retention_days
-                    ? `${data.telemetry_retention_days} days`
-                    : "Unavailable"}
-                </dd>
-              </div>
-            </dl>
-          </div>
-        </Panel>
-        <Panel title="Your data stays yours">
-          <div className="panel-body">
-            <ShieldCheck size={30} />
-            <h3>Independent by design</h3>
-            <p className="muted">
-              Vectory is an open-source, self-hosted configuration manager. No
-              cloud account, license server, or phone-home analytics is
-              required.
-            </p>
-            <p className="muted">
-              Runtime settings, TLS material, and retention are configured by
-              the host operator. Agent policies provide bounded fleet controls.
-            </p>
-            <p className="small">
-              Vectory is independent of, and not affiliated with, Datadog.
-              Vector is a Datadog project.
-            </p>
-          </div>
-        </Panel>
-      </div>
-      <Panel title="Safe operations">
-        <div className="panel-body operational-notes">
+      <section className="control-card">
+        <h2>Instance</h2>
+        {loading ? (
+          <Spinner />
+        ) : (
+          <dl className="control-summary-list">
+            <div>
+              <dt>Name</dt>
+              <dd>{data?.instance_name || "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Vectory version</dt>
+              <dd>{data?.version || "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Vector version</dt>
+              <dd>{data?.vector_version || "Unavailable"}</dd>
+            </div>
+          </dl>
+        )}
+      </section>
+      <section className="control-card">
+        <h2>Defaults</h2>
+        <dl className="control-summary-list">
           <div>
-            <DatabaseIcon />
-            <h3>Back up consistently</h3>
-            <p>
-              Use the included online SQLite backup procedure and preserve
-              required trust keys separately. Copying a live database file alone
-              does not capture its WAL.
-            </p>
+            <dt>Check-in interval</dt>
+            <dd>
+              {data?.heartbeat_seconds
+                ? `${data.heartbeat_seconds} seconds`
+                : "Unavailable"}
+            </dd>
           </div>
           <div>
-            <Clock3 size={23} />
-            <h3>Respect generations</h3>
-            <p>
-              Restoring an older backup cannot silently reset device
-              anti-rollback protection. Follow the documented recovery
-              procedure.
+            <dt>Metric retention</dt>
+            <dd>
+              {data?.telemetry_retention_days
+                ? `${data.telemetry_retention_days} days`
+                : "Unavailable"}
+            </dd>
+          </div>
+        </dl>
+        <p className="control-muted">
+          The host administrator configures this instance. Apply device-specific
+          behavior under Devices, Agent settings.
+        </p>
+        <details className="control-disclosure">
+          <summary>Hosting and recovery</summary>
+          <div className="control-disclosure-content">
+            <p className="control-muted">
+              Run one control-plane instance on local persistent storage. Use
+              the included backup tool to preserve the database and its trust
+              keys together.
+            </p>
+            <p className="control-muted">
+              After restoring an older backup, follow the reviewed
+              generation-recovery procedure before resuming deployments. Agent
+              counters must not be reset.
             </p>
           </div>
-          <div>
-            <LockKeyhole size={23} />
-            <h3>One active instance</h3>
-            <p>
-              Keep SQLite on local persistent storage. This release is designed
-              for one active control-plane process.
-            </p>
-          </div>
-        </div>
-      </Panel>
-    </>
+        </details>
+      </section>
+    </div>
   );
-}
-function DatabaseIcon() {
-  return <Server size={23} />;
 }

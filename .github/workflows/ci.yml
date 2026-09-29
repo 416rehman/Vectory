@@ -10,12 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Provide pinned Vector for native validator tests
+        run: |
+          image='timberio/vector:0.58.0-debian@sha256:1c1ea358c617ea0b23003d5af87f7a678b30f8f7096437e680380c47fc13d2d9'
+          container_id="$(docker create "$image")"
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          docker cp -L "$container_id:/usr/bin/vector" "$RUNNER_TEMP/vector"
+          chmod +x "$RUNNER_TEMP/vector"
+          "$RUNNER_TEMP/vector" --version
+          echo "VECTORY_TEST_VECTOR=$RUNNER_TEMP/vector" >> "$GITHUB_ENV"
       - run: cargo +1.94.0 test --locked --manifest-path server/Cargo.toml
       - run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml
       - run: cargo +1.94.0 install cargo-audit --version 0.22.2 --locked
       - run: python3 packaging/audit-rust.py --out artifacts/rust-dependency-audit.json
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        with: {go-version: '1.26.8', cache: false}
+        with: { go-version: "1.26.8", cache: false }
       - run: go test -v tests/security/protocol_test.go
         env:
           VECTORY_SECURITY_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
@@ -27,12 +36,209 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with: {node-version: '22', cache: npm, cache-dependency-path: dashboard/package-lock.json}
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
       - run: npm ci
+      - run: npm ci
+        working-directory: help-center
       - run: npm test
+      - name: Check typed variable wire schemas
+        run: node ../tests/variable-contract.mjs
+      - name: Check canonical Markdown and help link validation
+        run: node --test help-center/scripts/markdown.test.mjs help-center/scripts/check-links.test.mjs
+        working-directory: .
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: node ../tests/security/resource-race.mjs
+      - name: Check shared column sorting, filtering and keyboard access
+        run: node tests/data-table-browser.mjs
+      - name: Check fleet, group, policy and target tables
+        run: node tests/fleet-tables-browser.mjs
+        env:
+          VECTORY_FLEET_TABLES_OUTPUT: artifacts/fleet-tables
+      - name: Check library session boundaries and navigation state
+        run: node tests/pipeline-library-browser.mjs
+        env:
+          VECTORY_LIBRARY_COMPONENT_OUTPUT: artifacts/pipeline-library-component
+      - name: Check pipeline creation recovery and missing-name feedback
+        run: node tests/pipeline-create-recovery-browser.mjs
+        env:
+          VECTORY_PIPELINE_CREATION_OUTPUT: artifacts/pipeline-creation-recovery
+      - name: Check enrollment identity and pending-token boundaries
+        run: node tests/enrollment-browser.mjs
+        env:
+          VECTORY_ENROLLMENT_COMPONENT_OUTPUT: artifacts/enrollment-component
+      - name: Check bounded deployment navigation and actions
+        run: node tests/deployments-browser.mjs
+        env:
+          VECTORY_DEPLOYMENTS_COMPONENT_OUTPUT: artifacts/deployments-component
+      - name: Check issue disposition, review races and accessibility
+        run: node tests/issues-browser.mjs
+        env:
+          VECTORY_ISSUES_COMPONENT_OUTPUT: artifacts/issues-component
+      - name: Check audit browsing, reviewed exports and accessible navigation
+        run: node tests/audit-browser.mjs
+        env:
+          VECTORY_AUDIT_COMPONENT_OUTPUT: artifacts/audit-component
+      - name: Check people and telemetry column sorting, filtering and accessibility
+        run: node tests/account-metrics-tables-browser.mjs
+        env:
+          VECTORY_ACCOUNT_METRICS_TABLES_OUTPUT: artifacts/account-metrics-tables
+      - name: Check deployment permalinks and navigation boundaries
+        run: node tests/deployment-routing-browser.mjs
+        env:
+          VECTORY_DEPLOYMENT_ROUTING_OUTPUT: artifacts/deployment-routing
+      - name: Check staged sign-in and partial-authentication UI boundaries
+        run: node tests/staged-login-browser.mjs
+        env:
+          VECTORY_STAGED_LOGIN_OUTPUT: artifacts/staged-login
+      - name: Check local authenticator QR, recovery handoff and accessibility
+        run: node tests/authenticator-setup-browser.mjs
+        env:
+          VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-setup
+      - name: Check mobile authenticator action layout
+        run: node tests/authenticator-setup-browser.mjs
+        env:
+          VECTORY_AUTHENTICATOR_SETUP_FOCUS: mobile-footer
+          VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-mobile-footer
+      - name: Check contextual page help and unfinished editor fields
+        run: node tests/page-help-browser.mjs
+        env:
+          VECTORY_PAGE_HELP_OUTPUT: artifacts/page-help
+      - name: Check collapsible sidebar, mobile focus and editor resizing
+        run: node tests/sidebar-browser.mjs
+        env:
+          VECTORY_SIDEBAR_OUTPUT: artifacts/sidebar-navigation
+      - name: Check Overview actions and typed activity destinations
+        run: node tests/overview-browser.mjs
+        env:
+          VECTORY_OVERVIEW_OUTPUT: artifacts/overview-navigation
+      - name: Check canvas creation, named connections and pending-edit guards
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas
+      - name: Check rich code editing and reviewed file import boundaries
+        run: node tests/editor-code-import-browser.mjs
+        env:
+          VECTORY_EDITOR_CODE_IMPORT_OUTPUT: artifacts/editor-code-import
+      - name: Check pipeline candidate, schema and discarded Code results
+        run: node tests/pipeline-check-schema-browser.mjs
+      - name: Check component inspector fields, raw JSON and accessibility
+        run: node tests/inspector-browser.mjs
+        env:
+          VECTORY_INSPECTOR_OUTPUT: artifacts/inspector-component
+      - name: Check compact component search results at desktop and mobile widths
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_FOCUS: menu-layout
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-menu-layout
+      - name: Check pipeline validation results stay inside narrow viewports
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_FOCUS: check-results
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-results
+      - name: Check pipeline validation states and operator preflight
+        run: node tests/editor-canvas-browser.mjs
+        env:
+          VECTORY_EDITOR_CANVAS_FOCUS: check-state
+          VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-state
+      - name: Check enrollment connection and service setup guidance
+        run: node tests/enrollment-connection-browser.mjs
+        env:
+          VECTORY_ENROLLMENT_CONNECTION_OUTPUT: artifacts/enrollment-connection
+      - run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Build the isolated help test server
+        run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bin vectory-server
+        working-directory: .
+      - name: Exercise bundled help and account workflows on a fresh instance
+        run: node help-center/tests/ci.mjs
+        working-directory: .
+        env:
+          VECTORY_HELP_ACCOUNT_TESTS: "true"
+          VECTORY_HELP_CI_OUTPUT: artifacts/help-account-ci
+      - name: Verify staged MFA, account authorization and reset races on isolated instances
+        run: node tests/security/account-review.mjs
+        working-directory: .
+        env:
+          VECTORY_ACCOUNT_EVIDENCE: artifacts/account-review.json
+      - name: Verify pipeline lifecycle authorization and immutable history
+        run: node tests/security/pipeline-review.mjs
+        working-directory: .
+        env:
+          VECTORY_PIPELINE_EVIDENCE: artifacts/pipeline-review.json
+      - name: Verify bounded library metadata and query isolation
+        run: node tests/security/library-review.mjs
+        working-directory: .
+        env:
+          VECTORY_LIBRARY_EVIDENCE: artifacts/library-review.json
+      - name: Verify rollback priority and transaction boundaries
+        run: node tests/security/rollback-review.mjs
+        working-directory: .
+        env:
+          VECTORY_ROLLBACK_EVIDENCE: artifacts/rollback-review.json
+      - name: Verify bounded deployment history and target isolation
+        run: node tests/security/deployment-history-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEPLOYMENT_HISTORY_EVIDENCE: artifacts/deployment-history-review.json
+      - name: Verify durable audit chronology and migration boundaries
+        run: node tests/security/audit-order-review.mjs
+        working-directory: .
+        env:
+          VECTORY_AUDIT_ORDER_EVIDENCE: artifacts/audit-order-review.json
+      - name: Verify issue acknowledgement authorization and transactions
+        run: node tests/security/issue-review.mjs
+        working-directory: .
+        env:
+          VECTORY_ISSUE_EVIDENCE: artifacts/issue-review.json
+      - name: Verify bounded audit queries and private snapshot export lifecycle
+        run: node tests/security/audit-review.mjs
+        working-directory: .
+        env:
+          VECTORY_AUDIT_EVIDENCE: artifacts/audit-review.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: help-and-account-acceptance
+          path: |
+            artifacts/help-account-ci
+            artifacts/account-review.json
+            artifacts/pipeline-review.json
+            artifacts/pipeline-library-component
+            artifacts/pipeline-creation-recovery
+            artifacts/enrollment-component
+            artifacts/enrollment-connection
+            artifacts/deployments-component
+            artifacts/issues-component
+            artifacts/audit-component
+            artifacts/account-metrics-tables
+            artifacts/fleet-tables
+            .local/data-table-review
+            artifacts/deployment-routing
+            artifacts/staged-login
+            artifacts/authenticator-setup
+            artifacts/authenticator-mobile-footer
+            artifacts/page-help
+            artifacts/sidebar-navigation
+            artifacts/overview-navigation
+            artifacts/editor-canvas
+            artifacts/editor-code-import
+            .local/pipeline-check-schema
+            artifacts/inspector-component
+            artifacts/editor-canvas-menu-layout
+            artifacts/editor-canvas-check-results
+            artifacts/editor-canvas-check-state
+            artifacts/library-review.json
+            artifacts/rollback-review.json
+            artifacts/deployment-history-review.json
+            artifacts/audit-order-review.json
+            artifacts/issue-review.json
+            artifacts/audit-review.json
+          if-no-files-found: warn
   agent:
     strategy:
       fail-fast: false
@@ -42,7 +248,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with: {go-version: '1.26.8', cache-dependency-path: agent/go.sum}
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - run: go test ./...
         working-directory: agent
       - run: go vet ./...
@@ -54,8 +260,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with: {python-version: '3.13'}
+        with: { python-version: "3.13" }
       - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
+      - run: python packaging/test_verify_release.py
       - run: docker compose -f deploy/compose.yaml config --quiet
         env:
           VECTORY_HOSTNAME: localhost

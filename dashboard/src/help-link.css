@@ -1,0 +1,52 @@
+.page-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.page-title-row > h1,
+.page-title-row > h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.page-heading > div:first-child {
+  min-width: 0;
+}
+.page-heading .page-title-row {
+  margin-bottom: 7px;
+}
+.page-help-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: transparent;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.page-help-link:hover {
+  color: var(--ink);
+  background: var(--surface-soft);
+  text-decoration: none;
+}
+.page-help-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.page-help-link > svg {
+  flex: none;
+}
+.doc-link-indicator {
+  display: inline-block;
+  vertical-align: -0.1em;
+  margin-inline-start: 4px;
+  flex: none;
+}

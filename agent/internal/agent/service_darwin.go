@@ -30,6 +30,14 @@ func ServiceInstall(dir, account string) error {
 	if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,31}$`).MatchString(account) || account == "root" {
 		return errors.New("--service-user must name an existing unprivileged account")
 	}
+	releaseLifecycle, err := lockLifecycle(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseLifecycle()
+	if err := checkNoPendingPurge(dir); err != nil {
+		return err
+	}
 	u, err := user.Lookup(account)
 	if err != nil {
 		return err

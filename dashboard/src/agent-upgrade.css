@@ -1,0 +1,93 @@
+.agent-upgrade-trigger {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.agent-upgrade-trigger:hover {
+  color: var(--ink);
+}
+.agent-upgrade-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.agent-upgrade-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+  margin: 0 0 20px;
+}
+.agent-upgrade-versions dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-upgrade-versions dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+.agent-upgrade-download {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+.agent-upgrade-download-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.agent-upgrade-download-heading p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-upgrade-checksum {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.agent-upgrade-checksum > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.agent-upgrade-checksum code {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.agent-upgrade-checksum .button {
+  margin-left: -8px;
+}
+.agent-upgrade-checksum p,
+.agent-upgrade-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.agent-upgrade-note {
+  margin: 12px 0 0;
+}
+.agent-upgrade-steps {
+  padding-left: 20px;
+  margin: 20px 0;
+}
+.agent-upgrade-steps li {
+  padding-left: 5px;
+  margin: 16px 0;
+}
+.agent-upgrade-steps li::marker {
+  color: var(--muted);
+}
+.agent-upgrade-steps p {
+  color: var(--muted);
+  margin: 3px 0 0;
+}

@@ -18,13 +18,13 @@
   "sinks": {
     "output": {
       "type": "elasticsearch",
-      "inputs": [
-        "enrich"
-      ],
       "endpoints": [
         "https://elasticsearch.example.com:9200"
       ],
-      "mode": "bulk"
+      "mode": "bulk",
+      "inputs": [
+        "enrich"
+      ]
     }
   }
 }

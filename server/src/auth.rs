@@ -19,10 +19,10 @@ pub fn random_secret() -> String {
     rand::rngs::OsRng.fill_bytes(&mut b);
     hex::encode(b)
 }
-fn public_user(row: &sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":row.get::<String,_>("id"),"email":row.get::<String,_>("email"),"name":row.get::<String,_>("name"),"role":row.get::<String,_>("role")})
+pub(crate) fn public_user(row: &sqlx::sqlite::SqliteRow) -> Value {
+    json!({"id":row.get::<String,_>("id"),"email":row.get::<String,_>("email"),"name":row.get::<String,_>("name"),"role":row.get::<String,_>("role"),"enabled":row.get::<bool,_>("enabled"),"revision":row.get::<i64,_>("revision")})
 }
-pub async fn authorize(s: &State, h: &HeaderMap, roles: &[&str], mutation: bool) -> Result<Value> {
+pub(crate) fn session_token(h: &HeaderMap) -> Result<&str> {
     let cookie = h
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -34,7 +34,22 @@ pub async fn authorize(s: &State, h: &HeaderMap, roles: &[&str], mutation: bool)
     if token.len() != 64 {
         return Err(ApiError::unauthorized());
     }
-    let row=sqlx::query("SELECT u.*,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.verifier=? AND s.expires_at>?").bind(db::hash(token)).bind(db::now()).fetch_optional(&s.pool).await?.ok_or_else(ApiError::unauthorized)?;
+    Ok(token)
+}
+pub async fn authorize(s: &State, h: &HeaderMap, roles: &[&str], mutation: bool) -> Result<Value> {
+    let mut conn = s.pool.acquire().await?;
+    authorize_in(&mut conn, h, roles, mutation).await
+}
+// Call again inside the serialized writer transaction. Password work and native
+// validation can take time; authorization before them is not a commit permit.
+pub(crate) async fn authorize_in(
+    conn: &mut sqlx::SqliteConnection,
+    h: &HeaderMap,
+    roles: &[&str],
+    mutation: bool,
+) -> Result<Value> {
+    let token = session_token(h)?;
+    let row=sqlx::query("SELECT u.*,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.verifier=? AND s.expires_at>? AND u.enabled=1").bind(db::hash(token)).bind(db::now()).fetch_optional(conn).await?.ok_or_else(ApiError::unauthorized)?;
     if mutation {
         let actual = h
             .get("x-csrf-token")
@@ -60,7 +75,7 @@ pub async fn authorize(s: &State, h: &HeaderMap, roles: &[&str], mutation: bool)
     }
     Ok(user)
 }
-async fn password_hash(password: String) -> Result<String> {
+pub(crate) async fn password_hash(password: String) -> Result<String> {
     tokio::task::spawn_blocking(move || {
         let salt = SaltString::generate(&mut rand::rngs::OsRng);
         Argon2::default()
@@ -71,20 +86,20 @@ async fn password_hash(password: String) -> Result<String> {
     .await
     .map_err(|_| ApiError::invalid("Password worker unavailable"))?
 }
-fn check_password(password: &str) -> Result<()> {
+pub(crate) fn check_password(password: &str) -> Result<()> {
     if password.len() < 12 || password.len() > 256 {
         return Err(ApiError::invalid("Password must be 12–256 bytes"));
     }
     Ok(())
 }
-fn email(v: &Value) -> Result<String> {
+pub(crate) fn user_email(v: &Value) -> Result<String> {
     let e = db::string(v, "email", 254)?.trim().to_ascii_lowercase();
     if !e.contains('@') || e.contains(char::is_whitespace) {
         return Err(ApiError::invalid("A valid email is required"));
     }
     Ok(e)
 }
-async fn create_session(
+pub(crate) async fn create_session(
     s: &State,
     db: &mut sqlx::SqliteConnection,
     user: Value,
@@ -136,7 +151,7 @@ pub async fn bootstrap(
     {
         return Err(ApiError::forbidden());
     }
-    let email = email(&v)?;
+    let email = user_email(&v)?;
     let name = db::string(&v, "name", 100)?.to_owned();
     let password = db::string(&v, "password", 256)?;
     check_password(password)?;
@@ -149,7 +164,8 @@ pub async fn bootstrap(
     if n != 0 {
         return Err(ApiError::conflict("Instance is already initialized"));
     }
-    let user = json!({"id":db::id(),"email":email,"name":name,"role":"admin"});
+    let user =
+        json!({"id":db::id(),"email":email,"name":name,"role":"admin","enabled":true,"revision":1});
     sqlx::query(
         "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,'admin',?,?)",
     )
@@ -185,7 +201,7 @@ pub async fn login(
         50,
         std::time::Duration::from_secs(60),
     )?;
-    let email = email(&v)?;
+    let email = user_email(&v)?;
     s.limit(
         format!("login:{email}"),
         8,
@@ -197,7 +213,96 @@ pub async fn login(
         .fetch_optional(&s.pool)
         .await?;
     let stored = row.as_ref().map(|r| r.get::<String, _>("password_hash"));
-    let valid = tokio::task::spawn_blocking(move || {
+    let valid = verify_password(password, stored.clone()).await;
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    let fresh = sqlx::query("SELECT * FROM users WHERE email=? AND enabled=1")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let unchanged = fresh
+        .as_ref()
+        .is_some_and(|r| Some(r.get::<String, _>("password_hash")) == stored);
+    if !valid || !unchanged {
+        db::audit(&mut tx, "anonymous", "login", "", "denied").await?;
+        tx.commit().await?;
+        return Err(ApiError::unauthorized());
+    }
+    let fresh = fresh.unwrap();
+    let user = public_user(&fresh);
+    // Reveal MFA only after the password and live account have been verified.
+    // Combined credentials+factor requests remain supported for existing clients.
+    if v["totp_code"].as_str().is_none_or(str::is_empty)
+        && v["recovery_code"].as_str().is_none_or(str::is_empty)
+    {
+        let cipher: Option<String> = sqlx::query_scalar(
+            "SELECT secret_ciphertext FROM user_mfa WHERE user_id=? AND enabled=1",
+        )
+        .bind(user["id"].as_str().unwrap())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(cipher) = cipher {
+            let challenge = crate::login_challenges::issue(&mut tx, &fresh, &cipher).await?;
+            tx.commit().await?;
+            return Ok((HeaderMap::new(), Json(challenge)));
+        }
+    }
+    if let Err(error) = crate::mfa::verify_login(
+        &s,
+        &mut tx,
+        user["id"].as_str().unwrap(),
+        v["totp_code"].as_str(),
+        v["recovery_code"].as_str(),
+    )
+    .await
+    {
+        // A recovery code may already have been deleted before its audit write
+        // failed. Only rejected factors commit a denial; all other failures must
+        // roll back factor consumption together with the missing session.
+        if error.code != "UNAUTHENTICATED" {
+            return Err(error);
+        }
+        db::audit(
+            &mut tx,
+            user["id"].as_str().unwrap(),
+            "login.mfa",
+            "",
+            "denied",
+        )
+        .await?;
+        tx.commit().await?;
+        return Err(error);
+    }
+    let response = finish_login(&s, &mut tx, &h, user).await?;
+    tx.commit().await?;
+    Ok(response)
+}
+pub(crate) async fn finish_login(
+    s: &State,
+    conn: &mut sqlx::SqliteConnection,
+    h: &HeaderMap,
+    user: Value,
+) -> Result<(HeaderMap, Json<Value>)> {
+    crate::login_challenges::clear(conn, user["id"].as_str().unwrap()).await?;
+    // Only full authentication rotates the existing browser session.
+    if let Ok(token) = session_token(&h) {
+        sqlx::query("DELETE FROM sessions WHERE verifier=?")
+            .bind(db::hash(token))
+            .execute(&mut *conn)
+            .await?;
+    }
+    db::audit(
+        conn,
+        user["id"].as_str().unwrap(),
+        "login",
+        user["id"].as_str().unwrap(),
+        "success",
+    )
+    .await?;
+    create_session(s, conn, user).await
+}
+pub(crate) async fn verify_password(password: String, stored: Option<String>) -> bool {
+    tokio::task::spawn_blocking(move || {
         if let Some(stored) = stored {
             PasswordHash::new(&stored).ok().is_some_and(|hash| {
                 Argon2::default()
@@ -211,74 +316,17 @@ pub async fn login(
         }
     })
     .await
-    .unwrap_or(false);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
-    if !valid {
-        db::audit(&mut tx, "anonymous", "login", "", "denied").await?;
-        tx.commit().await?;
-        return Err(ApiError::unauthorized());
-    }
-    let user = public_user(&row.unwrap());
-    if let Err(error) = crate::mfa::verify_login(
-        &s,
-        &mut tx,
-        user["id"].as_str().unwrap(),
-        v["totp_code"].as_str(),
-        v["recovery_code"].as_str(),
-    )
-    .await
-    {
-        db::audit(
-            &mut tx,
-            user["id"].as_str().unwrap(),
-            "login.mfa",
-            "",
-            "denied",
-        )
-        .await?;
-        tx.commit().await?;
-        return Err(error);
-    }
-    // A successful login rotates any existing browser session.
-    if let Some(token) = h
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-                .find_map(|x| x.trim().strip_prefix("vectory_session="))
-        })
-    {
-        sqlx::query("DELETE FROM sessions WHERE verifier=?")
-            .bind(db::hash(token))
-            .execute(&mut *tx)
-            .await?;
-    }
-    db::audit(
-        &mut tx,
-        user["id"].as_str().unwrap(),
-        "login",
-        user["id"].as_str().unwrap(),
-        "success",
-    )
-    .await?;
-    let response = create_session(&s, &mut tx, user).await?;
-    tx.commit().await?;
-    Ok(response)
+    .unwrap_or(false)
 }
 pub async fn session(AppState(s): AppState<State>, h: HeaderMap) -> Result<Json<Value>> {
-    let user = authorize(&s, &h, &[], false).await?;
-    let token = h
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-                .find_map(|x| x.trim().strip_prefix("vectory_session="))
-        })
-        .ok_or_else(ApiError::unauthorized)?;
+    // A read snapshot avoids a revoke between the authorization and CSRF reads
+    // turning an ordinary session-expiry race into an internal error.
+    let mut tx = s.pool.begin().await?;
+    let user = authorize_in(&mut tx, &h, &[], false).await?;
+    let token = session_token(&h)?;
     let csrf: String = sqlx::query_scalar("SELECT csrf FROM sessions WHERE verifier=?")
         .bind(db::hash(token))
-        .fetch_one(&s.pool)
+        .fetch_one(&mut *tx)
         .await?;
     Ok(Json(json!({"user":user,"csrf_token":csrf})))
 }
@@ -286,9 +334,11 @@ pub async fn logout(
     AppState(s): AppState<State>,
     h: HeaderMap,
 ) -> Result<(HeaderMap, Json<Value>)> {
-    let user = authorize(&s, &h, &[], true).await?;
+    authorize(&s, &h, &[], true).await?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let user = authorize_in(&mut tx, &h, &[], true).await?;
+    crate::login_challenges::clear(&mut tx, user["id"].as_str().unwrap()).await?;
     let token = h
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -329,10 +379,14 @@ pub async fn users(AppState(s): AppState<State>, h: HeaderMap) -> Result<Json<Va
 pub async fn create_user(
     AppState(s): AppState<State>,
     h: HeaderMap,
-    Json(v): Json<Value>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>> {
-    let actor = authorize(&s, &h, &["admin"], true).await?;
-    let email = email(&v)?;
+    authorize(&s, &h, &["admin"], true).await?;
+    let v = crate::token_requests::parse(&body)?;
+    if let Some(key) = crate::deployment_requests::request_id(&v)? {
+        return crate::user_requests::create(&s, &h, &v, &key).await;
+    }
+    let email = user_email(&v)?;
     let name = db::string(&v, "name", 100)?;
     let password = db::string(&v, "password", 256)?;
     check_password(password)?;
@@ -343,6 +397,7 @@ pub async fn create_user(
     let hash = password_hash(password.to_owned()).await?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let actor = authorize_in(&mut tx, &h, &["admin"], true).await?;
     let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=?")
         .bind(&email)
         .fetch_one(&mut *tx)
@@ -350,7 +405,8 @@ pub async fn create_user(
     if exists > 0 {
         return Err(ApiError::conflict("Email is already registered"));
     }
-    let user = json!({"id":db::id(),"email":email,"name":name,"role":role});
+    let user =
+        json!({"id":db::id(),"email":email,"name":name,"role":role,"enabled":true,"revision":1});
     sqlx::query(
         "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
     )

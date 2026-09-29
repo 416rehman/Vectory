@@ -40,8 +40,14 @@ func NormalizeServer(s string) (string, error) {
 		s = "https://" + s
 	}
 	u, e := url.Parse(s)
-	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return "", errors.New("server must be an HTTPS origin with no path or credentials")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", errors.New("server port must be between 1 and 65535")
+		}
 	}
 	return strings.TrimSuffix(u.String(), "/"), nil
 }
@@ -57,10 +63,10 @@ func NewClient(s Settings, c *Credentials, key []byte) (*Client, error) {
 	if s.CAFile != "" {
 		b, e := os.ReadFile(s.CAFile)
 		if e != nil {
-			return nil, errors.New("cannot read trusted CA file")
+			return nil, errors.New("cannot read trusted CA file; check the saved path and the agent account's read access")
 		}
 		if !roots.AppendCertsFromPEM(b) {
-			return nil, errors.New("trusted CA file has no certificates")
+			return nil, errors.New("trusted CA file has no certificates; use public CA certificates in PEM format")
 		}
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots}
@@ -145,23 +151,27 @@ func ensureKeyFile(path string) ([]byte, string, error) {
 	} else if e != nil {
 		return nil, "", e
 	}
+	csr, e := enrollmentCSR(b)
+	return b, csr, e
+}
+func enrollmentCSR(b []byte) (string, error) {
 	block, _ := pem.Decode(b)
 	if block == nil {
-		return nil, "", errors.New("invalid local key")
+		return "", errors.New("invalid local key")
 	}
 	raw, e := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if e != nil {
-		return nil, "", e
+		return "", e
 	}
 	key, ok := raw.(*ecdsa.PrivateKey)
 	if !ok {
-		return nil, "", errors.New("local key must be ECDSA")
+		return "", errors.New("local key must be ECDSA")
 	}
 	der, e := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
 	if e != nil {
-		return nil, "", e
+		return "", e
 	}
-	return b, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), nil
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), nil
 }
 func validateCredentials(c Credentials, key []byte, expectedDevice string) error {
 	return validateCredentialsAt(c, key, expectedDevice, time.Now())
@@ -211,23 +221,30 @@ func Enroll(ctx context.Context, dir string, s Settings, token string) error {
 		return e
 	}
 	defer unlock()
-	if token == "" || len(token) > 4096 {
-		return errors.New("invalid enrollment token")
+	s, token, e = enrollmentInput(s, token)
+	if e != nil {
+		return e
 	}
-	if _, _, e = ReadIdentity(dir); e == nil {
-		return errors.New("already enrolled; identity is preserved")
-	} else if !os.IsNotExist(e) {
+	if e = enrollmentPreflight(dir, s); e != nil {
+		return e
+	}
+	c, e := NewClient(s, nil, nil)
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	return enrollPrepared(ctx, dir, s, token, c)
+}
+
+func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c *Client) error {
+	if e := ctx.Err(); e != nil {
 		return e
 	}
 	key, csr, e := EnsureKey(dir)
 	if e != nil {
 		return e
 	}
-	var pending struct {
-		RequestID string `json:"request_id"`
-		Name      string `json:"name"`
-		Server    string `json:"server"`
-	}
+	var pending enrollmentPending
 	pendingPath := filepath.Join(dir, "enrollment.json")
 	e = ReadJSON(pendingPath, &pending)
 	if os.IsNotExist(e) {
@@ -243,12 +260,7 @@ func Enroll(ctx context.Context, dir string, s Settings, token string) error {
 	if pending.Name != s.Name || pending.Server != s.Server {
 		return errors.New("pending enrollment belongs to a different server or name; preserve identity and retry the original request")
 	}
-	c, e := NewClient(s, nil, nil)
-	if e != nil {
-		return e
-	}
-	defer c.Close()
-	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{1, pending.RequestID, token, s.Name, csr, runtime.GOOS, runtime.GOARCH, Version, VectorVersion})
+	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
 	if e != nil {
 		return e
 	}
@@ -264,10 +276,13 @@ func Enroll(ctx context.Context, dir string, s Settings, token string) error {
 	}
 	st, e := LoadState(dir)
 	if e != nil {
-		return e
+		return fmt.Errorf("enrollment identity was saved but durable state could not be read; preserve local files and inspect recovery before retrying: %w", e)
 	}
 	st.DeviceID = cred.DeviceID
-	return SaveState(dir, st)
+	if e = SaveState(dir, st); e != nil {
+		return fmt.Errorf("enrollment identity was saved but durable state update is incomplete; preserve local files and inspect recovery before retrying: %w", e)
+	}
+	return nil
 }
 func (c *Client) Renew(ctx context.Context, dir string, current Credentials, key []byte, csr string) (Credentials, error) {
 	b, e := c.request(ctx, "POST", "/agent/v1/renew", map[string]string{"csr_pem": csr})
@@ -346,6 +361,9 @@ func VerifyEnvelope(env Envelope, pub, device, nonce string, now time.Time, st S
 	}
 	if m.Policy.HeartbeatSeconds < 10 || m.Policy.HeartbeatSeconds > 3600 {
 		return m, errors.New("policy exceeds local heartbeat bounds")
+	}
+	if m.Generation > MaxJSONCounter || m.PolicyGeneration > MaxJSONCounter || (m.Desired != nil && m.Generation == 0) {
+		return m, errors.New("manifest generation exceeds protocol bounds")
 	}
 	if m.Desired != nil {
 		d := m.Desired

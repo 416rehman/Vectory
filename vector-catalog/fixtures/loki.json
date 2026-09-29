@@ -18,16 +18,16 @@
   "sinks": {
     "output": {
       "type": "loki",
-      "inputs": [
-        "enrich"
-      ],
       "endpoint": "https://loki.example.com",
       "encoding": {
         "codec": "json"
       },
       "labels": {
         "service": "vectory"
-      }
+      },
+      "inputs": [
+        "enrich"
+      ]
     }
   }
 }

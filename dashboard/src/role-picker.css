@@ -1,0 +1,100 @@
+.role-picker > label {
+  font-size: 13px;
+  font-weight: 550;
+}
+.role-picker-trigger {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.role-picker-trigger > svg,
+.role-picker-option > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.role-picker-trigger > svg:last-child {
+  align-self: center;
+  margin-left: auto;
+}
+.role-picker-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.role-picker-copy > strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.role-picker-copy > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.role-picker-trigger:hover:not(:disabled),
+.role-picker-trigger[data-state="open"] {
+  border-color: var(--muted);
+  background: var(--surface-soft);
+}
+.role-picker-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.role-picker-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.role-picker-menu {
+  z-index: 2200;
+  width: var(--radix-dropdown-menu-trigger-width);
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.role-picker-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 9px;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+.role-picker-option + .role-picker-option {
+  margin-top: 2px;
+}
+.role-picker-option[data-highlighted] {
+  background: var(--surface-soft);
+}
+.role-picker-option[data-state="checked"] {
+  background: var(--accent-soft);
+}
+.role-picker-option[data-highlighted][data-state="checked"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.role-picker-check {
+  width: 18px;
+  flex: none;
+  padding-top: 2px;
+  color: var(--accent-ink);
+}

@@ -1,0 +1,965 @@
+/* Dense typed controls for the persistent component inspector. */
+.schema-fields,
+.schema-field-control {
+  min-width: 0;
+}
+.schema-field-control > .field,
+.schema-value > .field {
+  margin-bottom: 5px;
+}
+.schema-value-input {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0;
+  position: relative;
+}
+.schema-value-input > svg {
+  position: absolute;
+  left: 11px;
+  flex: none;
+  color: var(--muted);
+  pointer-events: none;
+}
+.schema-value-input > svg + input {
+  padding-left: 34px;
+}
+.schema-value-input input {
+  width: 100%;
+  min-width: 0;
+}
+.schema-value-input > select {
+  width: auto;
+  max-width: 125px;
+  flex: none;
+  margin-left: 6px;
+  padding-left: 8px;
+  padding-right: 20px;
+  font-size: 12px;
+}
+.schema-unit {
+  position: absolute;
+  right: 11px;
+  pointer-events: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.schema-value-input:has(.schema-unit) input {
+  padding-right: 70px;
+}
+.schema-control-error {
+  color: var(--danger, #a13333);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+.schema-control-hint,
+.schema-default-note,
+.schema-empty-note,
+.schema-null-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 6px 0 10px;
+  overflow-wrap: anywhere;
+}
+.schema-control-hint:empty {
+  display: none;
+}
+.schema-control-hint code,
+.schema-default-note code {
+  font-size: 11px;
+}
+.schema-code-control {
+  width: 100%;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.schema-code-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+}
+.schema-code-control textarea.editor-code-input {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  min-height: 100px;
+  font-size: 12px;
+  line-height: 1.65;
+  padding: 12px;
+  resize: vertical;
+}
+.schema-code-control textarea:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 0;
+}
+.schema-json-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.schema-collection-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 8px;
+}
+.schema-collection-label > strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.schema-collection-label > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.schema-map,
+.schema-array {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.schema-map-entry,
+.schema-array-entry {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.schema-array-entry-draft {
+  border-style: dashed;
+}
+.schema-entry-header {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+  min-width: 0;
+}
+.schema-entry-header > strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  font-weight: 550;
+}
+.schema-entry-header > strong > small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.schema-entry-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 0;
+}
+.schema-entry-actions .icon-button {
+  width: 25px;
+  height: 27px;
+  border: 0;
+  background: transparent;
+  padding: 3px;
+  color: var(--muted);
+}
+.schema-entry-actions .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+.schema-entry-actions .icon-button:disabled {
+  opacity: 0.28;
+}
+.schema-key-editor {
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  width: 100%;
+}
+.schema-key-editor > .field {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+}
+.schema-key-editor > .button {
+  font-size: 11px;
+  padding: 6px 8px;
+}
+.schema-map-add {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+.schema-map-add .field {
+  margin: 0;
+}
+.schema-map-add .field:has(select) {
+  grid-column: 1/-1;
+}
+.schema-map-add > .button {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: end;
+  min-height: 39px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.schema-map-add > .schema-control-error {
+  grid-column: 1/-1;
+}
+.schema-array > .button {
+  justify-self: start;
+}
+.schema-variant {
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.schema-null-control {
+  display: flex;
+  margin: 7px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.schema-null-control label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.schema-null-control input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.schema-null-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+.schema-null-action {
+  appearance: none;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 3px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.schema-null-action:hover {
+  color: var(--ink);
+}
+.schema-explicit-null {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 13px;
+}
+.schema-explicit-null code {
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.schema-required {
+  display: block;
+  margin: 5px 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+.schema-raw-details {
+  margin: 9px 0 15px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.schema-raw-details > summary {
+  cursor: pointer;
+}
+.schema-raw-details .pipeline-json-field {
+  margin-top: 10px;
+}
+.schema-additional {
+  margin-top: 14px;
+}
+.schema-additional > h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 550;
+}
+.schema-requirements {
+  margin: 0 0 12px;
+  border-left: 2px solid var(--line-strong, var(--line));
+  padding-left: 10px;
+}
+.schema-requirements p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 5px 0;
+}
+.schema-fields .pipeline-schema-option-list > button {
+  min-width: 0;
+}
+.schema-fields .pipeline-schema-option-list > button span {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.schema-fields .pipeline-schema-field {
+  min-width: 0;
+}
+@media (max-width: 480px) {
+  .schema-map-entry,
+  .schema-array-entry {
+    padding: 9px;
+  }
+  .schema-entry-actions .icon-button {
+    width: 23px;
+  }
+}
+
+/* Collection rows already name their value; retain accessible labels without repeating them visually. */
+.schema-array-entry
+  > .schema-field-control
+  > .schema-value
+  > .field
+  > span:first-child,
+.schema-map-entry
+  > .schema-field-control
+  > .schema-value
+  > .field
+  > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.schema-collection-object > .schema-object-description {
+  margin: 0 0 10px;
+}
+.schema-collection-object > .schema-fields > .pipeline-schema-field:last-child {
+  margin-bottom: 0;
+}
+.schema-fields .pipeline-schema-options {
+  padding: 9px 10px;
+  margin-top: 10px;
+}
+.schema-fields .pipeline-schema-options > summary {
+  font-size: 12px;
+}
+.schema-field-control .schema-empty-note {
+  margin-bottom: 4px;
+}
+.schema-value .field > small {
+  font-size: 12px;
+  line-height: 1.55;
+}
+/* Field ownership is shared by the inspector and pipeline-wide settings. */
+.schema-record-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  margin-bottom: 5px;
+}
+.schema-record-label {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+.schema-record-label > strong {
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.schema-record-label .schema-required {
+  display: inline;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+}
+.schema-record-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 3px;
+}
+.schema-record-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.schema-record-action:hover,
+.schema-record-actions .icon-button:hover {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+.schema-record-action[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.schema-record-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.schema-record-actions .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+.schema-field-owned
+  > .schema-structured-value
+  > .schema-value
+  > .field
+  > span:first-child,
+.schema-field-owned > .schema-structured-value > .field > span:first-child,
+.schema-field-owned
+  > .schema-raw-value
+  > .pipeline-json-field
+  > .field
+  > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.schema-record-label strong > small {
+  display: block;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--muted);
+}
+.schema-structured-value[hidden],
+.schema-raw-value[hidden] {
+  display: none;
+}
+.schema-fields .pipeline-schema-field {
+  margin-bottom: 16px;
+}
+.schema-field-owned > .schema-structured-value > .schema-object {
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+.schema-field-owned > .schema-structured-value > .schema-object > summary {
+  padding: 4px 0 8px;
+}
+.schema-field-owned
+  > .schema-structured-value
+  > .schema-object
+  > .schema-object-body {
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--line);
+}
+.schema-field-owned
+  > .schema-structured-value
+  > .schema-object
+  > .schema-object-description {
+  margin: 0 0 10px;
+}
+.schema-field-owned .schema-object-description {
+  font-size: 12px;
+}
+.schema-map-entry,
+.schema-array-entry {
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.schema-array-entry-draft {
+  border-bottom-style: dashed;
+}
+.schema-collection-label {
+  margin: 0 0 7px;
+  justify-content: flex-start;
+}
+.schema-explicit-null {
+  padding: 4px 0;
+}
+.schema-explicit-null code {
+  margin-left: 0;
+}
+.schema-field-picker {
+  position: relative;
+  margin: 9px 0 13px;
+  min-width: 0;
+}
+.schema-field-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 9px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.schema-field-picker-trigger:hover {
+  background: var(--surface-soft);
+}
+.schema-field-picker-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+.schema-field-picker-panel {
+  z-index: 2200;
+  width: min(330px, calc(100vw - 24px));
+  max-height: var(--radix-popover-content-available-height);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px #0002;
+  overflow: hidden;
+}
+.schema-field-search {
+  display: flex;
+  position: relative;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.schema-field-search > svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+  color: var(--muted);
+}
+.schema-field-search > input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 34px 10px 31px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+}
+.schema-field-search .icon-button {
+  position: absolute;
+  right: 3px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+}
+.schema-field-picker-results {
+  max-height: min(
+    260px,
+    calc(var(--radix-popover-content-available-height) - 43px)
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+.schema-field-picker-results > button {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.schema-field-picker-results > button:hover {
+  background: var(--surface-soft);
+}
+.schema-field-picker-results > button > svg {
+  flex: none;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.schema-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.schema-option-copy strong {
+  font-size: 12px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.schema-option-copy small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.schema-field-picker-results > p {
+  margin: 10px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.schema-field-search > input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.schema-field-search:focus-within {
+  box-shadow: inset 0 -1px var(--line-strong);
+}
+.schema-field-picker button:focus-visible,
+.schema-record-actions :is(button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Every value owns its label, help, and actions, across inspector and global settings. */
+.schema-field-owned {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.schema-field-owned > .schema-record-header {
+  margin-bottom: 7px;
+  min-height: 25px;
+}
+.schema-record-label {
+  align-items: center;
+  gap: 5px;
+}
+.schema-record-label > strong {
+  font-size: 12px;
+}
+.schema-help-trigger,
+.schema-actions-trigger,
+.schema-help-heading > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.schema-help-trigger {
+  width: 22px;
+  height: 22px;
+}
+.schema-help-trigger:hover,
+.schema-actions-trigger:hover,
+.schema-help-heading > button:hover,
+.schema-actions-trigger[data-state="open"] {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+.schema-help-trigger:focus-visible,
+.schema-actions-trigger:focus-visible,
+.schema-help-heading > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.schema-help-popover,
+.schema-actions-menu {
+  z-index: 2200;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 7px;
+  box-shadow: 0 10px 30px #0002;
+  font-size: 12px;
+}
+.schema-help-popover {
+  width: min(350px, calc(100vw - 24px));
+  max-height: min(460px, var(--radix-popover-content-available-height));
+  padding: 11px 13px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+.schema-help-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.schema-help-heading > strong {
+  font-size: 13px;
+}
+.schema-help-popover p {
+  white-space: pre-line;
+  margin: 8px 0;
+  color: var(--muted);
+}
+.schema-help-popover pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 7px;
+  margin: 5px 0 8px;
+  background: var(--surface-soft);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.schema-help-popover dl {
+  margin: 9px 0;
+}
+.schema-help-popover dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 3px 0;
+}
+.schema-help-popover dt {
+  color: var(--muted);
+}
+.schema-help-popover dd {
+  margin: 0;
+}
+.schema-actions-menu {
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 24px));
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+  padding: 4px;
+}
+.schema-menu-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+}
+.schema-menu-action > svg {
+  flex: none;
+  color: var(--muted);
+}
+.schema-menu-action[data-highlighted] {
+  background: var(--surface-soft);
+}
+.schema-menu-action[data-disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+.schema-menu-action[data-danger] {
+  color: var(--danger);
+}
+.schema-menu-action[data-danger] > svg {
+  color: inherit;
+}
+.schema-standalone-value > .field > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.schema-selector-owned > .field > span:first-child {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.schema-field-owned .schema-map-entry,
+.schema-field-owned .schema-array-entry {
+  padding: 0;
+  border: 0;
+}
+.schema-field-owned .schema-object-body {
+  border: 0;
+  padding: 0;
+}
+.schema-fields .pipeline-schema-field {
+  margin-bottom: 10px;
+}
+.schema-field-control > .schema-default-note {
+  margin-bottom: 0;
+}
+
+/* Nested properties share the available width; paths carry hierarchy, not indentation. */
+.schema-record-header {
+  align-items: center;
+}
+.schema-record-label {
+  min-width: 0;
+  flex: 1;
+}
+.schema-record-label > strong {
+  color: var(--ink);
+  font-weight: 650;
+  line-height: 1.4;
+}
+.schema-field-picker-slot {
+  display: flex;
+  flex: none;
+  min-width: 0;
+}
+.schema-field-picker-slot:empty,
+.schema-field-picker-slot[hidden] {
+  display: none;
+}
+.schema-field-picker-slot .schema-field-picker {
+  margin: 0;
+}
+.schema-field-picker-slot .schema-field-picker-trigger {
+  padding: 3px 5px;
+  font-size: 11px;
+  min-height: 28px;
+  gap: 4px;
+}
+.schema-field-picker-slot .schema-field-picker-trigger > svg:first-child {
+  display: none;
+}
+.schema-object-children {
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+}
+.schema-field-owned .schema-field-owned {
+  border: 0;
+  border-radius: 0;
+  padding: 4px 0 10px;
+  background: transparent;
+}
+.schema-parent-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.schema-condition-note {
+  margin: -1px 0 8px;
+  color: var(--inspector-tone, var(--accent-ink));
+  font-size: 11px;
+  line-height: 1.45;
+}
+.schema-retained-fields {
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-strong, var(--line));
+}
+.schema-retained-fields > h4 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.schema-retained-fields > .pipeline-schema-field {
+  margin-bottom: 10px;
+}
+.schema-field-owned .schema-field-section > .schema-record-header {
+  padding: 5px 7px;
+  background: var(--surface-soft);
+  border-radius: 4px;
+}
+.schema-field-owned
+  .schema-field-section
+  > .schema-record-header
+  .schema-record-label
+  > strong {
+  font-weight: 650;
+}
+.schema-field-section > .schema-structured-value,
+.schema-list-field,
+.schema-object-children,
+.schema-fixed-value {
+  min-width: 0;
+}
+.schema-object-children
+  > .schema-fields
+  > .pipeline-schema-field:last-of-type
+  > .schema-field-owned {
+  padding-bottom: 0;
+}
+.schema-object-children > .schema-fields > .pipeline-schema-field {
+  margin-bottom: 6px;
+}
+.schema-object-children
+  > .schema-fields
+  > .pipeline-schema-field
+  + .pipeline-schema-field {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.schema-field-owned
+  .schema-field-owned
+  > .schema-record-header
+  .schema-record-label
+  > strong {
+  font-weight: 550;
+}
+.schema-variant > .field > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.schema-variant > .field {
+  margin-bottom: 8px;
+}
+.schema-fields > .schema-field-picker {
+  margin: 0 0 10px;
+}
+.schema-field-control > .schema-structured-value > .schema-value .field {
+  margin-bottom: 0;
+}

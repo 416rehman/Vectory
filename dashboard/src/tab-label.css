@@ -1,0 +1,12 @@
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.tab-label > svg {
+  flex: none;
+}

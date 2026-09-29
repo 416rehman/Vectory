@@ -1,0 +1,89 @@
+.authenticator-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.authenticator-scan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 9px;
+}
+.authenticator-scan > svg {
+  display: block;
+  flex: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.authenticator-scan > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.authenticator-app-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-top: 2px;
+  color: var(--accent);
+  text-underline-offset: 3px;
+}
+.authenticator-app-hint {
+  margin-top: -5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.authenticator-manual {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+.authenticator-manual > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+}
+.authenticator-manual > p {
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.authenticator-key {
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.authenticator-confirm .field {
+  margin-bottom: 0;
+}
+.authenticator-code {
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  letter-spacing: 0.3em;
+  max-width: 200px;
+}
+.authenticator-confirm .error-box {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .authenticator-setup {
+    gap: 16px;
+  }
+  .authenticator-setup + .modal-footer .button {
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+}
+@media (max-width: 350px) {
+  .authenticator-setup + .modal-footer .button {
+    width: 100%;
+  }
+}

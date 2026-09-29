@@ -1,0 +1,159 @@
+.editor-graph .react-flow__edge.pipeline-connection .react-flow__edge-path {
+  stroke: var(--pipeline-edge-ink, var(--muted));
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.editor-graph
+  .react-flow__edge.pipeline-connection:hover
+  .react-flow__edge-path,
+.editor-graph
+  .react-flow__edge.pipeline-connection.selected
+  .react-flow__edge-path,
+.editor-graph
+  .react-flow__edge.pipeline-connection:focus-visible
+  .react-flow__edge-path {
+  stroke: var(--pipeline-category-ink, var(--accent));
+  stroke-width: 2.5;
+}
+.pipeline-connection .react-flow__edgeupdater {
+  cursor: grab;
+}
+.pipeline-edge-endpoints circle {
+  fill: var(--surface);
+  stroke: var(--pipeline-category-ink, var(--accent));
+  stroke-width: 1.5;
+}
+/* The outer transparent stroke keeps a generous endpoint target. */
+.pipeline-connection .react-flow__edgeupdater:hover {
+  fill: var(--pipeline-category-soft, var(--surface-soft));
+  stroke-width: 3;
+}
+.canvas-shortcuts-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 12px 20px;
+  font-size: 13px;
+}
+.canvas-shortcuts-list dt {
+  font-weight: 600;
+}
+.canvas-shortcuts-list dd {
+  margin: 0;
+  color: var(--muted);
+}
+@media (max-width: 520px) {
+  .canvas-shortcuts-list {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .canvas-shortcuts-list dd {
+    margin-bottom: 10px;
+  }
+}
+.pipeline-edge-actions {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--surface);
+  pointer-events: all;
+  cursor: pointer;
+}
+.pipeline-edge-actions:hover {
+  background: var(--surface-soft);
+}
+.pipeline-edge-actions:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.editor-connection-guidance {
+  max-width: min(440px, calc(100vw - 64px));
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* A temporary reading aid; faded items retain their normal hit targets. */
+.editor-graph .react-flow__edge.pipeline-connection,
+.editor-graph .pipeline-edge-actions {
+  transition: opacity 120ms ease;
+}
+.editor-graph .react-flow__edge[data-connection-highlight="dimmed"] {
+  opacity: 0.25;
+}
+.editor-graph
+  .react-flow__node[data-connection-highlight="dimmed"]
+  .pipeline-node {
+  --pipeline-node-tone: var(--muted);
+  background: var(--bg);
+  box-shadow: none;
+}
+.editor-graph
+  .react-flow__node[data-connection-highlight="dimmed"]
+  .pipeline-node:not(.pipeline-node-issue):not(.pipeline-node-selected) {
+  border-color: var(--line);
+}
+.editor-graph
+  .react-flow__node[data-connection-highlight="dimmed"]
+  :is(
+    .pipeline-node-kind,
+    .pipeline-node-title-text > strong,
+    .pipeline-node-summary > p
+  ) {
+  color: var(--muted);
+}
+.editor-graph
+  .react-flow__node[data-connection-highlight="dimmed"]
+  :is(
+    .pipeline-node-icon-frame,
+    .pipeline-node-identity,
+    .pipeline-node-menu,
+    .pipeline-node-port-list
+  ),
+.editor-graph .pipeline-edge-actions[data-connection-highlight="dimmed"] {
+  background: var(--bg);
+  color: var(--muted);
+}
+.editor-graph
+  .react-flow__node[data-connection-highlight="endpoint"]
+  .pipeline-node {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--pipeline-category-ink) 75%, transparent),
+    0 6px 22px -8px
+      color-mix(in srgb, var(--pipeline-category-ink) 30%, transparent);
+}
+.editor-graph
+  .react-flow__edge.pipeline-connection[data-connection-highlight="active"]
+  .react-flow__edge-path {
+  stroke: var(--pipeline-category-ink, var(--accent));
+  stroke-width: 3.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-graph .react-flow__edge.pipeline-connection,
+  .editor-graph .pipeline-edge-actions {
+    transition: none;
+  }
+}
+@media (prefers-contrast: more), (forced-colors: active) {
+  .editor-graph .react-flow__node[data-connection-highlight="dimmed"],
+  .editor-graph .react-flow__edge[data-connection-highlight="dimmed"],
+  .editor-graph .pipeline-edge-actions[data-connection-highlight="dimmed"] {
+    opacity: 1;
+  }
+  .editor-graph
+    .react-flow__node[data-connection-highlight="endpoint"]
+    .pipeline-node {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+  }
+}

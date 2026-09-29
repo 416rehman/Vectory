@@ -1,0 +1,120 @@
+.assignment-removal-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.assignment-removal-modal > .modal-header,
+.assignment-removal-modal > .modal-footer {
+  flex-shrink: 0;
+}
+.assignment-removal-modal > .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.assignment-removal-loading,
+.assignment-removal-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assignment-removal-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.assignment-removal-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.assignment-removal-heading > span,
+.assignment-removal-filter-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.assignment-removal-notice {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-hover);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.assignment-removal-notice ul {
+  padding-left: 18px;
+  margin-bottom: 0;
+}
+.assignment-removal-device,
+.assignment-removal-state,
+.assignment-removal-effect {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.assignment-removal-device strong,
+.assignment-removal-state strong,
+.assignment-removal-effect strong {
+  font-weight: 500;
+}
+.assignment-removal-state > span,
+.assignment-removal-effect > p {
+  color: var(--muted);
+  margin: 0;
+}
+.assignment-removal code {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.assignment-removal .data-table td {
+  vertical-align: top;
+  min-width: 150px;
+  max-width: 300px;
+}
+.assignment-removal .data-table td:first-child {
+  min-width: 130px;
+}
+.assignment-removal-mobile-current,
+.assignment-removal-mobile-after {
+  display: none;
+}
+@media (max-width: 600px) {
+  .assignment-removal-modal > .modal-footer {
+    flex-wrap: wrap;
+  }
+  .assignment-removal .data-table-scroll > table.data-table {
+    min-width: 0;
+    table-layout: fixed;
+  }
+  .assignment-removal .data-table :is(th, td) {
+    min-width: 0;
+    max-width: none;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .assignment-removal .data-table :is(th, td):first-child {
+    width: 38%;
+    min-width: 0;
+  }
+  .assignment-removal .data-table .assignment-removal-current-column {
+    display: none;
+  }
+  .assignment-removal-mobile-current {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .assignment-removal-mobile-current > span,
+  .assignment-removal-mobile-after {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+  }
+}

@@ -3,7 +3,12 @@ WORKDIR /src/dashboard
 COPY dashboard/package*.json ./
 COPY dashboard/.npmrc ./
 RUN npm ci
+COPY help-center/package*.json /src/help-center/
+RUN npm ci --prefix /src/help-center
 COPY dashboard/ ./
+COPY docs/user /src/docs/user
+COPY contracts /src/contracts
+COPY help-center /src/help-center
 RUN npm run build
 
 FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS server

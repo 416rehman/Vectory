@@ -18,13 +18,13 @@
   "sinks": {
     "output": {
       "type": "http",
-      "inputs": [
-        "enrich"
-      ],
       "uri": "https://logs.example.com",
       "encoding": {
         "codec": "json"
-      }
+      },
+      "inputs": [
+        "enrich"
+      ]
     }
   }
 }

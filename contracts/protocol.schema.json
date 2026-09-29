@@ -4,6 +4,698 @@
   "title": "Vectory protocol v1",
   "description": "Validate one named schema via $defs. Cryptographic, authorization and semantic checks remain mandatory.",
   "$defs": {
+    "VariableDeclaration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 512,
+          "pattern": "^/"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "VariableBindings": {
+      "type": "object",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "Server also limits UTF-8 encoding to 4096 bytes."
+              },
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "description": "Values must exactly match published declaration names and types. Missing, extra, and secret-like values are rejected by the server."
+        },
+        "devices": {
+          "type": "object",
+          "propertyNames": {
+            "format": "uuid"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            },
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "description": "Server also limits UTF-8 encoding to 4096 bytes."
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "description": "Values must exactly match published declaration names and types. Missing, extra, and secret-like values are rejected by the server."
+          }
+        }
+      },
+      "required": [
+        "defaults",
+        "devices"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactPreview": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        }
+      },
+      "required": [
+        "device_id",
+        "sha256",
+        "size"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationAttempt": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "secret_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "enum": [
+            "desired",
+            "downloaded",
+            "validated",
+            "written",
+            "reload_requested",
+            "verified_applied",
+            "verification_unknown",
+            "failed",
+            "rolled_back",
+            "paused"
+          ]
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "stage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "code",
+            "stage",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "generation",
+        "version_id",
+        "sha256",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "AuditSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actor_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "actor_kind": {
+          "enum": [
+            "user",
+            "device",
+            "system",
+            "unknown"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_kind": {
+          "enum": [
+            "user",
+            "device",
+            "configuration",
+            "deployment",
+            "group",
+            "policy",
+            "token",
+            "issue",
+            "signing_key",
+            "server",
+            "unknown"
+          ]
+        },
+        "target_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_exists": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "actor_id",
+        "actor",
+        "actor_kind",
+        "action",
+        "target",
+        "target_id",
+        "target_kind",
+        "target_name",
+        "device_id",
+        "outcome",
+        "created_at",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    "AuditDetail": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actor_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actor": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "actor_kind": {
+          "enum": [
+            "user",
+            "device",
+            "system",
+            "unknown"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_kind": {
+          "enum": [
+            "user",
+            "device",
+            "configuration",
+            "deployment",
+            "group",
+            "policy",
+            "token",
+            "issue",
+            "signing_key",
+            "server",
+            "unknown"
+          ]
+        },
+        "target_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_exists": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "previous_group_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "group_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "issue_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "secret_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "previous_secret_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "actual_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "applied_template_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "device_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "previous_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "previous_policy_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "policy_generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "secret_revision_floor": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "version_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "policy_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "browser_sessions": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "password_reset_codes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "enrollment_tokens_to_revoke": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mfa_recovery_codes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "previous_device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "replacement_device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "previous_signing_key_id": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "signing_key_id": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "actor_id",
+        "actor",
+        "actor_kind",
+        "action",
+        "target",
+        "target_id",
+        "target_kind",
+        "target_name",
+        "device_id",
+        "outcome",
+        "created_at",
+        "request_id",
+        "details"
+      ],
+      "additionalProperties": false
+    },
+    "AuditHistoryPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/AuditSummary"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "AuditExportFilters": {
+      "type": "object",
+      "properties": {
+        "search": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]*$"
+        },
+        "family": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]*$"
+        },
+        "outcome": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]*$"
+        },
+        "actor_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "target_id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "AuditExport": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "filters": {
+          "$ref": "#/$defs/AuditExportFilters"
+        },
+        "row_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 134217728
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "download_path": {
+          "type": "string",
+          "pattern": "^/api/v1/audit/exports/[0-9a-f-]+/download$"
+        }
+      },
+      "required": [
+        "id",
+        "filters",
+        "row_count",
+        "byte_count",
+        "sha256",
+        "created_at",
+        "expires_at",
+        "download_path"
+      ],
+      "additionalProperties": false
+    },
     "Error": {
       "type": "object",
       "properties": {
@@ -50,15 +742,350 @@
             "operator",
             "admin"
           ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "required": [
         "id",
         "email",
         "name",
-        "role"
+        "role",
+        "enabled",
+        "revision"
       ],
       "additionalProperties": true
+    },
+    "AccessEditReceipt": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user": {
+          "$ref": "#/$defs/User"
+        }
+      },
+      "required": [
+        "request_id",
+        "user"
+      ],
+      "additionalProperties": false
+    },
+    "AccessEditResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/User"
+        },
+        {
+          "$ref": "#/$defs/AccessEditReceipt"
+        }
+      ]
+    },
+    "AccessEditRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "not_found"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "applied"
+            },
+            "user": {
+              "$ref": "#/$defs/User"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status",
+            "user"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Actor-scoped exact-target access edit status. An applied user is the immutable public commit snapshot, not necessarily the account’s current state. not_found is noncausal while a PUT may be in flight; cancellation fences only an absent request and cannot undo an applied edit."
+    },
+    "UserCreateReceipt": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user": {
+          "$ref": "#/$defs/User"
+        }
+      },
+      "required": [
+        "request_id",
+        "user"
+      ],
+      "additionalProperties": false
+    },
+    "UserCreateResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/User"
+        },
+        {
+          "$ref": "#/$defs/UserCreateReceipt"
+        }
+      ]
+    },
+    "UserRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "not_found"
+            }
+          },
+          "required": [
+            "request_id",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "request_id",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "created"
+            },
+            "user": {
+              "$ref": "#/$defs/User"
+            }
+          },
+          "required": [
+            "request_id",
+            "status",
+            "user"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Actor-scoped, secret-free current status. not_found is not cancellation: an in-flight POST may still commit. A repeated keyed POST always conflicts; cancel fences a late create only when it wins the writer transaction."
+    },
+    "ResetIssueReceipt": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "request_id",
+        "user_id",
+        "code",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "ResetIssueResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "code",
+            "expires_at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ResetIssueReceipt"
+        }
+      ]
+    },
+    "ResetRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "not_found"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "issued"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status",
+            "active",
+            "expires_at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "const": "cancelled"
+            },
+            "was_issued": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "request_id",
+            "user_id",
+            "status",
+            "was_issued"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Actor-scoped, exact-target, secret-free reset issuance status. A negative read does not fence an in-flight POST. Issued active is true only while this exact code verifier remains current and unexpired for an enabled account. Cancellation revokes the exact still-current unused code and fences late issuance; it cannot undo a code already redeemed."
     },
     "Session": {
       "type": "object",
@@ -75,6 +1102,38 @@
         "csrf_token"
       ],
       "additionalProperties": true
+    },
+    "LoginChallenge": {
+      "type": "object",
+      "properties": {
+        "mfa_required": {
+          "const": true
+        },
+        "challenge_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "mfa_required",
+        "challenge_token",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "LoginResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Session"
+        },
+        {
+          "$ref": "#/$defs/LoginChallenge"
+        }
+      ]
     },
     "Status": {
       "type": "object",
@@ -135,6 +1194,14 @@
           "type": "object",
           "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
         },
+        "variables": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/VariableDeclaration"
+          },
+          "description": "Draft-owned nonsecret scalar replacement slots, captured immutably in each published version. Paths are canonical RFC6901 pointers to existing leaves; server validation rejects structural and known credential fields and rechecks each rendered configuration against target capabilities."
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -142,6 +1209,23 @@
         "updated_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "archived": {
+          "type": "boolean",
+          "default": false,
+          "description": "Organization/editing state only. Archived drafts cannot be saved, restored or published; all immutable versions remain readable and deployable."
+        },
+        "archived_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -151,12 +1235,761 @@
         "revision",
         "graph",
         "config",
+        "variables",
         "created_at",
         "updated_at"
       ],
       "additionalProperties": true
     },
-    "Version": {
+    "PipelineCreateReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Configuration"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "archived": {
+              "type": "boolean"
+            },
+            "archived_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "request_id",
+            "revision",
+            "archived",
+            "archived_at"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "PipelineRequestLookup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "operation": {
+              "enum": [
+                "create",
+                "duplicate"
+              ]
+            },
+            "source_configuration_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source_revision": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration": {
+              "$ref": "#/$defs/PipelineCreateReceipt"
+            }
+          },
+          "required": [
+            "request_id",
+            "found",
+            "operation",
+            "source_configuration_id",
+            "source_revision",
+            "configuration"
+          ],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "properties": {
+                "operation": {
+                  "const": "create"
+                },
+                "source_configuration_id": {
+                  "type": "null"
+                },
+                "source_revision": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "operation": {
+                  "const": "duplicate"
+                },
+                "source_configuration_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "source_revision": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Nested request_id must equal the outer key. A duplicate result UUID must differ from its source. Current result contents may have changed since creation; original operation/source metadata remains immutable."
+    },
+    "PipelineRequestPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "duplicate"
+                ]
+              },
+              "source_configuration_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "configuration_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "configuration_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "request_id",
+              "operation",
+              "source_configuration_id",
+              "source_revision",
+              "configuration_id",
+              "configuration_name",
+              "created_at"
+            ],
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {
+                    "const": "create"
+                  },
+                  "source_configuration_id": {
+                    "type": "null"
+                  },
+                  "source_revision": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "duplicate"
+                  },
+                  "source_configuration_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "source_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationLibraryItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "archived_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "component_counts": {
+          "type": "object",
+          "properties": {
+            "sources": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transforms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sinks": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "sources",
+            "transforms",
+            "sinks"
+          ],
+          "additionalProperties": false
+        },
+        "latest_version": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "number",
+                "created_at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "revision",
+        "created_at",
+        "updated_at",
+        "archived",
+        "archived_at",
+        "component_counts",
+        "latest_version"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationLibraryPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/ConfigurationLibraryItem"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "Activity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_kind": {
+          "enum": [
+            "user",
+            "device",
+            "system",
+            "unknown"
+          ]
+        },
+        "action": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "target_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_kind": {
+          "enum": [
+            "user",
+            "device",
+            "configuration",
+            "deployment",
+            "group",
+            "policy",
+            "token",
+            "issue",
+            "signing_key",
+            "server",
+            "unknown"
+          ]
+        },
+        "target_exists": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "actor",
+        "action",
+        "target",
+        "outcome",
+        "created_at"
+      ],
+      "additionalProperties": true
+    },
+    "Issue": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "device_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_revoked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "desired_version_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "acknowledged": {
+          "type": "boolean"
+        },
+        "acknowledged_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledged_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledged_by_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledgement_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "open",
+            "acknowledged",
+            "resolved"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "device_id",
+        "device_name",
+        "device_revoked",
+        "code",
+        "stage",
+        "message",
+        "count",
+        "first_seen",
+        "last_seen",
+        "desired_version_id",
+        "resolved",
+        "revision",
+        "acknowledged",
+        "acknowledged_at",
+        "acknowledged_by",
+        "acknowledged_by_name",
+        "acknowledgement_reason",
+        "disposition"
+      ],
+      "additionalProperties": false
+    },
+    "IssueHistoryPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/Issue"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "Overview": {
+      "type": "object",
+      "properties": {
+        "devices_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_online": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "configurations_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deployments_active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "issues_open": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Device"
+          }
+        },
+        "recent_activity": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Activity"
+          }
+        }
+      },
+      "required": [
+        "devices_total",
+        "devices_online",
+        "configurations_total",
+        "deployments_active",
+        "issues_open",
+        "devices",
+        "recent_activity"
+      ],
+      "additionalProperties": true
+    },
+    "Revision": {
       "type": "object",
       "properties": {
         "id": {
@@ -167,9 +2000,57 @@
           "type": "string",
           "format": "uuid"
         },
-        "number": {
+        "revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "author": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "draft",
+                "revision",
+                "version"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": true
         },
         "graph": {
           "type": "object",
@@ -197,8 +2078,145 @@
           "type": "object",
           "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
         },
-        "artifact": {
+        "variables": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/VariableDeclaration"
+          },
+          "description": "Draft-owned nonsecret scalar replacement slots, captured immutably in each published version. Paths are canonical RFC6901 pointers to existing leaves; server validation rejects structural and known credential fields and rechecks each rendered configuration against target capabilities."
+        }
+      },
+      "required": [
+        "id",
+        "configuration_id",
+        "revision",
+        "graph",
+        "config",
+        "variables",
+        "message",
+        "created_at",
+        "author"
+      ],
+      "additionalProperties": true
+    },
+    "RevisionMetadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
           "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "author": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "draft",
+                "revision",
+                "version"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "id",
+        "configuration_id",
+        "revision",
+        "message",
+        "created_at",
+        "author"
+      ],
+      "additionalProperties": true,
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "config"
+            ]
+          },
+          {
+            "required": [
+              "graph"
+            ]
+          },
+          {
+            "required": [
+              "variables"
+            ]
+          },
+          {
+            "required": [
+              "artifact"
+            ]
+          },
+          {
+            "required": [
+              "validation"
+            ]
+          }
+        ]
+      }
+    },
+    "Version": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
         },
         "sha256": {
           "type": "string",
@@ -218,6 +2236,54 @@
         "uses_local_secrets": {
           "type": "boolean"
         },
+        "author": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "additionalProperties": true
+        },
+        "config": {
+          "type": "object",
+          "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/VariableDeclaration"
+          },
+          "description": "Draft-owned nonsecret scalar replacement slots, captured immutably in each published version. Paths are canonical RFC6901 pointers to existing leaves; server validation rejects structural and known credential fields and rechecks each rendered configuration against target capabilities."
+        },
+        "artifact": {
+          "type": "string"
+        },
         "validation": {
           "type": "object"
         }
@@ -228,12 +2294,360 @@
         "number",
         "graph",
         "config",
+        "variables",
         "artifact",
         "sha256",
         "size",
         "created_at",
         "message",
         "validation"
+      ],
+      "additionalProperties": true
+    },
+    "PublishReceipt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": "string"
+        },
+        "uses_local_secrets": {
+          "type": "boolean"
+        },
+        "author": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "graph": {
+          "type": "object",
+          "properties": {
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "nodes",
+            "edges"
+          ],
+          "additionalProperties": true
+        },
+        "config": {
+          "type": "object",
+          "description": "Canonical Vector configuration; unknown properties are preserved. Secrets and unsafe capabilities are validated independently."
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/VariableDeclaration"
+          },
+          "description": "Draft-owned nonsecret scalar replacement slots, captured immutably in each published version. Paths are canonical RFC6901 pointers to existing leaves; server validation rejects structural and known credential fields and rechecks each rendered configuration against target capabilities."
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "validation": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "configuration_id",
+        "number",
+        "source_revision",
+        "request_id",
+        "graph",
+        "config",
+        "variables",
+        "artifact",
+        "sha256",
+        "size",
+        "created_at",
+        "message",
+        "validation"
+      ],
+      "additionalProperties": true
+    },
+    "PublishRequestLookup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "version": {
+              "$ref": "#/$defs/PublishReceipt"
+            }
+          },
+          "required": [
+            "request_id",
+            "found",
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublishRequestPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "configuration_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "source_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "request_id",
+              "configuration_id",
+              "version_id",
+              "number",
+              "source_revision",
+              "created_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "VersionMetadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": "string"
+        },
+        "uses_local_secrets": {
+          "type": "boolean"
+        },
+        "author": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "configuration_id",
+        "number",
+        "sha256",
+        "size",
+        "created_at",
+        "message"
+      ],
+      "additionalProperties": true,
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "config"
+            ]
+          },
+          {
+            "required": [
+              "graph"
+            ]
+          },
+          {
+            "required": [
+              "variables"
+            ]
+          },
+          {
+            "required": [
+              "artifact"
+            ]
+          },
+          {
+            "required": [
+              "validation"
+            ]
+          }
+        ]
+      }
+    },
+    "HistoryPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/RevisionMetadata"
+              },
+              {
+                "$ref": "#/$defs/VersionMetadata"
+              }
+            ]
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
       ],
       "additionalProperties": true
     },
@@ -257,7 +2671,194 @@
         "sync_paused",
         "telemetry_enabled"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
+    },
+    "SavedPolicy": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Nonempty, at most 120 UTF-8 bytes, with no NUL character. The byte bound is enforced by the server and dashboard."
+        },
+        "policy": {
+          "$ref": "#/$defs/AgentPolicy"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "policy",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "PolicyCreateReceipt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "policy": {
+          "$ref": "#/$defs/AgentPolicy"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "create_idempotency": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "policy",
+        "created_at",
+        "request_id",
+        "create_idempotency"
+      ],
+      "additionalProperties": false
+    },
+    "PolicyRequestLookup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "create_idempotency": {
+              "const": true
+            },
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "create_idempotency",
+            "request_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "create_idempotency": {
+              "const": true
+            },
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "policy": {
+              "$ref": "#/$defs/PolicyCreateReceipt"
+            }
+          },
+          "required": [
+            "create_idempotency",
+            "request_id",
+            "found",
+            "policy"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "The outer request identity must match the nested receipt and the expected actor-scoped request. A negative read does not prove an in-flight request cannot still commit."
+    },
+    "PolicyRequestPage": {
+      "type": "object",
+      "properties": {
+        "create_idempotency": {
+          "const": true
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "policy_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "policy_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "request_id",
+              "policy_id",
+              "policy_name",
+              "created_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "create_idempotency",
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
     },
     "Selector": {
       "type": "object",
@@ -512,6 +3113,29 @@
       ],
       "additionalProperties": true
     },
+    "Assignment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "priority",
+        "reason"
+      ],
+      "additionalProperties": true
+    },
     "Device": {
       "type": "object",
       "properties": {
@@ -521,6 +3145,22 @@
         },
         "name": {
           "type": "string"
+        },
+        "configuration_mode": {
+          "enum": [
+            "restricted",
+            "full"
+          ],
+          "description": "Locally granted capability profile reported by the device; omission means restricted. Never writable through remote policy."
+        },
+        "effective_policy": {
+          "$ref": "#/$defs/AgentPolicy"
+        },
+        "assignment": {
+          "$ref": "#/$defs/Assignment"
+        },
+        "policy_assignment": {
+          "$ref": "#/$defs/Assignment"
         },
         "os": {
           "type": "string"
@@ -624,6 +3264,29 @@
         "created_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "retry_preconditions": {
+          "const": true,
+          "description": "Retry requires the reviewed desired version and generation plus current retryable state and enabled sync."
+        },
+        "desired_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact rendered artifact digest for the currently released device generation. Version identity, delivered artifact bytes, and actual managed-file digest are distinct."
+        },
+        "configuration_attempt": {
+          "$ref": "#/$defs/ConfigurationAttempt"
+        },
+        "reported_apply_state": {
+          "type": "string",
+          "description": "Agent-reported workload state, separate from progress of the current desired assignment."
         }
       },
       "required": [
@@ -743,6 +3406,18 @@
         },
         "rollout": {
           "$ref": "#/$defs/Rollout"
+        },
+        "rollback_idempotency": {
+          "const": true,
+          "description": "This server supports durable actor-scoped rollback request identities."
+        },
+        "rollback_review": {
+          "const": true,
+          "description": "This server supports read-only rollback scope review and a transactionally checked review token."
+        },
+        "request_correlation": {
+          "const": true,
+          "description": "Keyed create/rollback receipts and exact request lookup echo durable request, operation and source identity."
         }
       },
       "required": [
@@ -757,15 +3432,331 @@
       ],
       "additionalProperties": true
     },
+    "DeploymentSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configuration_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configuration_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_number": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "target_mode": {
+          "enum": [
+            "snapshot",
+            "persistent"
+          ]
+        },
+        "status": {
+          "enum": [
+            "scheduled",
+            "active",
+            "paused",
+            "completed",
+            "cancelled",
+            "failed",
+            "missed",
+            "unassigned"
+          ]
+        },
+        "scheduled_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rollout": {
+          "$ref": "#/$defs/Rollout"
+        },
+        "target_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state_counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "rollback_idempotency": {
+          "const": true,
+          "description": "This server supports durable actor-scoped rollback request identities."
+        },
+        "rollback_review": {
+          "const": true,
+          "description": "This server supports read-only rollback scope review and a transactionally checked review token."
+        },
+        "request_correlation": {
+          "const": true,
+          "description": "Keyed create/rollback receipts and exact request lookup echo durable request, operation and source identity."
+        },
+        "canary_gate": {
+          "$ref": "#/$defs/CanaryGate",
+          "description": "Present only on the single-deployment summary for active/paused canaries; omitted from paged history and other rollout states. Absence does not establish readiness."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "configuration_id",
+        "configuration_name",
+        "version_id",
+        "version_number",
+        "policy",
+        "priority",
+        "target_mode",
+        "status",
+        "scheduled_at",
+        "created_at",
+        "rollout",
+        "target_count",
+        "verified_count",
+        "state_counts"
+      ],
+      "additionalProperties": false
+    },
+    "DeploymentHistoryPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/DeploymentSummary"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "request_history": {
+          "const": true,
+          "description": "Supporting servers offer authenticated actor-scoped committed deployment request discovery."
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "DeploymentTargetSummary": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "device_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original": {
+          "type": "boolean"
+        },
+        "gate_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "superseded",
+                "stale",
+                "paused",
+                "unverified",
+                "unavailable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current gate blocker for this target of an active/paused canary. Null also covers pending or no-longer-targeted rows and must not be interpreted as verified. Omitted outside this context or by older servers."
+        }
+      },
+      "required": [
+        "device_id",
+        "device_name",
+        "state",
+        "generation",
+        "error",
+        "original"
+      ],
+      "additionalProperties": false
+    },
+    "DeploymentTargetPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/DeploymentTargetSummary"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
     "DeploymentRequest": {
       "type": "object",
       "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional durable create identity scoped to the authenticated actor. Reuse only with the identical payload."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "version_id": {
           "type": "string",
           "format": "uuid"
         },
         "policy": {
           "$ref": "#/$defs/AgentPolicy"
+        },
+        "variable_bindings": {
+          "$ref": "#/$defs/VariableBindings"
         },
         "selector": {
           "$ref": "#/$defs/Selector"
@@ -807,7 +3798,494 @@
         "target_mode",
         "rollout"
       ],
+      "additionalProperties": false
+    },
+    "DeploymentReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Deployment"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "operation": {
+              "enum": [
+                "create",
+                "rollback"
+              ]
+            },
+            "source_deployment_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request_correlation": {
+              "const": true
+            }
+          },
+          "required": [
+            "request_id",
+            "operation",
+            "source_deployment_id",
+            "request_correlation"
+          ],
+          "additionalProperties": true
+        }
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "const": "create"
+            },
+            "source_deployment_id": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "rollback"
+            },
+            "source_deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      ],
+      "description": "Current original result with response-only durable request identity. For rollback, result ID differs from source ID. Mutable deployment state and targets need not equal the original request."
+    },
+    "DeploymentRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "operation": {
+              "const": "create"
+            },
+            "source_deployment_id": {
+              "type": "null"
+            },
+            "deployment": {
+              "$ref": "#/$defs/DeploymentReceipt"
+            }
+          },
+          "required": [
+            "request_id",
+            "found",
+            "operation",
+            "source_deployment_id",
+            "deployment"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "operation": {
+              "const": "rollback"
+            },
+            "source_deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deployment": {
+              "$ref": "#/$defs/DeploymentReceipt"
+            }
+          },
+          "required": [
+            "request_id",
+            "found",
+            "operation",
+            "source_deployment_id",
+            "deployment"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Outer request_id, operation and source_deployment_id must exactly match the nested receipt and the locally frozen operation. A negative read is not proof an in-flight request failed."
+    },
+    "DeploymentRequestSummary": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "deployment_status": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 240
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version_number": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resource": {
+              "enum": [
+                "configuration",
+                "policy"
+              ]
+            },
+            "scheduled_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "operation": {
+              "const": "create"
+            },
+            "source_deployment_id": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "request_id",
+            "deployment_id",
+            "created_at",
+            "deployment_name",
+            "deployment_status",
+            "configuration_name",
+            "version_number",
+            "resource",
+            "scheduled_at",
+            "operation",
+            "source_deployment_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "deployment_status": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 240
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version_number": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resource": {
+              "enum": [
+                "configuration",
+                "policy"
+              ]
+            },
+            "scheduled_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "operation": {
+              "const": "rollback"
+            },
+            "source_deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "request_id",
+            "deployment_id",
+            "created_at",
+            "deployment_name",
+            "deployment_status",
+            "configuration_name",
+            "version_number",
+            "resource",
+            "scheduled_at",
+            "operation",
+            "source_deployment_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "DeploymentRequestPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/DeploymentRequestSummary"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
+    },
+    "PreviewOutcome": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "resource": {
+          "enum": [
+            "configuration",
+            "policy"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "requested",
+            "higher_priority",
+            "conflict"
+          ]
+        },
+        "assignment": {
+          "$ref": "#/$defs/Assignment"
+        }
+      },
+      "required": [
+        "device_id",
+        "resource",
+        "outcome"
+      ],
       "additionalProperties": true
+    },
+    "PreviewBlocker": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "deployment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "device_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "resource": {
+              "enum": [
+                "configuration",
+                "policy"
+              ]
+            },
+            "code": {
+              "const": "ACTIVE_CANARY_OVERLAP"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "deployment_id",
+            "device_ids",
+            "resource",
+            "code",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "device_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "resource": {
+              "const": "configuration"
+            },
+            "code": {
+              "enum": [
+                "FULL_VECTOR_MODE_REQUIRED",
+                "VECTOR_VERSION_INCOMPATIBLE"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "device_ids",
+            "resource",
+            "code",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "Preview": {
       "type": "object",
@@ -827,12 +4305,38 @@
           "items": {
             "type": "string"
           }
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewOutcome"
+          }
+        },
+        "artifact_previews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactPreview"
+          }
+        },
+        "create_idempotency": {
+          "const": true
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewBlocker"
+          }
+        },
+        "request_correlation": {
+          "const": true,
+          "description": "Keyed create/rollback receipts and exact request lookup echo durable request, operation and source identity."
         }
       },
       "required": [
         "devices",
         "conflicts",
-        "warnings"
+        "warnings",
+        "outcomes"
       ],
       "additionalProperties": true
     },
@@ -855,15 +4359,149 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
         "id",
         "name",
         "description",
-        "device_ids"
+        "device_ids",
+        "revision"
       ],
       "additionalProperties": true
+    },
+    "GroupCreateReceipt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Group"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "request_id"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "GroupRequestLookup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "group": {
+              "$ref": "#/$defs/GroupCreateReceipt"
+            }
+          },
+          "required": [
+            "request_id",
+            "found",
+            "group"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "GroupRequestPage": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "group_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "group_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "request_id",
+              "group_id",
+              "group_name",
+              "created_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "page",
+        "page_size"
+      ],
+      "additionalProperties": false
     },
     "Token": {
       "type": "object",
@@ -938,7 +4576,560 @@
         "token",
         "record"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
+    },
+    "EnrollmentTokenRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_uses": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name_prefix": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 80,
+              "pattern": "^[a-z0-9-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "expires_at",
+        "uses",
+        "max_uses",
+        "name_prefix",
+        "revoked",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "TokenCreateReceipt": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "request_correlation": {
+          "const": true
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "record": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/EnrollmentTokenRecord"
+            },
+            {
+              "properties": {
+                "uses": {
+                  "const": 0
+                },
+                "revoked": {
+                  "const": false
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "request_id",
+        "request_correlation",
+        "token",
+        "record"
+      ],
+      "additionalProperties": false
+    },
+    "TokenRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "found": {
+              "const": true
+            },
+            "state": {
+              "const": "created"
+            },
+            "record": {
+              "$ref": "#/$defs/EnrollmentTokenRecord"
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "found",
+            "state",
+            "record"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "found": {
+              "const": true
+            },
+            "state": {
+              "const": "cancelled"
+            },
+            "record": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/EnrollmentTokenRecord"
+                    },
+                    {
+                      "properties": {
+                        "revoked": {
+                          "const": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "found",
+            "state",
+            "record"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Actor-scoped exact creation identity. Lookup never reveals a secret. A negative read is not cancellation; cancellation fences late creation and revokes the mapped token atomically."
+    },
+    "EnrollmentTokenCreateResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TokenCreated"
+        },
+        {
+          "$ref": "#/$defs/TokenCreateReceipt"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/TokenRequestStatus"
+            },
+            {
+              "properties": {
+                "found": {
+                  "const": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "DeviceRevocationStatus": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revocation_status": {
+          "const": true
+        },
+        "revoked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "device_id",
+        "revocation_status",
+        "revoked"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceRevocationReceipt": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revocation_status": {
+          "const": true
+        },
+        "revoked": {
+          "const": true
+        },
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "device_id",
+        "revocation_status",
+        "revoked",
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceRecoveryTokenRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max_uses": {
+          "const": 1
+        },
+        "name_prefix": {
+          "type": "null"
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recovery_device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recovery_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "expires_at",
+        "uses",
+        "max_uses",
+        "name_prefix",
+        "revoked",
+        "created_at",
+        "recovery_device_id",
+        "recovery_name"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceRecoveryTokenReceipt": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "request_correlation": {
+          "const": true
+        },
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "record": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DeviceRecoveryTokenRecord"
+            },
+            {
+              "properties": {
+                "uses": {
+                  "const": 0
+                },
+                "revoked": {
+                  "const": false
+                }
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "request_id",
+        "request_correlation",
+        "device_id",
+        "token",
+        "record"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceRecoveryRequestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": false
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "device_id",
+            "found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "state": {
+              "const": "created"
+            },
+            "record": {
+              "$ref": "#/$defs/DeviceRecoveryTokenRecord"
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "device_id",
+            "found",
+            "state",
+            "record"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "request_correlation": {
+              "const": true
+            },
+            "device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "found": {
+              "const": true
+            },
+            "state": {
+              "const": "cancelled"
+            },
+            "record": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/DeviceRecoveryTokenRecord"
+                    },
+                    {
+                      "properties": {
+                        "revoked": {
+                          "const": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "request_id",
+            "request_correlation",
+            "device_id",
+            "found",
+            "state",
+            "record"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Current administrator own recovery request bound to its original device UUID. Record recovery_device_id must equal envelope device_id, and recovery_name must equal the reviewed expected_name. No secret replay. A negative read does not fence late issuance. Cancellation revokes only the mapped token; completed replacement identities remain unchanged."
+    },
+    "DeviceRecoveryCreateResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TokenCreated"
+        },
+        {
+          "$ref": "#/$defs/DeviceRecoveryTokenReceipt"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DeviceRecoveryRequestStatus"
+            },
+            {
+              "properties": {
+                "found": {
+                  "const": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "DeviceRecoveryRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "request_id",
+            "expected_name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Empty legacy request or strict correlated request. The expected name must exactly match the original source device on first issuance. Same actor/request key cannot be rebound to another device or reviewed name."
     },
     "Release": {
       "type": "object",
@@ -999,6 +5190,21 @@
           "items": {
             "type": "string"
           }
+        },
+        "vector_validated": {
+          "type": "boolean"
+        },
+        "vector_version": {
+          "type": "string"
+        },
+        "deferred": {
+          "type": "boolean"
+        },
+        "deferred_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -1008,9 +5214,61 @@
       ],
       "additionalProperties": true
     },
+    "PipelineTestResult": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "tests_run": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output": {
+          "type": "string"
+        },
+        "deferred": {
+          "type": "boolean"
+        },
+        "deferred_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vector_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid",
+        "tests_run",
+        "errors",
+        "vector_version"
+      ],
+      "additionalProperties": true
+    },
     "EnrollmentRequest": {
       "type": "object",
       "properties": {
+        "configuration_mode": {
+          "enum": [
+            "restricted",
+            "full"
+          ],
+          "description": "Locally granted capability profile reported by the device; omission means restricted. Never writable through remote policy."
+        },
         "protocol_version": {
           "const": 1
         },
@@ -1094,6 +5352,13 @@
     "HeartbeatRequest": {
       "type": "object",
       "properties": {
+        "configuration_mode": {
+          "enum": [
+            "restricted",
+            "full"
+          ],
+          "description": "Locally granted capability profile reported by the device; omission means restricted. Never writable through remote policy."
+        },
         "protocol_version": {
           "const": 1
         },
@@ -1116,11 +5381,13 @@
         },
         "reported_generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "policy_generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "actual_sha256": {
           "anyOf": [
@@ -1145,7 +5412,8 @@
         },
         "secret_revision": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "apply_state": {
           "enum": [
@@ -1204,6 +5472,9 @@
               "type": "null"
             }
           ]
+        },
+        "configuration_attempt": {
+          "$ref": "#/$defs/ConfigurationAttempt"
         }
       },
       "required": [
@@ -1231,7 +5502,8 @@
         },
         "sha256": {
           "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Digest of exact target-specific rendered artifact bytes, not necessarily the published base-version digest."
         },
         "size": {
           "type": "integer",
@@ -1278,11 +5550,13 @@
         },
         "generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "policy_generation": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "policy": {
           "$ref": "#/$defs/AgentPolicy"
@@ -1330,6 +5604,1048 @@
         "signature"
       ],
       "additionalProperties": true
+    },
+    "CanaryGate": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "waiting",
+            "observing",
+            "paused"
+          ]
+        },
+        "released_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "verified_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pending_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reasons": {
+          "type": "object",
+          "properties": {
+            "superseded": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "paused": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "unverified": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "unavailable": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "superseded",
+            "stale",
+            "paused",
+            "unverified",
+            "unavailable"
+          ],
+          "additionalProperties": false
+        },
+        "observation_started_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "evaluated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "state",
+        "released_count",
+        "verified_count",
+        "pending_count",
+        "reasons",
+        "observation_started_at",
+        "observation_seconds",
+        "evaluated_at"
+      ],
+      "additionalProperties": false,
+      "description": "Read-only current canary evidence, separate from historical progress. Each released target contributes exactly once to verified_count or one reason. Only observing has a nonnull observation start and requires every released target to be currently verified. Counts and evaluation share a read snapshot; no countdown or future release promise.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "observing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observation_started_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "released_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "observation_started_at": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RollbackRequest": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "RollbackPreview": {
+      "type": "object",
+      "properties": {
+        "source_deployment_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source_action": {
+          "enum": [
+            "cancel",
+            "unassign"
+          ]
+        },
+        "previous_version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_version_number": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_configuration_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_configuration_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 240
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "eligible_devices": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "device_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "artifact_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "device_id",
+              "device_name",
+              "artifact_sha256"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "excluded_devices": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "device_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "enum": [
+                  "revoked",
+                  "removed",
+                  "not_released",
+                  "missing"
+                ]
+              }
+            },
+            "required": [
+              "device_id",
+              "device_name",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "ready": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_deployment_id",
+        "source_version_id",
+        "source_status",
+        "source_action",
+        "previous_version_id",
+        "previous_version_number",
+        "previous_configuration_id",
+        "previous_configuration_name",
+        "priority",
+        "eligible_devices",
+        "excluded_devices",
+        "blockers",
+        "review_token",
+        "ready"
+      ],
+      "additionalProperties": false,
+      "description": "Complete metadata-only historical scope, bounded to 10000 distinct device UUIDs across both lists. Ready requires at least one eligible device, a common previous version and no blockers. Each eligible target exposes the exact prior artifact digest, never its bytes or binding values. Names are display-only. The token binds source, exact eligible/excluded identities and reasons, prior version, prior target artifact digests and generations, admission and current assignment state."
+    },
+    "RemovalState": {
+      "type": "object",
+      "properties": {
+        "assignment_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assignment_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configuration_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 240
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_number": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "assignment_id",
+        "assignment_name",
+        "version_id",
+        "configuration_name",
+        "version_number",
+        "generation",
+        "policy"
+      ],
+      "additionalProperties": false
+    },
+    "AssignmentRemovalPreview": {
+      "type": "object",
+      "properties": {
+        "removal_review": {
+          "const": true
+        },
+        "source_deployment_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "resource": {
+          "enum": [
+            "configuration",
+            "policy"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "device_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "effect": {
+                "enum": [
+                  "fallback",
+                  "unmanaged",
+                  "default_policy",
+                  "retained_pending",
+                  "unchanged",
+                  "revoked",
+                  "missing",
+                  "not_targeted"
+                ]
+              },
+              "before": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RemovalState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "after": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RemovalState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pending_assignment_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pending_assignment_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "device_id",
+              "device_name",
+              "effect",
+              "before",
+              "after",
+              "pending_assignment_id",
+              "pending_assignment_name"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "effect": {
+                      "const": "missing"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "before": {
+                      "type": "null"
+                    },
+                    "after": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "before": {
+                      "type": "object"
+                    },
+                    "after": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "effect": {
+                      "const": "fallback"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "after": {
+                      "properties": {
+                        "assignment_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "effect": {
+                      "const": "unmanaged"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "after": {
+                      "properties": {
+                        "assignment_id": {
+                          "type": "null"
+                        },
+                        "version_id": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "effect": {
+                      "const": "default_policy"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "after": {
+                      "properties": {
+                        "assignment_id": {
+                          "type": "null"
+                        },
+                        "policy": {
+                          "$ref": "#/$defs/AgentPolicy"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "effect": {
+                      "const": "retained_pending"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "pending_assignment_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "removal_review",
+        "source_deployment_id",
+        "source_status",
+        "resource",
+        "ready",
+        "review_token",
+        "blockers",
+        "devices"
+      ],
+      "additionalProperties": false,
+      "description": "Read-only removal simulation. Every device identity is distinct, ready is true exactly when blockers is empty, and an empty ready scope is allowed. Fingerprint binds the actor, source and meaningful current/projected delivery state, not display metadata or telemetry. Configuration removal can retain local workload; policy removal can restore defaults. Pending candidates are not delivered assignments.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ready": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "blockers": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "blockers": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "resource": {
+                "const": "configuration"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "devices": {
+                "items": {
+                  "properties": {
+                    "before": {
+                      "properties": {
+                        "policy": {
+                          "type": "null"
+                        }
+                      }
+                    },
+                    "after": {
+                      "properties": {
+                        "policy": {
+                          "type": "null"
+                        }
+                      }
+                    },
+                    "effect": {
+                      "not": {
+                        "const": "default_policy"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "devices": {
+                "items": {
+                  "properties": {
+                    "before": {
+                      "properties": {
+                        "version_id": {
+                          "type": "null"
+                        },
+                        "configuration_name": {
+                          "type": "null"
+                        },
+                        "version_number": {
+                          "type": "null"
+                        },
+                        "policy": {
+                          "$ref": "#/$defs/AgentPolicy"
+                        }
+                      }
+                    },
+                    "after": {
+                      "properties": {
+                        "version_id": {
+                          "type": "null"
+                        },
+                        "configuration_name": {
+                          "type": "null"
+                        },
+                        "version_number": {
+                          "type": "null"
+                        },
+                        "policy": {
+                          "$ref": "#/$defs/AgentPolicy"
+                        }
+                      }
+                    },
+                    "effect": {
+                      "not": {
+                        "const": "unmanaged"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AssignmentRemovalRequest": {
+      "type": "object",
+      "properties": {
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "review_token"
+      ],
+      "additionalProperties": false
+    },
+    "ScheduledRefreshDevice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 240
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "ScheduledRefreshPreview": {
+      "type": "object",
+      "properties": {
+        "refresh_review": {
+          "const": true
+        },
+        "source_deployment_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_status": {
+          "enum": [
+            "scheduled",
+            "active",
+            "paused",
+            "completed",
+            "cancelled",
+            "failed",
+            "missed",
+            "unassigned"
+          ]
+        },
+        "resource": {
+          "enum": [
+            "configuration",
+            "policy"
+          ]
+        },
+        "scheduled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "saved_devices": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/ScheduledRefreshDevice"
+          }
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/ScheduledRefreshDevice"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "refresh_review",
+        "source_deployment_id",
+        "source_status",
+        "resource",
+        "scheduled_at",
+        "ready",
+        "review_token",
+        "saved_devices",
+        "devices",
+        "warnings",
+        "blockers"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ready": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source_status": {
+                "const": "scheduled"
+              },
+              "blockers": {
+                "maxItems": 0
+              },
+              "devices": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "blockers": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_status": {
+                "not": {
+                  "const": "scheduled"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "devices": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "description": "Read-only comparison of the saved scheduled snapshot and current selector resolution. Device identities are distinct within each list; the combined union is bounded to10000. Ready is true exactly when blockers is empty; an empty proposed selection is blocked. New UUIDs without complete typed bindings produce VARIABLE_BINDING_REQUIRED; the actor-bound token covers frozen bindings, source settings, saved/proposed membership and an internal monotonic revision so delayed requests cannot overwrite a newer review, including an ABA change. Matching no-op does not mutate or audit. Names and connection status are display metadata. Current saved selection does not attribute an earlier request or establish activation."
+    },
+    "ScheduledRefreshRequest": {
+      "type": "object",
+      "properties": {
+        "review_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expected_device_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "review_token",
+        "expected_device_ids"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceRetryRequest": {
+      "type": "object",
+      "properties": {
+        "expected_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "expected_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "expected_version_id",
+        "expected_generation"
+      ],
+      "additionalProperties": false
     }
   }
 }

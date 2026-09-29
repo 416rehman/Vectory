@@ -9,10 +9,10 @@
   "transforms": {
     "process": {
       "type": "remap",
+      "source": ".environment = \"development\"",
       "inputs": [
         "demo"
-      ],
-      "source": ".environment = \"development\""
+      ]
     }
   },
   "sinks": {

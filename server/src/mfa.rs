@@ -2,7 +2,6 @@ use crate::{
     State, auth, db,
     error::{ApiError, Result},
 };
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::{
     Json,
     extract::{Path, State as AppState},
@@ -92,25 +91,15 @@ fn verify_code(secret: &str, code: &str, last: i64) -> Result<i64> {
     }
     Err(ApiError::unauthorized())
 }
-async fn password(s: &State, user: &str, value: &Value) -> Result<()> {
-    let password = db::string(value, "password", 256)?.to_owned();
-    let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id=?")
-        .bind(user)
-        .fetch_one(&s.pool)
-        .await?;
-    let valid = tokio::task::spawn_blocking(move || {
-        PasswordHash::new(&hash).ok().is_some_and(|h| {
-            Argon2::default()
-                .verify_password(password.as_bytes(), &h)
-                .is_ok()
-        })
-    })
-    .await
-    .unwrap_or(false);
-    if valid {
-        Ok(())
+fn authenticated_code_error(error: ApiError) -> ApiError {
+    if error.code == "UNAUTHENTICATED" {
+        ApiError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "INVALID_MFA_CODE",
+            "Authenticator or recovery code is invalid or already used",
+        )
     } else {
-        Err(ApiError::unauthorized())
+        error
     }
 }
 async fn revoke_other_sessions(
@@ -150,12 +139,51 @@ pub async fn manage(
     let user = auth::authorize(&s, &h, &[], true).await?;
     let id = user["id"].as_str().unwrap();
     s.limit(format!("mfa:{id}"), 10, std::time::Duration::from_secs(300))?;
-    if action == "setup" || action == "disable" {
-        password(&s, id, &v).await?;
-    }
+    // Capture the lifecycle generation before password hashing. A second setup
+    // may finish hashing and commit first; the older prepared request must not
+    // replace the secret and QR code returned by that later request.
+    let expected_epoch: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+        .bind(id)
+        .fetch_one(&s.pool)
+        .await?;
+    let password_hash = if action == "setup" || action == "disable" {
+        Some(
+            crate::accounts::reauthenticate(&s, &h, &[], db::string(&v, "password", 256)?)
+                .await?
+                .1,
+        )
+    } else {
+        None
+    };
+    commit_prepared(&s, &h, &action, &v, id, expected_epoch, password_hash).await
+}
+
+async fn commit_prepared(
+    s: &State,
+    h: &HeaderMap,
+    action: &str,
+    v: &Value,
+    id: &str,
+    expected_epoch: i64,
+    password_hash: Option<String>,
+) -> Result<Json<Value>> {
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
-    let out = match action.as_str() {
+    let actor = if let Some(hash) = password_hash {
+        crate::accounts::recheck(&mut tx, h, &[], &hash).await?
+    } else {
+        auth::authorize_in(&mut tx, h, &[], true).await?
+    };
+    let current_epoch: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if current_epoch != expected_epoch {
+        return Err(ApiError::conflict(
+            "MFA changed while this request was being checked. Review its current state and start again.",
+        ));
+    }
+    let out = match action {
         "setup" => {
             let enabled: Option<bool> =
                 sqlx::query_scalar("SELECT enabled FROM user_mfa WHERE user_id=?")
@@ -168,7 +196,7 @@ pub async fn manage(
                 ));
             }
             let secret = Secret::generate_secret().to_encoded().to_string();
-            let generator = totp(secret.clone(), user["email"].as_str().unwrap_or("account"))?;
+            let generator = totp(secret.clone(), actor["email"].as_str().unwrap_or("account"))?;
             let ciphertext = s.keys.seal_mfa(id, &secret)?;
             sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,pending_expires_at=excluded.pending_expires_at,last_used_step=-1").bind(id).bind(ciphertext).bind((Utc::now()+Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true)).execute(&mut *tx).await?;
             json!({"secret":secret,"otpauth_url":generator.get_url()})
@@ -187,7 +215,8 @@ pub async fn manage(
                 &secret,
                 db::string(&v, "code", 6)?,
                 row.get("last_used_step"),
-            )?;
+            )
+            .map_err(authenticated_code_error)?;
             sqlx::query("UPDATE user_mfa SET enabled=1,last_used_step=? WHERE user_id=?")
                 .bind(step)
                 .bind(id)
@@ -213,7 +242,7 @@ pub async fn manage(
                         .join("-"),
                 );
             }
-            revoke_other_sessions(&mut tx, id, &h).await?;
+            revoke_other_sessions(&mut tx, id, h).await?;
             json!({"enabled":true,"recovery_codes":codes})
         }
         "disable" => {
@@ -224,7 +253,8 @@ pub async fn manage(
                 v["code"].as_str(),
                 v["recovery_code"].as_str(),
             )
-            .await?;
+            .await
+            .map_err(authenticated_code_error)?;
             sqlx::query("DELETE FROM user_mfa WHERE user_id=?")
                 .bind(id)
                 .execute(&mut *tx)
@@ -233,12 +263,271 @@ pub async fn manage(
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-            revoke_other_sessions(&mut tx, id, &h).await?;
+            revoke_other_sessions(&mut tx, id, h).await?;
             json!({"enabled":false})
         }
         _ => return Err(ApiError::missing()),
     };
+    sqlx::query("UPDATE users SET mfa_epoch=mfa_epoch+1 WHERE id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     db::audit(&mut tx, id, &format!("mfa.{action}"), id, "success").await?;
     tx.commit().await?;
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Settings, initialize};
+    use axum::http::{HeaderValue, StatusCode};
+
+    #[tokio::test]
+    async fn epoch_migration_preserves_existing_account_session_and_mfa() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_mfa.sql"),
+            include_str!("../migrations/0005_account_lifecycle.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES('legacy','legacy@example.test','Legacy','admin','existing-verifier','2020-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO sessions(verifier,user_id,csrf,expires_at) VALUES('session','legacy','csrf','2099-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO user_mfa(user_id,secret_ciphertext,pending_expires_at) VALUES('legacy','sealed-secret','2099-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0023_mfa_epoch.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (epoch, hash, revision): (i64, String, i64) =
+            sqlx::query_as("SELECT mfa_epoch,password_hash,revision FROM users WHERE id='legacy'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (epoch, hash.as_str(), revision),
+            (0, "existing-verifier", 1)
+        );
+        let sessions: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM sessions WHERE user_id='legacy'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let mfa: i64 = sqlx::query_scalar("SELECT count(*) FROM user_mfa WHERE user_id='legacy'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((sessions, mfa), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn older_prepared_setup_cannot_replace_a_newer_setup_or_repeat_audit() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = initialize(Settings {
+            data_dir: temp.path().join("state"),
+            bootstrap_secret: "isolated-test-bootstrap-secret-123456789".into(),
+            cookie_secure: false,
+            dashboard_dir: temp.path().join("dist"),
+            releases_dir: temp.path().join("releases"),
+            instance_name: "Test".into(),
+            validation_url: None,
+        })
+        .await
+        .unwrap();
+        let password = "a-long-enough-password";
+        let (response_headers, Json(bootstrap)) = auth::bootstrap(
+            AppState(s.clone()),
+            Json(json!({
+                "bootstrap_secret": "isolated-test-bootstrap-secret-123456789",
+                "email": "admin@example.test",
+                "name": "Administrator",
+                "password": password
+            })),
+        )
+        .await
+        .unwrap();
+        let id = bootstrap["user"]["id"].as_str().unwrap();
+        let mut headers = HeaderMap::new();
+        let cookie = response_headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        headers.insert("cookie", HeaderValue::from_str(cookie).unwrap());
+        headers.insert(
+            "x-csrf-token",
+            HeaderValue::from_str(bootstrap["csrf_token"].as_str().unwrap()).unwrap(),
+        );
+
+        // Model the older request after its initial authorization and before
+        // its slow password proof completes. The next explicit setup commits
+        // first, so the older prepared request must reject under the writer.
+        let old_epoch: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        let password_hash: String =
+            sqlx::query_scalar("SELECT password_hash FROM users WHERE id=?")
+                .bind(id)
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        assert!(auth::verify_password(password.into(), Some(password_hash.clone())).await);
+        let Json(newer) = manage(
+            AppState(s.clone()),
+            headers.clone(),
+            Path("setup".into()),
+            Json(json!({"password":password})),
+        )
+        .await
+        .unwrap();
+        let ciphertext: String =
+            sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa WHERE user_id=?")
+                .bind(id)
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        assert_eq!(s.keys.open_mfa(id, &ciphertext).unwrap(), newer["secret"]);
+
+        let error = commit_prepared(
+            &s,
+            &headers,
+            "setup",
+            &json!({"password":password}),
+            id,
+            old_epoch,
+            Some(password_hash),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "CONFLICT");
+        let unchanged: String =
+            sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa WHERE user_id=?")
+                .bind(id)
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        assert_eq!(unchanged, ciphertext);
+        let epoch: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(epoch, old_epoch + 1);
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='mfa.setup'",
+        )
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+        assert_eq!(audit_count, 1);
+
+        // Confirmation and disable also advance the private generation. In
+        // particular, deleting the MFA row cannot recreate the original
+        // row-absent state for an older prepared setup (an ABA race).
+        let generator = TOTP::from_url(newer["otpauth_url"].as_str().unwrap()).unwrap();
+        let Json(confirmed) = manage(
+            AppState(s.clone()),
+            headers.clone(),
+            Path("confirm".into()),
+            Json(json!({"code":generator.generate_current().unwrap()})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(confirmed["enabled"], true);
+        let next_step = Utc::now().timestamp() / 30 + 1;
+        let Json(disabled) = manage(
+            AppState(s.clone()),
+            headers.clone(),
+            Path("disable".into()),
+            Json(json!({
+                "password":password,
+                "code":generator.generate((next_step * 30) as u64)
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(disabled["enabled"], false);
+        let epoch: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(epoch, old_epoch + 3);
+        let row_count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_mfa WHERE user_id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 0);
+        let stale_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        let error = commit_prepared(
+            &s,
+            &headers,
+            "setup",
+            &json!({"password":password}),
+            id,
+            old_epoch,
+            Some(stale_hash),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        let row_count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_mfa WHERE user_id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 0);
+        let mfa_audits: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action') LIKE 'mfa.%'",
+        )
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+        assert_eq!(mfa_audits, 3);
+
+        // A late audit failure must roll the secret and generation back in
+        // the same transaction, leaving a retry at the current generation.
+        sqlx::query("CREATE TRIGGER fail_mfa_setup_audit BEFORE INSERT ON records WHEN new.kind='audit' AND json_extract(new.data,'$.action')='mfa.setup' BEGIN SELECT RAISE(ABORT,'injected late failure'); END")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let error = manage(
+            AppState(s.clone()),
+            headers,
+            Path("setup".into()),
+            Json(json!({"password":password})),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        let epoch_after_failure: i64 = sqlx::query_scalar("SELECT mfa_epoch FROM users WHERE id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(epoch_after_failure, epoch);
+        let row_count: i64 = sqlx::query_scalar("SELECT count(*) FROM user_mfa WHERE user_id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 0);
+    }
 }
