@@ -217,50 +217,71 @@ function ToastCard({ item }: { item: ToastItem }) {
   );
 }
 
+type Region = "polite" | "assertive";
+const REGIONS: Region[] = ["polite", "assertive"];
+/** How long a spoken message stays in its region before it is wiped. */
+const SPOKEN_LIFETIME = 10_000;
+
 /**
  * The app's notification stack, bottom-right on desktop, above the safe area
  * on phones. Screen readers hear each new message through two live regions
  * that are always mounted: a region inserted together with its text is often
  * skipped, so the text is written into an existing, empty region instead.
+ * The regions carry no role of their own, so they never show up as a second
+ * "alert" or "status" beside the messages a page shows.
  */
 export function ToastViewport() {
   const list = useSyncExternalStore(subscribe, snapshot, snapshot);
-  const [spoken, setSpoken] = useState({ polite: "", assertive: "" });
+  const [spoken, setSpoken] = useState<Record<Region, string>>({
+    polite: "",
+    assertive: "",
+  });
   const announced = useRef(0);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const timers = useRef<
+    Record<
+      Region,
+      {
+        write?: ReturnType<typeof setTimeout>;
+        wipe?: ReturnType<typeof setTimeout>;
+      }
+    >
+  >({ polite: {}, assertive: {} });
+  const say = (region: Region, text: string) =>
+    setSpoken((current) => ({ ...current, [region]: text }));
   useEffect(() => {
     const newest = list[list.length - 1];
     if (!newest || newest.id <= announced.current) return;
     announced.current = newest.id;
-    const region = newest.tone === "error" ? "assertive" : "polite";
+    const region: Region = newest.tone === "error" ? "assertive" : "polite";
     const text = newest.action
       ? `${newest.message} ${newest.action.label} is available in the notification.`
       : newest.message;
+    const own = timers.current[region];
+    clearTimeout(own.write);
+    clearTimeout(own.wipe);
     // Clear, then write, so a repeated message is announced again.
-    setSpoken((current) => ({ ...current, [region]: "" }));
-    clearTimeout(timer.current);
-    timer.current = setTimeout(
-      () => setSpoken((current) => ({ ...current, [region]: text })),
-      100,
-    );
+    say(region, "");
+    own.write = setTimeout(() => {
+      say(region, text);
+      // Nothing is left behind for a screen reader's browse mode to find.
+      own.wipe = setTimeout(() => say(region, ""), SPOKEN_LIFETIME);
+    }, 100);
   }, [list]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      for (const region of REGIONS) {
+        clearTimeout(timers.current[region].write);
+        clearTimeout(timers.current[region].wipe);
+      }
+    },
+    [],
+  );
   return (
     <>
-      <div
-        className="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
         {spoken.polite}
       </div>
-      <div
-        className="sr-only"
-        role="alert"
-        aria-live="assertive"
-        aria-atomic="true"
-      >
+      <div className="sr-only" aria-live="assertive" aria-atomic="true">
         {spoken.assertive}
       </div>
       {list.length > 0 && (
