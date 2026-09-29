@@ -150,16 +150,24 @@ async fn agent(f: &Fixture, id: &str) -> Router {
 /// server time, so the stored evaluation time is moved back first: this
 /// stands in for the heartbeat interval passing.
 async fn beat(f: &Fixture, agent: &Router, device: &str, n: i64, telemetry: Value) {
+    let at = chrono::Utc::now() - chrono::Duration::seconds(100 - n);
+    beat_at(f, agent, device, at, telemetry).await;
+}
+/// Like `beat`, with the sample stamped by the device's own clock at `at`.
+async fn beat_at(
+    f: &Fixture,
+    agent: &Router,
+    device: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    telemetry: Value,
+) {
     sqlx::query("UPDATE data_plane_state SET data=json_set(data,'$.evaluated_at','2000-01-01T00:00:00Z') WHERE device_id=?")
         .bind(device)
         .execute(&f.s.pool)
         .await
         .unwrap();
     let mut sample = telemetry;
-    sample["sampled_at"] = json!(
-        (chrono::Utc::now() - chrono::Duration::seconds(100 - n))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    );
+    sample["sampled_at"] = json!(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let v = json!({"protocol_version":1,"request_id":db::id(),"boot_id":"synthetic","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","agent_version":"synthetic","vector_version":"0.58.0","reported_generation":1,"policy_generation":0,"actual_sha256":db::hash("{}\n"),"apply_state":"verified_applied","local_paused":false,"remote_pause_acknowledged":false,"telemetry":sample,
         "vector_log_summary":[{"fingerprint":"0123456789abcdef","level":"error","component_id":"archive","component_kind":"sink","component_type":"http","reason":"connection_refused","message":"Connection refused (os error 111) to 127.0.0.1:1","count":13,"first_seen":db::now(),"last_seen":db::now()}]});
     let response = agent
@@ -732,4 +740,67 @@ async fn healthy_devices_keep_no_streak_entries_and_a_steady_summary() {
         "the public summary carries no timestamps or growing counts"
     );
     assert_eq!(one["evaluations"], 3, "counts stop at what the gate needs");
+}
+
+async fn evaluation_state(f: &Fixture, device: &str) -> Value {
+    let raw: String = sqlx::query_scalar("SELECT data FROM data_plane_state WHERE device_id=?")
+        .bind(device)
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    db::parse(&raw).unwrap()
+}
+
+#[tokio::test]
+async fn a_clock_running_ahead_never_freezes_evaluation() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    let now = chrono::Utc::now();
+    // A wrong time at boot: an hour ahead. That sample is not evaluated, and
+    // its time is not remembered.
+    beat_at(
+        &f,
+        &peer,
+        &device,
+        now + chrono::Duration::hours(1),
+        failing(),
+    )
+    .await;
+    let state = evaluation_state(&f, &device).await;
+    assert_eq!(state["evaluations"], 0, "{state}");
+    assert!(state["sampled_at"].is_null(), "{state}");
+    // NTP corrects the clock: the next two failing samples open the issue.
+    beat(&f, &peer, &device, 1, failing()).await;
+    beat(&f, &peer, &device, 2, failing()).await;
+    assert_eq!(open_delivery_issues(&f, "DATA_PLANE_SINK_ERRORS").await, 1);
+    assert_eq!(evaluation_state(&f, &device).await["evaluations"], 2);
+}
+
+#[tokio::test]
+async fn a_sample_a_few_minutes_ahead_counts_but_is_remembered_at_server_time() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    let ahead = chrono::Utc::now() + chrono::Duration::seconds(200);
+    beat_at(&f, &peer, &device, ahead, failing()).await;
+    let state = evaluation_state(&f, &device).await;
+    assert_eq!(state["evaluations"], 1, "{state}");
+    let remembered =
+        chrono::DateTime::parse_from_rfc3339(state["sampled_at"].as_str().unwrap()).unwrap();
+    assert!(remembered <= chrono::Utc::now(), "{state}");
+    // The clock is corrected to a time before the first sample's stamp: the
+    // next sample is still newer than what was remembered, so it counts.
+    beat_at(
+        &f,
+        &peer,
+        &device,
+        chrono::Utc::now() + chrono::Duration::seconds(5),
+        failing(),
+    )
+    .await;
+    assert_eq!(evaluation_state(&f, &device).await["evaluations"], 2);
+    assert_eq!(open_delivery_issues(&f, "DATA_PLANE_SINK_ERRORS").await, 1);
 }
