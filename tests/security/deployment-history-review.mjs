@@ -801,6 +801,8 @@ try {
     "rollout",
     "target_count",
     "verified_count",
+    // Applied devices that are not delivering, from the data-plane gate.
+    "degraded",
     "state_counts",
     "rollback_idempotency",
     "rollback_review",
