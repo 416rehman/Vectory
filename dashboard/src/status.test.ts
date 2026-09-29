@@ -13,6 +13,14 @@ import {
   statusOf,
   targetStates,
 } from "./status";
+import {
+  deploymentLifecycle,
+  describeDeployment,
+  progressSegments,
+  statusFilters,
+  targetLabel,
+} from "./deploymentStatus";
+import { auditOutcomeLabel } from "./auditModel";
 
 const repository = new URL("../../", import.meta.url);
 const protocol = JSON.parse(
@@ -179,3 +187,55 @@ describe("status language", () => {
     );
   });
 });
+
+describe("one vocabulary across views", () => {
+  it("gives deployments, targets and audit results the status.ts words", () => {
+    for (const status of deploymentLifecycle) {
+      const known = statusOf("deployment", status);
+      expect(known.description, status).not.toBe("");
+      expect(describeDeployment(lineage(status)).label, status).toBe(
+        known.label,
+      );
+    }
+    for (const filter of statusFilters)
+      expect(filter.label, filter.value).toBe(
+        statusOf("deployment", filter.value).label,
+      );
+    expect(statusOf("deployment", "completed").label).toBe("Completed");
+    for (const state of Object.keys(applyStates)) {
+      expect(targetLabel(state), state).toBe(statusOf("apply", state).label);
+      expect(auditOutcomeLabel(state), state).toBe(
+        statusOf("apply", state).label,
+      );
+    }
+    expect(progressSegments({}).map((segment) => segment.label)).toEqual([
+      applyStates.verified_applied.label,
+      applyStates.verification_unknown.label,
+      applyStates.written.label,
+      applyStates.desired.label,
+      targetStates.pending.label,
+      applyStates.failed.label,
+    ]);
+  });
+
+  it("lists every audit result the server writes, including throttled", () => {
+    const written = new Set<string>();
+    for (const match of rust("auth.rs").matchAll(/"(throttled|denied)"/g))
+      written.add(match[1]);
+    expect(written.has("throttled")).toBe(true);
+    for (const value of written)
+      expect(Object.hasOwn(auditOutcomes, value), value).toBe(true);
+  });
+});
+
+function lineage(status: string) {
+  return {
+    status,
+    status_before_removal: null,
+    status_before_rollback: null,
+    rolled_back_by: null,
+    rolled_back_to_version: null,
+    replaced_by: [],
+    failure_reason: null,
+  };
+}

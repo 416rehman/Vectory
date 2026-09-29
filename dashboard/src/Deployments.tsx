@@ -48,7 +48,10 @@ import {
   Pagination,
   RefreshButton,
   SearchBox,
-  Spinner,
+  InlineError,
+  Skeleton,
+  StatusBadge,
+  useNow,
   useResource,
 } from "./ui";
 import { DataTable } from "./DataTable";
@@ -76,27 +79,25 @@ import {
   type DeploymentSort,
 } from "./deploymentRouting";
 import {
+  deploymentLifecycle,
   describeDeployment,
   explainError,
   exactTime,
   isLive,
-  lifecycleLabels,
   progressSegments,
-  since,
   statusFilters,
   targetFilterStates,
   targetLabel,
-  targetTone,
+  targetState,
 } from "./deploymentStatus";
+import { statusLabel } from "./status";
+import { relativeTime } from "./time";
 import {
   DeviceTimeline,
   FailureGroups,
   ProgressBar,
   StageLanes,
-  StatusChip,
-  UpdatedStamp,
   laneTitle,
-  useNow,
 } from "./DeploymentRollout";
 import DeploymentRetry from "./DeploymentRetry";
 import DeploymentPicker from "./DeploymentPicker";
@@ -111,7 +112,7 @@ import {
   readGateReason,
 } from "./canaryGateModel";
 
-const knownStatuses = new Set(Object.keys(lifecycleLabels));
+const knownStatuses = new Set<string>(deploymentLifecycle);
 function title(d: DeploymentSummary) {
   return (
     d.name ||
@@ -138,9 +139,11 @@ function DeploymentStatusCell({ d }: { d: DeploymentSummary }) {
   const display = describeDeployment(d);
   return (
     <span className="deployment-status-cell">
-      <StatusChip tone={display.tone} spin>
-        {display.label}
-      </StatusChip>
+      <StatusBadge
+        domain="deployment"
+        value={display.state}
+        label={display.label}
+      />
       {display.note && <small>{display.note}</small>}
     </span>
   );
@@ -370,6 +373,7 @@ export function Deployments({
         notify={notify}
         navigate={navigate}
         onBack={closeDetail}
+        backHref={`#/${deploymentRoute(scheduled, null, query)}`}
         originLabel={originLabel}
         permalinkRoute={deploymentRoute(scheduled, detailId, query)}
       />
@@ -416,9 +420,7 @@ export function Deployments({
         <RecentDeploymentRequests
           key={user.id}
           onClose={() => setRecentRequestsOpen(false)}
-          statusLabel={(state) =>
-            lifecycleLabels[state] || state.replaceAll("_", " ")
-          }
+          statusLabel={(state) => statusLabel("deployment", state)}
           returnFocusRef={recentRequestsOpener}
         />
       )}
@@ -671,7 +673,7 @@ function DeviceResults({
   useEffect(() => {
     if (pulse) void reload();
   }, [pulse, reload]);
-  const now = useNow(true, 5000);
+  const now = useNow(null, { every: 5000 });
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correcting = !loading && !error && query.page > lastPage;
   useEffect(() => {
@@ -747,7 +749,7 @@ function DeviceResults({
                       </span>
                     )}
                     {t.last_seen
-                      ? `Checked in ${since(t.last_seen, now)?.toLowerCase()}`
+                      ? `Checked in ${relativeTime(t.last_seen, now)}`
                       : "Never checked in"}
                     {t.check_in_seconds
                       ? ` · every ${t.check_in_seconds} s`
@@ -762,15 +764,13 @@ function DeviceResults({
               sortable: true,
               cell: (t) => (
                 <div className="rollout-progress-cell">
-                  <StatusChip
-                    tone={targetTone(t.state)}
-                    spin={isLive(deployment.status)}
-                  >
-                    {targetLabel(t.state, {
+                  <StatusBadge
+                    domain="target"
+                    value={targetState(t.state, {
                       stopped,
                       replaced: !!t.replaced_by,
                     })}
-                  </StatusChip>
+                  />
                   {t.state !== "removed" && t.state !== "pending" && (
                     <DeviceTimeline target={t} />
                   )}
@@ -996,12 +996,35 @@ function CopyLink({ route }: { route: string }) {
   );
 }
 
+/** The rollout page's shape while its first read is in flight. */
+function RolloutSkeleton() {
+  return (
+    <div
+      className="rollout-skeleton"
+      role="status"
+      aria-label="Loading rollout"
+    >
+      <Skeleton width={96} height={12} />
+      <Skeleton width="min(420px, 70%)" height={24} />
+      <Skeleton width="min(560px, 90%)" height={14} />
+      <div className="rollout-card rollout-skeleton-card">
+        <Skeleton width={180} height={14} />
+        <Skeleton height={10} radius={999} />
+        {[0, 1, 2].map((row) => (
+          <Skeleton key={row} height={36} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RolloutPage({
   id,
   user,
   notify,
   navigate,
   onBack,
+  backHref,
   permalinkRoute,
   originLabel,
 }: {
@@ -1010,13 +1033,16 @@ function RolloutPage({
   notify(message: string): void;
   navigate(path: string): void;
   onBack(): void;
+  backHref: string;
   permalinkRoute: string;
   originLabel: string;
 }) {
   const {
     data: deployment,
     error,
+    errorStatus,
     loading,
+    refreshing,
     reload,
     reloadResult,
   } = useResource<DeploymentSummary | null>(
@@ -1419,211 +1445,232 @@ function RolloutPage({
       role="region"
       aria-label="Deployment details"
     >
-      <button
-        type="button"
-        className="rollout-back"
-        aria-label={`Back to ${originLabel.toLowerCase()}`}
-        onClick={onBack}
-      >
-        <ArrowLeft size={15} aria-hidden="true" /> {originLabel}
-      </button>
-      {error && <ErrorBox message={error} retry={reload} />}
-      {!loading && error && !deployment && (
-        <div className="rollout-unavailable">
-          <p>
-            This deployment could not be opened. It may be missing, or your
-            access may have changed.
-          </p>
-          <Button variant="secondary" onClick={onBack}>
-            Return to {originLabel.toLowerCase()}
-          </Button>
-        </div>
-      )}
       {loading && !deployment ? (
-        <div className="loading" role="status">
-          <Spinner />
-          Loading rollout
-        </div>
+        <RolloutSkeleton />
+      ) : !deployment ? (
+        error && (
+          <>
+            <PageHeader
+              title="Deployment"
+              breadcrumb={[
+                { label: originLabel, href: backHref, onClick: onBack },
+              ]}
+            />
+            <div className="rollout-unavailable" role="alert">
+              <p>
+                {errorStatus === 404 || errorStatus === 403
+                  ? "This deployment could not be opened. It may be missing, or your access may have changed."
+                  : "Vectory couldn't load this rollout right now."}
+              </p>
+              <div className="rollout-unavailable-actions">
+                {errorStatus !== 404 && errorStatus !== 403 && (
+                  <Button variant="secondary" onClick={() => void reload()}>
+                    Retry
+                  </Button>
+                )}
+                <Button variant="ghost" onClick={onBack}>
+                  Return to {originLabel.toLowerCase()}
+                </Button>
+              </div>
+            </div>
+          </>
+        )
       ) : (
-        deployment &&
         display && (
           <>
-            <header className="rollout-header">
-              <div className="rollout-heading">
-                <div className="rollout-title">
-                  <h1 ref={heading} tabIndex={-1}>
-                    {title(deployment)}
-                  </h1>
-                  {!deployment.policy && deployment.version_number !== null && (
-                    <span
-                      className="rollout-version"
-                      aria-label={`Version ${deployment.version_number}`}
-                    >
-                      v{deployment.version_number}
-                    </span>
-                  )}
-                </div>
-                <ul className="rollout-meta" aria-label="Rollout settings">
-                  <li className="rollout-meta-status">
-                    <StatusChip tone={display.tone} spin>
-                      {display.label}
-                    </StatusChip>
-                    {display.note && (
-                      <span className="rollout-status-note">
-                        {display.note}
-                      </span>
-                    )}
-                  </li>
-                  <li>
-                    <Layers size={14} aria-hidden="true" />
-                    {deployment.policy
-                      ? subtitle(deployment)
-                      : strategy(deployment)}
-                  </li>
-                  <li>
-                    <ArrowUpDown size={14} aria-hidden="true" />
-                    Priority {deployment.priority}
-                  </li>
-                  <li>
-                    <Users size={14} aria-hidden="true" />
-                    {deployment.target_mode === "persistent"
-                      ? "Follows group membership"
-                      : "Fixed devices"}
-                  </li>
-                  <li>
-                    <Clock size={14} aria-hidden="true" />
-                    {deployment.scheduled_at &&
-                    deployment.status === "scheduled"
-                      ? `Starts ${exactTime(deployment.scheduled_at)}`
-                      : `Created ${exactTime(deployment.created_at)}`}
-                    {deployment.created_by_name
-                      ? ` by ${deployment.created_by_name}`
-                      : ""}
-                  </li>
-                  {deployment.configuration_id && (
-                    <li>
-                      <GitBranch size={14} aria-hidden="true" />
-                      <a
-                        href={`#/configurations/${encodeURIComponent(deployment.configuration_id)}`}
-                      >
-                        Open pipeline
-                      </a>
-                    </li>
-                  )}
-                </ul>
-                <Lineage deployment={deployment} go={goToDeployment} />
-              </div>
-              <div className="rollout-actions">
-                <UpdatedStamp
-                  at={updatedAt}
-                  live={live}
-                  error={!!error || !!lanes.error}
-                />
-                {operate && (
-                  <div className="rollout-action-row">
-                    {failedCount > 0 && deployment.version_id && (
-                      <Button
-                        icon={RotateCcw}
-                        disabled={locked}
-                        onClick={() => openRetry(null)}
-                      >
-                        Retry failed ({failedCount})
-                      </Button>
-                    )}
-                    {status === "active" && (
-                      <Button
-                        variant="secondary"
-                        icon={Pause}
-                        disabled={locked}
-                        onClick={() => begin("pause")}
-                      >
-                        Pause
-                      </Button>
-                    )}
-                    {status === "paused" && (
-                      <Button
-                        icon={Play}
-                        disabled={locked}
-                        onClick={() => begin("resume")}
-                      >
-                        Resume
-                      </Button>
-                    )}
-                    {status === "scheduled" && (
-                      <Button
-                        variant="secondary"
-                        icon={CalendarClock}
-                        disabled={locked}
-                        onClick={(event) => {
-                          assignmentReturnFocus.current = event.currentTarget;
-                          setScheduledRefreshOpen(true);
-                        }}
-                      >
-                        Review scheduled devices
-                      </Button>
-                    )}
-                    {["active", "paused", "scheduled"].includes(status) && (
-                      <Button
-                        variant="secondary"
-                        icon={Ban}
-                        disabled={locked}
-                        onClick={() => begin("cancel")}
-                      >
-                        {status === "scheduled" ? "Cancel schedule" : "Cancel"}
-                      </Button>
-                    )}
-                    {canRollBack &&
-                      (rollbackUnavailable ? (
-                        // Still focusable and clickable: it explains why and offers removal.
-                        <span
-                          className="rollout-hint"
-                          data-hint={unavailableReason}
-                        >
-                          <Button
-                            variant="secondary"
-                            icon={Undo2}
-                            disabled={locked}
-                            aria-disabled="true"
-                            aria-describedby="rollback-unavailable-reason"
-                            className="is-unavailable"
-                            onClick={() => begin("rollback")}
-                          >
-                            Roll back
-                          </Button>
-                          <span
-                            id="rollback-unavailable-reason"
-                            className="sr-only"
-                          >
-                            {unavailableReason}
-                          </span>
+            <PageHeader
+              title={title(deployment)}
+              documentTitle={`${title(deployment)}${!deployment.policy && deployment.version_number !== null ? ` v${deployment.version_number}` : ""}`}
+              headingRef={heading}
+              breadcrumb={[
+                { label: originLabel, href: backHref, onClick: onBack },
+              ]}
+              titleAside={
+                !deployment.policy &&
+                deployment.version_number !== null && (
+                  <span
+                    className="rollout-version"
+                    aria-label={`Version ${deployment.version_number}`}
+                  >
+                    v{deployment.version_number}
+                  </span>
+                )
+              }
+              live={{
+                updatedAt,
+                error: error || lanes.error || undefined,
+                refreshing,
+                onRefresh: () => {
+                  void reload();
+                  void lanes.reload();
+                },
+              }}
+              meta={
+                <>
+                  <ul className="rollout-meta" aria-label="Rollout settings">
+                    <li className="rollout-meta-status">
+                      <StatusBadge
+                        domain="deployment"
+                        value={display.state}
+                        label={display.label}
+                      />
+                      {display.note && (
+                        <span className="rollout-status-note">
+                          {display.note}
                         </span>
-                      ) : (
+                      )}
+                    </li>
+                    <li>
+                      <Layers size={14} aria-hidden="true" />
+                      {deployment.policy
+                        ? subtitle(deployment)
+                        : strategy(deployment)}
+                    </li>
+                    <li>
+                      <ArrowUpDown size={14} aria-hidden="true" />
+                      Priority {deployment.priority}
+                    </li>
+                    <li>
+                      <Users size={14} aria-hidden="true" />
+                      {deployment.target_mode === "persistent"
+                        ? "Follows group membership"
+                        : "Fixed devices"}
+                    </li>
+                    <li>
+                      <Clock size={14} aria-hidden="true" />
+                      {deployment.scheduled_at &&
+                      deployment.status === "scheduled"
+                        ? `Starts ${exactTime(deployment.scheduled_at)}`
+                        : `Created ${exactTime(deployment.created_at)}`}
+                      {deployment.created_by_name
+                        ? ` by ${deployment.created_by_name}`
+                        : ""}
+                    </li>
+                    {deployment.configuration_id && (
+                      <li>
+                        <GitBranch size={14} aria-hidden="true" />
+                        <a
+                          href={`#/configurations/${encodeURIComponent(deployment.configuration_id)}`}
+                        >
+                          Open pipeline
+                        </a>
+                      </li>
+                    )}
+                  </ul>
+                  <Lineage deployment={deployment} go={goToDeployment} />
+                </>
+              }
+            >
+              {operate && (
+                <div className="rollout-action-row">
+                  {failedCount > 0 && deployment.version_id && (
+                    <Button
+                      icon={RotateCcw}
+                      disabled={locked}
+                      onClick={() => openRetry(null)}
+                    >
+                      Retry failed ({failedCount})
+                    </Button>
+                  )}
+                  {status === "active" && (
+                    <Button
+                      variant="secondary"
+                      icon={Pause}
+                      disabled={locked}
+                      onClick={() => begin("pause")}
+                    >
+                      Pause
+                    </Button>
+                  )}
+                  {status === "paused" && (
+                    <Button
+                      icon={Play}
+                      disabled={locked}
+                      onClick={() => begin("resume")}
+                    >
+                      Resume
+                    </Button>
+                  )}
+                  {status === "scheduled" && (
+                    <Button
+                      variant="secondary"
+                      icon={CalendarClock}
+                      disabled={locked}
+                      onClick={(event) => {
+                        assignmentReturnFocus.current = event.currentTarget;
+                        setScheduledRefreshOpen(true);
+                      }}
+                    >
+                      Review scheduled devices
+                    </Button>
+                  )}
+                  {["active", "paused", "scheduled"].includes(status) && (
+                    <Button
+                      variant="secondary"
+                      icon={Ban}
+                      disabled={locked}
+                      onClick={() => begin("cancel")}
+                    >
+                      {status === "scheduled" ? "Cancel schedule" : "Cancel"}
+                    </Button>
+                  )}
+                  {canRollBack &&
+                    (rollbackUnavailable ? (
+                      // Still focusable and clickable: it explains why and offers removal.
+                      <span
+                        className="rollout-hint"
+                        data-hint={unavailableReason}
+                      >
                         <Button
                           variant="secondary"
                           icon={Undo2}
                           disabled={locked}
+                          aria-disabled="true"
+                          aria-describedby="rollback-unavailable-reason"
+                          className="is-unavailable"
                           onClick={() => begin("rollback")}
                         >
                           Roll back
                         </Button>
-                      ))}
-                    {candidate && (
+                        <span
+                          id="rollback-unavailable-reason"
+                          className="sr-only"
+                        >
+                          {unavailableReason}
+                        </span>
+                      </span>
+                    ) : (
                       <Button
-                        variant="ghost"
-                        icon={Trash2}
+                        variant="secondary"
+                        icon={Undo2}
                         disabled={locked}
-                        onClick={(event) =>
-                          removeAssignment(event.currentTarget)
-                        }
+                        onClick={() => begin("rollback")}
                       >
-                        Remove assignment
+                        Roll back
                       </Button>
-                    )}
-                  </div>
-                )}
-                <CopyLink route={permalinkRoute} />
-              </div>
-            </header>
+                    ))}
+                  {candidate && (
+                    <Button
+                      variant="ghost"
+                      icon={Trash2}
+                      disabled={locked}
+                      onClick={(event) => removeAssignment(event.currentTarget)}
+                    >
+                      Remove assignment
+                    </Button>
+                  )}
+                </div>
+              )}
+              <CopyLink route={permalinkRoute} />
+            </PageHeader>
+            {error && (
+              <InlineError
+                title="Couldn't refresh this rollout."
+                error={error}
+                updatedAt={updatedAt}
+                retry={() => void reload()}
+              />
+            )}
             {actionUncertain && (
               <div className="deployment-status-review" role="status">
                 <p>

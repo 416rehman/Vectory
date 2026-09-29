@@ -146,7 +146,7 @@ describe("what changed", () => {
         password: "never shown",
       }),
     ).toEqual([
-      { label: "State", before: "Written", after: "Applied and verified" },
+      { label: "State", before: "Applying", after: "Applied" },
       { label: "Version", after: "v7" },
     ]);
     expect(auditChanges({ generation: 2 })).toEqual([

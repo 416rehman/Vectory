@@ -1,37 +1,12 @@
 import { ArrowRight } from "lucide-react";
 import type { DeploymentPage, DeploymentSummary, Device, Group } from "./api";
-import { ErrorBox, Spinner, useResource } from "./ui";
+import { ErrorBox, Spinner, StatusBadge, useResource } from "./ui";
+import { deviceDisplayStatus, statusLabel } from "./status";
+import { relativeTime } from "./time";
 import { deploymentRoute } from "./deploymentRouting";
-import {
-  describeDeployment,
-  interval,
-  isLive,
-  since,
-  type StatusTone,
-} from "./deploymentStatus";
-import { StatusChip } from "./DeploymentRollout";
+import { describeDeployment, interval } from "./deploymentStatus";
 import { runningName } from "./deploymentReview";
 
-const deviceTones: Record<string, [string, StatusTone]> = {
-  verified: ["Verified", "success"],
-  unmanaged: ["Local config", "neutral"],
-  applying: ["Applying", "info"],
-  failed: ["Failed", "danger"],
-  rolled_back: ["Rolled back", "danger"],
-  verification_unknown: ["Needs verification", "warning"],
-  paused: ["Sync paused", "warning"],
-  offline: ["Offline", "warning"],
-  awaiting_first_check_in: ["Waiting for first check-in", "neutral"],
-  revoked: ["Revoked", "neutral"],
-};
-function deviceState(device: Device): [string, StatusTone] {
-  return (
-    deviceTones[device.status] || [
-      device.status.replaceAll("_", " "),
-      "neutral",
-    ]
-  );
-}
 function assignmentTitle(d: DeploymentSummary) {
   if (d.policy)
     return d.policy_name
@@ -74,15 +49,10 @@ export default function GroupOverview({
     .filter((device): device is Device => !!device)
     .sort((a, b) => a.name.localeCompare(b.name));
   const missing = group.device_ids.length - members.length;
-  const counts = new Map<
-    string,
-    { label: string; tone: StatusTone; count: number }
-  >();
+  const counts = new Map<string, number>();
   for (const device of members) {
-    const [label, tone] = deviceState(device);
-    const entry = counts.get(label) || { label, tone, count: 0 };
-    entry.count += 1;
-    counts.set(label, entry);
+    const state = deviceDisplayStatus(device);
+    counts.set(state, (counts.get(state) || 0) + 1);
   }
   // Current assignments: still able to deliver something to members.
   const current = history.data.items.filter(
@@ -99,17 +69,19 @@ export default function GroupOverview({
             {members.length === 1 ? "1 device" : `${members.length} devices`}
           </h3>
           <div className="group-overview-counts">
-            {[...counts.values()].map((entry) => (
-              <StatusChip key={entry.label} tone={entry.tone}>
-                {entry.count} {entry.label.toLowerCase()}
-              </StatusChip>
+            {[...counts].map(([state, count]) => (
+              <StatusBadge
+                key={state}
+                domain="device"
+                value={state}
+                label={`${count} ${statusLabel("device", state).toLowerCase()}`}
+              />
             ))}
           </div>
         </div>
         {members.length ? (
           <ul className="group-overview-devices">
             {members.slice(0, 50).map((device) => {
-              const [label, tone] = deviceState(device);
               return (
                 <li key={device.id}>
                   <a href={`#/devices/${encodeURIComponent(device.id)}`}>
@@ -118,10 +90,13 @@ export default function GroupOverview({
                   <span className="group-overview-running">
                     {runningName(device)}
                   </span>
-                  <StatusChip tone={tone}>{label}</StatusChip>
+                  <StatusBadge
+                    domain="device"
+                    value={deviceDisplayStatus(device)}
+                  />
                   <small>
                     {device.last_seen
-                      ? `Checked in ${since(device.last_seen)?.toLowerCase()}`
+                      ? `Checked in ${relativeTime(device.last_seen)}`
                       : "Never checked in"}
                   </small>
                 </li>
@@ -165,9 +140,11 @@ export default function GroupOverview({
                       ? "follows membership"
                       : "fixed devices from when it was created"}
                   </span>
-                  <StatusChip tone={display.tone} spin={isLive(d.status)}>
-                    {display.label}
-                  </StatusChip>
+                  <StatusBadge
+                    domain="deployment"
+                    value={display.state}
+                    label={display.label}
+                  />
                 </li>
               );
             })}
@@ -194,11 +171,13 @@ export default function GroupOverview({
                   <span className="control-muted">
                     {d.verified_count} of{" "}
                     {d.target_count - (d.state_counts.removed || 0)} verified ·{" "}
-                    {since(d.created_at)?.toLowerCase()}
+                    {relativeTime(d.created_at)}
                   </span>
-                  <StatusChip tone={display.tone} spin={isLive(d.status)}>
-                    {display.label}
-                  </StatusChip>
+                  <StatusBadge
+                    domain="deployment"
+                    value={display.state}
+                    label={display.label}
+                  />
                 </li>
               );
             })}

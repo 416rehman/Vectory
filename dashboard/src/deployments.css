@@ -48,67 +48,30 @@ a.control-row-title {
 
 /* Rollout page */
 .rollout-page {
-  display: grid;
-  gap: 22px;
   min-width: 0;
 }
-.rollout-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: fit-content;
-  padding: 4px 2px;
-  margin: -8px 0 -10px;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
+/* The shared page header keeps its own spacing; the body sections stack. */
+.rollout-page > :where(:not(.page-context, .page-heading, .page-tabs)) + * {
+  margin-top: 22px;
 }
-.rollout-back:hover {
-  color: var(--ink);
-}
-.rollout-back:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-.rollout-header {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px 28px;
-  padding: 14px 0 16px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
-}
-.rollout-heading {
+.rollout-page .page-meta {
   display: grid;
-  gap: 8px;
-  min-width: 0;
-  flex: 1 1 380px;
+  gap: var(--space-2);
 }
-.rollout-title {
+.rollout-skeleton {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.rollout-skeleton-card {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.rollout-unavailable-actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-.rollout-heading h1 {
-  margin: 0;
-  font-size: 28px;
-  letter-spacing: -0.8px;
-  line-height: 1.15;
-  overflow-wrap: anywhere;
-}
-.rollout-heading h1:focus {
-  outline: none;
+  gap: var(--space-2);
 }
 .rollout-version {
   padding: 2px 7px;
@@ -181,13 +144,6 @@ a.control-row-title {
 }
 .rollout-lineage-icon {
   color: var(--muted);
-}
-.rollout-actions {
-  display: grid;
-  justify-items: end;
-  gap: 10px;
-  flex: 0 1 auto;
-  max-width: 100%;
 }
 .rollout-action-row {
   display: flex;
@@ -614,15 +570,6 @@ a.control-row-title {
     gap: 10px;
     flex-wrap: wrap;
   }
-  /* A tall sticky header would hide the page on a phone. */
-  .rollout-header {
-    position: static;
-    padding-top: 6px;
-  }
-  .rollout-title-row h1 {
-    font-size: 23px;
-  }
-  .rollout-actions,
   .rollout-action-row,
   .rollout-link,
   .rollout-link-actions {

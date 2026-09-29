@@ -1,67 +1,18 @@
-import { useEffect, useState, type ReactNode } from "react";
-import {
-  CircleCheck,
-  CircleDashed,
-  CircleX,
-  Clock3,
-  LoaderCircle,
-  TriangleAlert,
-} from "lucide-react";
+import { CircleCheck, Clock3 } from "lucide-react";
 import type { DeploymentTarget, RolloutFailure, RolloutLane } from "./api";
 import {
   countdown,
   explainError,
   exactTime,
   progressSegments,
-  since,
   targetLabel,
   targetTone,
   timelineSteps,
   type ProgressSegment,
-  type StatusTone,
 } from "./deploymentStatus";
+
+import { StatusBadge, useNow } from "./ui";
 import "./deployment-rollout.css";
-
-/** Re-render once a second while mounted, for countdowns and "updated" stamps. */
-export function useNow(active = true, everyMs = 1000) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), everyMs);
-    return () => clearInterval(timer);
-  }, [active, everyMs]);
-  return now;
-}
-
-const toneIcons: Record<StatusTone, typeof CircleCheck> = {
-  success: CircleCheck,
-  danger: CircleX,
-  warning: TriangleAlert,
-  info: LoaderCircle,
-  neutral: CircleDashed,
-};
-/** State chip: an icon and a label, never color alone. */
-export function StatusChip({
-  tone,
-  children,
-  spin = false,
-}: {
-  tone: StatusTone;
-  children: ReactNode;
-  spin?: boolean;
-}) {
-  const Icon = toneIcons[tone];
-  return (
-    <span className="rollout-chip" data-tone={tone}>
-      <Icon
-        size={14}
-        aria-hidden="true"
-        className={spin && tone === "info" ? "rollout-spin" : undefined}
-      />
-      <span>{children}</span>
-    </span>
-  );
-}
 
 function share(count: number, total: number) {
   return total ? `${Math.round((count / total) * 100)}%` : "0%";
@@ -140,16 +91,6 @@ const laneTitles: Record<RolloutLane["kind"], string> = {
   added: "Added later",
   not_released: "Not released",
 };
-const laneStates: Record<
-  RolloutLane["state"],
-  { label: string; tone: StatusTone }
-> = {
-  verified: { label: "Verified", tone: "success" },
-  in_progress: { label: "Rolling out", tone: "info" },
-  failed: { label: "Failed", tone: "danger" },
-  queued: { label: "Queued", tone: "neutral" },
-  stopped: { label: "Not released", tone: "neutral" },
-};
 export function laneTitle(lane: RolloutLane) {
   return lane.kind === "batch"
     ? `Batch ${lane.index}`
@@ -168,7 +109,7 @@ export function NextAdmission({
   clockOffset: number;
   last: boolean;
 }) {
-  const now = useNow(true, 250) + clockOffset;
+  const now = useNow(null, { every: 250 }) + clockOffset;
   const remaining = Date.parse(due) - now;
   const fraction =
     totalSeconds > 0
@@ -229,7 +170,6 @@ export function StageLanes({
   return (
     <ol className="rollout-lanes" aria-label="Release stages">
       {lanes.map((lane, index) => {
-        const state = laneStates[lane.state];
         const verified = lane.counts.verified_applied || 0;
         return (
           <li
@@ -240,9 +180,7 @@ export function StageLanes({
           >
             <header>
               <strong>{laneTitle(lane)}</strong>
-              <StatusChip tone={state.tone} spin>
-                {state.label}
-              </StatusChip>
+              <StatusBadge domain="stage" value={lane.state} />
             </header>
             <p className="rollout-lane-count">
               <span>
@@ -347,16 +285,11 @@ export function FailureGroups({
           return (
             <li key={`${failure.state}-${index}`}>
               <div className="rollout-failure-head">
-                <StatusChip
-                  tone={
-                    failure.state === "verification_unknown"
-                      ? "warning"
-                      : "danger"
-                  }
-                >
-                  {targetLabel(failure.state)} on {failure.count}{" "}
-                  {failure.count === 1 ? "device" : "devices"}
-                </StatusChip>
+                <StatusBadge
+                  domain="target"
+                  value={failure.state}
+                  label={`${targetLabel(failure.state)} on ${failure.count} ${failure.count === 1 ? "device" : "devices"}`}
+                />
                 {onRetry && failure.state !== "verification_unknown" && (
                   <button
                     type="button"
@@ -442,32 +375,5 @@ export function DeviceTimeline({ target }: { target: DeploymentTarget }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-/** "Updated 3 s ago · live" for a polled view. */
-export function UpdatedStamp({
-  at,
-  live,
-  error,
-}: {
-  at: number | null;
-  live: boolean;
-  error?: boolean;
-}) {
-  const now = useNow(true, 1000);
-  if (!at) return null;
-  const text = since(new Date(at).toISOString(), now);
-  return (
-    <span
-      className="rollout-updated"
-      data-live={live || undefined}
-      role="status"
-    >
-      {live && <span className="rollout-live-dot" aria-hidden="true" />}
-      {error ? "Couldn't refresh · updated " : "Updated "}
-      {text === "Just now" ? "just now" : text}
-      {live && !error ? " · live" : ""}
-    </span>
   );
 }

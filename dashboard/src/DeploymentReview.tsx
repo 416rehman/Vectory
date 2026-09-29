@@ -3,19 +3,15 @@ import {
   Bird,
   CalendarClock,
   Check,
-  CircleMinus,
-  CirclePlus,
   Clock,
   Copy,
   ExternalLink,
-  Repeat2,
   Rocket,
-  TriangleAlert,
 } from "lucide-react";
-import type { AssignmentDescription } from "./api";
-import { Button } from "./ui";
+
+import { Button, StatusBadge } from "./ui";
 import { deploymentRoute } from "./deploymentRouting";
-import type { StatusTone } from "./deploymentStatus";
+import type { StatusIcon, StatusTone } from "./status";
 import {
   assignmentName,
   localInputValue,
@@ -28,12 +24,12 @@ import {
 import "./deployment-rollout.css";
 import "./target-dialog.css";
 
-const outcomeIcons: Record<StatusTone, typeof Repeat2> = {
-  info: Repeat2,
-  success: CirclePlus,
-  warning: CircleMinus,
-  danger: TriangleAlert,
-  neutral: CircleMinus,
+const outcomeIcons: Record<StatusTone, StatusIcon> = {
+  info: "repeat",
+  success: "plus",
+  warning: "minus",
+  danger: "alert",
+  neutral: "minus",
 };
 /** What a request does on one device: an icon and a word, never color alone. */
 export function OutcomeChip({
@@ -43,13 +39,7 @@ export function OutcomeChip({
   tone: StatusTone;
   children: ReactNode;
 }) {
-  const Icon = outcomeIcons[tone];
-  return (
-    <span className="rollout-chip" data-tone={tone}>
-      <Icon size={14} aria-hidden="true" />
-      <span>{children}</span>
-    </span>
-  );
+  return <StatusBadge tone={tone} icon={outcomeIcons[tone]} label={children} />;
 }
 
 const strategies: {
