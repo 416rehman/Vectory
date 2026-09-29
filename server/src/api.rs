@@ -101,6 +101,10 @@ pub fn router(s: State) -> Router {
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
         .route(
+            "/api/v1/deployments/binding-suggestions",
+            post(crate::deployment_history::binding_suggestions),
+        )
+        .route(
             "/api/v1/deployments/requests",
             get(crate::deployment_requests::history),
         )

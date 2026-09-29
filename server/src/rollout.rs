@@ -1066,11 +1066,6 @@ async fn preview_inner(
     if fleet.is_empty() {
         warnings.push("No devices selected.".to_owned())
     }
-    if !artifact_previews.is_empty() && v["variable_bindings"].is_object() {
-        warnings.push(
-            "Each device validates its own rendered configuration before it applies it.".into(),
-        );
-    }
     let offline = fleet
         .iter()
         .filter(|d| ["offline", "awaiting_first_check_in"].contains(&text(d, "status")))
@@ -1122,7 +1117,15 @@ pub(crate) async fn describe(
         return Ok(described.clone());
     }
     let mut out = json!({"id":id,"name":d["name"].as_str().map(|name| name.chars().take(120).collect::<String>()),"resource":kind(d),"priority":d["priority"],"target_mode":d["target_mode"],"status":d["status"],"created_at":d["created_at"],
-        "version_id":null,"version_number":null,"configuration_id":null,"configuration_name":null,"policy":null,"policy_id":null,"policy_name":null});
+        "version_id":null,"version_number":null,"configuration_id":null,"configuration_name":null,"policy":null,"policy_id":null,"policy_name":null,"created_by_name":null});
+    if let Some(actor) = d["created_by"].as_str() {
+        out["created_by_name"] = json!(
+            sqlx::query_scalar::<_, String>("SELECT substr(name,1,120) FROM users WHERE id=?")
+                .bind(actor)
+                .fetch_optional(&mut *db)
+                .await?
+        );
+    }
     if let Some(version) = d["version_id"].as_str() {
         out["version_id"] = json!(version);
         if let Some(row) = sqlx::query("SELECT CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number,json_extract(v.data,'$.configuration_id') AS configuration_id,CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) END AS name FROM records v LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id') WHERE v.kind='version' AND v.id=?").bind(version).fetch_optional(&mut *db).await? {

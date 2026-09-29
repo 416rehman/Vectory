@@ -7559,6 +7559,17 @@
               "type": "null"
             }
           ]
+        },
+        "created_by_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -7720,6 +7731,15 @@
           "type": "integer",
           "minimum": 0
         },
+        "device_ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Every device in the group, bounded; devices lists the first few with names."
+        },
         "devices": {
           "type": "array",
           "maxItems": 8,
@@ -7755,6 +7775,7 @@
         "message",
         "diagnostic",
         "count",
+        "device_ids",
         "devices"
       ],
       "additionalProperties": false
