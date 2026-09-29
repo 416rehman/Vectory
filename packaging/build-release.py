@@ -41,14 +41,18 @@ def archive(path, members):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--version', default='0.1.0-dev')
+    parser.add_argument('--version', help='defaults to the agent source Version')
     parser.add_argument('--out', type=Path, default=ROOT / 'artifacts/releases')
     parser.add_argument('--target', choices=[f'{o}/{a}' for o, a in TARGETS], action='append')
+    parser.add_argument('--no-archives', action='store_true',
+                        help='write only the binaries, catalog.json and SHA256SUMS (the set a server bundles and serves)')
     args = parser.parse_args()
-    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', args.version):
-        parser.error('version must be a safe semantic version')
     source = (ROOT / 'agent/internal/agent/types.go').read_text(encoding='utf-8')
     version_match = re.search(r'^const Version = "([^"]+)"$', source, re.MULTILINE)
+    if args.version is None and version_match is not None:
+        args.version = version_match.group(1)
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', args.version or ''):
+        parser.error('version must be a safe semantic version')
     if version_match is None or args.version != version_match.group(1):
         parser.error('package version must match the agent source Version; refusing misleading metadata')
     out = args.out.resolve()
@@ -63,6 +67,8 @@ def main():
         env = {**os.environ, 'CGO_ENABLED': '0', 'GOOS': goos, 'GOARCH': goarch, 'GOAMD64': 'v1', 'GOTOOLCHAIN': 'go1.26.8'}
         subprocess.run(['go', 'build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w -buildid=', '-o', str(binary), './cmd/vectory'], cwd=ROOT / 'agent', env=env, check=True)
         catalog.append({'name': binary.name, 'os': goos, 'arch': goarch, 'version': args.version, 'sha256': sha(binary), 'size': binary.stat().st_size, 'url': '/api/v1/releases/' + binary.name, 'signed': False})
+        if args.no_archives:
+            continue
         members = [('vectory.exe' if goos == 'windows' else 'vectory', binary.read_bytes(), 0o755),
                    ('RELEASE-STATUS.txt', b'UNSIGNED DEVELOPMENT BUILD. Native OS/service acceptance and signing are separate gates. No enrollment secrets included.\n', 0o644)]
         for rel in ('LICENSE', 'NOTICE', 'docs/AGENT-INSTALL.md', 'docs/COMPATIBILITY.md'):
@@ -75,7 +81,7 @@ def main():
     (out / 'catalog.json').write_text(json.dumps(catalog, indent=2) + '\n', encoding='utf-8')
     artifacts = sorted(p for p in out.iterdir() if p.is_file() and p.name != 'SHA256SUMS' and not p.name.endswith(('.sig', '.bundle')))
     (out / 'SHA256SUMS').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in artifacts), encoding='utf-8')
-    print(f'Built {len(catalog)} unsigned target binaries and archives in {out}')
+    print(f'Built {len(catalog)} unsigned target binaries{"" if args.no_archives else " and archives"} in {out}')
 
 
 if __name__ == '__main__':

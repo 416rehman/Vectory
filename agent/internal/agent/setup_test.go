@@ -223,6 +223,17 @@ func TestSetupRefusesToRebindAPossiblyDeliveredEnrollment(t *testing.T) {
 	}
 }
 
+func TestPackagedAgentsRunInPlace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX locations")
+	}
+	for exe, want := range map[string]bool{"/usr/bin/vectory": true, "/usr/local/bin/vectory": true, "/usr/local/bin/../bin/vectory": true, "/tmp/vectory": false, "/home/ops/Downloads/vectory": false} {
+		if got := packagedLocation(exe, "/usr/local/bin/vectory"); got != want {
+			t.Fatalf("%s: %v", exe, got)
+		}
+	}
+}
+
 func TestSanitizedDeviceNamesAreValid(t *testing.T) {
 	for host, want := range map[string]string{"WEB_01.local": "web_01", "My Mac Book": "my-mac-book", "--edge--": "edge--", "": "device", "db01.prod.example.com": "db01.prod.example.com"} {
 		got := sanitizeDeviceName(host)

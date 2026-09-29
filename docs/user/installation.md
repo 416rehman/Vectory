@@ -10,7 +10,7 @@ In the wizard's **Install** step, choose the **Starting workload** and review th
 
 Create separate dedicated locations for agent state, managed configuration and Vector data. Grant the intended agent identity the required access.
 
-The managed configuration's directory becomes private. Do not use a directory containing unrelated configurations or secrets. State and managed paths must be absolute and have no symlink ancestors. On macOS, use concrete paths such as `/Library/Application Support/Vectory`; `/var` commonly resolves through a symlink.
+The managed configuration's directory becomes private. Do not use a directory containing unrelated configurations or secrets. State and managed paths must be absolute and have no symlink ancestors. On macOS, use concrete paths such as `/Library/Application Support/Vectory/agent`; `/var` commonly resolves through a symlink.
 
 Set your pipeline's `data_dir` to an existing writable device directory. On Windows, Vector's default `/var/lib/vector` normally does not exist. The browser does not create the directory for you.
 
@@ -63,7 +63,7 @@ Run installation and ordinary foreground operation under the intended account. S
 Linux example with full mode explicitly enabled:
 
 ```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vectory-managed/vector.json --adopt --allow-full-vector-config
+vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vectory/managed/vector.json --adopt --allow-full-vector-config
 vectory enroll --state-dir /var/lib/vectory-agent --server https://vectory.example.com:8443 --ca-file /protected/server-ca.pem --id edge-01 --token-file /protected/enrollment-token.txt
 vectory doctor --state-dir /var/lib/vectory-agent
 vectory run --state-dir /var/lib/vectory-agent
@@ -74,10 +74,10 @@ Use the agent endpoint shown by **Add device**, which may differ from the dashbo
 Windows uses the same flags:
 
 ```powershell
-vectory install --state-dir C:\ProgramData\Vectory --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\VectoryConfig\managed.json --adopt --allow-full-vector-config
-vectory enroll --state-dir C:\ProgramData\Vectory --server https://vectory.example.com:8443 --ca-file C:\secure\server-ca.pem --id edge-01 --token-file C:\secure\enrollment-token.txt
-vectory doctor --state-dir C:\ProgramData\Vectory
-vectory run --state-dir C:\ProgramData\Vectory
+vectory install --state-dir C:\ProgramData\Vectory\agent --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\Vectory\managed\vector.json --adopt --allow-full-vector-config
+vectory enroll --state-dir C:\ProgramData\Vectory\agent --server https://vectory.example.com:8443 --ca-file C:\secure\server-ca.pem --id edge-01 --token-file C:\secure\enrollment-token.txt
+vectory doctor --state-dir C:\ProgramData\Vectory\agent
+vectory run --state-dir C:\ProgramData\Vectory\agent
 ```
 
 Use `--ca-file PATH` when the device needs additional trust for the server certificate. The wizard explains both choices under **Server certificate trust** and puts that choice explicitly in the command.
@@ -179,7 +179,7 @@ sudo ./vectory service-start
 Linux's native service command requires systemd; if the host lacks it, run the agent under your existing supervisor. On macOS, the same flags register a launchd service using an existing unprivileged account. On Windows, use an elevated PowerShell and omit `--service-user`; the service uses `NT SERVICE\Vectory`:
 
 ```powershell
-.\vectory.exe service-install --state-dir 'C:\ProgramData\Vectory'
+.\vectory.exe service-install --state-dir 'C:\ProgramData\Vectory\agent'
 .\vectory.exe service-start
 ```
 
@@ -224,8 +224,8 @@ An agent upgrade is a host operation. It does not upgrade Vector, change configu
    On Windows, use the existing paths, for example:
 
    ```powershell
-   & 'C:\Program Files\Vectory\vectory.exe' status --state-dir C:\ProgramData\Vectory --json
-   & 'C:\Program Files\Vectory\vectory.exe' doctor --state-dir C:\ProgramData\Vectory
+   & 'C:\Program Files\Vectory\vectory.exe' status --state-dir C:\ProgramData\Vectory\agent --json
+   & 'C:\Program Files\Vectory\vectory.exe' doctor --state-dir C:\ProgramData\Vectory\agent
    ```
 
 6. Restart through the existing service or continuous `run` command. Confirm the same device identity, a fresh heartbeat, the expected configuration mode and workload, and the reported pipeline generation. `doctor` checks local setup; it does not verify the server connection. Downloading a binary or seeing a version label does not establish activation.
@@ -253,7 +253,7 @@ Confirm that `vectory help` lists `re-adopt`. If it does not, first [upgrade the
 
    ```powershell
    $approvedVectorSha256 = 'REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-   vectory re-adopt --state-dir C:\ProgramData\Vectory --expected-sha256 $approvedVectorSha256
+   vectory re-adopt --state-dir C:\ProgramData\Vectory\agent --expected-sha256 $approvedVectorSha256
    ```
 
    The default is the existing Vector path. If you deliberately moved the executable, also pass `--vector-binary` with its new absolute path. Keep the managed configuration path unchanged. Add `--json` to inspect the approved path, digest, version and which existing configurations were validated.

@@ -37,10 +37,10 @@ Create an operator-owned local policy, for example:
 Create the data directory and set the published config's `data_dir` to that existing absolute path. Full Vector validation checks the real environment; Vectory does not bypass it with `--no-environment` or `--skip-healthchecks`. On Windows, Vector's default `/var/lib/vector` normally does not exist, so an explicit `data_dir` is necessary.
 
 ```powershell
-vectory install --state-dir C:\ProgramData\Vectory --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\VectoryConfig\managed.json --capability-policy C:\secure\capabilities.json --adopt
-Get-Content C:\secure\enrollment-token.txt | vectory enroll --state-dir C:\ProgramData\Vectory --server https://vectory.example.net:8443 --ca-file C:\secure\server-ca.pem --id edge-01 --token-stdin
-vectory doctor --state-dir C:\ProgramData\Vectory
-vectory run --state-dir C:\ProgramData\Vectory
+vectory install --state-dir C:\ProgramData\Vectory\agent --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\Vectory\managed\vector.json --capability-policy C:\secure\capabilities.json --adopt
+Get-Content C:\secure\enrollment-token.txt | vectory enroll --state-dir C:\ProgramData\Vectory\agent --server https://vectory.example.net:8443 --ca-file C:\secure\server-ca.pem --id edge-01 --token-stdin
+vectory doctor --state-dir C:\ProgramData\Vectory\agent
+vectory run --state-dir C:\ProgramData\Vectory\agent
 ```
 
 On Linux/macOS use the same commands with absolute platform paths. The `service` command implements Windows SCM service execution and is also usable under an external Unix supervisor. Explicit `service-install` registers the current absolute executable and state directory; `service-start`, `service-stop`, and `service-uninstall` invoke only the fixed Vectory service and reject an explicit `--state-dir` selector. On Linux/macOS supply `--service-user <existing-unprivileged-account>`; systemd/launchd registration requires root, preserves differing existing definitions, and assigns only the dedicated state/config trees to that account. Windows registration uses the dedicated `NT SERVICE\Vectory` virtual account and grants it the dedicated state/config directories. Host operators must separately provision that account's Vector binary execution and data-root access. Service installation does not start the workload or establish tested service operation. Lifecycle commands accept flags only and reject unexpected positional arguments before changing local state. The CLI never silently enables privileged services. `run --once` is a test convenience and stops the owned child when it exits; use continuous `run` for a lasting workload.
@@ -65,7 +65,7 @@ The agent refuses executable bytes that differ from its locally adopted SHA-256.
 
 ```powershell
 $approvedVectorSha256 = 'REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-vectory re-adopt --state-dir C:\ProgramData\Vectory --expected-sha256 $approvedVectorSha256 --json
+vectory re-adopt --state-dir C:\ProgramData\Vectory\agent --expected-sha256 $approvedVectorSha256 --json
 ```
 
 Uppercase and lowercase hexadecimal are accepted. The existing binary path is used unless an explicit absolute local `--vector-binary` path is supplied. On Unix, use the same flags with absolute platform paths. Symlinks, Windows network/device paths and alternate data streams are refused. This command still requires Vector **0.58.0**; it does not approve an arbitrary upstream version. A checksum calculated from an unexplained replacement is not independent approval.
@@ -93,7 +93,7 @@ Individual file replacements are atomic, but settings and state are not a single
 To use the complete configuration surface of the adopted Vector build, add `--allow-full-vector-config` to the local installation command:
 
 ```powershell
-vectory install --state-dir C:\ProgramData\Vectory --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\VectoryConfig\managed.json --adopt --allow-full-vector-config
+vectory install --state-dir C:\ProgramData\Vectory\agent --vector-binary 'C:\Program Files\Vector\bin\vector.exe' --managed-config C:\ProgramData\Vectory\managed\vector.json --adopt --allow-full-vector-config
 ```
 
 This explicit host grant persists `capability_policy.full_vector_config: true` in the protected local settings. It trusts pipeline publishers with Vector's process permissions: all available component types, global settings, enrichment tables, native secret providers, external VRL files, native environment references and executable integrations. The restricted file/network/component allowances do not constrain full mode. Actual support still depends on the adopted Vector build, OS, credentials, external services and provisioned host resources. There is no remote action that grants this permission. Enrollment and authenticated heartbeats report `configuration_mode: "full"` or `"restricted"` for deployment planning.
@@ -102,7 +102,7 @@ An existing installation can change mode while the agent is stopped, without re-
 
 ```powershell
 vectory service-stop
-vectory install --state-dir C:\ProgramData\Vectory --allow-full-vector-config
+vectory install --state-dir C:\ProgramData\Vectory\agent --allow-full-vector-config
 vectory service-start
 ```
 
