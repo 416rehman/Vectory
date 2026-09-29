@@ -10,10 +10,12 @@ use vectory_server::{Settings, State, api, auth, db, initialize};
 
 struct Actor {
     cookie: String,
+    csrf: String,
 }
 async fn admin(s: &State) -> Actor {
     let id = db::id();
     let token = auth::random_secret();
+    let csrf = auth::random_secret();
     sqlx::query(
         "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
     )
@@ -29,14 +31,36 @@ async fn admin(s: &State) -> Actor {
     sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
         .bind(db::hash(&token))
         .bind(&id)
-        .bind(auth::random_secret())
+        .bind(&csrf)
         .bind("2099-01-01T00:00:00Z")
         .execute(&s.pool)
         .await
         .unwrap();
     Actor {
         cookie: format!("vectory_session={token}"),
+        csrf,
     }
+}
+async fn post(app: &Router, actor: &Actor, uri: &str, body: Value) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("cookie", &actor.cookie)
+                .header("x-csrf-token", &actor.csrf)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let value: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(status, StatusCode::OK, "{uri}: {value}");
+    value
 }
 async fn fixture() -> (tempfile::TempDir, State, Router, Actor) {
     let temp = tempfile::tempdir().unwrap();
@@ -236,8 +260,13 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     assert_eq!(actions, ["deployment.create", "configuration.publish"]);
     assert_eq!(
         activity[0]["deployment"],
-        json!({"configuration_name":"Edge syslog processing","version_number":2,"policy":false,"rollout_kind":"canary","priority":100,"target_count":1})
+        json!({"configuration_name":"Edge syslog processing","version_number":2,"policy":false,"rollout_kind":"canary","priority":100,"target_count":1,
+            "rolled_back_to_configuration_name":null,"rolled_back_to_version_number":null,"rolled_back_device_count":null,
+            "rollback_of_configuration_name":null,"rollback_of_version_number":null})
     );
+    // Without a shared assignment there is no rollout to offer a rollback of.
+    assert!(attention[0]["deployment_id"].is_null());
+    assert_eq!(attention[0]["rollback_available"], false);
     assert_eq!(activity[1]["version_number"], 2);
     assert_eq!(value["security_events_hidden"], 1);
 
@@ -256,6 +285,157 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     );
     let bare = rows.iter().find(|d| d["name"] == "edge-02").unwrap();
     assert!(bare["desired_version"].is_null());
+}
+
+/// Round-2 operator review P1-1 and P1-2: a rollback reads the right way round
+/// (what was rolled back, on which devices, and what they run now), and a
+/// failing group names the rollout its devices share and whether it can be
+/// rolled back.
+#[tokio::test]
+async fn rollback_lineage_and_failing_groups_name_their_rollout() {
+    let (_temp, s, app, actor) = fixture().await;
+    let mut conn = s.pool.acquire().await.unwrap();
+    let mut versions = Vec::new();
+    for (name, slug) in [("Edge syslog processing", "edge"), ("r15-demo", "demo")] {
+        let pipeline = db::id();
+        db::insert(&mut conn,"configuration",&json!({"id":pipeline,"name":name,"description":"","config":{},"graph":{"nodes":[],"edges":[]}})).await.unwrap();
+        let version = db::id();
+        let artifact = format!("{{\"data_dir\":\"/var/lib/vector/{slug}\"}}\n");
+        db::insert(&mut conn,"version",&json!({"id":version,"configuration_id":pipeline,"number":1,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now()})).await.unwrap();
+        versions.push(version);
+    }
+    drop(conn);
+    let (edge, demo) = (versions[0].clone(), versions[1].clone());
+    let mut ids = Vec::new();
+    for name in ["edge-nyc-02", "edge-fra-01"] {
+        ids.push(
+            device(
+                &s,
+                name,
+                json!({"last_seen":db::now(),"vector_version":"0.58.0","apply_state":"unmanaged","reported_generation":0}),
+                None,
+                false,
+            )
+            .await,
+        );
+    }
+    ids.sort();
+    let request = |version: &str, kind: &str| {
+        json!({"version_id":version,"selector":{"device_ids":ids,"group_ids":[],"exclude_ids":[]},"priority":100,"target_mode":"snapshot",
+            "rollout":{"kind":kind,"canary_size":1,"batch_size":1,"observation_seconds":3600,"failure_threshold":0}})
+    };
+    let base = post(&app, &actor, "/api/v1/deployments", request(&edge, "all")).await;
+    let mut canary_request = request(&demo, "canary");
+    canary_request["replaces"] = json!([base["id"]]);
+    let canary = post(&app, &actor, "/api/v1/deployments", canary_request).await;
+    let canary_id = canary["id"].as_str().unwrap();
+    // The canary device failed and the agent restored its last working config.
+    let (generation, name): (i64, String) =
+        sqlx::query_as("SELECT desired_generation,name FROM devices WHERE id=?")
+            .bind(&ids[0])
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.apply_state','rolled_back','$.configuration_attempt',json(?)) WHERE id=?")
+        .bind(json!({"generation":generation,"version_id":demo,"sha256":"b".repeat(64),"state":"rolled_back","error":{"code":"APPLY_ROLLED_BACK","stage":"reload","message":"Another process is already listening on this component's address."}}).to_string())
+        .bind(&ids[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let value = overview(&app, &actor).await;
+    let failed = value["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["cause"] == "failed")
+        .unwrap()
+        .clone();
+    assert_eq!(failed["state"], "rolled_back");
+    assert_eq!(failed["device_names"], json!([name]));
+    assert_eq!(failed["deployment_id"], canary_id);
+    assert_eq!(failed["rollback_available"], true);
+
+    let plan = get(
+        &app,
+        &actor,
+        &format!("/api/v1/deployments/{canary_id}/rollback-preview"),
+    )
+    .await;
+    assert_eq!(plan["ready"], true, "{plan}");
+    let rollback = post(
+        &app,
+        &actor,
+        &format!("/api/v1/deployments/{canary_id}/rollback"),
+        json!({"request_id":db::id(),"review_token":plan["review_token"]}),
+    )
+    .await;
+    let value = overview(&app, &actor).await;
+    let activity = value["fleet_activity"].as_array().unwrap();
+    let rolled = activity
+        .iter()
+        .find(|item| item["action"] == "deployment.rollback")
+        .unwrap();
+    assert_eq!(rolled["target_id"], canary_id);
+    assert_eq!(rolled["deployment"]["configuration_name"], "r15-demo");
+    assert_eq!(rolled["deployment"]["version_number"], 1);
+    assert_eq!(
+        rolled["deployment"]["rolled_back_to_configuration_name"],
+        "Edge syslog processing"
+    );
+    assert_eq!(rolled["deployment"]["rolled_back_to_version_number"], 1);
+    assert_eq!(rolled["deployment"]["rolled_back_device_count"], 1);
+    assert_eq!(rolled["device_names"], json!([name]));
+    let created = activity
+        .iter()
+        .find(|item| item["action"] == "deployment.create" && item["target_id"] == rollback["id"])
+        .unwrap();
+    assert_eq!(
+        created["deployment"]["configuration_name"],
+        "Edge syslog processing"
+    );
+    assert_eq!(
+        created["deployment"]["rollback_of_configuration_name"],
+        "r15-demo"
+    );
+    assert_eq!(created["deployment"]["rollback_of_version_number"], 1);
+    // Rolled back: the rollout is no longer something to roll back.
+    let summary = get(
+        &app,
+        &actor,
+        &format!("/api/v1/deployments/{canary_id}/summary"),
+    )
+    .await;
+    assert_eq!(
+        summary["rolled_back_to_configuration_name"],
+        "Edge syslog processing"
+    );
+    assert_eq!(
+        summary["replaces"],
+        json!([{"deployment_id":base["id"],"version_number":1,"configuration_name":"Edge syslog processing"}])
+    );
+    let history = get(&app, &actor, "/api/v1/deployments/history?page_size=12").await;
+    let restored = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == rollback["id"])
+        .unwrap()
+        .clone();
+    assert_eq!(restored["rollback_of_configuration_name"], "r15-demo");
+    assert_eq!(restored["rollback_of_version"], 1);
+    let base_summary = get(
+        &app,
+        &actor,
+        &format!(
+            "/api/v1/deployments/{}/summary",
+            base["id"].as_str().unwrap()
+        ),
+    )
+    .await;
+    assert_eq!(
+        base_summary["replaced_by"][0]["configuration_name"],
+        "r15-demo"
+    );
 }
 
 #[tokio::test]

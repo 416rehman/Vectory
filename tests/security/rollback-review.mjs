@@ -525,6 +525,141 @@ try {
       }
     },
   );
+  await check(
+    "a live canary rolls back in one reviewed step; exclusions state exactly what they keep",
+    async () => {
+      const fleet = [];
+      for (const name of [
+        "synthetic-canary-a",
+        "synthetic-canary-b",
+        "synthetic-canary-c",
+      ]) {
+        const id = randomUUID();
+        db.prepare("INSERT INTO devices(id,name,data) VALUES(?,?,?)").run(
+          id,
+          name,
+          JSON.stringify({ ...device, id, name }),
+        );
+        fleet.push(id);
+      }
+      fleet.sort();
+      const selector = { device_ids: fleet, group_ids: [], exclude_ids: [] };
+      const base = (
+        await call(
+          "POST",
+          "/deployments",
+          {
+            ...deploymentRequest,
+            selector,
+            expected_device_ids: fleet,
+            priority: 30,
+          },
+          roles.operator,
+        )
+      ).body;
+      const canary = (
+        await call(
+          "POST",
+          "/deployments",
+          {
+            ...deploymentRequest,
+            version_id: foreignVersion.id,
+            selector,
+            expected_device_ids: fleet,
+            priority: 30,
+            replaces: [base.id],
+            rollout: {
+              kind: "canary",
+              canary_size: 1,
+              batch_size: 1,
+              observation_seconds: 3600,
+              failure_threshold: 0,
+            },
+          },
+          roles.operator,
+        )
+      ).body;
+      const untouched = () => fleet.slice(1).map(snapshot);
+      const before = untouched();
+      const plan = (
+        await call(
+          "GET",
+          `/deployments/${canary.id}/rollback-preview`,
+          undefined,
+          roles.operator,
+        )
+      ).body;
+      assert.deepEqual(Object.keys(plan).sort(), [
+        "blockers",
+        "eligible_devices",
+        "excluded_devices",
+        "previous_configuration_id",
+        "previous_configuration_name",
+        "previous_version_id",
+        "previous_version_number",
+        "priority",
+        "ready",
+        "review_token",
+        "source_action",
+        "source_deployment_id",
+        "source_status",
+        "source_version_id",
+      ]);
+      assert.equal(plan.source_status, "active");
+      assert.equal(plan.ready, true);
+      assert.deepEqual(plan.blockers, []);
+      assert.deepEqual(
+        plan.eligible_devices.map((d) => d.device_id),
+        [fleet[0]],
+      );
+      assert.equal(plan.excluded_devices.length, 2);
+      for (const excluded of plan.excluded_devices) {
+        assert.deepEqual(Object.keys(excluded).sort(), [
+          "current",
+          "device_id",
+          "device_name",
+          "effect",
+          "next",
+          "reason",
+        ]);
+        assert.equal(excluded.reason, "not_released");
+        assert.equal(excluded.effect, "unchanged");
+        assert.equal(excluded.next, null);
+        assert.deepEqual(Object.keys(excluded.current).sort(), [
+          "configuration_name",
+          "version_number",
+        ]);
+        assert.equal(
+          excluded.current.configuration_name,
+          "Synthetic source pipeline",
+        );
+        assert([...excluded.current.configuration_name].length <= 240);
+        assert(Number.isSafeInteger(excluded.current.version_number));
+        assert(excluded.current.version_number >= 1);
+      }
+      const rollback = (
+        await call(
+          "POST",
+          `/deployments/${canary.id}/rollback`,
+          { request_id: randomUUID(), review_token: plan.review_token },
+          roles.operator,
+        )
+      ).body;
+      assert.equal(rollback.version_id, published.id);
+      assert.equal(rollback.priority, 31);
+      assert.deepEqual(
+        rollback.targets.map((t) => t.device_id),
+        [fleet[0]],
+      );
+      const source = (
+        await call("GET", `/deployments/${canary.id}`, undefined, admin)
+      ).body;
+      assert.equal(source.status, "cancelled");
+      assert.equal(source.status_before_rollback, "active");
+      assert.equal(snapshot(fleet[0]).desired_version_id, published.id);
+      assert.deepEqual(untouched(), before);
+    },
+  );
   evidence.passed = true;
 } finally {
   db?.close();
