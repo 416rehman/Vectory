@@ -1,3 +1,5 @@
+import { parseLosslessJSON } from "./configurationNumbers";
+
 /**
  * Named synthetic sample sets, kept in this browser per account and pipeline.
  * Samples are user-written test data; they never come from devices.
@@ -103,7 +105,7 @@ export function parseSamples(text: string, limit = 20): ParsedSamples {
   if (!trimmed) return { samples: [], lines: [], errors: [] };
   if (/^[[{]/.test(trimmed) && trimmed.includes("\n")) {
     try {
-      const whole = JSON.parse(trimmed);
+      const whole = parseLosslessJSON(trimmed);
       const list = Array.isArray(whole) ? whole : [whole];
       if (
         list.every(
@@ -136,7 +138,7 @@ export function parseSamples(text: string, limit = 20): ParsedSamples {
   text.split("\n").forEach((line, index) => {
     if (!line.trim()) return;
     try {
-      const value = JSON.parse(line);
+      const value = parseLosslessJSON(line);
       if (!value || typeof value !== "object" || Array.isArray(value))
         errors.push({
           line: index + 1,

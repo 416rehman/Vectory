@@ -2,7 +2,10 @@
 
 .sample-tester {
   display: grid;
+  /* One shrinkable column: a long sample line must not widen the inspector. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
   margin-top: 4px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -87,7 +90,9 @@
 }
 .sample-tester-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
 }
 .sample-tester-wide .sample-tester-body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
@@ -112,9 +117,14 @@
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  background: var(--surface);
+  /* Color only: the global select rule supplies the chevron image. */
+  background-color: var(--surface);
   font: inherit;
   font-size: 12.5px;
+}
+.sample-set-bar select {
+  padding-right: 28px;
+  background-position: right 7px center;
 }
 .sample-icon-button {
   display: inline-grid;
@@ -139,6 +149,10 @@
 .sample-icon-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.sample-editor {
+  min-width: 0;
+  overflow: hidden;
 }
 .sample-editor .configuration-code-editor,
 .sample-editor .configuration-code-editor .cm-editor {

@@ -5,8 +5,13 @@ export type FieldChange = {
   after?: unknown;
 };
 
+import { isExactInteger } from "./configurationNumbers";
+
 const record = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === "object" && !Array.isArray(value);
+  !!value &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  !isExactInteger(value);
 
 const segment = (key: string) =>
   /^[A-Za-z_@][\w@]*$/.test(key) ? key : JSON.stringify(key);

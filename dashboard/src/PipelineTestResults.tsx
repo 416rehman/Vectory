@@ -16,12 +16,18 @@ export type PipelineTestRun = {
   errors: string[];
   output?: string;
   deferred?: boolean;
+  warnings?: string[];
 };
+
+/** Tests that ran, whatever else Vector could not check here. */
+const ran = (run: PipelineTestRun) =>
+  run.tests_run === true || (run.tests_run !== false && !!run.tests?.length);
 
 /** One line that says how the run went, from Vector's own result. */
 export function testHeadline(run: PipelineTestRun) {
-  if (run.deferred) return "These tests need the device environment";
   const tests = run.tests ?? [];
+  if (!ran(run) && run.deferred)
+    return "These tests need the device environment";
   if (run.tests_run === false)
     return "Vector couldn't load this pipeline to run its tests";
   if (!tests.length)
@@ -34,6 +40,20 @@ export function testHeadline(run: PipelineTestRun) {
   return `${passed} of ${tests.length} tests passed`;
 }
 
+/**
+ * What still waits for the device after the tests ran here: Vector used
+ * stand-ins for device paths, variables or secrets.
+ */
+export function deferralNote(run: PipelineTestRun) {
+  if (!run.deferred || !ran(run)) return null;
+  const device = (run.warnings ?? []).find((warning) =>
+    warning.startsWith("Each device checks"),
+  );
+  return `Vector ran them with stand-ins for device values. ${
+    device ?? "Each device checks its own values before applying."
+  }`;
+}
+
 /** Each test with Vector's verdict; failures show why and what came out. */
 export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
   const tests = run.tests ?? [];
@@ -43,13 +63,20 @@ export default function PipelineTestResults({ run }: { run: PipelineTestRun }) {
     (message) =>
       !tests.length || !/^\d+ of \d+ pipeline tests? failed\.?$/.test(message),
   );
+  const note = deferralNote(run);
+  const state = ran(run)
+    ? run.valid
+      ? "passed"
+      : "failed"
+    : run.deferred
+      ? "deferred"
+      : run.valid
+        ? "passed"
+        : "failed";
   return (
-    <div
-      className="pipeline-test-results"
-      role="status"
-      data-state={run.deferred ? "deferred" : run.valid ? "passed" : "failed"}
-    >
+    <div className="pipeline-test-results" role="status" data-state={state}>
       <strong>{testHeadline(run)}</strong>
+      {note && <p className="pipeline-test-note">{note}</p>}
       {tests.length > 0 && (
         <ul className="pipeline-test-list" aria-label="Test results">
           {tests.map((test, index) => (

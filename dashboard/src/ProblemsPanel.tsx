@@ -3,7 +3,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
+  CircleDashed,
   CircleX,
+  LoaderCircle,
+  RefreshCw,
   Wand2,
 } from "lucide-react";
 import type { Config } from "./api";
@@ -13,6 +16,7 @@ import { componentTitle } from "./pipelineNodeModel";
 import {
   countProblems,
   groupProblems,
+  type CheckStatus,
   type Problem,
   type ProblemSection,
 } from "./pipelineProblems";
@@ -50,6 +54,17 @@ function location(problem: Problem) {
 }
 
 /**
+ * The panel's headline when nothing is listed. Only a check that ran may
+ * read as clean: a draft that was not (or could not be) checked is neutral.
+ */
+export function cleanSummary(status: CheckStatus) {
+  if (status === "checking") return "Checking…";
+  if (status === "passed" || status === "device" || status === "partial")
+    return "No problems";
+  return "Not checked";
+}
+
+/**
  * Every finding for the draft, grouped by component. Local checks update
  * instantly; Vector findings come from the latest check of this draft.
  */
@@ -65,6 +80,8 @@ export default function ProblemsPanel({
   onFix,
   checking,
   canFix,
+  status,
+  onCheck,
 }: {
   problems: Problem[];
   config: Config;
@@ -78,6 +95,10 @@ export default function ProblemsPanel({
   onFix: (problem: Problem) => void;
   checking: boolean;
   canFix: (problem: Problem) => boolean;
+  /** State of the last Vector check of this draft. */
+  status: CheckStatus;
+  /** Omit for people who cannot run checks. */
+  onCheck?: () => void;
 }) {
   const { errors, warnings } = countProblems(problems);
   const groups = groupProblems(problems, config);
@@ -92,12 +113,22 @@ export default function ProblemsPanel({
         ]
           .filter(Boolean)
           .join(" · ")
-      : "No problems";
+      : cleanSummary(status);
+  const clean = summary === "No problems";
+  const retry =
+    onCheck && !checking && status === "unavailable" ? (
+      <button type="button" className="problems-retry" onClick={onCheck}>
+        <RefreshCw size={13} aria-hidden="true" />
+        Check again
+      </button>
+    ) : null;
   return (
     <section
       className="problems-panel"
       data-open={open || undefined}
-      data-state={errors ? "error" : warnings ? "warning" : "clean"}
+      data-state={
+        errors ? "error" : warnings ? "warning" : clean ? "clean" : "unchecked"
+      }
       aria-label="Problems"
     >
       <div className="problems-bar">
@@ -120,11 +151,23 @@ export default function ProblemsPanel({
               aria-hidden="true"
               className="problems-icon-warning"
             />
-          ) : (
+          ) : clean ? (
             <CheckCircle2
               size={15}
               aria-hidden="true"
               className="problems-icon-clean"
+            />
+          ) : status === "checking" ? (
+            <LoaderCircle
+              size={15}
+              aria-hidden="true"
+              className="problems-icon-checking"
+            />
+          ) : (
+            <CircleDashed
+              size={15}
+              aria-hidden="true"
+              className="problems-icon-unchecked"
             />
           )}
           <strong>{summary}</strong>
@@ -137,6 +180,7 @@ export default function ProblemsPanel({
         <span className="problems-verdict" aria-live="polite">
           {checking ? "Checking with Vector…" : verdict}
         </span>
+        {retry}
         {autoCheck !== undefined && onAutoCheckChange && (
           <label
             className="problems-auto"
@@ -154,7 +198,9 @@ export default function ProblemsPanel({
       {open && (
         <div className="problems-list" id="pipeline-problems-list">
           {groups.length === 0 ? (
-            <p className="problems-empty">Nothing to fix. {verdict}</p>
+            <p className="problems-empty">
+              {clean ? `Nothing to fix. ${verdict}` : verdict}
+            </p>
           ) : (
             groups.map((group) => {
               const component = group.component

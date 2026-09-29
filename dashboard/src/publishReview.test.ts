@@ -26,6 +26,60 @@ const published = {
 };
 
 describe("publish review", () => {
+  it("ignores key order, the way the server returns a version", () => {
+    const draft = {
+      sources: { nginx: { type: "file", include: ["/var/log/a.log"] } },
+      transforms: {
+        parse: { type: "remap", inputs: ["nginx"], source: ".a = 1" },
+      },
+      sinks: {
+        loki: {
+          type: "loki",
+          inputs: ["parse", "nginx"],
+          labels: { app: "web", env: "prod" },
+        },
+      },
+    };
+    const server = {
+      sinks: {
+        loki: {
+          labels: { env: "prod", app: "web" },
+          inputs: ["nginx", "parse"],
+          type: "loki",
+        },
+      },
+      sources: { nginx: { include: ["/var/log/a.log"], type: "file" } },
+      transforms: {
+        parse: { source: ".a = 1", inputs: ["nginx"], type: "remap" },
+      },
+    };
+    expect(reviewChanges(server, draft).components).toEqual([]);
+    // Order inside other lists still matters.
+    const reordered = structuredClone(draft) as any;
+    reordered.sources.nginx.include = ["/var/log/b.log", "/var/log/a.log"];
+    server.sources.nginx.include = ["/var/log/a.log", "/var/log/b.log"];
+    expect(reviewChanges(server, reordered).components).toMatchObject([
+      { id: "nginx", options: ["include"] },
+    ]);
+  });
+
+  it("lists steps from source to sink", () => {
+    const draft = {
+      transforms: {
+        by_status: { type: "route", inputs: ["parse"], route: { a: "true" } },
+        parse: { type: "remap", inputs: ["nginx"], source: "." },
+      },
+      sinks: { archive: { type: "aws_s3", inputs: ["by_status.a"] } },
+      sources: { nginx: { type: "file" } },
+    };
+    expect(reviewChanges(null, draft).components.map((c) => c.id)).toEqual([
+      "nginx",
+      "parse",
+      "by_status",
+      "archive",
+    ]);
+  });
+
   it("lists added, removed and changed steps with program and option changes", () => {
     const draft = structuredClone(published) as any;
     draft.transforms.parse.source =
