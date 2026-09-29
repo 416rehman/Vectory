@@ -30,10 +30,11 @@ import {
 } from "./ui";
 import { useHashQuery } from "./urlState";
 import TargetDialog from "./TargetDialog";
-import { deviceDisplayStatus } from "./status";
+import { dataPlaneIssues, deviceDisplayStatus } from "./status";
 import { formatRate, healthLabels, type HealthBucket } from "./overviewModel";
 import {
   deviceViews,
+  freshFlow,
   freshRate,
   groupsByDevice,
   isDeviceView,
@@ -383,24 +384,12 @@ export default function DeviceList({
     },
     {
       id: "events",
-      header: "Events/s",
-      width: 96,
+      header: "In → Out /s",
+      width: 128,
       className: "device-number",
       defaultDirection: "desc",
       sortValue: (device) => freshRate(device, now),
-      cell: (device) => {
-        const rate = freshRate(device, now);
-        return rate === null ? (
-          <span
-            className="device-muted"
-            title="No metrics in the last 3 minutes"
-          >
-            —
-          </span>
-        ) : (
-          formatRate(rate)
-        );
-      },
+      cell: (device) => <FlowCell device={device} now={now} />,
     },
     {
       id: "last_seen",
@@ -612,9 +601,7 @@ export default function DeviceList({
                   ) : (
                     "Never connected"
                   ),
-                  freshRate(device, now) !== null
-                    ? `${formatRate(freshRate(device, now)!)} events/s`
-                    : null,
+                  flowText(device, now),
                 ],
               })}
               empty={
@@ -662,5 +649,47 @@ export default function DeviceList({
         />
       )}
     </div>
+  );
+}
+
+/** "5.0 → 4.9 events/s", or null without a fresh sample. */
+function flowText(device: Device, now: number) {
+  const flow = freshFlow(device, now);
+  if (!flow) return null;
+  return flow.out === null
+    ? `${formatRate(flow.in)} events/s in`
+    : `${formatRate(flow.in)} → ${formatRate(flow.out)} events/s`;
+}
+
+/** Events in and delivered per second. Delivery reads red while degraded. */
+function FlowCell({ device, now }: { device: Device; now: number }) {
+  const flow = freshFlow(device, now);
+  if (!flow)
+    return (
+      <span className="device-muted" title="No metrics in the last 3 minutes">
+        —
+      </span>
+    );
+  const degraded = dataPlaneIssues(device).length > 0;
+  return (
+    <span
+      className="device-flow"
+      title={
+        flow.out === null
+          ? `${formatRate(flow.in)} events/s in. This agent doesn't report delivery.`
+          : `${formatRate(flow.in)} events/s in, ${formatRate(flow.out)} events/s delivered`
+      }
+    >
+      <span>{formatRate(flow.in)}</span>
+      <span className="device-flow-arrow" aria-hidden="true">
+        →
+      </span>
+      <span
+        className="device-flow-out"
+        data-tone={degraded ? "danger" : undefined}
+      >
+        {flow.out === null ? "—" : formatRate(flow.out)}
+      </span>
+    </span>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  freshFlow,
   freshRate,
   groupsByDevice,
   matchesStatus,
@@ -154,5 +155,32 @@ describe("list helpers", () => {
       "Web tier",
     ]);
     expect(groups.get("d3")).toBeUndefined();
+  });
+});
+
+describe("delivery health", () => {
+  const degraded = device({
+    telemetry: {
+      sampled_at: ago(10),
+      events_per_second: 5,
+      events_out_per_second: 0,
+    },
+    data_plane: {
+      version_id: "v1",
+      issues: [{ code: "DATA_PLANE_SINK_ERRORS", title: "out can't deliver" }],
+    },
+  });
+  it("reports events in and out, never inventing a missing delivery rate", () => {
+    expect(freshFlow(degraded, now)).toEqual({ in: 5, out: 0 });
+    expect(freshFlow(device({}), now)).toEqual({ in: 12.5, out: null });
+    expect(
+      freshFlow(device({ telemetry: { sampled_at: ago(600) } }), now),
+    ).toBeNull();
+  });
+  it("lists degraded devices as failing and filters them by their own state", () => {
+    expect(matchesView(degraded, "failing", now)).toBe(true);
+    expect(matchesStatus(degraded, "degraded")).toBe(true);
+    expect(matchesStatus(degraded, "applied")).toBe(false);
+    expect(statusRank(degraded)).toBeLessThan(statusRank(device({})));
   });
 });

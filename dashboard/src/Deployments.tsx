@@ -82,6 +82,7 @@ import {
   isLive,
   lifecycleLabels,
   progressSegments,
+  withDegraded,
   since,
   statusFilters,
   targetFilterStates,
@@ -763,13 +764,15 @@ function DeviceResults({
               cell: (t) => (
                 <div className="rollout-progress-cell">
                   <StatusChip
-                    tone={targetTone(t.state)}
-                    spin={isLive(deployment.status)}
+                    tone={t.delivery ? "warning" : targetTone(t.state)}
+                    spin={!t.delivery && isLive(deployment.status)}
                   >
-                    {targetLabel(t.state, {
-                      stopped,
-                      replaced: !!t.replaced_by,
-                    })}
+                    {t.delivery
+                      ? targetLabel("degraded")
+                      : targetLabel(t.state, {
+                          stopped,
+                          replaced: !!t.replaced_by,
+                        })}
                   </StatusChip>
                   {t.state !== "removed" && t.state !== "pending" && (
                     <DeviceTimeline target={t} />
@@ -870,6 +873,19 @@ function TargetDetails({
         {t.error && (
           <span className="deployment-target-history">
             Last reported error: {t.error}
+          </span>
+        )}
+      </span>
+    );
+  if (t.delivery)
+    return (
+      <span className="rollout-delivery">
+        <strong>{t.delivery.title}</strong>
+        {t.delivery.message && <span>{t.delivery.message}</span>}
+        {t.delivery.hint && (
+          <span>
+            <span className="rollout-delivery-label">Fix</span>{" "}
+            {t.delivery.hint}
           </span>
         )}
       </span>
@@ -1366,6 +1382,14 @@ function RolloutPage({
     ? progressSegments(deployment.state_counts).find((s) => s.key === "failed")
         ?.count || 0
     : 0;
+  // Devices that verified but aren't delivering read as failed here, as they
+  // do in the stages and failure groups below.
+  const delivery = withDegraded(
+    deployment?.state_counts || {},
+    (lanes.data?.failures || [])
+      .filter((failure) => failure.state === "degraded")
+      .reduce((sum, failure) => sum + failure.count, 0),
+  );
   const operate = can(user, "operate") && !error && !!deployment;
   const locked = committing || actionUncertain || checkingStatus;
   const status = deployment?.status || "";
@@ -1664,7 +1688,8 @@ function RolloutPage({
                   <div className="rollout-summary-head">
                     <p>
                       <strong>
-                        {deployment.verified_count} of {currentTargets}
+                        {deployment.verified_count - delivery.moved} of{" "}
+                        {currentTargets}
                       </strong>{" "}
                       {currentTargets === 1 ? "device" : "devices"} verified
                       {deployment.rolled_back_by ? " before the rollback" : ""}
@@ -1680,7 +1705,7 @@ function RolloutPage({
                     </span>
                   </div>
                   <ProgressBar
-                    counts={deployment.state_counts}
+                    counts={delivery.counts}
                     stopped={!live}
                     label="Device progress"
                   />

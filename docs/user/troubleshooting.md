@@ -87,7 +87,27 @@ Removing or cancelling a deployment never stops Vector. See [Deploy and roll bac
 
 **No metrics:** the pipeline needs a loopback Prometheus exporter, restricted devices must allow its listener, and **Collect operational metrics** must be on. See [Enable real metrics](telemetry.md#enable-real-metrics). A rate needs two samples, and a dash means "not reported", not zero.
 
-**No events at the destination:** **Applied** and throughput prove Vector runs and reads events; they don't prove delivery. Check that the source receives events, that no condition discards them on purpose, and that the sink's address, credentials and destination are right. Test transforms with sample events in [pipeline tests](resources.md#test-transformations).
+**No events at the destination:** **Applied** and throughput prove Vector runs and reads events; they don't prove delivery. When the device reports metrics, Vectory checks delivery for you: see [A pipeline applies but delivers nothing](#a-pipeline-applies-but-delivers-nothing). Check that the source receives events, that no condition discards them on purpose, and that the sink's address, credentials and destination are right. Test transforms with sample events in [pipeline tests](resources.md#test-transformations).
+
+## A pipeline applies but delivers nothing
+
+The device reads **Degraded**: the version applied and Vector runs it, but its metrics show events aren't getting through. The device page names the component, the reason and the fix, and the issue appears in **Needs you** and [**Activity → Issues**](/#/issues).
+
+| Issue | What Vectory measured | Likely cause |
+| --- | --- | --- |
+| **The pipeline stopped delivering** | Events keep arriving, but none have been delivered for three checks, and a sink is struggling. | A destination is down. Its buffer filled, so Vector paused every path that feeds it. |
+| **_sink_ can't deliver events** | The sink failed at least one request a minute, two checks in a row. | Wrong address or credentials, the destination is down, or a firewall blocks it. |
+| **_component_'s buffer is filling up** | A buffer is over 80% full and rising, or over 95% full. | The destination is slow, throttling or unreachable. |
+| **_component_ is dropping events** | The component dropped events because of errors, at least one a minute. | A transform fails on some events, or a sink rejects them. |
+
+<!-- steps -->
+1. Open the device and read **Applied, but not delivering**. The Vector log line under the issue, such as `Connection refused`, usually names the cause.
+2. Fix the destination, or the component's address, credentials or program. For a quick recovery, roll the pipeline back to its last working version.
+3. Watch the device. The issue closes by itself after three clean checks (about three check-in intervals), and the device returns to **Applied**.
+
+A canary rollout checks this before it releases more devices. While Vectory takes its first measurements the gate reads **Measuring delivery**; a canary that isn't delivering counts as a failure against the rollout's failure threshold, and the rollout page shows why. A device without metrics is judged on its apply state alone.
+
+These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-metrics). A filter or route that drops events on purpose never counts as a delivery problem.
 
 ## The adopted Vector binary changed
 

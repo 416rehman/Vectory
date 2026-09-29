@@ -373,7 +373,8 @@ fn target_query(
         'next_release_at',(SELECT min(x.released_at) FROM deployment_targets x WHERE x.device_id=t.device_id AND x.deployment_id<>t.deployment_id AND x.released_at>t.released_at),\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
-        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')))"
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN t.state='verified_applied' AND json_type(d.data,'$.data_plane.issues')='array' AND json_extract(d.data,'$.data_plane.version_id')=(SELECT json_extract(p.data,'$.version_id') FROM records p WHERE p.kind='deployment' AND p.id=t.deployment_id) THEN json_extract(d.data,'$.data_plane.issues[0]') END)"
     } else {
         "SELECT count(*)"
     });
@@ -461,12 +462,15 @@ pub async fn targets(
     ))
 }
 
-const FAILED_STATES: [&str; 5] = [
+const FAILED_STATES: [&str; 6] = [
     "failed",
     "rolled_back",
     "verification_unknown",
     "incompatible",
     "blocked",
+    // Applied, but a data-plane issue on this version shows it isn't
+    // delivering. Lanes and failure groups only; never a stored target state.
+    "degraded",
 ];
 /// The first sanitized diagnostic the agent reported for this exact candidate.
 /// Older agents and servers omit diagnostics; callers fall back to the error.
@@ -500,6 +504,14 @@ fn finish_target(item: &mut Value) {
         .unwrap_or(0);
     let acknowledgement = object.remove("_acknowledgement").unwrap_or(Value::Null);
     let generation = object.get("generation").cloned().unwrap_or(Value::Null);
+    // Applied, but the device's telemetry shows the version isn't delivering:
+    // the open data-plane issue in the user's words (see data_plane.rs).
+    if let Some(issue) = object.remove("_data_plane").filter(Value::is_object) {
+        object.insert(
+            "delivery".into(),
+            json!({"code":issue["code"],"title":issue["title"],"message":issue["message"],"hint":issue["hint"]}),
+        );
+    }
     object.insert(
         "diagnostic".into(),
         json!(diagnostic(&terminal, &generation).or_else(|| diagnostic(&attempt, &generation))),
@@ -610,8 +622,10 @@ pub async fn rollout(
     let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('device_id',t.device_id,'device_name',substr(d.name,1,240),'state',t.state,'generation',t.generation,'released_at',t.released_at,'verified_at',t.verified_at,'error',t.error,\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
-        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds'))) \
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN t.state='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END) \
         FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001")
+        .bind(context["version_id"].as_str())
         .bind(&id)
         .fetch_all(&mut *tx)
         .await?;
@@ -626,6 +640,14 @@ pub async fn rollout(
         .collect::<Result<Vec<_>>>()?;
     for target in &mut targets {
         finish_target(target);
+        // Lanes and failure groups count a device that isn't delivering as
+        // failed, with the issue's title, measured reason and fix.
+        if let Some(delivery) = target.get("delivery").filter(|d| d.is_object()).cloned() {
+            target["state"] = json!("degraded");
+            target["error"] = delivery["title"].clone();
+            target["diagnostic"] = delivery["message"].clone();
+            target["fix"] = delivery["hint"].clone();
+        }
     }
     let status = context["status"].as_str().unwrap_or("");
     let canary = context["rollout"]["kind"] == "canary";
@@ -738,13 +760,15 @@ pub async fn rollout(
             state.clone(),
             diagnostic.clone().or(message.clone()).unwrap_or_default(),
         );
+        let fix = target["fix"].as_str().map(str::to_owned);
         failures
             .entry(key)
             .or_insert_with(|| {
-                (
-                    json!({"state":state,"message":message,"diagnostic":diagnostic}),
-                    Vec::new(),
-                )
+                let mut group = json!({"state":state,"message":message,"diagnostic":diagnostic});
+                if fix.is_some() {
+                    group["fix"] = json!(fix);
+                }
+                (group, Vec::new())
             })
             .1
             .push(json!({"device_id":target["device_id"],"device_name":target["device_name"]}));

@@ -8,6 +8,7 @@ import {
   since,
   targetLabel,
   timelineSteps,
+  withDegraded,
 } from "./deploymentStatus";
 
 const base = {
@@ -118,6 +119,37 @@ describe("progress segments", () => {
       progressSegments({}, { stopped: true }).find((s) => s.key === "queued")
         ?.label,
     ).toBe("Not released");
+  });
+});
+
+describe("devices that verified but aren't delivering", () => {
+  it("moves them from verified to failed so the bar agrees with the stages", () => {
+    const recorded = { verified_applied: 2, pending: 1 };
+    const { counts, moved } = withDegraded(recorded, 1);
+    expect(moved).toBe(1);
+    expect(counts).toEqual({ verified_applied: 1, pending: 1, degraded: 1 });
+    const bar = Object.fromEntries(
+      progressSegments(counts).map((s) => [s.key, s.count]),
+    );
+    expect(bar).toMatchObject({ verified: 1, failed: 1, queued: 1 });
+    // The recorded counts are never changed.
+    expect(recorded).toEqual({ verified_applied: 2, pending: 1 });
+  });
+  it("never moves more than were verified and ignores nonsense", () => {
+    expect(withDegraded({ verified_applied: 1 }, 5).moved).toBe(1);
+    expect(withDegraded({ pending: 3 }, 2).moved).toBe(0);
+    for (const bad of [0, -1, Number.NaN])
+      expect(withDegraded({ verified_applied: 2 }, bad).moved).toBe(0);
+  });
+  it("labels and explains a failed rollout stopped by delivery", () => {
+    expect(targetLabel("degraded")).toBe("Not delivering");
+    expect(
+      describeDeployment({
+        ...base,
+        status: "failed",
+        failure_reason: "data_plane",
+      }).note,
+    ).toBe("Stopped: a device isn't delivering");
   });
 });
 

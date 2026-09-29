@@ -2319,8 +2319,12 @@
             {
               "enum": [
                 "verified",
-                "unassigned"
-              ]
+                "unassigned",
+                "healthy",
+                "superseded",
+                "unmonitored"
+              ],
+              "description": "verified: a configuration verified after an apply failure. unassigned: the assignment was removed. healthy: a DATA_PLANE_* condition was clear for three evaluations. superseded: the device no longer runs the version a DATA_PLANE_* issue was measured on. unmonitored: the device's settings turned metrics off, so delivery can no longer be judged."
             },
             {
               "type": "null"
@@ -2683,6 +2687,11 @@
           "minimum": 0,
           "description": "Managed devices verified on their desired version (status verified)."
         },
+        "devices_degraded": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of those, devices with an open DATA_PLANE_* issue on that version."
+        },
         "versions_total": {
           "type": "integer",
           "minimum": 0,
@@ -2773,6 +2782,7 @@
         "recent_activity",
         "devices_managed",
         "devices_on_desired",
+        "devices_degraded",
         "versions_total",
         "versions",
         "rollouts",
@@ -2950,12 +2960,14 @@
         "cause": {
           "enum": [
             "failed",
+            "degraded",
             "check_required",
             "stuck",
             "offline",
             "paused",
             "unmanaged"
-          ]
+          ],
+          "description": "degraded: verified on the desired version, with an open DATA_PLANE_* issue measured on it."
         },
         "severity": {
           "enum": [
@@ -3065,6 +3077,54 @@
           "type": "integer",
           "minimum": 0,
           "description": "Paused groups only: pauses set on the host."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups only: the most common leading data-plane issue title."
+        },
+        "fix": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups only: that issue's fix."
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 48
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups only: that issue's DATA_PLANE_* code."
+        },
+        "component_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups only: the component it names, if any."
         }
       },
       "required": [
@@ -4936,6 +4996,139 @@
           "additionalProperties": false,
           "description": "Latest summary from an agent that reports it; absent for agents that do not."
         },
+        "data_plane": {
+          "type": "object",
+          "properties": {
+            "version_id": {
+              "type": "string"
+            },
+            "evaluations": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Evaluations on this version (capped at 1000000)."
+            },
+            "evaluated_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "issues": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "issue_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "code": {
+                    "enum": [
+                      "DATA_PLANE_STALLED",
+                      "DATA_PLANE_SINK_ERRORS",
+                      "DATA_PLANE_BUFFER_FULL",
+                      "DATA_PLANE_ERROR_DROPS"
+                    ]
+                  },
+                  "component_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "component_kind": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "source",
+                          "transform",
+                          "sink"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "message": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "hint": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "since": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "issue_id",
+                  "code",
+                  "component_id",
+                  "component_kind",
+                  "title",
+                  "message",
+                  "hint",
+                  "since"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "version_id",
+            "evaluations",
+            "evaluated_at",
+            "issues"
+          ],
+          "additionalProperties": false,
+          "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+        },
         "check_in_seconds": {
           "type": "integer",
           "minimum": 10,
@@ -5780,7 +5973,9 @@
                 "stale",
                 "paused",
                 "unverified",
-                "unavailable"
+                "unavailable",
+                "measuring",
+                "degraded"
               ]
             },
             {
@@ -5788,6 +5983,60 @@
             }
           ],
           "description": "Current gate blocker for this target of an active/paused canary. Null also covers pending or no-longer-targeted rows and must not be interpreted as verified. Omitted outside this context or by older servers."
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "enum": [
+                    "DATA_PLANE_STALLED",
+                    "DATA_PLANE_SINK_ERRORS",
+                    "DATA_PLANE_BUFFER_FULL",
+                    "DATA_PLANE_ERROR_DROPS"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "hint": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "code",
+                "title",
+                "message",
+                "hint"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only on a verified_applied row whose device has an open data-plane issue on the deployment's version: the issue's title, measured reason and fix. The recorded state is unchanged."
         },
         "released_at": {
           "anyOf": [
@@ -8758,6 +9007,16 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
+            },
+            "measuring": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "degraded": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": [
@@ -8765,7 +9024,9 @@
             "stale",
             "paused",
             "unverified",
-            "unavailable"
+            "unavailable",
+            "measuring",
+            "degraded"
           ],
           "additionalProperties": false
         },
@@ -11247,7 +11508,8 @@
       "type": "object",
       "properties": {
         "state": {
-          "type": "string"
+          "type": "string",
+          "description": "A failed target state, or degraded: applied but an open DATA_PLANE_* issue on this version (message is its title, diagnostic its reason)."
         },
         "message": {
           "anyOf": [
@@ -11269,6 +11531,18 @@
               "type": "null"
             }
           ]
+        },
+        "fix": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Degraded groups only: the issue's fix."
         },
         "count": {
           "type": "integer",
@@ -11317,6 +11591,7 @@
         "state",
         "message",
         "diagnostic",
+        "fix",
         "count",
         "device_ids",
         "devices"

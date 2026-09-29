@@ -14,6 +14,7 @@ import {
   Rocket,
   Server,
   ShieldCheck,
+  Unplug,
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
@@ -64,7 +65,13 @@ type Navigate = (path: string) => void;
 
 export type AttentionGroup = {
   cause:
-    "failed" | "check_required" | "stuck" | "offline" | "paused" | "unmanaged";
+    | "failed"
+    | "degraded"
+    | "check_required"
+    | "stuck"
+    | "offline"
+    | "paused"
+    | "unmanaged";
   severity: "danger" | "warning" | "neutral";
   count: number;
   device_ids: string[];
@@ -78,6 +85,11 @@ export type AttentionGroup = {
   reason: string | null;
   requested?: number;
   local?: number;
+  /** Degraded groups: the leading delivery issue's title, code and fix. */
+  title?: string | null;
+  fix?: string | null;
+  code?: string | null;
+  component_id?: string | null;
 };
 export type RolloutSummary = {
   id: string;
@@ -107,6 +119,8 @@ export type OverviewData = {
   recent_activity: Audit[];
   devices_managed?: number;
   devices_on_desired?: number;
+  /** Applied devices with an open data-plane issue (newer servers). */
+  devices_degraded?: number;
   versions_total?: number;
   rollouts?: RolloutSummary[];
   attention?: AttentionGroup[];
@@ -706,6 +720,7 @@ function KpiTiles({ data, live }: { data: OverviewData; live: Device[] }) {
 
 const bucketIcons: Record<HealthBucket, LucideIcon> = {
   applied: CircleCheck,
+  degraded: Unplug,
   updating: LoaderCircle,
   check: CircleHelp,
   failed: CircleX,
@@ -715,6 +730,7 @@ const bucketIcons: Record<HealthBucket, LucideIcon> = {
 };
 const bucketCopy: Record<HealthBucket, string> = {
   applied: "Running their assigned version, verified by the agent.",
+  degraded: "Applied, but not delivering events.",
   updating: "Receiving or applying a new version.",
   check: "Applied, but Vector wasn't confirmed running.",
   failed: "The last apply failed or was rolled back.",
@@ -795,6 +811,7 @@ function FleetHealth({ live }: { live: Device[] }) {
 
 const severityIcons: Record<AttentionGroup["cause"], LucideIcon> = {
   failed: CircleX,
+  degraded: Unplug,
   check_required: CircleHelp,
   stuck: LoaderCircle,
   offline: WifiOff,
@@ -827,6 +844,14 @@ function attentionCopy(group: AttentionGroup, now: number) {
               "The agent restored the last working version after the apply failed.",
           }
         : { title: `${pipeline} failed on ${devices}`, detail: null };
+    case "degraded":
+      return {
+        title:
+          group.count === 1 && group.device_names[0]
+            ? `${group.device_names[0]} stopped delivering ${pipeline}`
+            : `${pipeline} stopped delivering on ${devices}`,
+        detail: [group.title, group.reason].filter(Boolean).join(". ") || null,
+      };
     case "check_required":
       return {
         title: `${pipeline} needs a check on ${devices}`,
@@ -869,6 +894,7 @@ function attentionCopy(group: AttentionGroup, now: number) {
 }
 const causeBucket: Partial<Record<AttentionGroup["cause"], HealthBucket>> = {
   failed: "failed",
+  degraded: "degraded",
   check_required: "check",
   stuck: "updating",
   offline: "offline",
@@ -896,7 +922,7 @@ function NeedsYou({
       subtitle={
         groups.length
           ? affected
-            ? `${countLabel(affected, "device")} need attention`
+            ? `${countLabel(affected, "device")} ${affected === 1 ? "needs" : "need"} attention`
             : "Nothing is failing"
           : undefined
       }
@@ -927,7 +953,7 @@ function NeedsYou({
                 </span>
                 <div className="overview-attention-copy">
                   <p className="overview-attention-title">{title}</p>
-                  {group.reason && (
+                  {group.reason && group.cause !== "degraded" && (
                     <p
                       className="overview-attention-reason"
                       title={group.reason}
@@ -937,6 +963,11 @@ function NeedsYou({
                   )}
                   {detail && (
                     <p className="overview-attention-detail">{detail}</p>
+                  )}
+                  {group.cause === "degraded" && group.fix && (
+                    <p className="overview-attention-fix">
+                      <strong>Fix</strong> {group.fix}
+                    </p>
                   )}
                   <p className="overview-attention-devices">
                     {nameList(group.device_names, group.count)}
@@ -960,7 +991,9 @@ function NeedsYou({
                     </a>
                   )}
                   {group.configuration_id &&
-                    ["failed", "check_required"].includes(group.cause) && (
+                    ["failed", "degraded", "check_required"].includes(
+                      group.cause,
+                    ) && (
                       <a
                         className="overview-inline-link"
                         href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}

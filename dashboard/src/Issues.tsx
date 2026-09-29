@@ -31,6 +31,7 @@ import { DataTable, type TableColumn, type TableSort } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
+import { isDataPlaneCode } from "./status";
 import "./control.css";
 import "./issues.css";
 
@@ -80,16 +81,30 @@ function versionLabel(context: VersionContext, versionId?: string | null) {
     ? `${name} · version ${context.version_number}`
     : name;
 }
-function attemptsLabel(attempts: number, reports?: number) {
+function attemptsLabel(attempts: number, reports?: number, code?: string) {
+  // Delivery issues count openings, and the checks that found the problem.
+  if (isDataPlaneCode(code)) {
+    const text = plural(attempts, "occurrence");
+    return reports ? `${text} · seen in ${plural(reports, "check")}` : text;
+  }
   const text = plural(attempts, "failed attempt");
   return reports && reports > attempts
     ? `${text} · reported ${plural(reports, "time")}`
     : text;
 }
 function resolution(issue: Issue) {
-  return issue.resolved_reason === "unassigned"
-    ? "Resolved when its pipeline assignment was removed."
-    : "Resolved when the device verified a configuration after this failure.";
+  switch (issue.resolved_reason) {
+    case "unassigned":
+      return "Resolved when its pipeline assignment was removed.";
+    case "healthy":
+      return "Resolved when the pipeline delivered normally for three checks in a row.";
+    case "superseded":
+      return "Resolved when the device stopped running the version this was measured on.";
+    case "unmonitored":
+      return "Resolved when metrics were turned off, so delivery can't be checked any more.";
+    default:
+      return "Resolved when the device verified a configuration after this failure.";
+  }
 }
 function canAct(user: User, issue: Issue) {
   // The original device identity must still exist; revoked identities can
@@ -523,6 +538,14 @@ function IssueSummary({ issue }: { issue: Issue }) {
             any replacement separately. Acknowledging records your decision and
             removes this issue from the open list; it does not verify recovery.
           </p>
+        ) : isDataPlaneCode(issue.code) ? (
+          <p>
+            The version applied, but the device's telemetry shows it isn't
+            delivering. Fix the destination or the component, or roll back to
+            the last working version. This closes by itself after three clean
+            checks. On the host, <code>vectory logs</code> shows Vector's full
+            output.
+          </p>
         ) : (
           <p>
             Fix the cause, then retry on the device or deploy a corrected
@@ -536,7 +559,9 @@ function IssueSummary({ issue }: { issue: Issue }) {
           section={
             issue.device_revoked
               ? "an-old-issue-stays-open-after-device-recovery"
-              : "a-pipeline-is-rejected-or-rolled-back"
+              : isDataPlaneCode(issue.code)
+                ? "a-pipeline-applies-but-delivers-nothing"
+                : "a-pipeline-is-rejected-or-rolled-back"
           }
         >
           Troubleshooting guide
@@ -544,7 +569,7 @@ function IssueSummary({ issue }: { issue: Issue }) {
         <dl className="control-summary-list">
           <div>
             <dt>Attempts</dt>
-            <dd>{attemptsLabel(issue.count, issue.reports)}</dd>
+            <dd>{attemptsLabel(issue.count, issue.reports, issue.code)}</dd>
           </div>
           <div>
             <dt>First seen</dt>
@@ -584,15 +609,17 @@ function IssueActions({
   if (!canAct(user, issue)) return null;
   return (
     <div className="issue-actions">
-      {!issue.device_revoked && issue.desired_version_id && (
-        <Button
-          variant="secondary compact"
-          aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
-          onClick={(event) => onAct("retry", issue, event.currentTarget)}
-        >
-          Retry on device
-        </Button>
-      )}
+      {!issue.device_revoked &&
+        issue.desired_version_id &&
+        !isDataPlaneCode(issue.code) && (
+          <Button
+            variant="secondary compact"
+            aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
+            onClick={(event) => onAct("retry", issue, event.currentTarget)}
+          >
+            Retry on device
+          </Button>
+        )}
       <Button
         variant="ghost compact"
         aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
@@ -706,7 +733,7 @@ function IssueGroupCard({
       id: "count",
       header: "Attempts",
       value: (issue) => issue.count,
-      cell: (issue) => attemptsLabel(issue.count, issue.reports),
+      cell: (issue) => attemptsLabel(issue.count, issue.reports, issue.code),
     },
     {
       id: "last_seen",
@@ -773,7 +800,7 @@ function IssueGroupCard({
       )}
       <p className="issue-group-meta">
         {plural(group.device_count, "device")} ·{" "}
-        {attemptsLabel(group.attempts, group.reports)}
+        {attemptsLabel(group.attempts, group.reports, group.code)}
         {group.first_seen && (
           <> · failing since {issueTime(group.first_seen)}</>
         )}
@@ -1052,7 +1079,7 @@ function IssueDisposition({
             <dt>Last reported</dt>
             <dd>
               {issueTime(snapshot.last_seen)} ·{" "}
-              {attemptsLabel(snapshot.count, snapshot.reports)}
+              {attemptsLabel(snapshot.count, snapshot.reports, snapshot.code)}
             </dd>
           </div>
           <div>

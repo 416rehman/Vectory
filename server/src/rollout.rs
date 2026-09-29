@@ -1734,14 +1734,23 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         .iter()
         .filter(|t| t["generation"].as_i64().unwrap_or(0) > 0)
         .collect();
-    let failures = released
+    let (failed, applied): (Vec<&Value>, Vec<&Value>) = released
         .iter()
-        .filter(|t| ["failed", "rolled_back", "incompatible"].contains(&text(t, "state")))
-        .count();
-    if failures as u64 > d["rollout"]["failure_threshold"].as_u64().unwrap_or(0) {
+        .copied()
+        .partition(|t| ["failed", "rolled_back", "incompatible"].contains(&text(t, "state")));
+    // A device that applied the version but isn't delivering fails like one
+    // that couldn't apply it (see canary_gate::degraded).
+    let applied: Vec<&str> = applied.iter().map(|t| text(t, "device_id")).collect();
+    let degraded = crate::canary_gate::degraded(db, d, &applied).await?;
+    let threshold = d["rollout"]["failure_threshold"].as_u64().unwrap_or(0);
+    if (failed.len() + degraded) as u64 > threshold {
         d["status"] = json!("failed");
         d["failed_at"] = json!(db::now());
-        d["failure_reason"] = json!("threshold");
+        d["failure_reason"] = json!(if failed.len() as u64 > threshold {
+            "threshold"
+        } else {
+            "data_plane"
+        });
         db::update(db, "deployment", d).await?;
         db::audit(db, "scheduler", "deployment.gate", text(d, "id"), "failed").await?;
         return Ok(());
