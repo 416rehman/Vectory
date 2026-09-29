@@ -337,6 +337,14 @@ func TestNetworkErrorsHaveBoundedReasons(t *testing.T) {
 		"Server responded with an error: 503 Service Unavailable": "http_503",
 		"Http status: 401":                                        "http_401",
 		"TcpBind { source: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }": "address_in_use",
+		// Windows words these in the system language; the Winsock code is stable.
+		"error trying to connect: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)":                                                                 "connection_refused",
+		"tcp connect error: Es konnte keine Verbindung hergestellt werden, da der Zielcomputer die Verbindung verweigerte. (os error 10061)":                                                                       "connection_refused",
+		"A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)": "timeout",
+		"An existing connection was forcibly closed by the remote host. (os error 10054)":                                                                                                                          "connection_reset",
+		"A socket operation was attempted to an unreachable network. (os error 10051)":                                                                                                                             "unreachable",
+		"A socket operation was attempted to an unreachable host. (os error 10065)":                                                                                                                                "unreachable",
+		"TCP bind failed: Only one usage of each socket address (protocol/network address/port) is normally permitted. (os error 10048)":                                                                           "address_in_use",
 		"something else": "",
 	} {
 		if got := classifyNetwork(text); got != want {
