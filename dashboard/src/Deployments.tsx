@@ -335,7 +335,12 @@ export function Deployments({
   if (invalidDetail)
     return (
       <div className="control-page deployment-page" ref={container}>
-        <button type="button" className="rollout-back" onClick={closeDetail}>
+        <button
+          type="button"
+          className="rollout-back"
+          aria-label={`Back to ${originLabel.toLowerCase()}`}
+          onClick={closeDetail}
+        >
           <ArrowLeft size={15} aria-hidden="true" /> {originLabel}
         </button>
         <div className="rollout-unavailable" role="alert">
@@ -540,7 +545,7 @@ export function Deployments({
                 <Button
                   variant="secondary compact"
                   onClick={() => openDetail(d.id)}
-                  aria-label={`Open rollout for ${title(d)}`}
+                  aria-label={`View details for ${title(d)}`}
                 >
                   Open
                 </Button>
@@ -904,7 +909,9 @@ function TargetDetails({
             : "Applies on its next check-in."
           : t.state === "verified_applied"
             ? `Verified ${exactTime(t.verified_at)}`.trim()
-            : "No reported error."}
+            : ["failed", "rolled_back", "incompatible"].includes(t.state)
+              ? "No reason reported. Open device for details."
+              : "No reported error."}
     </span>
   );
 }
@@ -1351,7 +1358,12 @@ function RolloutPage({
       role="region"
       aria-label="Deployment details"
     >
-      <button type="button" className="rollout-back" onClick={onBack}>
+      <button
+        type="button"
+        className="rollout-back"
+        aria-label={`Back to ${originLabel.toLowerCase()}`}
+        onClick={onBack}
+      >
         <ArrowLeft size={15} aria-hidden="true" /> {originLabel}
       </button>
       {error && <ErrorBox message={error} retry={reload} />}
@@ -1377,14 +1389,19 @@ function RolloutPage({
           <>
             <header className="rollout-header">
               <div className="rollout-heading">
-                <h1 ref={heading} tabIndex={-1}>
-                  {title(deployment)}
+                <div className="rollout-title">
+                  <h1 ref={heading} tabIndex={-1}>
+                    {title(deployment)}
+                  </h1>
                   {!deployment.policy && deployment.version_number !== null && (
-                    <span className="rollout-version">
+                    <span
+                      className="rollout-version"
+                      aria-label={`Version ${deployment.version_number}`}
+                    >
                       v{deployment.version_number}
                     </span>
                   )}
-                </h1>
+                </div>
                 <ul className="rollout-meta" aria-label="Rollout settings">
                   <li className="rollout-meta-status">
                     <StatusChip tone={display.tone} spin>
