@@ -1064,6 +1064,7 @@ async fn preview_inner(
     let mut outcomes = Vec::with_capacity(selected.len());
     let mut suggestions: BTreeMap<String, (Value, Vec<String>)> = BTreeMap::new();
     let mut winning_priority: Option<i64> = None;
+    let mut lineage = std::collections::HashMap::new();
     for device in &selected {
         let key = (device.clone(), resource.to_owned());
         let mut result = json!({"device_id":device,"resource":resource,"outcome":"requested"});
@@ -1086,6 +1087,46 @@ async fn preview_inner(
                 suggestions
                     .entry(text(winner, "id").to_owned())
                     .or_insert_with(|| (winner.clone(), Vec::new()))
+                    .1
+                    .push(device.clone());
+            }
+        }
+        // Everything else of this pipeline's lineage that still binds the
+        // device at or above the requested priority: its cancelled or
+        // rolled-back deployments and their rollbacks. Suggesting only the
+        // winner would leave the rest to conflict in a second round.
+        if resource == "configuration" && !requested_configuration.is_null() {
+            for c in set.iter().filter(|c| {
+                c.deployment["id"] != "preview"
+                    && kind(&c.deployment) == resource
+                    && c.devices.contains(device)
+                    && c.deployment["priority"].as_i64() >= v["priority"].as_i64()
+            }) {
+                let id = text(&c.deployment, "id");
+                if suggestions
+                    .get(id)
+                    .is_some_and(|(_, devices)| devices.contains(device))
+                    || !in_lineage(
+                        db,
+                        &mut described,
+                        &mut lineage,
+                        &c.deployment,
+                        &requested_configuration,
+                    )
+                    .await?
+                {
+                    continue;
+                }
+                let theirs = identity(db, &c.deployment, device).await?;
+                if requested_sha
+                    .get(device.as_str())
+                    .is_some_and(|sha| theirs == format!("{}:{sha}", text(v, "version_id")))
+                {
+                    continue;
+                }
+                suggestions
+                    .entry(id.to_owned())
+                    .or_insert_with(|| (c.deployment.clone(), Vec::new()))
                     .1
                     .push(device.clone());
             }
@@ -1116,6 +1157,43 @@ async fn preview_inner(
             }
         }
         outcomes.push(result);
+    }
+    // Every assignment, at any tier at or above the requested priority, that
+    // keeps a reviewed device from taking the request: replacing all of them
+    // resolves the review in one step.
+    let mut needed: BTreeMap<String, (Value, Vec<String>)> = BTreeMap::new();
+    for outcome in &outcomes {
+        if !matches!(text(outcome, "outcome"), "conflict" | "higher_priority") {
+            continue;
+        }
+        let device = text(outcome, "device_id").to_owned();
+        let ours = match v["version_id"].as_str() {
+            Some(version) => requested_sha
+                .get(device.as_str())
+                .map(|sha| format!("{version}:{sha}")),
+            None => Some(v["policy"].to_string()),
+        };
+        for c in set.iter().filter(|c| {
+            c.deployment["id"] != "preview"
+                && kind(&c.deployment) == resource
+                && c.devices.contains(&device)
+                && c.deployment["priority"].as_i64() >= v["priority"].as_i64()
+        }) {
+            if ours.as_deref() == Some(identity(db, &c.deployment, &device).await?.as_str()) {
+                continue;
+            }
+            needed
+                .entry(text(&c.deployment, "id").to_owned())
+                .or_insert_with(|| (c.deployment.clone(), Vec::new()))
+                .1
+                .push(device.clone());
+        }
+    }
+    let mut replacements_needed = Vec::with_capacity(needed.len());
+    for (assignment, devices) in needed.into_values() {
+        replacements_needed.push(
+            json!({"assignment":describe(db,&mut described,&assignment).await?,"device_ids":devices}),
+        );
     }
     let mut conflicts_described = Vec::with_capacity(issues.len());
     for mut issue in issues {
@@ -1197,7 +1275,7 @@ async fn preview_inner(
     }
     Ok(
         json!({"devices":fleet,"conflicts":conflicts_described,"warnings":warnings,"outcomes":outcomes,"artifact_previews":artifact_previews,"create_idempotency":true,"request_correlation":true,"blockers":blockers,
-            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused,"configuration_name":configuration_name}),
+            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"replacements_needed":replacements_needed,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused,"configuration_name":configuration_name}),
     )
 }
 /// Display metadata for an assignment: names and numbers, never selectors,
@@ -1212,7 +1290,8 @@ pub(crate) async fn describe(
         return Ok(described.clone());
     }
     let mut out = json!({"id":id,"name":d["name"].as_str().map(|name| name.chars().take(120).collect::<String>()),"resource":kind(d),"priority":d["priority"],"target_mode":d["target_mode"],"status":d["status"],"created_at":d["created_at"],
-        "version_id":null,"version_number":null,"configuration_id":null,"configuration_name":null,"policy":null,"policy_id":null,"policy_name":null,"created_by_name":null});
+        "version_id":null,"version_number":null,"configuration_id":null,"configuration_name":null,"policy":null,"policy_id":null,"policy_name":null,"created_by_name":null,
+        "rollback_of":d["rollback_of"].as_str().filter(|of| uuid::Uuid::parse_str(of).is_ok())});
     if let Some(actor) = d["created_by"].as_str() {
         out["created_by_name"] = json!(
             sqlx::query_scalar::<_, String>("SELECT substr(name,1,120) FROM users WHERE id=?")
@@ -1237,6 +1316,39 @@ pub(crate) async fn describe(
     }
     cache.insert(id, out.clone());
     Ok(out)
+}
+/// Whether an assignment belongs to a pipeline's lineage: a deployment of that
+/// pipeline, or a rollback (of a rollback…) of one. A rollback restores another
+/// pipeline's version, so only its `rollback_of` chain says whose it is.
+async fn in_lineage(
+    db: &mut SqliteConnection,
+    described: &mut std::collections::HashMap<String, Value>,
+    known: &mut std::collections::HashMap<String, bool>,
+    d: &Value,
+    pipeline: &Value,
+) -> Result<bool> {
+    let id = text(d, "id").to_owned();
+    if let Some(found) = known.get(&id) {
+        return Ok(*found);
+    }
+    let mut current = d.clone();
+    let mut found = false;
+    for _ in 0..16 {
+        if describe(db, described, &current).await?["configuration_id"] == *pipeline {
+            found = true;
+            break;
+        }
+        let Some(of) = current["rollback_of"].as_str().map(str::to_owned) else {
+            break;
+        };
+        match db::record(db, "deployment", &of).await {
+            Ok(next) => current = next,
+            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => break,
+            Err(error) => return Err(error),
+        }
+    }
+    known.insert(id, found);
+    Ok(found)
 }
 /// An explicit, reviewed replacement of existing assignments on these devices.
 pub(crate) struct Replacement {
@@ -2404,6 +2516,9 @@ pub(crate) async fn execute_rollback(
     if at_ceiling {
         d["status_before_removal"] = d["status"].clone();
         d["removed_at"] = json!(db::now());
+    } else if matches!(text(&d, "status"), "active" | "paused") {
+        // A live rollout stops here, exactly as cancelling it would.
+        d["cancelled_at"] = json!(db::now());
     }
     d["status"] = json!(if at_ceiling {
         "unassigned"

@@ -69,7 +69,7 @@ try:
         plan=api(source_path+"/rollback-preview")
         assert plan["ready"] and plan["previous_version_id"]==a
         assert [r["device_id"] for r in plan["eligible_devices"]]==[ids[1]]
-        assert plan["excluded_devices"]==[{"device_id":ids[0],"device_name":"rollback-fixture-0","reason":"revoked"}]
+        assert plan["excluded_devices"]==[{"device_id":ids[0],"device_name":"rollback-fixture-0","reason":"revoked","effect":None,"current":None,"next":None}]
         assert snapshot()==before
         request={"request_id":str(uuid.uuid4()),"review_token":plan["review_token"]}
         replacement=api(source_path+"/rollback",request)
