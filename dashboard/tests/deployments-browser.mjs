@@ -868,7 +868,7 @@ try {
       await expect(
         details()
           .getByRole("list", { name: "Device results", exact: true })
-          .getByRole("listitem"),
+          .locator("li.data-list-item"),
       ).toHaveCount(12);
       await expect(
         details().getByRole("button", { name: "Pause", exact: true }),
