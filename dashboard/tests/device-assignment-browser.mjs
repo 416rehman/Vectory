@@ -853,6 +853,38 @@ try {
     },
   );
   await check(
+    "a revoked device says what its agent last verified running, not a pending assignment",
+    async () => {
+      await load({
+        device: {
+          ...baseDevice(),
+          status: "revoked",
+          running_version: {
+            id: version.id,
+            number: 3,
+            configuration_id: pipeline.id,
+            configuration_name: pipeline.name,
+            generation: 5,
+          },
+        },
+      });
+      await deviceVisible();
+      await expect(
+        page.getByText(/^Revoked · last verified running (v3|.+ v3)$/),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "This device's access is revoked, so it no longer checks in: what it runs now is unknown.",
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "The agent has not yet confirmed this assignment as active.",
+        ),
+      ).toHaveCount(0);
+    },
+  );
+  await check(
     "refresh keeps known context on error and ignores an older delayed binding response",
     async () => {
       await load();

@@ -203,5 +203,18 @@ describe("runtime contract shapes", () => {
     expect(describeDiagnostic({ ...warning, message: "Cut short…" })).toBe(
       "Cut short…",
     );
+    // A finding that already names its component says it once.
+    expect(
+      describeDiagnostic({
+        severity: "error",
+        code: "NETWORK_DESTINATION_DENIED",
+        component_id: "out",
+        message:
+          'Sink "out" (http) sends to 127.0.0.1:8239, which this host hasn\'t approved.',
+        hint: "Allow it on the host, with the agent stopped: vectory allow --network 127.0.0.1:8239. Or deploy to a full-mode device.",
+      }),
+    ).toBe(
+      'Sink "out" (http) sends to 127.0.0.1:8239, which this host hasn\'t approved. Allow it on the host, with the agent stopped: vectory allow --network 127.0.0.1:8239. Or deploy to a full-mode device.',
+    );
   });
 });

@@ -416,10 +416,24 @@ export function groupDeviceResults<T extends GroupableEvent>(
   flush();
   return rows;
 }
-/** "3 device results" with names and outcomes, most common outcome first. */
+/**
+ * "3 device results" with names and outcomes, most common outcome first.
+ * Outcomes count each device once, by its latest result: one device that
+ * waited and then applied is "1 applied", not two results of two devices.
+ */
 export function deviceResultsSummary(items: GroupableEvent[]) {
+  const time = (item: GroupableEvent) => Date.parse(item.created_at || "");
+  const latest = new Map<string, GroupableEvent>();
+  items.forEach((item, index) => {
+    // A result without a device name can't be matched with another.
+    const key = item.target_name ?? `#${index}`;
+    const seen = latest.get(key);
+    if (!seen || time(item) > time(seen)) latest.set(key, item);
+  });
   const names = [
-    ...new Set(items.map((item) => item.target_name || "a device")),
+    ...new Set(
+      [...latest.values()].map((item) => item.target_name || "a device"),
+    ),
   ];
   const shown = names.slice(0, 2);
   const devices =
@@ -427,7 +441,7 @@ export function deviceResultsSummary(items: GroupableEvent[]) {
       ? `${shown.join(", ")} and ${names.length - 2} more`
       : shown.join(" and ");
   const counts = new Map<string, number>();
-  for (const item of items)
+  for (const item of latest.values())
     counts.set(item.outcome, (counts.get(item.outcome) || 0) + 1);
   const outcomes = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -437,7 +451,10 @@ export function deviceResultsSummary(items: GroupableEvent[]) {
     )
     .join(", ");
   return {
-    title: `${items.length} device results`,
+    title:
+      latest.size === items.length
+        ? `${items.length} device results`
+        : `${items.length} results for ${latest.size} ${latest.size === 1 ? "device" : "devices"}`,
     devices,
     outcomes,
   };
