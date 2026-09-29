@@ -20,6 +20,7 @@ import type { Config } from "./api";
 import { catalog, componentSchema, vectorSchema, type Kind } from "./catalog";
 import { Button, Field, Modal } from "./ui";
 import SyntheticTester from "./SyntheticTester";
+import type { Upstream } from "./sampleUpstream";
 import DocLink from "./DocLink";
 import PipelineSchemaFields, {
   FieldPathScope,
@@ -321,6 +322,7 @@ export default function PipelineSettings({
   existingTests = [],
   onSaveTests,
   focus,
+  upstream,
 }: {
   id: string;
   kind: Kind;
@@ -342,6 +344,8 @@ export default function PipelineSettings({
   onSaveTests?: (tests: Config[]) => void;
   /** Reveal a field (and a position in a VRL program) when `nonce` changes. */
   focus?: SettingsFocus | null;
+  /** What feeds this step, for the sample tester. */
+  upstream?: Upstream;
 }) {
   const definition = catalog.find(
     (c) => c.kind === kind && c.type === component.type,
@@ -521,6 +525,7 @@ export default function PipelineSettings({
         onPaths={setPathHints}
         onJump={jump}
         wide={wide}
+        upstream={upstream}
       />
     ) : null;
   const services = useMemo<VrlFieldServices>(
