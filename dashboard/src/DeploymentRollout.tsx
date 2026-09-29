@@ -339,6 +339,14 @@ export function FailureGroups({
       <h2 id="rollout-failures">Why devices failed</h2>
       <ul>
         {failures.map((failure, index) => {
+          if (failure.state === "degraded")
+            return (
+              <DeliveryFailure
+                key={`degraded-${index}`}
+                failure={failure}
+                navigate={navigate}
+              />
+            );
           const explained = explainError(failure.message);
           const reason =
             failure.diagnostic ||
@@ -409,6 +417,61 @@ export function FailureGroups({
         })}
       </ul>
     </section>
+  );
+}
+
+/**
+ * Applied, but the device's telemetry shows it isn't delivering: the delivery
+ * issue's title, the measured reason and the fix. Retrying the same version
+ * can't help, so there is no retry.
+ */
+function DeliveryFailure({
+  failure,
+  navigate,
+}: {
+  failure: RolloutFailure;
+  navigate(path: string): void;
+}) {
+  return (
+    <li data-state="degraded">
+      <div className="rollout-failure-head">
+        <StatusChip tone="warning">
+          {targetLabel(failure.state)} on {failure.count}{" "}
+          {failure.count === 1 ? "device" : "devices"}
+        </StatusChip>
+      </div>
+      <p className="rollout-failure-reason">
+        {failure.message || "The pipeline isn't delivering events"}
+      </p>
+      {failure.diagnostic && (
+        <p className="rollout-failure-detail">{failure.diagnostic}</p>
+      )}
+      {failure.fix && (
+        <p className="rollout-failure-fix">
+          <strong>Fix</strong> {failure.fix}
+        </p>
+      )}
+      <p className="rollout-failure-devices">
+        {failure.devices.map((device, position) => (
+          <span key={device.device_id}>
+            {position > 0 && ", "}
+            <a
+              href={`#/devices/${encodeURIComponent(device.device_id)}`}
+              onClick={(event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey)
+                  return;
+                event.preventDefault();
+                navigate(`devices/${encodeURIComponent(device.device_id)}`);
+              }}
+            >
+              {device.device_name || device.device_id}
+            </a>
+          </span>
+        ))}
+        {failure.count > failure.devices.length &&
+          ` and ${failure.count - failure.devices.length} more`}
+      </p>
+    </li>
   );
 }
 

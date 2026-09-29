@@ -387,6 +387,17 @@ a.overview-kpi-tile:focus-visible {
 .overview-attention-devices {
   color: var(--text-subtle);
 }
+.overview-attention-fix {
+  margin-top: var(--space-1) !important;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.overview-attention-fix strong {
+  margin-right: var(--space-1);
+  color: var(--text-muted);
+  font-weight: 600;
+}
 .overview-attention-actions {
   display: flex;
   flex-direction: column;

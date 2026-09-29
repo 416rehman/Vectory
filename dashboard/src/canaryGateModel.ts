@@ -8,6 +8,8 @@ export const gateReasons = [
   "paused",
   "unverified",
   "unavailable",
+  "measuring",
+  "degraded",
 ] as const;
 export type GateReason = (typeof gateReasons)[number];
 export const gateReasonLabels: Record<GateReason, string> = {
@@ -16,6 +18,8 @@ export const gateReasonLabels: Record<GateReason, string> = {
   paused: "Configuration sync is paused",
   unverified: "Waiting for the device to confirm",
   unavailable: "Device is unavailable",
+  measuring: "Measuring delivery",
+  degraded: "Not delivering",
 };
 export const gateReasonHelp: Record<GateReason, string> = {
   superseded:
@@ -26,6 +30,10 @@ export const gateReasonHelp: Record<GateReason, string> = {
   unverified:
     "Devices confirm on their next check-in. The rollout waits until they do.",
   unavailable: "The device was revoked or replaced.",
+  measuring:
+    "Applied. Vectory checks a few telemetry samples to confirm events are delivered before it starts observing.",
+  degraded:
+    "Applied, but its telemetry shows it isn't delivering. It counts as a failure against the threshold.",
 };
 export const CanaryGateSchema = z
   .object({
@@ -40,6 +48,9 @@ export const CanaryGateSchema = z
         paused: count,
         unverified: count,
         unavailable: count,
+        // Servers without data-plane health omit these.
+        measuring: count.default(0),
+        degraded: count.default(0),
       })
       .strict(),
     observation_started_at: z.string().datetime({ offset: true }).nullable(),

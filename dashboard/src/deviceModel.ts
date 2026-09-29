@@ -28,6 +28,7 @@ export type ListDevice = DeviceStatusInput & {
   telemetry?: {
     sampled_at?: string;
     events_per_second?: number | null;
+    events_out_per_second?: number | null;
   } | null;
 };
 
@@ -62,6 +63,13 @@ export function freshRate(device: ListDevice, now = Date.now()) {
   const rate = device.telemetry?.events_per_second;
   return present(rate) ? rate : null;
 }
+/** Events in and delivered per second from a fresh sample. */
+export function freshFlow(device: ListDevice, now = Date.now()) {
+  const input = freshRate(device, now);
+  if (input === null) return null;
+  const out = device.telemetry?.events_out_per_second;
+  return { in: input, out: present(out) ? out : null };
+}
 export function reportsTelemetry(device: ListDevice, now = Date.now()) {
   const sampled = Date.parse(device.telemetry?.sampled_at || "");
   return Number.isFinite(sampled) && now - sampled <= TELEMETRY_FRESH_MS;
@@ -75,12 +83,11 @@ export function matchesView(
   if (device.status === "revoked") return false;
   switch (view) {
     case "failing":
-      return [
-        "failed",
-        "rolled_back",
-        "conflict",
-        "verification_unknown",
-      ].includes(device.status);
+      return (
+        ["failed", "rolled_back", "conflict", "verification_unknown"].includes(
+          device.status,
+        ) || healthBucket(device) === "degraded"
+      );
     case "drift":
       return !!device.desired_version_id && !runsDesired(device);
     case "offline":
@@ -138,6 +145,7 @@ export function versionMarker(device: ListDevice): VersionMarker | null {
 /** Sort key: problems first, healthy last, revoked at the end. */
 const statusOrder: (HealthBucket | "revoked")[] = [
   "failed",
+  "degraded",
   "check",
   "offline",
   "updating",

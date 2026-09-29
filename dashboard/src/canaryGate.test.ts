@@ -20,6 +20,8 @@ const gate: Gate = {
     paused: 0,
     unverified: 0,
     unavailable: 0,
+    measuring: 0,
+    degraded: 0,
   },
   observation_started_at: null,
   observation_seconds: 60,
@@ -124,6 +126,32 @@ describe("current canary gate evidence", () => {
         }),
       ),
     ).toBe("");
+  });
+  it("explains devices still measuring delivery or not delivering", () => {
+    const html = render(
+      deployment({
+        ...gate,
+        reasons: { ...gate.reasons, superseded: 0, degraded: 1 },
+      }),
+    );
+    expect(html).toContain("Not delivering");
+    expect(html).toContain("counts as a failure");
+    expect(
+      render(
+        deployment({
+          ...gate,
+          reasons: { ...gate.reasons, superseded: 0, measuring: 1 },
+        }),
+      ),
+    ).toContain("Measuring delivery");
+    expect(readGateReason("degraded")).toBe("degraded");
+  });
+  it("reads gates from servers without data-plane health", () => {
+    const { measuring: _m, degraded: _d, ...legacy } = gate.reasons;
+    expect(
+      readCanaryGate(deployment({ ...gate, reasons: legacy }))?.reasons
+        .degraded,
+    ).toBe(0);
   });
   it("never treats null or unknown per-device reasons as current verification", () => {
     for (const value of [undefined, null, "verified", "__proto__", {}, []])

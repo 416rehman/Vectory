@@ -409,6 +409,17 @@
   font-weight: 500;
   white-space: pre-wrap;
 }
+.rollout-failure-fix {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.rollout-failure-fix strong {
+  margin-right: 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
 .rollout-failure-detail,
 .rollout-failure-devices {
   margin: 0;

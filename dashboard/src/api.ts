@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { DataPlaneSummary } from "./status";
 import { assertExactNumbers, stringifyExactJSON } from "./configurationNumbers";
 import { RollbackPreviewSchema } from "./rollbackReview";
 import { AssignmentRemovalPreviewSchema } from "./assignmentRemovalModel";
@@ -590,6 +591,8 @@ export type Device = {
   desired_version?: VersionLabel | null;
   /** Last verified managed version; null means the adopted local config. */
   running_version?: (VersionLabel & { generation?: number }) | null;
+  /** Data-plane health measured on the running version (newer servers). */
+  data_plane?: DataPlaneSummary | null;
 };
 export type VersionLabel = {
   id: string;
@@ -1010,6 +1013,8 @@ export type RolloutFailure = {
   state: string;
   message: string | null;
   diagnostic: string | null;
+  /** Degraded groups: what to do about the delivery problem. */
+  fix?: string | null;
   count: number;
   /** Every device in the group (bounded); `devices` names the first few. */
   device_ids?: string[];
@@ -1266,7 +1271,10 @@ export const IssueSchema = z.object({
   configuration_name: z.string().nullable().optional(),
   deployment_id: z.string().nullable().optional(),
   resolved: z.boolean(),
-  resolved_reason: z.enum(["verified", "unassigned"]).nullable().optional(),
+  resolved_reason: z
+    .enum(["verified", "unassigned", "healthy", "superseded"])
+    .nullable()
+    .optional(),
   resolved_at: z.string().nullable().optional(),
   revision: z.number().int().positive(),
   acknowledged: z.boolean(),
