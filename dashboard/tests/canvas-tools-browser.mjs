@@ -153,6 +153,16 @@ const telemetryOf = (values = {}) => ({
   ...values,
 });
 const emptyTelemetry = telemetryOf();
+// A step that changes nothing: every sample comes out as it went in. Steps
+// added in a check open their inspector, which runs the default samples.
+const passthrough = (body) => {
+  const { samples } = JSON.parse(body);
+  const results = samples.map(
+    (event, index) =>
+      `{"sample":${index},"outcome":"emitted","outputs":[{"port":"","event":${JSON.stringify(event)},"timestamps":[]}]}`,
+  );
+  return `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${results.join(",")}]}`;
+};
 
 async function load({
   document = baseDocument(),
@@ -486,16 +496,7 @@ try {
     "a new step lands in free space, fed by the selection, and the picker explains what cannot connect",
     async () => {
       // The new filter opens its inspector, which runs the default samples.
-      await load({
-        vrl: (body) => {
-          const { samples } = JSON.parse(body);
-          const results = samples.map(
-            (event, index) =>
-              `{"sample":${index},"outcome":"emitted","outputs":[{"port":"","event":${JSON.stringify(event)},"timestamps":[]}]}`,
-          );
-          return `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${results.join(",")}]}`;
-        },
-      });
+      await load({ vrl: passthrough });
       await node("sample").click();
       await button("Add component").click();
       await expect(picker()).toBeVisible();
@@ -530,7 +531,7 @@ try {
   await check(
     "+ on a selected connection inserts a step between its ends",
     async () => {
-      await load();
+      await load({ vrl: passthrough });
       const edge = page.locator(
         '.react-flow__edge[aria-label="Connection from sample to other"]',
       );
