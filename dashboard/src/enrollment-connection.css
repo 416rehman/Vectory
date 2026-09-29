@@ -1,69 +1,111 @@
-.enrollment-trust {
-  margin: 22px 0 26px;
+.enroll-modes {
+  min-width: 0;
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
 }
-.enrollment-trust > .field {
-  margin-bottom: 8px;
+.enroll-modes legend {
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 550;
 }
-.enrollment-trust-purpose,
-.enrollment-certificate-retain {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 8px 0;
+.enroll-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
 }
-.enrollment-certificate-file {
-  margin: 16px 0 12px;
-  padding: 14px;
+.enroll-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    border-color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
 }
-.enrollment-certificate-file .field {
-  margin-bottom: 8px;
+.enroll-mode:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
 }
-.enrollment-certificate-retain {
-  margin-bottom: 0;
+.enroll-mode:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
-.enrollment-trust-help {
-  font-size: 12px;
-  line-height: 1.6;
+.enroll-mode:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.enroll-modes:disabled .enroll-mode {
+  cursor: default;
+  opacity: 0.7;
+}
+.enroll-mode input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.enroll-mode svg {
+  margin-top: 1px;
   color: var(--muted);
 }
-.enrollment-trust-help > summary {
-  width: fit-content;
-  padding: 6px 0;
-  color: var(--ink);
-  cursor: pointer;
-}
-.enrollment-trust-help > summary:hover {
+.enroll-mode:has(input:checked) svg {
   color: var(--accent-ink);
 }
-.enrollment-trust-help > div {
-  padding: 0 0 8px;
+.enroll-mode strong {
+  display: block;
+  font-size: 14px;
 }
-.enrollment-trust-help ol {
-  padding-left: 20px;
-  margin: 8px 0;
+.enroll-mode small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
-.enrollment-trust-help li + li {
-  margin-top: 8px;
+.enroll-receipt {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
 }
-.enrollment-trust-help code {
+.enroll-receipt > div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+}
+.enroll-receipt dt {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.enroll-receipt dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.enroll-receipt code {
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
-.enrollment-policy {
-  margin: 12px 0 18px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-soft);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.enrollment-policy > p {
-  margin: 0 0 12px;
-  color: var(--muted);
-}
-.enrollment-policy .field {
-  margin-bottom: 8px;
+@media (max-width: 640px) {
+  .enroll-mode-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .enroll-receipt > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }

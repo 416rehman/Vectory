@@ -1064,6 +1064,18 @@ export type Token = {
   name_prefix?: string | null;
   revoked: boolean;
   created_at: string;
+  recovery_device_id?: string;
+  recovery_name?: string;
+  /** Usage added by the token list: who created it and what it enrolled. */
+  created_by?: { id: string; name: string | null } | null;
+  last_used_at?: string | null;
+  device_count?: number;
+  devices?: {
+    id: string;
+    name: string;
+    revoked: boolean;
+    enrolled_at: string | null;
+  }[];
 };
 export type Release = {
   name: string;
@@ -1074,7 +1086,77 @@ export type Release = {
   size: number;
   url: string;
   signed: boolean;
+  /** "bundled" with the server image, or from the operator "mirror". */
+  source?: "bundled" | "mirror";
 };
+const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
+// Values reach copyable shell commands, so every field is checked strictly.
+const ReleaseSchema = z.object({
+  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,149}$/),
+  os: z.enum(["linux", "darwin", "windows"]),
+  arch: z.enum(["amd64", "arm64"]),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/),
+  sha256: sha256Hex,
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  url: z.string().regex(/^\/api\/v1\/releases\/[A-Za-z0-9._-]+$/),
+  signed: z.boolean(),
+  source: z.enum(["bundled", "mirror"]).optional(),
+});
+const agentOrigin = z
+  .string()
+  .regex(
+    /^https:\/\/(?:[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\[[0-9a-f:.]+\])(?::\d{1,5})?$/,
+  );
+export const AgentInstallSchema = z.object({
+  agent_url: agentOrigin.nullable(),
+  agent_url_configured: z.boolean(),
+  listener_enabled: z.boolean(),
+  dashboard_url: z.string().nullable(),
+  certificate: z
+    .object({
+      available: z.boolean(),
+      publicly_trusted: z.boolean(),
+      ca_sha256: sha256Hex.nullable(),
+      ca_fingerprint: z.string().max(95).nullable().optional(),
+      ca_name: z.string().max(200).nullable().optional(),
+      ca_issuer: z.string().max(200).nullable().optional(),
+      ca_not_after: z.string().nullable().optional(),
+      problem: z.string().max(1000).nullable(),
+    })
+    .nullable(),
+  downloads_enabled: z.boolean(),
+  installer: z
+    .object({
+      url: z.string(),
+      sha256: sha256Hex,
+      platforms: z.array(z.string()),
+    })
+    .nullable(),
+  default_install_dir: z.string(),
+  releases: z.array(ReleaseSchema).max(100),
+  catalog_problems: z.array(z.string()).max(200),
+});
+export type AgentInstall = z.infer<typeof AgentInstallSchema>;
+const boundedText = (max: number) => z.string().max(max).nullable();
+export const EnrollmentEventSchema = z.object({
+  id: boundedText(128),
+  created_at: boundedText(64),
+  outcome: z.enum(["success", "failure"]),
+  reason_code: boundedText(64),
+  device_id: boundedText(128),
+  device_name: boundedText(100),
+  token_id: boundedText(128),
+  agent_os: boundedText(64),
+  agent_arch: boundedText(64),
+  agent_version: boundedText(64),
+  configuration_mode: boundedText(16),
+  client_address: boundedText(64),
+});
+export type EnrollmentEvent = z.infer<typeof EnrollmentEventSchema>;
+export const EnrollmentActivitySchema = z.object({
+  events: z.array(EnrollmentEventSchema).max(50),
+  now: z.string(),
+});
 export const ConfigurationAttemptSchema = z
   .object({
     generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),

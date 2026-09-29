@@ -20,7 +20,7 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 <!-- verify-after-merge: default state directories after W1 unifies paths -->
 | Flag | Meaning |
 | --- | --- |
-| `--state-dir PATH` | The agent's private state: identity, settings and recovery copies. Defaults: `/var/lib/vectory` on Linux, `/Library/Application Support/Vectory` on macOS, `C:\ProgramData\Vectory` on Windows. Must be absolute. |
+| `--state-dir PATH` | The agent's private state: identity, settings and recovery copies. Defaults: `/var/lib/vectory-agent` on Linux, `/Library/Application Support/Vectory/agent` on macOS, `C:\ProgramData\Vectory\agent` on Windows. Must be absolute. |
 | `--json` | Print machine-readable JSON instead of text. |
 
 ## Commands at a glance
@@ -59,15 +59,19 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 | `--server URL` | The agent listener, for example `https://vectory.example.com:8443`. |
 | `--ca-sha256 HEX` | Trust only a server whose certificate chain includes this CA fingerprint. |
 | `--ca-file PATH` | Trust the CA certificate (PEM) in this file instead. |
+| `--name NAME` | Device name in the dashboard. Defaults to this host's name. |
 | `--token-file PATH`, `--token-stdin` | Read the enrollment token from a protected file or standard input. Without either, `setup` asks for it with hidden input. |
 | `--mode full` | Use full Vector mode. Restricted is the default. |
 | `--capability-policy PATH` | Restricted-mode allowances. |
 | `--vector-binary PATH` | The Vector binary to adopt. Found automatically when omitted. |
+| `--managed-config PATH` | The one configuration file the agent manages. Defaults to the platform path above. |
 | `--service auto` | Service manager to register with: `auto`, `systemd`, `launchd`, `windows` or `none`. |
 | `--service-user NAME`, `--create-user` | Account the service runs as, and whether to create it. |
-| `--dry-run` | Show what would happen without changing anything. |
+| `--keep-existing-vector` | Continue even though another Vector is running. Setup leaves that Vector untouched. |
+| `--dry-run` | Check everything and show the plan without changing anything. |
+| `--json` | Print the result as JSON for scripts. |
 
-`setup` never adopts a Vector that is already running. If it finds one, it stops and explains how to hand it over.
+`setup` never adopts a Vector that is already running. If it finds one, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
 
 ## install
 
@@ -76,7 +80,7 @@ Adopt a Vector binary and the configuration file the agent will manage. Run it a
 ```sh
 sudo vectory install \
   --vector-binary /usr/bin/vector \
-  --managed-config /etc/vector/vectory-managed/managed.json \
+  --managed-config /etc/vectory/managed/vector.json \
   --adopt
 ```
 
@@ -258,7 +262,7 @@ Delete the agent's state directory. Stop and unregister the service first.
 
 <!-- verify-after-merge: default Linux state directory after W1 unifies paths -->
 ```sh
-sudo vectory uninstall --purge --state-dir /var/lib/vectory
+sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 ```
 
 | Flag | Meaning |

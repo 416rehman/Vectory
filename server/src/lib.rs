@@ -17,6 +17,7 @@ pub mod device_revocation;
 pub mod error;
 pub mod group_requests;
 pub mod groups;
+pub mod install;
 pub mod issues;
 pub mod login_challenges;
 pub mod maintenance;
@@ -63,6 +64,20 @@ pub struct Settings {
     /// Take the client address from the last X-Forwarded-For hop. Enable only
     /// when the HTTP listener is reachable solely through a trusted proxy.
     pub trust_proxy_headers: bool,
+    /// Agent builds shipped inside the server image. Entries in the operator
+    /// mirror (`releases_dir`) replace the bundled build for their platform.
+    pub bundled_releases_dir: Option<PathBuf>,
+    /// Public HTTPS origin of the agent listener as devices reach it. When
+    /// unset, Add device derives it from the dashboard's host and `agent_port`.
+    pub public_agent_url: Option<String>,
+    /// Public origin of the dashboard, for device links and the startup banner.
+    pub public_url: Option<String>,
+    /// Refuse the unauthenticated installer and agent downloads on the agent listener.
+    pub disable_public_agent_downloads: bool,
+    /// Port of the agent TLS listener; None when the listener is off.
+    pub agent_port: Option<u16>,
+    /// The certificate chain (PEM) the agent listener presents, read at startup.
+    pub agent_certificate_pem: Option<String>,
 }
 pub struct App {
     pub pool: SqlitePool,
@@ -164,7 +179,8 @@ impl App {
         // must not exhaust browser authentication's independent memory budget.
         let authenticated_device = key.starts_with("heartbeat:")
             || key.starts_with("artifact:")
-            || key.starts_with("renew:");
+            || key.starts_with("renew:")
+            || key.starts_with("identity:");
         let maximum_entries = if authenticated_device {
             DEVICE_LIMIT_KEYS
         } else {

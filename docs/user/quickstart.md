@@ -129,7 +129,7 @@ To remove the agent from this machine, stop and unregister its service, then del
 ```sh
 sudo vectory service-stop
 sudo vectory service-uninstall
-sudo vectory uninstall --purge --state-dir /var/lib/vectory
+sudo vectory uninstall --purge --state-dir /var/lib/vectory-agent
 ```
 
 State, logs and the test certificate authority stay in `.local/` until you delete that folder.

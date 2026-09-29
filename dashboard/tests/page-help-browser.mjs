@@ -168,6 +168,19 @@ await context.route("**/*", async (route) => {
     return reply({ device_id: deviceId, samples: [] });
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))
     return reply([]);
+  if (path === "/agent-install")
+    return reply({
+      agent_url: null,
+      agent_url_configured: false,
+      listener_enabled: false,
+      dashboard_url: null,
+      certificate: null,
+      downloads_enabled: true,
+      installer: null,
+      default_install_dir: "/usr/local/bin",
+      releases: [],
+      catalog_problems: [],
+    });
   if (
     [
       "/configurations/library",

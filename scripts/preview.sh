@@ -48,6 +48,30 @@ chmod 700 "$preview"
 if [[ ! -f "$root/.local/pki/server.pem" ]]; then
   (cd "$root" && go run packaging/dev-pki/main.go --out .local/pki --hosts localhost,127.0.0.1,::1)
 fi
+# The agent listener presents its CA after the server certificate (a full
+# chain), so Add device can offer a CA pin that devices check.
+chain="$preview/agent-chain.pem"
+if [[ "$(grep -c 'BEGIN CERTIFICATE' "$root/.local/pki/server.pem")" == 1 ]]; then
+  cat "$root/.local/pki/server.pem" "$root/.local/pki/ca.pem" > "$chain"
+else
+  cp "$root/.local/pki/server.pem" "$chain"
+fi
+
+# Agents bundled with this preview, as the server image bundles them. Rebuilt
+# when agent sources change; VECTORY_PREVIEW_AGENT_TARGETS (for example
+# "linux/amd64 darwin/arm64") limits the platforms for a faster start.
+bundled="$preview/agent-releases"
+if [[ ! -f "$bundled/catalog.json" || -n "$(find "$root/agent" -name '*.go' -newer "$bundled/catalog.json" -print -quit)" ]]; then
+  if command -v go >/dev/null && command -v python3 >/dev/null; then
+    targets=()
+    for target in ${VECTORY_PREVIEW_AGENT_TARGETS:-}; do targets+=(--target "$target"); done
+    echo "Building bundled agents into $bundled..."
+    rm -rf "$bundled"
+    python3 "$root/packaging/build-release.py" --no-archives --out "$bundled" ${targets[@]+"${targets[@]}"} >/dev/null
+  else
+    echo "Go or Python is missing; the preview has no bundled agents." >&2
+  fi
+fi
 if [[ ! -f "$preview/bootstrap.secret" ]]; then
   (umask 077 && head -c 48 /dev/urandom | base64 | tr -d '\n' > "$preview/bootstrap.secret")
 fi
@@ -72,12 +96,15 @@ export VECTORY_DATA_DIR="$preview/state"
 export VECTORY_DEVELOPMENT=true
 export VECTORY_COOKIE_SECURE=false
 export VECTORY_BOOTSTRAP_SECRET_FILE="$preview/bootstrap.secret"
-export VECTORY_TLS_CERT="$root/.local/pki/server.pem"
+export VECTORY_TLS_CERT="$chain"
 export VECTORY_TLS_KEY="$root/.local/pki/server-key.pem"
 export VECTORY_HTTP_ADDR="127.0.0.1:$web_port"
 export VECTORY_AGENT_ADDR="127.0.0.1:$agent_port"
+export VECTORY_PUBLIC_URL="http://127.0.0.1:$web_port"
 export VECTORY_DASHBOARD_DIR="$root/dashboard/dist"
-export VECTORY_RELEASES_DIR="${VECTORY_RELEASES_DIR:-$root/artifacts/releases}"
+export VECTORY_BUNDLED_RELEASES_DIR="$bundled"
+# An optional operator mirror; its builds replace bundled ones per platform.
+export VECTORY_RELEASES_DIR="${VECTORY_RELEASES_DIR:-$preview/release-mirror}"
 export VECTORY_INSTANCE_NAME="${VECTORY_INSTANCE_NAME:-Local preview}"
 [[ -n "$validation_url" ]] && export VECTORY_VALIDATION_URL="$validation_url"
 mkdir -p "$VECTORY_RELEASES_DIR"
@@ -85,8 +112,9 @@ nohup "$server_bin" >"$preview/server.log" 2>&1 &
 echo $! > "$preview/server.pid"
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$web_port/api/v1/status" >/dev/null 2>&1; then
-    echo "Preview running at http://127.0.0.1:$web_port (agent TLS https://localhost:$agent_port)."
+    echo "Preview running at http://127.0.0.1:$web_port (agent TLS https://127.0.0.1:$agent_port)."
     echo "Bootstrap secret: $preview/bootstrap.secret"
+    echo "Add a device from Devices > Add device; the server log ($preview/server.log) shows the CA fingerprint."
     exit 0
   fi
   sleep 0.5

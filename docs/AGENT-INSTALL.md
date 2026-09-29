@@ -13,7 +13,7 @@ You need Vector 0.58.0 on the host, an enrollment token from **Add device**, and
 sudo install -m 0755 vectory /usr/local/bin/vectory
 sudo vectory install \
   --vector-binary /usr/bin/vector \
-  --managed-config /etc/vector/vectory-managed/managed.json \
+  --managed-config /etc/vectory/managed/vector.json \
   --adopt
 sudo vectory enroll --server https://vectory.example.com:8443 --id web-01
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin vectory

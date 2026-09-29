@@ -1,67 +1,75 @@
-import { FileCheck2, Layers, ShieldCheck } from "lucide-react";
-import DescribedPicker, { type DescribedOption } from "./DescribedPicker";
+import { Layers, ShieldCheck } from "lucide-react";
+import type { AgentInstall } from "./api";
 import DocLink from "./DocLink";
-import { Field } from "./ui";
+import {
+  fingerprint,
+  shortDigest,
+  shortFingerprint,
+  type HostOS,
+  type Mode,
+} from "./enrollmentCommands";
 import "./enrollment-connection.css";
 
-export type ConfigurationMode = "full" | "restricted";
-const modes: readonly DescribedOption<ConfigurationMode>[] = [
-  {
-    value: "full",
-    label: "Full Vector configuration",
-    summary: "All features in the installed Vector build.",
-    description:
-      "Use all features in the installed Vector build, including files, network access, secret providers and command sources. Running the installation command grants pipeline publishers these capabilities with Vector's host permissions.",
-    icon: Layers,
-  },
+const modes: {
+  value: Mode;
+  label: string;
+  summary: string;
+  icon: typeof Layers;
+}[] = [
   {
     value: "restricted",
-    label: "Restricted components and resources",
-    summary: "A limited component set with locally approved resources.",
-    description:
-      "Use the restricted component set. A host operator approves allowed files, network destinations and listeners on the device. The dashboard cannot widen these permissions.",
+    label: "Restricted",
+    summary:
+      "Reviewed components only. Files, destinations and listeners must be approved on the host.",
     icon: ShieldCheck,
   },
+  {
+    value: "full",
+    label: "Full Vector",
+    summary:
+      "Every Vector feature. People who publish pipelines get Vector's permissions on this host.",
+    icon: Layers,
+  },
 ];
-export function ConfigurationModePicker({
+
+/** The configuration mode as two cards; neither is chosen until the person picks one. */
+export function ModeCards({
   value,
   onChange,
   disabled,
 }: {
-  value: ConfigurationMode | "";
-  onChange: (mode: ConfigurationMode) => void;
+  value: Mode | "";
+  onChange: (mode: Mode) => void;
   disabled: boolean;
 }) {
   return (
-    <DescribedPicker
-      label="Vector configuration mode"
-      menuLabel="Choose configuration mode"
-      placeholder="Choose how this device is managed"
-      value={value}
-      options={modes}
-      onChange={onChange}
-      disabled={disabled}
-    />
+    <fieldset className="enroll-modes" disabled={disabled}>
+      <legend>How should Vectory manage this device?</legend>
+      <div className="enroll-mode-options">
+        {modes.map(({ value: mode, label, summary, icon: Icon }) => (
+          <label className="enroll-mode" key={mode}>
+            <input
+              type="radio"
+              name="enroll-mode"
+              value={mode}
+              checked={value === mode}
+              onChange={() => onChange(mode)}
+            />
+            <Icon size={18} aria-hidden="true" />
+            <span>
+              <strong>{label}</strong>
+              <small>{summary}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      <DocLink topic="installation" section="choose-configuration-capabilities">
+        Compare the modes
+      </DocLink>
+    </fieldset>
   );
 }
-const trustOptions: readonly DescribedOption<"system" | "file">[] = [
-  {
-    value: "system",
-    label: "Use system trust",
-    summary: "Already trusted by the device. No extra file needed.",
-    description:
-      "Use certificates already trusted by the device's operating system, including public authorities and certificates installed by your organization. No CA file is needed.",
-    icon: ShieldCheck,
-  },
-  {
-    value: "file",
-    label: "Provide a certificate file",
-    summary: "For a private CA the device does not already trust.",
-    description:
-      "Provide the public CA certificate that issued this server's HTTPS certificate, or its independently verified public certificate if it is deliberately self-signed. Use this when the device does not already trust the server.",
-    icon: FileCheck2,
-  },
-];
+
 export function isAbsoluteLocalFilePath(value: string, os: string): boolean {
   if (!value || value !== value.trim()) return false;
   if (os !== "windows")
@@ -91,180 +99,91 @@ export function isAbsoluteLocalFilePath(value: string, os: string): boolean {
   );
 }
 
-export function RestrictedPolicyFile({
-  value,
-  onChange,
+/**
+ * What protects this install, with the real values: the installer's SHA-256,
+ * the pinned server CA and the token's limits.
+ */
+export function SecurityReceipt({
+  install,
   os,
-  disabled,
+  agentSha256,
+  expiresAt,
+  maxUses,
 }: {
-  value: string;
-  onChange: (value: string) => void;
-  os: string;
-  disabled: boolean;
+  install: AgentInstall;
+  os: HostOS;
+  agentSha256: string | null;
+  expiresAt: string;
+  maxUses: number | null;
 }) {
-  const invalid = !!value && !isAbsoluteLocalFilePath(value, os);
+  const certificate = install.certificate;
+  const expiry = new Date(expiresAt);
+  const time = Number.isNaN(expiry.valueOf())
+    ? "later"
+    : expiry.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
   return (
-    <section
-      className="enrollment-policy"
-      aria-label="Restricted mode allowances"
-    >
-      <p>
-        A fresh restricted installation has no local file, network, or listener
-        allowances. If this workload needs any, prepare an approved JSON policy
-        file on the device and enter its path here. The dashboard cannot grant
-        these permissions.
-      </p>
-      <Field
-        label="Local allowance file on the device (optional)"
-        hint={
-          invalid
-            ? os === "windows"
-              ? "Use a full path on a local drive; network shares and relative paths are not supported."
-              : "Use a full path on this device, not a relative path."
-            : "The install command will read this existing file. This form does not create or upload it."
-        }
-      >
-        <input
-          value={value}
-          aria-invalid={invalid}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={
-            os === "windows"
-              ? "C:\\ProgramData\\Vectory\\capabilities.json"
-              : "/etc/vectory/capabilities.json"
-          }
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </Field>
-      <DocLink topic="installation" section="configure-restricted-allowances">
-        How to prepare local allowances
-      </DocLink>
-    </section>
-  );
-}
-
-export function ServerCertificateTrust({
-  privateCA,
-  onPrivateCAChange,
-  caFile,
-  onCaFileChange,
-  os,
-  disabled,
-}: {
-  privateCA: boolean;
-  onPrivateCAChange: (value: boolean) => void;
-  caFile: string;
-  onCaFileChange: (value: string) => void;
-  os: string;
-  disabled: boolean;
-}) {
-  return (
-    <section className="enrollment-trust" aria-label="Server certificate setup">
-      <DescribedPicker
-        label="Server certificate trust"
-        menuLabel="Choose certificate trust"
-        value={privateCA ? "file" : "system"}
-        options={trustOptions}
-        onChange={(value) => onPrivateCAChange(value === "file")}
-        disabled={disabled}
-      />
-      <p className="enrollment-trust-purpose">
-        The agent verifies this server before sending its enrollment token.
-      </p>
-      {privateCA && (
-        <div className="enrollment-certificate-file">
-          <p className="enrollment-certificate-preparation">
-            First get the <strong>public CA certificate</strong> that issued
-            this server&apos;s agent HTTPS certificate. If you run the server,
-            use the issuing CA from your server setup; otherwise, request it
-            from the server administrator through a trusted channel. Copy the
-            PEM file to the device before entering its path.
-          </p>
-          <Field
-            label="CA certificate path on the device"
-            hint={
-              caFile && !isAbsoluteLocalFilePath(caFile, os)
-                ? os === "windows"
-                  ? "Use a full path on a local drive, such as C:\\ProgramData\\VectoryTrust\\server-ca.pem. UNC shares and device paths are not supported here."
-                  : "Enter the full path on the device. Relative paths can fail when the agent runs as a service."
-                : "Enter the full path to that public PEM file on the device, not the path on the server. On Windows, keep it on a local drive."
-            }
-          >
-            <input
-              value={caFile}
-              aria-invalid={!isAbsoluteLocalFilePath(caFile, os)}
-              required
-              disabled={disabled}
-              onChange={(event) => onCaFileChange(event.target.value)}
-              placeholder={
-                os === "windows"
-                  ? "C:\\ProgramData\\VectoryTrust\\server-ca.pem"
-                  : "/etc/vectory/trust/server-ca.pem"
-              }
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </Field>
-          <p className="enrollment-certificate-retain">
-            Keep this file at the same path, readable by the agent. It is needed
-            for future connections; entering a path does not upload or verify
-            the file.
-          </p>
+    <dl className="enroll-receipt" aria-label="What protects this install">
+      {os !== "windows" && install.installer && (
+        <div>
+          <dt>Installer</dt>
+          <dd>
+            Runs only if its SHA-256 matches{" "}
+            <code title={install.installer.sha256}>
+              {shortDigest(install.installer.sha256)}
+            </code>
+            . It checks the agent it downloads the same way.
+          </dd>
         </div>
       )}
-      <details className="enrollment-trust-help">
-        <summary>
-          {privateCA
-            ? "I run the server — how do I find the right file?"
-            : "Which certificate option should I choose?"}
-        </summary>
+      {os === "windows" && agentSha256 && (
         <div>
-          {privateCA ? (
+          <dt>Agent</dt>
+          <dd>
+            The command stops unless vectory.exe matches SHA-256{" "}
+            <code title={agentSha256}>{shortDigest(agentSha256)}</code>.
+          </dd>
+        </div>
+      )}
+      <div>
+        <dt>Server</dt>
+        <dd>
+          {certificate?.publicly_trusted ? (
             <>
-              <ol>
-                <li>
-                  Check which certificate your server uses for its agent HTTPS
-                  listener. In a direct deployment this is configured with{" "}
-                  <code>VECTORY_TLS_CERT</code>; the supplied Compose setup uses{" "}
-                  <code>VECTORY_TLS_CERT_FILE</code>. Get the public PEM
-                  certificate or chain for the authority that issued it. For a
-                  deliberately self-signed listener, use its independently
-                  verified public certificate.
-                </li>
-                <li>
-                  If you used Vectory&apos;s development certificate script, use{" "}
-                  <code>ca.pem</code> from its output folder (by default{" "}
-                  <code>.local/pki/ca.pem</code> on the server).
-                </li>
-                <li>
-                  Copy the public file to the device through trusted access or
-                  provisioning. Compare its SHA-256 certificate fingerprint with
-                  the issuer&apos;s trusted copy, then keep it at a stable path
-                  readable by the agent.
-                </li>
-              </ol>
-              <p>
-                Copy only public certificates, never private keys. The separate{" "}
-                <code>device-ca.pem</code> identifies enrolled devices; it is
-                not the certificate for trusting the server.
-              </p>
+              Verified with the host&apos;s trusted certificate authorities; the
+              certificate is publicly trusted.
+            </>
+          ) : certificate?.ca_sha256 ? (
+            <>
+              CA pinned{" "}
+              <code title={fingerprint(certificate.ca_sha256)}>
+                {shortFingerprint(certificate.ca_sha256)}
+              </code>
+              {certificate.ca_name ? ` (${certificate.ca_name})` : ""}. The host
+              trusts no other certificate for this server, and never the first
+              one it happens to see.
             </>
           ) : (
-            <p>
-              Choose system trust if this device already trusts the agent
-              listener&apos;s certificate through its operating system. If it
-              does not, select a certificate file and copy the issuing public CA
-              to the device. Opening this dashboard in your browser does not
-              confirm trust on another device.
-            </p>
+            "The host must already trust this server's certificate."
           )}
-          <DocLink topic="installation" section="trust-the-server-certificate">
-            Server certificate setup guide
-          </DocLink>
-        </div>
-      </details>
-    </section>
+        </dd>
+      </div>
+      <div>
+        <dt>Token</dt>
+        <dd>
+          {maxUses === 1
+            ? "Works once"
+            : maxUses
+              ? `Works for ${maxUses} devices`
+              : "Works for any number of devices"}{" "}
+          and expires {time}. Setup asks for it, so it stays out of the command
+          and shell history.
+        </dd>
+      </div>
+    </dl>
   );
 }
