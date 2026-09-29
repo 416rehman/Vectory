@@ -1750,15 +1750,36 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         .iter()
         .copied()
         .partition(|t| ["failed", "rolled_back", "incompatible"].contains(&text(t, "state")));
-    // A device that applied the version but isn't delivering fails like one
-    // that couldn't apply it (see canary_gate::degraded).
+    // A canary that still has waves to release is held back by a released
+    // device that applied the version but isn't delivering (see
+    // canary_gate::degraded). Nothing else is: an all-at-once or finished
+    // rollout has no next wave to protect, so a destination outage never
+    // turns an assignment into a configuration failure. Lanes, Overview and
+    // Issues already show the degraded devices.
     let applied: Vec<&str> = applied.iter().map(|t| text(t, "device_id")).collect();
-    let degraded = crate::canary_gate::degraded(db, d, &applied).await?;
+    let gate_delivery = d["rollout"]["kind"] == "canary" && !pending.is_empty();
+    let degraded = if gate_delivery {
+        crate::canary_gate::degraded(db, d, &applied).await?
+    } else {
+        0
+    };
     let threshold = d["rollout"]["failure_threshold"].as_u64().unwrap_or(0);
     if (failed.len() + degraded) as u64 > threshold {
+        let apply_failure = failed.len() as u64 > threshold;
+        if !apply_failure && text(d, "target_mode") == "persistent" {
+            // A persistent assignment keeps following its group. Holding the
+            // next wave is a pause the operator can resume, never a terminal
+            // failure that freezes membership in both directions.
+            d["status"] = json!("paused");
+            d["failure_reason"] = json!("data_plane");
+            crate::canary_gate::clear(d);
+            db::update(db, "deployment", d).await?;
+            db::audit(db, "scheduler", "deployment.gate", text(d, "id"), "paused").await?;
+            return Ok(());
+        }
         d["status"] = json!("failed");
         d["failed_at"] = json!(db::now());
-        d["failure_reason"] = json!(if failed.len() as u64 > threshold {
+        d["failure_reason"] = json!(if apply_failure {
             "threshold"
         } else {
             "data_plane"
@@ -2134,6 +2155,11 @@ pub async fn action(
                 ));
             }
             d["status"] = json!("active");
+            if let Some(fields) = d.as_object_mut() {
+                if fields.get("failure_reason").and_then(Value::as_str) == Some("data_plane") {
+                    fields.remove("failure_reason");
+                }
+            }
             crate::canary_gate::clear(&mut d);
         }
         "unassign" => {

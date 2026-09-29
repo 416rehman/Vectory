@@ -522,3 +522,214 @@ async fn the_longest_component_names_never_fail_a_heartbeat() {
         );
     }
 }
+
+async fn group_of(f: &Fixture, ids: &[String]) -> String {
+    let group = db::id();
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "group",
+        &json!({"id":group,"name":"web","description":"","device_ids":ids,"created_at":db::now(),"revision":1}),
+    )
+    .await
+    .unwrap();
+    group
+}
+async fn persistent(f: &Fixture, group: &str, rollout: Value) -> Value {
+    let (status, d) = call(
+        &f.app,
+        "POST",
+        "/api/v1/deployments",
+        json!({"version_id":f.version,"selector":{"group_ids":[group],"device_ids":[],"exclude_ids":[]},"priority":100,"target_mode":"persistent","rollout":rollout}),
+        f,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{d}");
+    d
+}
+
+#[tokio::test]
+async fn a_finished_persistent_assignment_keeps_following_its_group_while_a_member_is_not_delivering()
+ {
+    let f = fixture().await;
+    let group = group_of(&f, &f.ids).await;
+    let d = persistent(
+        &f,
+        &group,
+        json!({"kind":"all","canary_size":1,"batch_size":1,"observation_seconds":0,"failure_threshold":0}),
+    )
+    .await;
+    let id = d["id"].as_str().unwrap();
+    let first = agent(&f, &f.ids[0]).await;
+    let second = agent(&f, &f.ids[1]).await;
+    beat(&f, &first, &f.ids[0], 1, healthy()).await;
+    beat(&f, &second, &f.ids[1], 1, healthy()).await;
+    vectory_server::rollout::tick(&f.s).await.unwrap();
+    let summary = get(&f, &format!("/api/v1/deployments/{id}/summary")).await;
+    assert_eq!(summary["status"], "completed", "{summary}");
+
+    // One member's destination goes down: two evaluations open its issues.
+    beat(&f, &first, &f.ids[0], 2, failing()).await;
+    beat(&f, &first, &f.ids[0], 3, failing()).await;
+    let device = get(&f, &format!("/api/v1/devices/{}", f.ids[0])).await;
+    assert_eq!(
+        device["data_plane"]["issues"][0]["code"],
+        "DATA_PLANE_SINK_ERRORS"
+    );
+
+    // The group gains a member. That must release the new device, and the
+    // assignment must not turn into a configuration failure.
+    let extra = db::id();
+    sqlx::query("INSERT INTO devices(id,name,data) VALUES(?,?,?)")
+        .bind(&extra)
+        .bind("web-new")
+        .bind(json!({"id":extra,"name":"web-new","vector_version":"0.58.0","last_seen":db::now(),"apply_state":"unmanaged","reported_generation":0}).to_string())
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let mut members = f.ids.clone();
+    members.push(extra.clone());
+    sqlx::query("UPDATE records SET data=json_set(data,'$.device_ids',json(?),'$.revision',2) WHERE kind='group' AND id=?")
+        .bind(json!(members).to_string())
+        .bind(&group)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    let mut conn = f.s.pool.acquire().await.unwrap();
+    vectory_server::rollout::reconcile_membership(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    vectory_server::rollout::tick(&f.s).await.unwrap();
+    let summary = get(&f, &format!("/api/v1/deployments/{id}/summary")).await;
+    assert_ne!(summary["status"], "failed", "{summary}");
+    assert!(summary["failure_reason"].is_null(), "{summary}");
+    assert!(
+        generation(&f, &d, &extra).await > 0,
+        "the new member was not released: {summary}"
+    );
+}
+
+#[tokio::test]
+async fn a_persistent_canary_that_is_not_delivering_pauses_instead_of_failing() {
+    let f = fixture().await;
+    let group = group_of(&f, &f.ids).await;
+    let d = persistent(
+        &f,
+        &group,
+        json!({"kind":"canary","canary_size":1,"batch_size":1,"observation_seconds":3600,"failure_threshold":0}),
+    )
+    .await;
+    let id = d["id"].as_str().unwrap();
+    let canary_device = f.ids[0].clone();
+    let peer = agent(&f, &canary_device).await;
+    beat(&f, &peer, &canary_device, 1, failing()).await;
+    beat(&f, &peer, &canary_device, 2, failing()).await;
+    vectory_server::rollout::tick(&f.s).await.unwrap();
+    let summary = get(&f, &format!("/api/v1/deployments/{id}/summary")).await;
+    // The next wave is held back, and the assignment still follows its group.
+    assert_eq!(summary["status"], "paused", "{summary}");
+    assert_eq!(summary["failure_reason"], "data_plane", "{summary}");
+    assert_eq!(generation(&f, &d, &f.ids[1]).await, 0, "no batch released");
+}
+
+fn many_failing(sinks: usize) -> Value {
+    let mut components =
+        vec![json!({"id":"demo","kind":"source","type":"demo_logs","events_per_second":5.0})];
+    for n in 0..sinks {
+        components.push(json!({"id":format!("sink_{n}"),"kind":"sink","type":"http","received_events_per_second":1.0,"events_per_second":1.0,"errors_per_minute":12.0,"dropped_per_minute":0.0,"buffer_utilization":0.1}));
+    }
+    json!({"events_per_second":5.0,"events_out_per_second":5.0,"errors_per_minute":12.0,"components":components})
+}
+async fn open_delivery_issues(f: &Fixture, code: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='issue' AND json_extract(data,'$.code')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0")
+        .bind(code)
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_steady_outage_refreshes_its_issue_every_few_minutes_not_every_evaluation() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    let reports = |f: &Fixture| {
+        let pool = f.s.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT json_extract(data,'$.reports') FROM records WHERE kind='issue' AND json_extract(data,'$.code')='DATA_PLANE_SINK_ERRORS'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    beat(&f, &peer, &device, 1, failing()).await;
+    beat(&f, &peer, &device, 2, failing()).await;
+    assert_eq!(reports(&f).await, 1, "opening writes the issue once");
+    // Three more evaluations of the same outage write nothing.
+    for n in 3..=5 {
+        beat(&f, &peer, &device, n, failing()).await;
+    }
+    assert_eq!(
+        reports(&f).await,
+        1,
+        "a refresh inside five minutes is not written"
+    );
+    // Once the last write is old enough, the next evaluation flushes what it
+    // counted, so `reports` still counts every evaluation.
+    sqlx::query("UPDATE data_plane_state SET data=json_set(data,'$.keys.\"DATA_PLANE_SINK_ERRORS:archive\".written_at','2000-01-01T00:00:00Z') WHERE device_id=?")
+        .bind(&device)
+        .execute(&f.s.pool)
+        .await
+        .unwrap();
+    beat(&f, &peer, &device, 6, failing()).await;
+    assert_eq!(reports(&f).await, 5);
+}
+
+#[tokio::test]
+async fn one_evaluation_writes_at_most_three_issues_and_the_rest_follow() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    beat(&f, &peer, &device, 1, many_failing(5)).await;
+    beat(&f, &peer, &device, 2, many_failing(5)).await;
+    assert_eq!(
+        open_delivery_issues(&f, "DATA_PLANE_SINK_ERRORS").await,
+        3,
+        "the write budget of one evaluation"
+    );
+    beat(&f, &peer, &device, 3, many_failing(5)).await;
+    assert_eq!(open_delivery_issues(&f, "DATA_PLANE_SINK_ERRORS").await, 5);
+}
+
+#[tokio::test]
+async fn healthy_devices_keep_no_streak_entries_and_a_steady_summary() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    for n in 1..=4 {
+        beat(&f, &peer, &device, n, healthy()).await;
+    }
+    let state: String = sqlx::query_scalar(
+        "SELECT json_extract(data,'$.keys') FROM data_plane_state WHERE device_id=?",
+    )
+    .bind(&device)
+    .fetch_one(&f.s.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        state, "{}",
+        "nothing is worth remembering about a healthy device"
+    );
+    let one = get(&f, &format!("/api/v1/devices/{device}")).await["data_plane"].clone();
+    beat(&f, &peer, &device, 5, healthy()).await;
+    let two = get(&f, &format!("/api/v1/devices/{device}")).await["data_plane"].clone();
+    assert_eq!(
+        one, two,
+        "the public summary carries no timestamps or growing counts"
+    );
+    assert_eq!(one["evaluations"], 3, "counts stop at what the gate needs");
+}

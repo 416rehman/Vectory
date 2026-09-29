@@ -177,9 +177,9 @@
               "type": "array",
               "maxItems": 10,
               "items": {
-                "$ref": "#/$defs/Diagnostic"
+                "$ref": "#/$defs/AgentDiagnostic"
               },
-              "description": "Errors first, at most 10."
+              "description": "Structured findings the agent or the server reports about a device, errors first, at most 10."
             }
           },
           "required": [
@@ -2223,9 +2223,9 @@
           "type": "array",
           "maxItems": 10,
           "items": {
-            "$ref": "#/$defs/Diagnostic"
+            "$ref": "#/$defs/AgentDiagnostic"
           },
-          "description": "Errors first, at most 10."
+          "description": "Structured findings the agent or the server reports about a device, errors first, at most 10."
         },
         "count": {
           "type": "integer",
@@ -2488,9 +2488,9 @@
           "type": "array",
           "maxItems": 10,
           "items": {
-            "$ref": "#/$defs/Diagnostic"
+            "$ref": "#/$defs/AgentDiagnostic"
           },
-          "description": "Errors first, at most 10."
+          "description": "Structured findings the agent or the server reports about a device, errors first, at most 10."
         },
         "version_id": {
           "anyOf": [
@@ -5005,18 +5005,8 @@
             "evaluations": {
               "type": "integer",
               "minimum": 0,
-              "description": "Evaluations on this version (capped at 1000000)."
-            },
-            "evaluated_at": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "maximum": 3,
+              "description": "Evaluations on this version, counted up to 3 (what the canary gate needs)."
             },
             "issues": {
               "type": "array",
@@ -5123,7 +5113,6 @@
           "required": [
             "version_id",
             "evaluations",
-            "evaluated_at",
             "issues"
           ],
           "additionalProperties": false,
@@ -8258,6 +8247,70 @@
       ],
       "additionalProperties": true
     },
+    "AgentDiagnostic": {
+      "type": "object",
+      "properties": {
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z0-9_]{1,48}$"
+        },
+        "component_kind": {
+          "enum": [
+            "source",
+            "transform",
+            "sink"
+          ]
+        },
+        "component_id": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "route_output": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "field": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,32}$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "hint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
     "Validation": {
       "type": "object",
       "properties": {
@@ -8696,9 +8749,9 @@
                   "type": "array",
                   "maxItems": 10,
                   "items": {
-                    "$ref": "#/$defs/Diagnostic"
+                    "$ref": "#/$defs/AgentDiagnostic"
                   },
-                  "description": "Errors first, at most 10."
+                  "description": "Structured findings the agent or the server reports about a device, errors first, at most 10."
                 }
               },
               "required": [
