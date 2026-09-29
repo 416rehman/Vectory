@@ -39,6 +39,7 @@ import {
   formatRate,
   healthCounts,
   healthLabels,
+  completeSeries,
   healthOrder,
   niceCeiling,
   present,
@@ -118,6 +119,7 @@ export type OverviewData = {
 
 type SummaryPoint = {
   at: string;
+  devices: number | null;
   in: number | null;
   out: number | null;
 };
@@ -157,6 +159,7 @@ function parseSummary(value: unknown): TelemetrySummary | null {
         return [
           {
             at: item.at,
+            devices: count(item.devices_reporting),
             in: metric(item.events_in_per_second),
             out: metric(item.events_out_per_second),
           },
@@ -1164,11 +1167,12 @@ function FleetThroughput({
     ? summary.errorsPerMinute
     : local.errorsPerMinute;
   const newest = summary?.newest ?? local.freshest;
+  // Only complete buckets: the one still collecting would dip toward zero.
+  const complete = summary ? completeSeries(summary.series, now) : [];
   const series =
-    summary &&
-    summary.series.filter((point) => point.in !== null || point.out !== null)
+    complete.filter((point) => point.in !== null || point.out !== null)
       .length >= 2
-      ? summary.series
+      ? complete
       : null;
   const coverage = reporting
     ? `${reporting.toLocaleString()} of ${countLabel(eligible, "device")} reporting${reporting < eligible ? ". Totals cover those devices only" : ""}`

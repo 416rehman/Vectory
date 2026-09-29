@@ -1,5 +1,9 @@
 /** Pure Overview logic: health buckets, telemetry coverage, rollout progress. */
-import { deviceDisplayStatus, type DeviceStatusInput } from "./status";
+import {
+  deviceDisplayStatus,
+  deviceStatuses,
+  type DeviceStatusInput,
+} from "./status";
 
 export type HealthBucket =
   | "applied"
@@ -19,13 +23,13 @@ export const healthOrder: HealthBucket[] = [
   "unmanaged",
 ];
 export const healthLabels: Record<HealthBucket, string> = {
-  applied: "Applied",
-  updating: "Updating",
-  check: "Check required",
-  failed: "Failed",
-  offline: "Offline",
-  paused: "Paused",
-  unmanaged: "No pipeline",
+  applied: deviceStatuses.verified.label,
+  updating: deviceStatuses.applying.label,
+  check: deviceStatuses.verification_unknown.label,
+  failed: deviceStatuses.failed.label,
+  offline: deviceStatuses.offline.label,
+  paused: deviceStatuses.paused.label,
+  unmanaged: deviceStatuses.unmanaged.label,
 };
 /** The device states each bucket stands for (for filters and links). */
 export const healthStates: Record<HealthBucket, string[]> = {
@@ -279,4 +283,32 @@ export function niceCeiling(value: number) {
   for (const step of [1, 2, 2.5, 5, 10])
     if (step * power >= value) return step * power;
   return 10 * power;
+}
+
+/** One point of a fleet series: the bucket's start and how many devices it holds. */
+export type SeriesBucket = { at: string; devices: number | null };
+/**
+ * The series without its newest bucket while that bucket is still collecting.
+ * A minute that has heard from one of four devices sums to a quarter of the
+ * fleet and reads as an outage; the line ends at the last complete bucket.
+ * A bucket that ended under a minute ago with fewer devices than the one
+ * before is treated as still collecting too (late check-ins, clock skew).
+ */
+export function completeSeries<T extends SeriesBucket>(
+  series: T[],
+  now = Date.now(),
+): T[] {
+  if (series.length < 2) return series;
+  const last = series[series.length - 1];
+  const previous = series[series.length - 2];
+  const start = Date.parse(last.at);
+  const step = start - Date.parse(previous.at);
+  if (!Number.isFinite(start) || !(step > 0)) return series;
+  const end = start + step;
+  const thin =
+    last.devices !== null &&
+    previous.devices !== null &&
+    last.devices < previous.devices;
+  const collecting = end > now || (thin && end + 60_000 > now);
+  return collecting ? series.slice(0, -1) : series;
 }

@@ -857,11 +857,11 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
         </>
       ),
     },
+    // Numbers sort; a text filter on a rate helps nobody.
     ...visible.map((column): TableColumn<ComponentTelemetry> => ({
       id: column.id,
       header: column.title,
       value: (component) => column.read(component) ?? null,
-      filter: { placeholder: "Filter reported value" },
       cell: (component) => {
         const reading = column.read(component);
         return present(reading) ? (
@@ -885,6 +885,21 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
         label="Component metrics"
         className="fleet-table telemetry-component-table"
         empty="No matching components."
+        mobileCard={(component) => ({
+          title: component.id,
+          status: component.kind ? (
+            <span className="telemetry-kind">{component.kind}</span>
+          ) : undefined,
+          meta: [
+            component.type?.replaceAll("_", " ") || null,
+            ...visible.slice(0, 3).map((column) => {
+              const reading = column.read(component);
+              return present(reading)
+                ? `${column.title} ${column.format(reading)}`
+                : null;
+            }),
+          ],
+        })}
       />
       <p className="telemetry-note">
         Filtered counts events a filter or sample transform dropped on purpose;
@@ -961,7 +976,6 @@ function SampleTable({ points }: { points: TimelinePoint[] }) {
       id: column.id,
       header: column.title,
       value: (point) => column.read(point.sample) ?? null,
-      filter: { placeholder: "Filter reported value" },
       cell: (point) => {
         const reading = column.read(point.sample);
         return present(reading) ? (

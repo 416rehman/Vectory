@@ -360,3 +360,18 @@
     padding-right: 12px;
   }
 }
+
+/* A failed read inside the card: one banner, the last rows kept but dimmed. */
+.table-card > .inline-error {
+  margin: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+.table-card > .inline-error:only-child {
+  border-bottom-width: 0;
+}
+:is(.data-table, .data-list)[data-stale],
+.issue-groups[data-stale] > :not(.inline-error) {
+  opacity: 0.6;
+  transition: opacity var(--dur-base) var(--ease);
+}

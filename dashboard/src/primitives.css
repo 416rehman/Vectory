@@ -609,3 +609,8 @@
   color: var(--danger-text);
   background: var(--danger-bg);
 }
+
+/* A page title focused after navigation needs no ring; it is not a control. */
+.page-title-focus:focus {
+  outline: none;
+}

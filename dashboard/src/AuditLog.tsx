@@ -20,7 +20,6 @@ import {
   EmptyState,
   ErrorBox,
   FilterChips,
-  InlineError,
   Modal,
   PageHeader,
   PageToolbar,
@@ -603,7 +602,7 @@ export function AuditLog({
           />
         }
         count={
-          loading && !events.updatedAt
+          !events.updatedAt
             ? undefined
             : `${data.total.toLocaleString()} ${data.total === 1 ? "event" : "events"}`
         }
@@ -650,19 +649,6 @@ export function AuditLog({
         </p>
       )}
       {dateError && <ErrorBox message={dateError} />}
-      {error && !dateError && (
-        <InlineError
-          title={
-            data.items.length
-              ? "Couldn't refresh the audit log."
-              : "Couldn't load the audit log."
-          }
-          error={error}
-          updatedAt={events.updatedAt}
-          retry={() => void reload()}
-          retrying={events.refreshing}
-        />
-      )}
       <TableCard>
         <DataTable
           data={dateError ? [] : data.items}
@@ -670,6 +656,19 @@ export function AuditLog({
           rowKey={(item) => item.id}
           label="Audit events"
           className="audit-table"
+          error={
+            error && !dateError
+              ? {
+                  title: events.updatedAt
+                    ? "Couldn't refresh the audit log."
+                    : "Couldn't load the audit log.",
+                  message: error,
+                  updatedAt: events.updatedAt,
+                  retry: () => void reload(),
+                  retrying: events.refreshing,
+                }
+              : null
+          }
           loading={loading && !events.updatedAt}
           skeletonRows={8}
           manualSorting
@@ -700,11 +699,7 @@ export function AuditLog({
             ],
           })}
           empty={
-            error ? (
-              <EmptyState variant="error" title="Activity could not be loaded">
-                {error}
-              </EmptyState>
-            ) : dateError ? (
+            dateError ? (
               <EmptyState
                 variant="filtered"
                 title="Choose a valid date range"

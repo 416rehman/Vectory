@@ -1,7 +1,13 @@
 import { useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { ChevronDown, CopyPlus, Pencil, Plus } from "lucide-react";
-import { DataTable } from "./DataTable";
+import {
+  ChevronDown,
+  CopyPlus,
+  Pencil,
+  Plus,
+  SlidersHorizontal,
+} from "lucide-react";
+import { DataTable, TableCard } from "./DataTable";
 import {
   can,
   type SavedPolicy,
@@ -11,6 +17,7 @@ import {
 import {
   Button,
   DateCell,
+  EmptyState,
   ErrorBox,
   PageHeader,
   Spinner,
@@ -23,55 +30,6 @@ import AgentSettingsCreation, {
 import AgentSettingsEditor from "./AgentSettingsEditor";
 import "./control.css";
 
-const words = (value: string) =>
-  value.replaceAll("_", " ").replaceAll(".", " ");
-const stateText: Record<string, string> = {
-  active: "In progress",
-  completed: "Complete",
-  scheduled: "Scheduled",
-  paused: "Paused",
-  failed: "Needs attention",
-  cancelled: "Cancelled",
-  unassigned: "Removed",
-  missed: "Schedule missed",
-  verified_applied: "Applied and verified",
-  desired: "Waiting for agent",
-  pending: "Waiting",
-  downloaded: "Downloaded",
-  validated: "Validated",
-  written: "Applying",
-  reload_requested: "Restarting Vector",
-  verification_unknown: "Verification needed",
-  rolled_back: "Rolled back",
-  incompatible: "Incompatible",
-  removed: "No longer targeted",
-  revoked: "Revoked",
-};
-function Status({ state }: { state: string }) {
-  return (
-    <span className="control-status" data-state={state}>
-      {stateText[state] || words(state)}
-    </span>
-  );
-}
-function Quiet({
-  title,
-  children,
-  action,
-}: {
-  title: string;
-  children: React.ReactNode;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="control-empty">
-      <h2>{title}</h2>
-      <p>{children}</p>
-      {action}
-    </div>
-  );
-}
-
 export function Policies({
   user,
   notify,
@@ -79,10 +37,11 @@ export function Policies({
   user: User;
   notify: (message: string) => void;
 }) {
-  const { data, error, loading, reload } = useResource<SavedPolicyListItem[]>(
-    "/policies",
-    [],
-  );
+  const { data, error, loading, reload, refreshing, updatedAt } = useResource<
+    SavedPolicyListItem[]
+  >("/policies", []);
+  // Nothing saved yet: the first-run message replaces the table.
+  const firstRun = !loading && !error && data.length === 0;
   const creation = useRef<AgentSettingsCreationHandle>(null);
   const editOpener = useRef<HTMLElement | null>(null);
   const [deploy, setDeploy] = useState<{
@@ -100,8 +59,15 @@ export function Policies({
           section: "devices-permissions-and-credentials",
         }}
         description="Reusable check-in, sync and metrics settings. Devices change only when you apply them."
+        live={{
+          updatedAt,
+          error: error || undefined,
+          loading,
+          refreshing,
+          onRefresh: () => void reload(),
+        }}
       >
-        {operate && (
+        {operate && !firstRun && (
           <Button
             icon={Plus}
             onClick={(event) =>
@@ -125,140 +91,173 @@ export function Policies({
           return true;
         }}
       />
-      {error && <ErrorBox message={error} retry={reload} />}
-      <div className="control-table">
-        <DataTable<SavedPolicyListItem>
-          data={error ? [] : data}
-          rowKey={(setting) => setting.id}
-          label="Agent settings"
-          loading={loading}
-          columns={[
-            {
-              id: "name",
-              header: "Settings",
-              value: (setting) => setting.name,
-              filter: { placeholder: "Filter settings names" },
-              cell: (setting) => <strong>{setting.name}</strong>,
-            },
-            {
-              id: "interval",
-              header: "Check-in interval",
-              value: (setting) => setting.policy.heartbeat_seconds,
-              filter: { placeholder: "Filter seconds" },
-              cell: (setting) => `${setting.policy.heartbeat_seconds} seconds`,
-            },
-            {
-              id: "sync",
-              header: "Configuration sync",
-              value: (setting) =>
-                setting.policy.sync_paused ? "Paused" : "Enabled",
-              filter: {
-                options: [
-                  { value: "Paused", label: "Paused" },
-                  { value: "Enabled", label: "Enabled" },
-                ],
+      {firstRun ? (
+        <TableCard>
+          <EmptyState
+            icon={SlidersHorizontal}
+            title="No saved agent settings"
+            action={
+              operate ? (
+                <Button
+                  icon={Plus}
+                  onClick={(event) =>
+                    creation.current?.openCreate(event.currentTarget)
+                  }
+                >
+                  New settings
+                </Button>
+              ) : undefined
+            }
+          >
+            Control how often agents check in, collect metrics, and sync
+            pipeline changes.
+          </EmptyState>
+        </TableCard>
+      ) : (
+        <TableCard className="control-table">
+          <DataTable<SavedPolicyListItem>
+            data={data}
+            rowKey={(setting) => setting.id}
+            label="Agent settings"
+            loading={loading}
+            error={
+              error
+                ? {
+                    title: updatedAt
+                      ? "Couldn't refresh agent settings."
+                      : "Couldn't load agent settings.",
+                    message: error,
+                    updatedAt,
+                    retry: () => void reload(),
+                    retrying: refreshing,
+                  }
+                : null
+            }
+            mobileCard={(setting) => ({
+              title: setting.name,
+              meta: [
+                `Check-in every ${setting.policy.heartbeat_seconds} s`,
+                setting.policy.sync_paused ? "Sync paused" : "Sync on",
+                setting.policy.telemetry_enabled ? "Metrics on" : "Metrics off",
+              ],
+              status: operate ? (
+                <Button
+                  variant="secondary compact"
+                  onClick={() => setDeploy({ setting, deviceIds: [] })}
+                >
+                  Apply
+                </Button>
+              ) : undefined,
+            })}
+            columns={[
+              {
+                id: "name",
+                header: "Settings",
+                value: (setting) => setting.name,
+                filter: { placeholder: "Filter settings names" },
+                cell: (setting) => <strong>{setting.name}</strong>,
               },
-              cell: (setting) =>
-                setting.policy.sync_paused ? "Paused" : "Enabled",
-            },
-            {
-              id: "metrics",
-              header: "Metrics",
-              value: (setting) =>
-                setting.policy.telemetry_enabled ? "Collected" : "Off",
-              filter: {
-                options: [
-                  { value: "Collected", label: "Collected" },
-                  { value: "Off", label: "Off" },
-                ],
+              {
+                id: "interval",
+                header: "Check-in interval",
+                value: (setting) => setting.policy.heartbeat_seconds,
+                filter: { placeholder: "Filter seconds" },
+                cell: (setting) =>
+                  `${setting.policy.heartbeat_seconds} seconds`,
               },
-              cell: (setting) =>
-                setting.policy.telemetry_enabled ? "Collected" : "Off",
-            },
-            {
-              id: "applied",
-              header: "Applied to",
-              value: (setting) => setting.applied_device_count ?? -1,
-              cell: (setting) => <AppliedDevices setting={setting} />,
-            },
-            {
-              id: "updated",
-              header: "Updated",
-              value: (setting) => setting.updated_at || setting.created_at,
-              cell: (setting) => (
-                <DateCell value={setting.updated_at || setting.created_at} />
-              ),
-            },
-            {
-              id: "actions",
-              header: <span className="sr-only">Actions</span>,
-              label: "Actions",
-              cell: (setting) =>
-                operate && (
-                  <div className="agent-settings-actions">
-                    <Button
-                      variant="secondary compact"
-                      onClick={() => setDeploy({ setting, deviceIds: [] })}
-                    >
-                      Apply to devices
-                    </Button>
-                    {setting.revision !== undefined && (
+              {
+                id: "sync",
+                header: "Configuration sync",
+                value: (setting) =>
+                  setting.policy.sync_paused ? "Paused" : "Enabled",
+                filter: {
+                  options: [
+                    { value: "Paused", label: "Paused" },
+                    { value: "Enabled", label: "Enabled" },
+                  ],
+                },
+                cell: (setting) =>
+                  setting.policy.sync_paused ? "Paused" : "Enabled",
+              },
+              {
+                id: "metrics",
+                header: "Metrics",
+                value: (setting) =>
+                  setting.policy.telemetry_enabled ? "Collected" : "Off",
+                filter: {
+                  options: [
+                    { value: "Collected", label: "Collected" },
+                    { value: "Off", label: "Off" },
+                  ],
+                },
+                cell: (setting) =>
+                  setting.policy.telemetry_enabled ? "Collected" : "Off",
+              },
+              {
+                id: "applied",
+                header: "Applied to",
+                value: (setting) => setting.applied_device_count ?? -1,
+                cell: (setting) => <AppliedDevices setting={setting} />,
+              },
+              {
+                id: "updated",
+                header: "Updated",
+                value: (setting) => setting.updated_at || setting.created_at,
+                cell: (setting) => (
+                  <DateCell value={setting.updated_at || setting.created_at} />
+                ),
+              },
+              {
+                id: "actions",
+                header: <span className="sr-only">Actions</span>,
+                label: "Actions",
+                cell: (setting) =>
+                  operate && (
+                    <div className="agent-settings-actions">
+                      <Button
+                        variant="secondary compact"
+                        onClick={() => setDeploy({ setting, deviceIds: [] })}
+                      >
+                        Apply to devices
+                      </Button>
+                      {setting.revision !== undefined && (
+                        <Button
+                          variant="ghost compact"
+                          icon={Pencil}
+                          aria-label={`Edit ${setting.name}`}
+                          onClick={(event) => {
+                            editOpener.current = event.currentTarget;
+                            setEditing(setting);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                      )}
                       <Button
                         variant="ghost compact"
-                        icon={Pencil}
-                        aria-label={`Edit ${setting.name}`}
-                        onClick={(event) => {
-                          editOpener.current = event.currentTarget;
-                          setEditing(setting);
-                        }}
+                        icon={CopyPlus}
+                        aria-label={`Duplicate ${setting.name}`}
+                        onClick={(event) =>
+                          creation.current?.openCreate(event.currentTarget, {
+                            name: `${setting.name} copy`.slice(0, 120),
+                            policy: setting.policy,
+                          })
+                        }
                       >
-                        Edit
+                        Duplicate
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost compact"
-                      icon={CopyPlus}
-                      aria-label={`Duplicate ${setting.name}`}
-                      onClick={(event) =>
-                        creation.current?.openCreate(event.currentTarget, {
-                          name: `${setting.name} copy`.slice(0, 120),
-                          policy: setting.policy,
-                        })
-                      }
-                    >
-                      Duplicate
-                    </Button>
-                  </div>
-                ),
-            },
-          ]}
-          empty={
-            error ? (
-              "Agent settings could not be loaded."
-            ) : data.length ? (
-              "No settings match these filters."
-            ) : (
-              <Quiet
-                title="No saved agent settings"
-                action={
-                  operate ? (
-                    <Button
-                      onClick={(event) =>
-                        creation.current?.openCreate(event.currentTarget)
-                      }
-                    >
-                      Create settings
-                    </Button>
-                  ) : undefined
-                }
-              >
-                Control how often agents check in, collect metrics, and sync
-                pipeline changes.
-              </Quiet>
-            )
-          }
-        />
-      </div>
+                    </div>
+                  ),
+              },
+            ]}
+            empty={
+              <EmptyState variant="filtered" title="No matching settings">
+                Try another name, interval or state.
+              </EmptyState>
+            }
+          />
+        </TableCard>
+      )}
       <p className="control-muted">
         Devices pick up applied settings on their next check-in. A pause set on
         the device itself stays until someone clears it there.

@@ -336,6 +336,17 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+.telemetry-component-table th:not(:first-child) .data-table-heading {
+  justify-content: flex-end;
+}
+.telemetry-component-table th:first-child {
+  min-width: 200px;
+}
+.telemetry-kind {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-transform: capitalize;
+}
 .telemetry-component-table td strong {
   font-size: 13px;
   font-weight: 500;
