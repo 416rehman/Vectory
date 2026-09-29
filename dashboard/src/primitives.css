@@ -515,3 +515,53 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Health buckets: one mark colour per fleet state, for bars and legends. */
+[data-bucket="applied"] {
+  --bucket: var(--mark-success);
+}
+[data-bucket="updating"] {
+  --bucket: var(--mark-info);
+}
+[data-bucket="check"] {
+  --bucket: var(--mark-warning);
+}
+[data-bucket="failed"] {
+  --bucket: var(--mark-danger);
+}
+[data-bucket="offline"] {
+  --bucket: var(--mark-serious);
+}
+[data-bucket="paused"] {
+  --bucket: var(--mark-paused);
+}
+[data-bucket="unmanaged"] {
+  --bucket: var(--mark-empty);
+}
+.health-bar-segment {
+  flex-basis: 0;
+  min-width: 6px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--bucket, var(--mark-empty));
+}
+
+/* Icon + text labels in tabs (section tabs and in-page tab lists). */
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.tab-label > svg {
+  flex: none;
+}
+
+/* Keyboard hints mean nothing on touch-sized layouts. */
+@media (max-width: 639px) {
+  .search-field-kbd {
+    display: none;
+  }
+}

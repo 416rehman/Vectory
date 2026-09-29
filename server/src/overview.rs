@@ -71,6 +71,25 @@ pub async fn extend(
     Ok(())
 }
 
+/// Name the pipeline and number behind each device's desired version, so a
+/// device list can show "Orders v3" without fetching every version.
+pub async fn annotate_versions(conn: &mut SqliteConnection, devices: &mut [Value]) -> Result<()> {
+    let versions = {
+        let all: Vec<&Value> = devices.iter().collect();
+        versions(conn, &all).await?
+    };
+    for device in devices.iter_mut() {
+        let found = device["desired_version_id"]
+            .as_str()
+            .map(|id| versions[id].clone())
+            .unwrap_or(Value::Null);
+        if !found.is_null() {
+            device["desired_version"] = found;
+        }
+    }
+    Ok(())
+}
+
 /// Pipeline name and number for every version a device is assigned.
 async fn versions(conn: &mut SqliteConnection, devices: &[&Value]) -> Result<Value> {
     let ids: Vec<&str> = devices

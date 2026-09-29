@@ -3769,6 +3769,49 @@
             }
           ]
         },
+        "desired_version": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "number",
+            "configuration_id",
+            "configuration_name"
+          ],
+          "additionalProperties": true,
+          "description": "List rows only: the pipeline name and number of desired_version_id."
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"

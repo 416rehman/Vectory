@@ -477,6 +477,12 @@ export type Device = {
     events_per_second?: number | null;
     errors?: number | null;
   };
+  /** List rows only: the pipeline name and number of desired_version_id. */
+  desired_version?: {
+    number: number | null;
+    configuration_id: string | null;
+    configuration_name: string | null;
+  } | null;
   assignment?: Assignment;
   policy_assignment?: Assignment;
   created_at: string;

@@ -1,5 +1,6 @@
 /** Turn audit summaries into short sentences that name what changed. */
 import { auditActionLabel, auditResourceRoute, isAuditId } from "./auditModel";
+import { statusLabel } from "./status";
 
 export type ActivityItem = {
   id: string;
@@ -81,7 +82,12 @@ function pipelineLabel(item: ActivityItem) {
   if (deployment?.policy) return "agent settings";
   const name = deployment?.configuration_name || item.target_name;
   const version = deployment?.version_number ?? item.version_number;
-  if (!name) return version ? `version ${version}` : "a pipeline";
+  if (!name)
+    return version
+      ? `version ${version}`
+      : item.target_kind === "deployment"
+        ? "a deployment"
+        : "a pipeline";
   return version ? `${name} v${version}` : name;
 }
 
@@ -200,16 +206,23 @@ export function describeActivity(item: ActivityItem): Part[] {
         devices.length ? devices : [item.target_name || "A device"],
         repeat,
       );
+      const their = repeat > 1 ? "their" : "its";
+      const verbs: Record<string, string> = {
+        verified_applied: ` applied ${their} pipeline`,
+        failed: ` failed to apply ${their} pipeline`,
+        rolled_back: ` rolled back to ${their} last working version`,
+        verification_unknown: " needs a check: Vector wasn't confirmed running",
+        desired: ` received a new version`,
+        downloaded: ` downloaded ${their} new version`,
+        validated: ` validated ${their} new version`,
+        written: ` wrote ${their} new version`,
+        reload_requested: " asked Vector to reload",
+        paused: " paused configuration sync",
+        unmanaged: " has no pipeline assigned",
+      };
       const verb =
-        item.outcome === "verified_applied"
-          ? repeat > 1
-            ? " applied their pipeline"
-            : " applied its pipeline"
-          : item.outcome === "failed"
-            ? " failed to apply its pipeline"
-            : item.outcome === "rolled_back"
-              ? " rolled back to its last working version"
-              : " needs a check: Vector wasn't confirmed running";
+        verbs[item.outcome] ??
+        ` reported ${statusLabel("apply", item.outcome).toLowerCase()}`;
       return [
         {
           text: who,

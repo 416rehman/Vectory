@@ -116,6 +116,26 @@ describe("activity sentences", () => {
     expect(links(single)).toEqual([["edge-fra-01", `#/devices/${uuid(9)}`]]);
   });
 
+  it("names intermediate apply steps instead of guessing a problem", () => {
+    const step = (outcome: string) =>
+      sentence(
+        describeActivity(
+          item({
+            action: "device.apply_state",
+            target_kind: "device",
+            target_name: "edge-01",
+            outcome,
+          }),
+        ),
+      );
+    expect(step("downloaded")).toBe("edge-01 downloaded its new version");
+    expect(step("reload_requested")).toBe("edge-01 asked Vector to reload");
+    expect(step("verification_unknown")).toBe(
+      "edge-01 needs a check: Vector wasn't confirmed running",
+    );
+    expect(step("something_new")).toBe("edge-01 reported something new");
+  });
+
   it("links published versions to their pipeline and names the number", () => {
     const parts = describeActivity(
       item({

@@ -560,7 +560,11 @@ pub async fn list(
     .await?;
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => json!(rollout::devices(&mut conn).await?),
+        "devices" => {
+            let mut devices = rollout::devices(&mut conn).await?;
+            crate::overview::annotate_versions(&mut conn, &mut devices).await?;
+            json!(devices)
+        }
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
         "groups" => json!(crate::groups::list(&mut conn).await?),
