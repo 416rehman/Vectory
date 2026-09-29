@@ -573,7 +573,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: dashboard/package-lock.json
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         timeout-minutes: 10
         with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
@@ -581,6 +583,18 @@ jobs:
         timeout-minutes: 10
         working-directory: dashboard
         run: npm ci
+      - name: Build the dashboard the instance serves
+        id: dashboard
+        timeout-minutes: 10
+        run: |
+          (cd help-center && npm ci)
+          (cd dashboard && npm run build)
+      - name: Install Chromium for the dashboard specs
+        id: chromium
+        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
       - name: Build the server, the validator and vectory-admin
         timeout-minutes: 10
         env:
@@ -632,6 +646,19 @@ jobs:
           mkdir -p docs/evidence artifacts/end-to-end
           node tests/contracts.mjs
           cp docs/evidence/contract-tests.json artifacts/end-to-end/
+      # The dashboard specs that pass against a real instance with this data;
+      # the others and why are in docs/internal/CI.md.
+      - name: Run the dashboard specs against the instance, including a 201-component pipeline
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: dashboard
+        env:
+          VECTORY_UI_URL: http://127.0.0.1:8080
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/artifacts/end-to-end/dashboard-specs.json
+        run: |
+          mkdir -p ../docs/evidence
+          npx playwright test e2e/concurrency.spec.ts e2e/issues-history.spec.ts e2e/performance.spec.ts e2e/pipeline-create-entry.spec.ts --reporter=list,json
+          cp ../docs/evidence/browser-performance.json ../artifacts/end-to-end/
       - name: Validate every starter pipeline with the pinned Vector
         if: ${{ !cancelled() }}
         timeout-minutes: 10
@@ -663,7 +690,9 @@ jobs:
         timeout-minutes: 10
         with:
           name: end-to-end
-          path: artifacts/end-to-end
+          path: |
+            artifacts/end-to-end
+            dashboard/test-results
           if-no-files-found: warn
   # The Compose quickstart as a first-time operator runs it (docs/user/install-server.md):
   # a private CA, protected secret files, deploy/.env, build, start, first
@@ -798,4 +827,260 @@ jobs:
         with:
           name: compose
           path: artifacts/compose
+          if-no-files-found: warn
+  # Browser harnesses that ran twice without failure on the reviewed tree; the
+  # dashboard job's own list is unchanged. docs/internal/CI.md lists the ones
+  # that are not here and why.
+  dashboard-browsers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - run: npm ci
+        timeout-minutes: 10
+      - run: npm ci
+        timeout-minutes: 10
+        working-directory: help-center
+      - id: build
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: npm run build
+      - id: chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
+      - name: Check agent settings creation and recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-settings-recovery-browser.mjs
+        env:
+          VECTORY_AGENT_SETTINGS_RECOVERY_OUTPUT: artifacts/browsers/agent-settings-recovery
+      - name: Check agent upgrade guidance on the device page
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/agent-upgrade-browser.mjs
+        env:
+          VECTORY_AGENT_UPGRADE_OUTPUT: artifacts/browsers/agent-upgrade
+      - name: Check the canary gate on deployments and devices
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-gate-browser.mjs
+        env:
+          VECTORY_CANARY_GATE_OUTPUT: artifacts/browsers/canary-gate
+      - name: Check resuming a paused canary
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-resume-browser.mjs
+        env:
+          VECTORY_CANARY_RESUME_OUTPUT: artifacts/browsers/canary-resume
+      - name: Check the canvas action menu
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canvas-action-menu-browser.mjs
+        env:
+          VECTORY_CANVAS_ACTION_MENU_OUTPUT: artifacts/browsers/canvas-action-menu
+      - name: Check the canvas tools
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canvas-tools-browser.mjs
+        env:
+          VECTORY_CANVAS_TOOLS_OUTPUT: artifacts/browsers/canvas-tools
+      - name: Check dangling branches in the editor
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/dangling-branch-browser.mjs
+        env:
+          VECTORY_DANGLING_BRANCH_OUTPUT: artifacts/browsers/dangling-branch
+      - name: Check unreadable deployment reminders fail closed
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deployment-corrupt-reminders-browser.mjs
+        env:
+          VECTORY_CORRUPT_REMINDERS_OUTPUT: artifacts/browsers/deployment-corrupt-reminders
+      - name: Check deployment request discovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deployment-discovery-browser.mjs
+        env:
+          VECTORY_DEPLOYMENT_DISCOVERY_OUTPUT: artifacts/browsers/deployment-discovery
+      - name: Check assignments from the device page
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-assignment-browser.mjs
+        env:
+          VECTORY_DEVICE_ASSIGNMENT_OUTPUT: artifacts/browsers/device-assignment
+      - name: Check device retry recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-retry-browser.mjs
+        env:
+          VECTORY_DEVICE_RETRY_OUTPUT: artifacts/browsers/device-retry
+      - name: Check connection highlighting on the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/edge-spotlight-browser.mjs
+        env:
+          VECTORY_EDGE_SPOTLIGHT_OUTPUT: artifacts/browsers/edge-spotlight
+      - name: Check discarding editor changes
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-discard-browser.mjs
+        env:
+          VECTORY_EDITOR_DISCARD_OUTPUT: artifacts/browsers/editor-discard
+      - name: Check editor hover hints
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-hover-hints-browser.mjs
+        env:
+          VECTORY_EDITOR_HINT_OUTPUT: artifacts/browsers/editor-hover-hints
+      - name: Check editor latency on a 144-component pipeline
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/editor-performance-browser.mjs
+        env:
+          VECTORY_EDITOR_PERFORMANCE_OUTPUT: artifacts/browsers/editor-performance
+      - name: Check group admission conflicts and audit revisions
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-admission-audit-browser.mjs
+        env:
+          VECTORY_GROUP_ADMISSION_AUDIT_OUTPUT: artifacts/browsers/group-admission-audit
+      - name: Check concurrent group edits
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-concurrency-browser.mjs
+        env:
+          VECTORY_GROUP_CONCURRENCY_OUTPUT: artifacts/browsers/group-concurrency
+      - name: Check group creation recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/group-create-recovery-browser.mjs
+        env:
+          VECTORY_GROUP_CREATE_RECOVERY_OUTPUT: artifacts/browsers/group-create-recovery
+      - name: Check closing the inspector keeps the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-close-viewport-browser.mjs
+        env:
+          VECTORY_INSPECTOR_CLOSE_OUTPUT: artifacts/browsers/inspector-close-viewport
+      - name: Check condition controls in the inspector
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-conditions-browser.mjs
+        env:
+          VECTORY_INSPECTOR_CONDITIONS_OUTPUT: artifacts/browsers/inspector-conditions
+      - name: Check the inspector panel
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/inspector-panel-browser.mjs
+        env:
+          VECTORY_INSPECTOR_PANEL_OUTPUT: artifacts/browsers/inspector-panel
+      - name: Check two-factor recovery on People & security
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/mfa-recovery-browser.mjs
+      - name: Check pipeline history
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-history-browser.mjs
+        env:
+          VECTORY_HISTORY_OUTPUT: artifacts/browsers/pipeline-history
+      - name: Check local pipeline checks
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-local-check-browser.mjs
+        env:
+          VECTORY_PIPELINE_LOCAL_CHECK_OUTPUT: artifacts/browsers/pipeline-local-check
+      - name: Check pipeline nodes on the canvas
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/pipeline-node-browser.mjs
+        env:
+          VECTORY_PIPELINE_NODE_OUTPUT: artifacts/browsers/pipeline-node
+      - name: Check publish recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/publish-recovery-browser.mjs
+        env:
+          VECTORY_PUBLISH_RECOVERY_OUTPUT: artifacts/browsers/publish-recovery
+      - name: Check retired deployment targets
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/retired-targets-browser.mjs
+        env:
+          VECTORY_RETIRED_TARGETS_OUTPUT: artifacts/browsers/retired-targets
+      - name: Check reviewed rollback and its recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/reviewed-rollback-browser.mjs
+        env:
+          VECTORY_REVIEWED_ROLLBACK_OUTPUT: artifacts/browsers/reviewed-rollback
+      - name: Check reviewed assignment removal
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/reviewed-unassignment-browser.mjs
+        env:
+          VECTORY_UNASSIGNMENT_OUTPUT: artifacts/browsers/reviewed-unassignment
+      - name: Check the role picker
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/role-picker-browser.mjs
+        env:
+          VECTORY_ROLE_PICKER_OUTPUT: artifacts/browsers/role-picker
+      - name: Check rollback recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/rollback-recovery-browser.mjs
+        env:
+          VECTORY_ROLLBACK_RECOVERY_OUTPUT: artifacts/browsers/rollback-recovery
+      - name: Check refresh-and-review of scheduled deployments
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/scheduled-refresh-browser.mjs
+        env:
+          VECTORY_SCHEDULED_REFRESH_OUTPUT: artifacts/browsers/scheduled-refresh
+      - name: Check schema-driven field controls
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/schema-control-browser.mjs
+      - name: Check the device secret picker
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/secret-picker-browser.mjs
+        env:
+          VECTORY_SECRET_PICKER_OUTPUT: artifacts/browsers/secret-picker
+      - name: Check target handoff
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/target-handoff-browser.mjs
+        env:
+          VECTORY_TARGET_HANDOFF_OUTPUT: artifacts/browsers/target-handoff
+      - name: Check target recovery
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/target-recovery-browser.mjs
+        env:
+          VECTORY_TARGET_RECOVERY_OUTPUT: artifacts/browsers/target-recovery
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: dashboard-browsers
+          path: |
+            artifacts/browsers
+            .local/mfa-recovery-browser
+            docs/evidence/schema-controls-browser*.json
+            !**/vite-cache/**
           if-no-files-found: warn
