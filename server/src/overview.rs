@@ -51,9 +51,14 @@ pub async fn extend(
         .map(|d| (text(d, "id"), text(d, "name")))
         .collect();
     let (activity, hidden) = fleet_activity(conn, &names).await?;
+    let versions_total: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='version'")
+            .fetch_one(&mut *conn)
+            .await?;
     let extra = json!({
         "devices_managed": managed,
         "devices_on_desired": on_desired,
+        "versions_total": versions_total,
         "versions": versions,
         "rollouts": rollouts,
         "attention": attention,

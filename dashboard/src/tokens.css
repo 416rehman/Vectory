@@ -75,6 +75,10 @@
   --mark-empty: #d6d1c9;
   --chart-grid: #ebe8e2;
   --chart-axis: #d6d1c9;
+  /* Categorical series (identity), validated for CVD separation. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
 
   /* Elevation. */
   --shadow-xs: 0 1px 1px rgb(41 37 34 / 0.04);
@@ -239,6 +243,9 @@
   --mark-empty: #4a464d;
   --chart-grid: #312e35;
   --chart-axis: #48444d;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
 
   --shadow-xs: 0 1px 1px rgb(0 0 0 / 0.3);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.36);

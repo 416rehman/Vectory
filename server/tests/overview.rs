@@ -188,6 +188,7 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
 
     assert_eq!(value["devices_managed"], 1);
     assert_eq!(value["devices_on_desired"], 0);
+    assert_eq!(value["versions_total"], 1);
     assert_eq!(
         value["versions"][&version],
         json!({"number":2,"configuration_id":pipeline,"configuration_name":"Edge syslog processing"})
@@ -244,6 +245,7 @@ async fn overview_is_empty_but_well_formed_for_a_new_workspace() {
     let value = overview(&app, &actor).await;
     assert_eq!(value["devices_total"], 0);
     assert_eq!(value["devices_managed"], 0);
+    assert_eq!(value["versions_total"], 0);
     assert_eq!(value["versions"], json!({}));
     assert_eq!(value["rollouts"], json!([]));
     assert_eq!(value["attention"], json!([]));

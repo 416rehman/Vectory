@@ -33,7 +33,16 @@ function eligibleState(snapshot: Device) {
   ].includes(snapshot.apply_state);
 }
 export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
-  const { device, user, onDone } = props;
+  return (
+    <>
+      <DeviceRetryAction {...props} />
+      <DeviceIdentityRecovery {...props} />
+    </>
+  );
+}
+/** Application retry alone, e.g. beside a failure message. */
+export function DeviceRetryAction(props: DeviceRecoveryProps) {
+  const { device, user } = props;
   // Retire each retry review permanently when its assignment or eligibility
   // changes. Identity recovery keeps its independent review and token lifetime.
   const review = JSON.stringify([
@@ -48,16 +57,21 @@ export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
     eligibleState(device),
     device.retry_preconditions === true,
   ]);
+  return <DeviceApplicationRetry key={review} {...props} />;
+}
+/** Identity recovery alone, kept apart from routine sync controls. */
+export function DeviceIdentityRecovery({
+  device,
+  user,
+  onDone,
+}: DeviceRecoveryProps) {
   return (
-    <>
-      <DeviceApplicationRetry key={review} {...props} />
-      <DeviceRecoveryAuthorization
-        key={`${user.id}:${user.role}:${device.id}:${device.name}`}
-        device={device}
-        user={user}
-        onDone={onDone}
-      />
-    </>
+    <DeviceRecoveryAuthorization
+      key={`${user.id}:${user.role}:${device.id}:${device.name}`}
+      device={device}
+      user={user}
+      onDone={onDone}
+    />
   );
 }
 type RetryRequest = { controller: AbortController; epoch: number };
