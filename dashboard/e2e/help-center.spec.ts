@@ -126,7 +126,10 @@ test("a guide without pipeline context opens a chooser then the exact requested 
       page.getByRole("complementary", { name: "Pipeline destination" }),
     ).toContainText("Choose a pipeline to open Pipeline tests.");
     await page.getByLabel("Search pipelines").fill(doc.name);
-    await page.locator(".pipeline-list-item").click();
+    // The list filters after a short pause; wait for the filtered result.
+    const match = page.locator(".pipeline-list-item");
+    await expect(match).toHaveCount(1);
+    await match.click();
     const dialog = page.getByRole("dialog", { name: "Pipeline settings" });
     await expect(dialog).toBeVisible();
     await expect(

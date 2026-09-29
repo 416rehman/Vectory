@@ -54,6 +54,11 @@ const browser = await chromium.launch(),
   errors = [],
   unexpected = [];
 const origin = "http://127.0.0.1:5199/__deployment-routing";
+// The first load bundles the app's dependencies, which outlasts one action's
+// timeout while Vite's cache is cold (a fresh checkout or runner).
+const warmup = await browser.newPage();
+await warmup.goto(origin, { timeout: 60000 });
+await warmup.close();
 const id = (n) => "abcdefab-1234-4000-8000-" + String(n).padStart(12, "0");
 const user = (role) => ({
   id: "synthetic-user",
@@ -101,6 +106,7 @@ async function fixture({
   page.on("pageerror", (error) => errors.push(error.message));
   const state = {
     signedIn,
+    endedReason: null,
     role,
     records: Array.from({ length: 15 }, (_, i) => summary(i + 1)),
     requests: [],
@@ -126,7 +132,11 @@ async function fixture({
       }
     };
     if (path === "/status")
-      return reply({ initialized: true, version: "synthetic" });
+      return reply({
+        initialized: true,
+        version: "synthetic",
+        instance_name: "Synthetic navigation check",
+      });
     if (path === "/login" && method === "POST") {
       state.signedIn = true;
       return reply({ user: user(state.role), csrf_token: "synthetic-csrf" });
@@ -139,6 +149,7 @@ async function fixture({
               error: {
                 code: "UNAUTHENTICATED",
                 message: "Synthetic session required",
+                reason: state.endedReason,
               },
             },
             401,
@@ -189,7 +200,10 @@ async function fixture({
     );
     if (match) {
       const [, identity, action] = match;
-      if (identity === deniedId)
+      if (identity === deniedId) {
+        // A 401 means the session is gone, so the session read agrees.
+        state.signedIn = false;
+        state.endedReason = "expired";
         return reply(
           {
             error: {
@@ -199,6 +213,7 @@ async function fixture({
           },
           401,
         );
+      }
       const item = state.records.find((record) => record.id === identity);
       if (!item)
         return reply(
@@ -248,18 +263,38 @@ async function fixture({
             ready: true,
             review_token: "e".repeat(64),
             blockers: [],
-            devices: [{
-              device_id: id(200),
-              device_name: "Synthetic affected device",
-              effect: "unmanaged",
-              before: { assignment_id: item.id, assignment_name: item.name, version_id: item.version_id, configuration_name: "Synthetic pipeline", version_number: 1, generation: 1, policy: null },
-              after: { assignment_id: null, assignment_name: null, version_id: null, configuration_name: null, version_number: null, generation: 2, policy: null },
-              pending_assignment_id: null,
-              pending_assignment_name: null,
-            }],
+            devices: [
+              {
+                device_id: id(200),
+                device_name: "Synthetic affected device",
+                effect: "unmanaged",
+                before: {
+                  assignment_id: item.id,
+                  assignment_name: item.name,
+                  version_id: item.version_id,
+                  configuration_name: "Synthetic pipeline",
+                  version_number: 1,
+                  generation: 1,
+                  policy: null,
+                },
+                after: {
+                  assignment_id: null,
+                  assignment_name: null,
+                  version_id: null,
+                  configuration_name: null,
+                  version_number: null,
+                  generation: 2,
+                  policy: null,
+                },
+                pending_assignment_id: null,
+                pending_assignment_name: null,
+              },
+            ],
           });
         if (action === "unassign")
-          expect(route.request().postDataJSON()).toEqual({ review_token: "e".repeat(64) });
+          expect(route.request().postDataJSON()).toEqual({
+            review_token: "e".repeat(64),
+          });
         if (state.holdMutation === action)
           await new Promise((resolve) => (state.releaseMutation = resolve));
         item.status = action === "pause" ? "paused" : "unassigned";
@@ -304,8 +339,12 @@ try {
         await f.page
           .getByLabel("Search deployments", { exact: true })
           .fill("Alpha");
-        await f.page.getByRole("button", { name: "Filter Status", exact: true }).click();
-        await f.page.getByRole("radio", { name: "In progress", exact: true }).click();
+        await f.page
+          .getByRole("button", { name: "Filter Status", exact: true })
+          .click();
+        await f.page
+          .getByRole("radio", { name: "In progress", exact: true })
+          .click();
         await expect(f.page.locator(".deployment-table tbody tr")).toHaveCount(
           12,
         );
@@ -343,7 +382,12 @@ try {
         await expect(
           f.page.getByLabel("Search deployments", { exact: true }),
         ).toHaveValue("Alpha");
-        await expect(f.page.getByRole("button", { name: "Filter Status (active)", exact: true })).toBeVisible();
+        await expect(
+          f.page.getByRole("button", {
+            name: "Filter Status (active)",
+            exact: true,
+          }),
+        ).toBeVisible();
         await expect(f.page.locator(".pagination")).toContainText("2 / 2");
         await f.page.goForward();
         await expect(
@@ -551,8 +595,18 @@ try {
           (hash) => (location.hash = hash),
           "/deployments/" + id(3) + "?page=1",
         );
-        // An expired session is handled once by the shell's sign-in prompt;
-        // the page keeps what it had instead of showing its own error.
+        // An expired session is handled once, by the shell's re-sign-in
+        // dialog; the page keeps what it had instead of showing its own error.
+        const ended = f.page.getByRole("dialog", {
+          name: "Your session expired",
+          exact: true,
+        });
+        await expect(ended).toBeVisible();
+        await expect(ended).toContainText(
+          "Your unsaved work on this page is still here.",
+        );
+        // The dialog hides the page from role queries, so look for it directly.
+        await expect(f.page.locator("main [role=alert]")).toHaveCount(0);
         await expect(
           f.page.getByRole("heading", {
             name: "Your session ended",
@@ -627,7 +681,10 @@ try {
         f.state.releaseMutation = null;
         f.state.holdMutation = "";
         await expect(removal).toHaveCount(0);
-        await f.page.getByRole("dialog", { name: "Assignment removed", exact: true }).getByRole("button", { name: "Close", exact: true }).click();
+        await f.page
+          .getByRole("dialog", { name: "Assignment removed", exact: true })
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
         await back(f.page).click();
         await expect(dialog(f.page)).toHaveCount(0);
         expect(f.state.requests.filter((r) => r.path === "/overview")).toEqual(

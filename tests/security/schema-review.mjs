@@ -67,6 +67,23 @@ try {
   async function value() {
     return page.evaluate(() => window.fixture.value);
   }
+  // Rename, duplicate, move, remove and the null/value switch live in each
+  // field's "Actions for ..." menu. Open the menus in turn until one offers it.
+  async function fieldAction(label) {
+    const triggers = page.getByRole("button", { name: /^Actions for / });
+    for (let index = 0; index < (await triggers.count()); index++) {
+      const trigger = triggers.nth(index);
+      if (!(await trigger.isVisible())) continue;
+      await trigger.click();
+      const action = page.getByRole("menuitem", { name: label, exact: true });
+      if (await action.count()) {
+        await action.click();
+        return;
+      }
+      await page.keyboard.press("Escape");
+    }
+    throw new Error(`Missing field action: ${label}`);
+  }
   async function probe(name, run) {
     try {
       await run();
@@ -165,17 +182,13 @@ try {
         ),
         value: { "X-{{ tenant }}": "{{ timestamp }}" },
       });
-      await page
-        .getByRole("button", { name: "Rename X-{{ tenant }}", exact: true })
-        .click();
+      await fieldAction("Rename X-{{ tenant }}");
       await page
         .getByRole("textbox", { name: "Rename X-{{ tenant }}", exact: true })
         .fill("X-Event");
       await page.getByRole("button", { name: "Rename", exact: true }).click();
       assert.deepEqual(await value(), { "X-Event": "{{ timestamp }}" });
-      await page
-        .getByRole("button", { name: "Duplicate X-Event", exact: true })
-        .click();
+      await fieldAction("Duplicate X-Event");
       assert.deepEqual(await value(), {
         "X-Event": "{{ timestamp }}",
         "X-Event_copy": "{{ timestamp }}",
@@ -188,13 +201,9 @@ try {
       schema: { type: "array", items: { type: "string" } },
       value: ["first", "second"],
     });
-    await page
-      .getByRole("button", { name: "Move item 2 up", exact: true })
-      .click();
+    await fieldAction("Move item 2 up");
     assert.deepEqual(await value(), ["second", "first"]);
-    await page
-      .getByRole("button", { name: "Duplicate item 1", exact: true })
-      .click();
+    await fieldAction("Duplicate item 1");
     assert.deepEqual(await value(), ["second", "first", "second"]);
   });
   await probe(
@@ -208,9 +217,7 @@ try {
       await page
         .getByRole("textbox", { name: "Item 1", exact: true })
         .fill("-");
-      await page
-        .getByRole("button", { name: "Move item 1 down", exact: true })
-        .click();
+      await fieldAction("Move item 1 down");
       assert.deepEqual(await value(), [30, 20]);
       assert.equal(
         await page
@@ -237,9 +244,7 @@ try {
         value: { alpha: 20 },
       });
       await page.getByRole("textbox", { name: "Alpha", exact: true }).fill("-");
-      await page
-        .getByRole("button", { name: "Rename alpha", exact: true })
-        .click();
+      await fieldAction("Rename alpha");
       await page
         .getByRole("textbox", { name: "Rename alpha", exact: true })
         .fill("beta");
@@ -269,9 +274,7 @@ try {
         ),
         value: null,
       });
-      await page
-        .getByRole("button", { name: "Enter Max Length value", exact: true })
-        .click();
+      await fieldAction("Enter Max Length value");
       await page.waitForFunction(() => window.fixture.pending, null, {
         timeout: 2000,
       });
@@ -279,13 +282,9 @@ try {
       assert.equal(await page.evaluate(() => window.fixture.pending), true);
       await page.getByRole("textbox").fill("64");
       assert.equal(await value(), 64);
-      await page
-        .getByRole("button", { name: "Set Max Length to null", exact: true })
-        .click();
+      await fieldAction("Set Max Length to null");
       assert.equal(await value(), null);
-      await page
-        .getByRole("button", { name: "Enter Max Length value", exact: true })
-        .click();
+      await fieldAction("Enter Max Length value");
       assert.equal(await value(), 64);
     },
   );
@@ -395,12 +394,39 @@ try {
   await probe(
     "read-only controls do not expose mutating list operations",
     async () => {
-      await load({
+      // Open every actions menu and list what it offers. Closed menus render
+      // no items, so counting buttons alone could not fail.
+      async function offered() {
+        const names = [];
+        const triggers = page.getByRole("button", { name: /^Actions for / });
+        for (let index = 0; index < (await triggers.count()); index++) {
+          await triggers.nth(index).click();
+          for (const item of await page.getByRole("menuitem").all())
+            names.push((await item.innerText()).trim());
+          await page.keyboard.press("Escape");
+        }
+        return names;
+      }
+      const list = {
         name: "values",
         schema: { type: "array", items: { type: "string" } },
         value: ["first"],
-        editable: false,
-      });
+      };
+      await load(list);
+      const editable = await offered();
+      for (const action of [
+        "Move item 1 up",
+        "Move item 1 down",
+        "Duplicate item 1",
+        "Remove item 1",
+      ])
+        assert(editable.includes(action), `${action} in ${editable}`);
+      await load({ ...list, editable: false });
+      const readOnly = await offered();
+      assert.deepEqual(
+        readOnly.filter((name) => !/^View /.test(name)),
+        [],
+      );
       assert.equal(
         await page
           .getByRole("button", {
@@ -436,10 +462,12 @@ const report = {
     "Synthetic property-name and array tests complement real pinned field probes; the pinned schema currently has no propertyNames constraints.",
   ],
 };
-await fs.writeFile(
-  path.join(root, "docs/evidence/schema-review.json"),
-  JSON.stringify(report, null, 2) + "\n",
+const output = path.resolve(
+  process.env.VECTORY_SCHEMA_REVIEW_EVIDENCE ||
+    path.join(root, "docs/evidence/schema-review.json"),
 );
+await fs.mkdir(path.dirname(output), { recursive: true });
+await fs.writeFile(output, JSON.stringify(report, null, 2) + "\n");
 console.log(JSON.stringify(report, null, 2));
 if (results.some((result) => !result.passed) || errors.length)
   process.exitCode = 1;

@@ -69,7 +69,7 @@ import {
   usesCanary,
   type ReleaseSettings,
   type RequestedChange,
-} from "./deploymentReview";
+} from "./deploymentReviewModel";
 import "./control.css";
 import "./target-dialog.css";
 

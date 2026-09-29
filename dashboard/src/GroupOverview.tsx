@@ -5,7 +5,7 @@ import { deviceDisplayStatus, statusLabel } from "./status";
 import { relativeTime } from "./time";
 import { deploymentRoute } from "./deploymentRouting";
 import { describeDeployment, interval, verifiedText } from "./deploymentStatus";
-import { runningName } from "./deploymentReview";
+import { runningName } from "./deploymentReviewModel";
 
 function assignmentTitle(d: DeploymentSummary) {
   if (d.policy)

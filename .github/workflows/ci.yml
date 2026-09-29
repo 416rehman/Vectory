@@ -58,8 +58,12 @@ jobs:
         run: npm run build
       - run: npx playwright install --with-deps chromium
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-      - run: node ../tests/security/resource-race.mjs
+      - name: Check the shared resource hook against stale, slow and interleaved replies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-race.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_RACE_EVIDENCE: artifacts/resource-race.json
       - name: Check shared column sorting, filtering and keyboard access
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/data-table-browser.mjs
@@ -68,6 +72,11 @@ jobs:
         run: node tests/fleet-tables-browser.mjs
         env:
           VECTORY_FLEET_TABLES_OUTPUT: artifacts/fleet-tables
+      - name: Check one page header, the first Tab stop and dialog focus return
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/page-chrome-browser.mjs
+        env:
+          VECTORY_PAGE_CHROME_OUTPUT: artifacts/page-chrome
       - name: Check library session boundaries and navigation state
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-library-browser.mjs
@@ -244,6 +253,54 @@ jobs:
         working-directory: .
         env:
           VECTORY_AUDIT_EVIDENCE: artifacts/audit-review.json
+      - name: Check the resource hook's polling, deadlines and cancellation with controlled timers
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/resource-polling.mjs
+        working-directory: .
+        env:
+          VECTORY_RESOURCE_REPORT: artifacts/resource-polling.json
+      - name: Check pinned Vector schema fixtures round-trip losslessly
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-fixtures.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_FIXTURES_EVIDENCE: artifacts/schema-fixtures.json
+      - name: Check schema controls keep values through rename, reorder and null
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/schema-review.mjs
+        working-directory: .
+        env:
+          VECTORY_SCHEMA_REVIEW_EVIDENCE: artifacts/schema-review.json
+      - name: Check failed page loads recover inside the production build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/lazy-page-recovery-review.mjs
+        working-directory: .
+        env:
+          VECTORY_LAZY_PAGE_OUTPUT: artifacts/lazy-page-recovery
+      - name: Check the device page never shows or acts on another record's reply
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-identity-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_IDENTITY_OUTPUT: artifacts/device-identity
+      - name: Check retried application keeps its reviewed preconditions
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-retry-context-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_RETRY_CONTEXT_OUTPUT: artifacts/device-retry-context
+      - name: Check revoking a device confirms from its exact status
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-revocation-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_REVOCATION_OUTPUT: artifacts/device-revocation
+      - name: Check authorizing device recovery shows its token once and never resends
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/security/device-recovery-request-review.mjs
+        working-directory: .
+        env:
+          VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT: artifacts/device-recovery-request
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -282,6 +339,16 @@ jobs:
             artifacts/audit-order-review.json
             artifacts/issue-review.json
             artifacts/audit-review.json
+            artifacts/resource-race.json
+            artifacts/resource-polling.json
+            artifacts/schema-fixtures.json
+            artifacts/schema-review.json
+            artifacts/lazy-page-recovery
+            artifacts/device-identity
+            artifacts/device-retry-context
+            artifacts/device-revocation
+            artifacts/device-recovery-request
+            artifacts/page-chrome
           if-no-files-found: warn
   agent:
     strategy:

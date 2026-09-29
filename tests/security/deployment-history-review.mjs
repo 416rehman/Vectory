@@ -184,6 +184,51 @@ try {
     insert.run(kind, value.id, JSON.stringify(value), value.created_at);
     return value;
   }
+  // Pre-generated so lineage fields can name other deployments, and a clock
+  // that gives every fixture event its own second.
+  const deploymentIds = Array.from({ length: 223 }, () => randomUUID());
+  // Two deployments name this group; the filter must find exactly them.
+  const groupId = randomUUID();
+  const at = (index, seconds = 0) =>
+    new Date(
+      Date.UTC(2026, 0, 3) + (index * 100 + seconds) * 1000,
+    ).toISOString();
+  // The operator's stored name is longer than the API allows, so the bound on
+  // the creator's name is visible.
+  const longUserName = "O".repeat(150);
+  db.prepare("UPDATE users SET name=? WHERE id=?").run(
+    longUserName,
+    roles.operator.user.id,
+  );
+  const userNames = new Map([
+    [admin.user.id, admin.user.name],
+    [roles.viewer.user.id, roles.viewer.user.name],
+    [roles.editor.user.id, roles.editor.user.name],
+    [roles.operator.user.id, longUserName],
+  ]);
+  const policies = [
+    record("policy", {
+      id: randomUUID(),
+      name: "Synthetic agent settings",
+      created_at: "2026-01-01T00:00:00Z",
+      heartbeat_seconds: 90,
+      private: marker,
+    }),
+    // The marker sits past the 120 character bound of a projected name.
+    record("policy", {
+      id: randomUUID(),
+      name: "P".repeat(200) + marker,
+      created_at: "2026-01-01T00:00:00Z",
+      private: marker,
+    }),
+  ];
+  const audit = (entry) =>
+    record("audit", {
+      id: randomUUID(),
+      outcome: "success",
+      details: { private: marker },
+      ...entry,
+    });
   const configurations = Array.from({ length: 3 }, (_, index) =>
     record("configuration", {
       id: randomUUID(),
@@ -207,6 +252,97 @@ try {
     "paused",
     "scheduled",
   ];
+  // Who created a deployment and which agent settings it applies. Each hostile
+  // shape (an object, an unknown identity, oversized text) must project as null
+  // or as bounded text, never as stored data.
+  function provenanceFor(index, policy) {
+    const fields = {};
+    if (index % 6 === 1) fields.created_by = roles.operator.user.id;
+    if (index % 6 === 2) fields.created_by = roles.editor.user.id;
+    if (index % 6 === 4) fields.created_by = randomUUID();
+    if (index % 6 === 5) fields.created_by = { private: marker };
+    // Older deployments carry no creator; their audit trail names one.
+    if (index % 12 === 3)
+      audit({
+        actor: roles.viewer.user.id,
+        action: "deployment.create",
+        target: deploymentIds[index],
+        created_at: at(index, 90),
+      });
+    if (index % 12 === 9)
+      audit({
+        actor: roles.editor.user.id,
+        action: "deployment.schedule",
+        target: deploymentIds[index],
+        created_at: at(index, 90),
+      });
+    if (policy)
+      fields.policy_id =
+        index === 100
+          ? { private: marker }
+          : index === 140
+            ? randomUUID()
+            : policies[index % 40 === 0 ? 0 : 1].id;
+    return fields;
+  }
+  // Outcome timestamps and reasons written when a deployment ends.
+  function outcomeFor(index, status) {
+    const fields = {};
+    if (status === "completed")
+      fields.completed_at = index % 21 === 3 ? 12345 : at(index, 20);
+    if (status === "failed") {
+      fields.failed_at = index % 21 === 4 ? { private: marker } : at(index, 30);
+      if (index % 14 === 4) fields.failure_reason = "threshold";
+      if (index % 14 === 11) fields.failure_reason = "x".repeat(80) + marker;
+    }
+    if (status === "cancelled")
+      fields.cancelled_at = index % 21 === 2 ? [marker] : at(index, 10);
+    if (status === "unassigned") {
+      fields.removed_at = at(index, 40);
+      fields.status_before_removal =
+        index % 21 === 0 && index > 0 ? "y".repeat(100) + marker : "active";
+    }
+    return fields;
+  }
+  // Rollback and replacement lineage. The marker rides along in every stored
+  // entry so only the four named fields can leave.
+  function lineageFor(index) {
+    const fields = {};
+    if (index === 10)
+      Object.assign(fields, {
+        rolled_back_by: deploymentIds[11],
+        rolled_back_at: at(10, 50),
+        status_before_rollback: "completed",
+      });
+    if (index === 11) fields.rollback_of = deploymentIds[10];
+    if (index === 13) fields.rolled_back_by = { private: marker };
+    if (index === 14) fields.rollback_of = 42;
+    if (index === 17) fields.status_before_rollback = "z".repeat(100) + marker;
+    if (index === 0)
+      fields.replaced_by = [
+        {
+          deployment_id: deploymentIds[3],
+          device_count: 15,
+          at: at(0, 7),
+          private: marker,
+        },
+        { deployment_id: deploymentIds[4], device_count: 3, at: at(0, 8) },
+      ];
+    if (index === 2)
+      fields.replaced_by = [
+        {
+          deployment_id: deploymentIds[3],
+          device_count: 5,
+          at: at(2, 5),
+          private: marker,
+        },
+        { deployment_id: randomUUID(), device_count: 1, at: at(2, 6) },
+      ];
+    if (index === 3) fields.replaces = [deploymentIds[2], randomUUID()];
+    if (index === 5) fields.replaced_by = "not-an-array";
+    if (index === 6) fields.replaces = { private: marker };
+    return fields;
+  }
   for (let index = 0; index < 223; index++) {
     // Paired timestamps exercise the deterministic id tie-breaker.
     const time = new Date(
@@ -227,7 +363,7 @@ try {
     const status = statuses[index % statuses.length];
     deployments.push(
       record("deployment", {
-        id: randomUUID(),
+        id: deploymentIds[index],
         name:
           index === 219
             ? "Oversized legacy name " + "x".repeat(65536) + marker
@@ -252,7 +388,7 @@ try {
         selector: {
           device_ids:
             index === 0 ? Array.from({ length: 5000 }, () => randomUUID()) : [],
-          group_ids: [],
+          group_ids: index === 30 || index === 31 ? [groupId] : [],
           exclude_ids: [],
           private: marker,
         },
@@ -273,6 +409,9 @@ try {
           private: marker,
         },
         private: marker,
+        ...provenanceFor(index, policy),
+        ...outcomeFor(index, status),
+        ...lineageFor(index),
       }),
     );
   }
@@ -295,12 +434,170 @@ try {
   ];
   const targets = [];
   const insertDevice = db.prepare(
-    "INSERT INTO devices(id,name,data,revoked) VALUES(?,?,?,?)",
+    "INSERT INTO devices(id,name,data,revoked,policy,policy_generation) VALUES(?,?,?,?,?,?)",
   );
   const insertTarget = db.prepare(
-    "INSERT INTO deployment_targets(deployment_id,device_id,state,generation,error,original) VALUES(?,?,?,?,?,?)",
+    "INSERT INTO deployment_targets(deployment_id,device_id,state,generation,error,original,previous_version_id,released_at,verified_at) VALUES(?,?,?,?,?,?,?,?,?)",
   );
+  // The agent's failed attempt for a target and the first diagnostic a reader
+  // may see for it (or null). Every stored object also carries the marker in
+  // fields no projection may copy.
+  function attemptFor(index) {
+    let attempt,
+      terminal,
+      diagnostic = null;
+    if (index % 7 === 0) {
+      attempt = {
+        generation: index,
+        error: {
+          diagnostics: [
+            { message: `Rejected component ${index}`, private: marker },
+          ],
+          private: marker,
+        },
+        private: marker,
+      };
+      diagnostic = `Rejected component ${index}`;
+    }
+    if (index === 14) {
+      attempt.error.diagnostics[0].message = "m".repeat(800);
+      diagnostic = "m".repeat(500);
+    }
+    if (index === 21) {
+      terminal = {
+        generation: 21,
+        error: { diagnostics: [{ message: "Terminal diagnostic" }] },
+        private: marker,
+      };
+      diagnostic = "Terminal diagnostic";
+    }
+    if (index === 28) {
+      // An attempt for another generation says nothing about this one.
+      attempt.generation = 29;
+      diagnostic = null;
+    }
+    if (index === 35) {
+      attempt.error.diagnostics = ["Plain string diagnostic"];
+      diagnostic = "Plain string diagnostic";
+    }
+    if (index === 42) {
+      attempt.error = { summary: "  Error summary  ", diagnostics: [] };
+      diagnostic = "Error summary";
+    }
+    if (index === 49) {
+      attempt.error.diagnostics[0].message = "   ";
+      diagnostic = null;
+    }
+    // The apply step that failed: a token of lower-case letters and underscores,
+    // at most 32 long, from this generation's terminal attempt first. Anything
+    // else the agent stored there (case, digits, hyphens, length, type, another
+    // generation, the marker) reads as none.
+    let stage = null;
+    if (attempt) {
+      const stored = {
+        14: "reload",
+        35: "Validation",
+        42: "a".repeat(33),
+        49: marker,
+        56: "a".repeat(32),
+        63: "step2",
+        70: "",
+        77: 7,
+        84: "reload_step",
+        91: "hyphen-ated",
+      };
+      const shown = {
+        14: "reload",
+        21: "rollback",
+        28: null,
+        35: null,
+        42: null,
+        49: null,
+        56: "a".repeat(32),
+        63: null,
+        70: null,
+        77: null,
+        84: "reload_step",
+        91: null,
+      };
+      attempt.error.stage = index in stored ? stored[index] : "validation";
+      if (terminal) terminal.error.stage = "rollback";
+      stage = index in shown ? shown[index] : "validation";
+    }
+    return { attempt, terminal, diagnostic, stage };
+  }
+  // Agent settings for a device and the check-in interval a reader may see: an
+  // integer from 10 to 3600 seconds. The column default (60 seconds) applies
+  // unless a fixture stores its own settings, some of them hostile.
+  const defaultSettings = JSON.stringify({
+    heartbeat_seconds: 60,
+    sync_paused: false,
+    telemetry_enabled: true,
+  });
+  function settingsFor(index) {
+    const stored = (heartbeat) =>
+      JSON.stringify({
+        heartbeat_seconds: heartbeat,
+        sync_paused: false,
+        telemetry_enabled: true,
+        private: marker,
+      });
+    if (index === 15) return { policy: stored(10 ** 12), seconds: 3600 };
+    if (index === 20) return { policy: stored(1), seconds: 60 };
+    if (index === 25) return { policy: stored("fast"), seconds: 60 };
+    if (index === 30)
+      return { policy: stored(45), seconds: 45, acknowledged: true };
+    if (index % 5 === 0) return { policy: stored(90), seconds: 90 };
+    return { policy: defaultSettings, seconds: 60 };
+  }
+  // Apply-state events the audit trail holds for a device. A target shows only
+  // those inside its own release window, in order, deduplicated, at most 12.
+  const expectedTimelines = new Map([
+    [
+      1,
+      [
+        { state: "desired", at: at(1, 2) },
+        { state: "downloaded", at: at(1, 3) },
+        { state: "validated", at: at(1, 5) },
+        { state: "s".repeat(32), at: at(1, 6) },
+      ],
+    ],
+    [
+      2,
+      Array.from({ length: 12 }, (_, step) => ({
+        state: `step-${step + 18}`,
+        at: at(2, 2 + step + 18),
+      })),
+    ],
+    [
+      4,
+      [
+        { state: "desired", at: at(4, 2) },
+        { state: "verified_applied", at: at(4, 44) },
+      ],
+    ],
+  ]);
+  const applyState = (deviceId, outcome, created_at, action) =>
+    audit({
+      actor: deviceId,
+      action: action || "device.apply_state",
+      target: deviceId,
+      outcome,
+      created_at,
+    });
+  const deviceIds = [];
   for (let index = 0; index < 151; index++) {
+    const state = targetStates[index % targetStates.length];
+    const { attempt, terminal, diagnostic, stage } = attemptFor(index);
+    const settings = settingsFor(index);
+    const lastSeen =
+      index === 10
+        ? "l".repeat(80) + marker
+        : index === 11
+          ? { private: marker }
+          : index % 3 === 0
+            ? at(index, 2)
+            : undefined;
     const device = {
       id: randomUUID(),
       name:
@@ -316,21 +613,65 @@ try {
       apply_state: "unmanaged",
       reported_generation: 0,
       created_at: "2026-01-01T00:00:00Z",
+      last_seen: lastSeen,
+      configuration_attempt: attempt,
+      terminal_configuration_attempt: terminal,
+      policy_generation: settings.acknowledged ? 5 : undefined,
+      // An open data-plane problem on the version deployment 21 delivers. Only
+      // four fields of it may reach a verified row of that deployment.
+      data_plane:
+        index === 6
+          ? {
+              version_id: versions[21].id,
+              issues: [
+                {
+                  code: "DATA_PLANE_STALLED",
+                  title: "Nothing is being delivered",
+                  message: "No events were read in the last 10 minutes.",
+                  hint: "Check that the source can reach its input.",
+                  private: marker,
+                  detail: { private: marker },
+                },
+              ],
+            }
+          : undefined,
       private: marker,
     };
+    deviceIds.push(device.id);
     insertDevice.run(
       device.id,
       device.name,
       JSON.stringify(device),
       index % 13 === 0 ? 1 : 0,
+      settings.policy,
+      settings.acknowledged ? 3 : 0,
     );
+    const released_at = state === "pending" ? null : at(index, 1);
+    const verified_at = state === "verified_applied" ? at(index, 45) : null;
     const target = {
       device_id: device.id,
       device_name: device.name,
-      state: targetStates[index % targetStates.length],
+      state,
       generation: index,
       error: index % 7 === 0 ? "Synthetic observed failure" : null,
       original: index % 3 !== 0,
+      released_at,
+      verified_at,
+      last_seen:
+        typeof lastSeen === "string"
+          ? [...lastSeen].slice(0, 64).join("")
+          : null,
+      // A replaced target names the deployment that took the device over.
+      replaced_by:
+        state === "removed" && index === 8
+          ? deploymentIds[3]
+          : state === "removed" && index === 18
+            ? deploymentIds[4]
+            : null,
+      diagnostic,
+      failure_stage: stage,
+      check_in_seconds: settings.seconds,
+      timeline: expectedTimelines.get(index) || [],
     };
     insertTarget.run(
       parent.id,
@@ -339,6 +680,9 @@ try {
       target.generation,
       target.error,
       target.original ? 1 : 0,
+      index % 9 === 2 ? versions[0].id : null,
+      released_at,
+      verified_at,
     );
     targets.push(target);
     if (index < 37)
@@ -349,8 +693,62 @@ try {
         8000 + index,
         "Other parent synthetic failure",
         1,
+        null,
+        null,
+        null,
       );
   }
+  // Timeline fixtures. Anything before the release, after verification, of
+  // another action or on another device must stay out; long runs keep the last 12.
+  {
+    const [, first, second, , fourth] = deviceIds;
+    applyState(first, "stale", at(1, 0));
+    applyState(first, "desired", at(1, 2));
+    applyState(first, "downloaded", at(1, 3));
+    applyState(first, "downloaded", at(1, 4));
+    applyState(first, "validated", at(1, 5));
+    applyState(first, "s".repeat(40) + marker, at(1, 6));
+    applyState(first, marker, at(1, 7), "device.enroll");
+    for (let step = 0; step < 30; step++)
+      applyState(
+        second,
+        `step-${String(step).padStart(2, "0")}`,
+        at(2, 2 + step),
+      );
+    applyState(fourth, "stale", at(4, 0));
+    applyState(fourth, "desired", at(4, 2));
+    applyState(fourth, "verified_applied", at(4, 44));
+    applyState(fourth, "late", at(4, 50));
+  }
+  // Other deployments' targets: a successor for two removed devices, rollback
+  // availability from a removed and a verified target, and a paused canary.
+  const extraTarget = (deployment, index, state, generation, previous) =>
+    insertTarget.run(
+      deployment.id,
+      deviceIds[index],
+      state,
+      generation,
+      null,
+      1,
+      previous ? versions[0].id : null,
+      null,
+      null,
+    );
+  extraTarget(deployments[3], 8, "pending", 0, false);
+  extraTarget(deployments[4], 18, "pending", 0, false);
+  extraTarget(deployments[20], 5, "removed", 5, true);
+  extraTarget(deployments[21], 6, "verified_applied", 3, true);
+  const paused = deployments[5];
+  assert.equal(paused.status, "paused");
+  extraTarget(paused, 30, "verified_applied", 1, false);
+  extraTarget(paused, 31, "pending", 0, false);
+  extraTarget(paused, 32, "failed", 1, false);
+  const rollbackAvailable = (id) =>
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed' AND previous_version_id IS NOT NULL",
+      )
+      .get(id).n > 0;
   // A reused display name must never move historical progress to a new identity.
   const retired = targets[0];
   const reusedName = retired.device_name;
@@ -371,6 +769,8 @@ try {
       private: marker,
     }),
     0,
+    defaultSettings,
+    0,
   );
   const summaryKeys = [
     "id",
@@ -389,6 +789,27 @@ try {
     "target_count",
     "verified_count",
     "state_counts",
+    "rollback_idempotency",
+    "rollback_review",
+    "request_correlation",
+    "created_by_name",
+    "policy_id",
+    "policy_name",
+    "rollback_available",
+    "completed_at",
+    "failed_at",
+    "failure_reason",
+    "cancelled_at",
+    "removed_at",
+    "status_before_removal",
+    "status_before_rollback",
+    "rolled_back_at",
+    "rolled_back_by",
+    "rolled_back_to_version",
+    "rollback_of",
+    "rollback_of_version",
+    "replaced_by",
+    "replaces",
   ].sort();
   const targetKeys = [
     "device_id",
@@ -397,14 +818,203 @@ try {
     "generation",
     "error",
     "original",
+    "released_at",
+    "verified_at",
+    "last_seen",
+    "replaced_by",
+    "diagnostic",
+    "failure_stage",
+    "check_in_seconds",
+    "timeline",
   ].sort();
+  const deliveryCodes = [
+    "DATA_PLANE_STALLED",
+    "DATA_PLANE_SINK_ERRORS",
+    "DATA_PLANE_BUFFER_FULL",
+    "DATA_PLANE_ERROR_DROPS",
+  ];
   const route = (query = {}) =>
     "/deployments/history?" + new URLSearchParams(query);
   const targetRoute = (id, query = {}) =>
     `/deployments/${id}/targets?` + new URLSearchParams(query);
+  const characters = (value) => [...value].length;
+  const cut = (value, max) =>
+    typeof value === "string" ? [...value].slice(0, max).join("") : null;
+  const bounded = (value, max) =>
+    value === null || (typeof value === "string" && characters(value) <= max);
+  const uuidShape =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const timestampShape = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+  const isId = (value) => value === null || uuidShape.test(value);
+  const isWhen = (value) =>
+    value === null ||
+    (typeof value === "string" &&
+      value.length <= 64 &&
+      timestampShape.test(value));
+  const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+  const isNumber = (value) =>
+    value === null || (Number.isSafeInteger(value) && value >= 1);
+  // The version number of the deployment with this id, as its record says.
+  const versionNumberOf = (id) => {
+    const found = deployments.find((d) => d.id === id);
+    const version =
+      found && typeof found.version_id === "string"
+        ? versions.find((v) => v.id === found.version_id)
+        : undefined;
+    return version ? version.number : null;
+  };
+  // What the provenance, outcome and lineage fields must read for a stored
+  // deployment: text and identities only when they are the right type, bounded
+  // where the API bounds them, and nothing else copied from lineage entries.
+  function expectedFields(stored) {
+    const actor =
+      stored.created_by !== undefined
+        ? stored.created_by
+        : db
+            .prepare(
+              "SELECT json_extract(data,'$.actor') AS actor FROM records WHERE kind='audit' AND json_extract(data,'$.target')=? AND json_extract(data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1",
+            )
+            .get(stored.id)?.actor;
+    const text = (value) => (typeof value === "string" ? value : null);
+    const policy = policies.find((p) => p.id === stored.policy_id);
+    return {
+      rollback_idempotency: true,
+      rollback_review: true,
+      request_correlation: true,
+      created_by_name: cut(userNames.get(actor), 120),
+      policy_id: text(stored.policy_id),
+      policy_name: policy ? cut(policy.name, 120) : null,
+      rollback_available: rollbackAvailable(stored.id),
+      completed_at: text(stored.completed_at),
+      failed_at: text(stored.failed_at),
+      failure_reason: cut(stored.failure_reason, 64),
+      cancelled_at: text(stored.cancelled_at),
+      removed_at: text(stored.removed_at),
+      status_before_removal: cut(stored.status_before_removal, 64),
+      status_before_rollback: cut(stored.status_before_rollback, 64),
+      rolled_back_at: text(stored.rolled_back_at),
+      rolled_back_by: text(stored.rolled_back_by),
+      rolled_back_to_version:
+        typeof stored.rolled_back_by === "string"
+          ? versionNumberOf(stored.rolled_back_by)
+          : null,
+      rollback_of: text(stored.rollback_of),
+      rollback_of_version:
+        typeof stored.rollback_of === "string"
+          ? versionNumberOf(stored.rollback_of)
+          : null,
+      replaced_by: Array.isArray(stored.replaced_by)
+        ? stored.replaced_by.map((entry) => ({
+            deployment_id: entry.deployment_id,
+            device_count: entry.device_count,
+            at: entry.at,
+            version_number: versionNumberOf(entry.deployment_id),
+          }))
+        : [],
+      replaces: Array.isArray(stored.replaces)
+        ? stored.replaces.map((id) => ({
+            deployment_id: id,
+            version_number: versionNumberOf(id),
+          }))
+        : [],
+    };
+  }
+  const newSummaryKeys = Object.keys(expectedFields(deployments[1]));
+  const canaryGateKeys = [
+    "evaluated_at",
+    "observation_seconds",
+    "observation_started_at",
+    "pending_count",
+    "reasons",
+    "released_count",
+    "state",
+    "verified_count",
+  ];
+  // Why a released device does not yet count toward the canary's proof:
+  // measuring and degraded come from the data-plane check on its version.
+  const gateReasons = [
+    "degraded",
+    "measuring",
+    "paused",
+    "stale",
+    "superseded",
+    "unavailable",
+    "unverified",
+  ];
+  function gate(value) {
+    assert.deepEqual(Object.keys(value).sort(), canaryGateKeys);
+    assert(["paused", "observing", "waiting"].includes(value.state));
+    for (const field of ["released_count", "verified_count", "pending_count"])
+      assert(isCount(value[field]), field);
+    assert.deepEqual(Object.keys(value.reasons).sort(), gateReasons);
+    assert(Object.values(value.reasons).every(isCount));
+    assert(
+      Number.isInteger(value.observation_seconds) &&
+        value.observation_seconds >= 0 &&
+        value.observation_seconds <= 86400,
+    );
+    assert(isWhen(value.observation_started_at));
+    assert(isWhen(value.evaluated_at) && value.evaluated_at !== null);
+  }
   function summary(value) {
-    assert.deepEqual(Object.keys(value).sort(), summaryKeys);
+    // A paused or active canary's own read also carries its gate.
+    const { canary_gate, ...rest } = value;
+    if (canary_gate !== undefined) gate(canary_gate);
+    assert.deepEqual(Object.keys(rest).sort(), summaryKeys);
     assert(!JSON.stringify(value).includes(marker));
+    // Advertised capabilities are literal booleans, never stored values.
+    for (const flag of [
+      "rollback_idempotency",
+      "rollback_review",
+      "request_correlation",
+    ])
+      assert.strictEqual(value[flag], true, flag);
+    // Provenance: names and identities are bounded text or null.
+    assert(bounded(value.created_by_name, 120));
+    assert(isId(value.policy_id));
+    assert(bounded(value.policy_name, 120));
+    assert.equal(typeof value.rollback_available, "boolean");
+    // Outcome: timestamps are date-shaped text, reasons short bounded text.
+    for (const field of [
+      "completed_at",
+      "failed_at",
+      "cancelled_at",
+      "removed_at",
+      "rolled_back_at",
+    ])
+      assert(isWhen(value[field]), field);
+    for (const field of [
+      "failure_reason",
+      "status_before_removal",
+      "status_before_rollback",
+    ])
+      assert(bounded(value[field], 64), field);
+    // Lineage: identities, version numbers and exactly the advertised entry keys.
+    assert(isId(value.rolled_back_by) && isId(value.rollback_of));
+    assert(isNumber(value.rolled_back_to_version));
+    assert(isNumber(value.rollback_of_version));
+    assert(Array.isArray(value.replaced_by));
+    for (const entry of value.replaced_by) {
+      assert.deepEqual(Object.keys(entry).sort(), [
+        "at",
+        "deployment_id",
+        "device_count",
+        "version_number",
+      ]);
+      assert(isId(entry.deployment_id) && entry.deployment_id !== null);
+      assert(isCount(entry.device_count));
+      assert(isWhen(entry.at) && entry.at !== null);
+      assert(isNumber(entry.version_number));
+    }
+    assert(Array.isArray(value.replaces));
+    for (const entry of value.replaces) {
+      assert.deepEqual(Object.keys(entry).sort(), [
+        "deployment_id",
+        "version_number",
+      ]);
+      assert(isId(entry.deployment_id) && entry.deployment_id !== null);
+      assert(isNumber(entry.version_number));
+    }
     assert(value.name === null || typeof value.name === "string");
     if (typeof value.name === "string") assert([...value.name].length <= 120);
     assert(value.version_id === null || typeof value.version_id === "string");
@@ -430,7 +1040,69 @@ try {
       value.state_counts.verified_applied || 0,
     );
   }
-  function pageEnvelope(value, expectedKeys) {
+  // One target row. A canary gate adds a per-target reason to a paused or
+  // active deployment's rows.
+  function targetProjection(target, gated = false) {
+    const { gate_reason, delivery, ...rest } = target;
+    if (gated)
+      assert(gate_reason === null || gateReasons.includes(gate_reason));
+    else assert.equal(gate_reason, undefined);
+    assert.deepEqual(Object.keys(rest).sort(), targetKeys);
+    assert(!JSON.stringify(target).includes(marker));
+    assert(uuidShape.test(target.device_id));
+    assert(
+      target.device_name === null || typeof target.device_name === "string",
+    );
+    assert(typeof target.state === "string" && characters(target.state) <= 64);
+    assert(isCount(target.generation));
+    assert(bounded(target.error, 500));
+    assert.equal(typeof target.original, "boolean");
+    assert(isWhen(target.released_at) && isWhen(target.verified_at));
+    // A device's own text is cut at 64 characters; reasons at 500.
+    assert(bounded(target.last_seen, 64));
+    assert(isId(target.replaced_by));
+    assert(bounded(target.diagnostic, 500));
+    assert(
+      target.failure_stage === null ||
+        (typeof target.failure_stage === "string" &&
+          /^[a-z_]{1,32}$/.test(target.failure_stage)),
+    );
+    // Present only on a verified row whose device has an open data-plane
+    // problem on this deployment's version: four fields, nothing else stored.
+    if (delivery !== undefined) {
+      assert.equal(target.state, "verified_applied");
+      assert.deepEqual(Object.keys(delivery).sort(), [
+        "code",
+        "hint",
+        "message",
+        "title",
+      ]);
+      assert(deliveryCodes.includes(delivery.code));
+      assert(
+        typeof delivery.title === "string" && characters(delivery.title) <= 120,
+      );
+      assert(bounded(delivery.message, 300) && bounded(delivery.hint, 200));
+    }
+    assert(
+      target.check_in_seconds === null ||
+        (Number.isInteger(target.check_in_seconds) &&
+          target.check_in_seconds >= 10 &&
+          target.check_in_seconds <= 3600),
+    );
+    assert(Array.isArray(target.timeline) && target.timeline.length <= 12);
+    for (const event of target.timeline) {
+      assert.deepEqual(Object.keys(event).sort(), ["at", "state"]);
+      assert(
+        typeof event.state === "string" &&
+          characters(event.state) >= 1 &&
+          characters(event.state) <= 32,
+      );
+      assert(isWhen(event.at) && event.at !== null);
+    }
+    const times = target.timeline.map((event) => event.at);
+    assert.deepEqual(times, [...times].sort());
+  }
+  function pageEnvelope(value, expectedKeys, gated = false) {
     // DeploymentHistoryPage may advertise actor-scoped request discovery.
     const { request_history, ...envelope } = value;
     assert([undefined, true].includes(request_history));
@@ -442,8 +1114,10 @@ try {
     ]);
     assert(value.items.length <= 50);
     assert(!JSON.stringify(value).includes(marker));
-    for (const item of value.items)
-      assert.deepEqual(Object.keys(item).sort(), expectedKeys);
+    for (const item of value.items) {
+      if (expectedKeys === targetKeys) targetProjection(item, gated);
+      else assert.deepEqual(Object.keys(item).sort(), expectedKeys);
+    }
   }
   const get = async (url, session = admin, expected = 200) =>
     (await call("GET", url, undefined, session, expected)).body;
@@ -496,6 +1170,24 @@ try {
     },
   );
   await check(
+    "a data-plane delivery problem is projected only on the verified row it belongs to, as four fields",
+    async () => {
+      const page = await get(targetRoute(deployments[21].id));
+      pageEnvelope(page, targetKeys);
+      assert.equal(page.total, 1);
+      assert.equal(page.items[0].device_id, deviceIds[6]);
+      assert.deepEqual(page.items[0].delivery, {
+        code: "DATA_PLANE_STALLED",
+        title: "Nothing is being delivered",
+        message: "No events were read in the last 10 minutes.",
+        hint: "Check that the source can reach its input.",
+      });
+      // The same device on another deployment, and every other row, carry none.
+      for (const row of (await get(targetRoute(parent.id))).items)
+        assert.equal(row.delivery, undefined);
+    },
+  );
+  await check(
     "history pages cover more than 200 versions with stable bounds and exact metadata",
     async () => {
       const ordered = [...deployments].sort(
@@ -504,6 +1196,7 @@ try {
       );
       const seen = [];
       let largest = 0;
+      const exercised = new Set();
       for (let page = 1; page <= 6; page++) {
         const result = await get(route({ page, page_size: 50 }));
         pageEnvelope(result, summaryKeys);
@@ -514,6 +1207,24 @@ try {
         result.items.forEach((item) => {
           summary(item);
           const original = deployments.find((d) => d.id === item.id);
+          // Provenance, outcome and lineage read exactly what the stored
+          // record says, bounded and typed, and nothing else.
+          const expected = expectedFields(original);
+          assert.deepEqual(
+            Object.fromEntries(newSummaryKeys.map((key) => [key, item[key]])),
+            expected,
+            item.id,
+          );
+          for (const key of newSummaryKeys) {
+            const value = item[key];
+            if (
+              value !== null &&
+              value !== false &&
+              !(Array.isArray(value) && !value.length)
+            )
+              exercised.add(key);
+          }
+          if (item.rollback_available === false) exercised.add("not_available");
           assert.equal(
             item.name,
             typeof original.name === "string"
@@ -543,6 +1254,14 @@ try {
       assert.equal(new Set(seen).size, deployments.length);
       assert(largest < 100000);
       evidence.largest_50_summary_page_bytes = largest;
+      // The fixtures reached every new field with a real value, so the checks
+      // above proved more than the absence of data.
+      assert.deepEqual(
+        [...newSummaryKeys, "not_available"].filter(
+          (key) => !exercised.has(key),
+        ),
+        [],
+      );
     },
   );
   await check(
@@ -717,6 +1436,156 @@ try {
     },
   );
   await check(
+    "a paused canary's gate, per-target reasons, rollback availability and successors are bounded metadata",
+    async () => {
+      const metadata = await get(`/deployments/${paused.id}/summary`);
+      summary(metadata);
+      assert.equal(metadata.canary_gate.state, "paused");
+      assert.equal(metadata.target_count, 3);
+      for (const session of Object.values(roles))
+        summary(await get(`/deployments/${paused.id}/summary`, session));
+      const rows = await get(targetRoute(paused.id));
+      pageEnvelope(rows, targetKeys, true);
+      assert.equal(rows.total, 3);
+      assert(rows.items.every((row) => row.gate_reason !== undefined));
+      // Lists never carry the gate; only a deployment's own read does.
+      const listed = (await get(route({ status: "paused", page_size: 50 })))
+        .items;
+      assert(listed.length > 0);
+      assert(listed.every((item) => item.canary_gate === undefined));
+      // Rollback is offered only while a released target that is still
+      // assigned has a version to return to.
+      const available = async (deployment) =>
+        (await get(`/deployments/${deployment.id}/summary`)).rollback_available;
+      assert.equal(await available(deployments[20]), false);
+      assert.equal(await available(deployments[21]), true);
+      assert.equal(await available(parent), true);
+      assert.equal(await available(otherParent), false);
+      // A removed target names only the deployment that took its device over.
+      const removed = (
+        await get(targetRoute(parent.id, { state: "removed", page_size: 50 }))
+      ).items;
+      assert.deepEqual(
+        removed
+          .filter((row) => row.replaced_by)
+          .map((row) => row.replaced_by)
+          .sort(),
+        [deploymentIds[3], deploymentIds[4]].sort(),
+      );
+    },
+  );
+  await check(
+    "sorting and group filters are allowlisted, deterministic and page without gaps",
+    async () => {
+      const every = async (path, query, pages) => {
+        const items = [];
+        for (let page = 1; page <= pages; page++) {
+          const result = await get(
+            path + new URLSearchParams({ ...query, page, page_size: 50 }),
+          );
+          items.push(...result.items);
+        }
+        return items;
+      };
+      const compareText = (a, b) => {
+        const [left, right] = [a.toLowerCase(), b.toLowerCase()];
+        return left < right ? -1 : left > right ? 1 : 0;
+      };
+      const compareValue = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      // What each order sorts by, read only from the projected fields. A
+      // nameless deployment sorts by the label a reader sees for it.
+      const keys = {
+        name: (item) =>
+          item.name ||
+          (item.policy
+            ? "Agent settings"
+            : item.configuration_name || "Pipeline deployment"),
+        created_at: (item) => item.created_at,
+        scheduled_at: (item) => item.scheduled_at,
+        verified: (item) => [item.verified_count, item.target_count],
+      };
+      const compare = {
+        name: compareText,
+        created_at: compareValue,
+        scheduled_at: compareValue,
+        verified: (a, b) => a[0] - b[0] || a[1] - b[1],
+      };
+      for (const sort of [
+        "name",
+        "status",
+        "verified",
+        "created_at",
+        "scheduled_at",
+      ])
+        for (const direction of ["asc", "desc"]) {
+          const query = { sort, direction };
+          const items = await every("/deployments/history?", query, 5);
+          // Every order covers every deployment once: pages never skip or repeat.
+          assert.equal(items.length, deployments.length, sort + direction);
+          assert.equal(
+            new Set(items.map((item) => item.id)).size,
+            items.length,
+          );
+          items.forEach(summary);
+          // Repeating a query repeats its order exactly.
+          const again = await every("/deployments/history?", query, 5);
+          assert.deepEqual(
+            again.map((item) => item.id),
+            items.map((item) => item.id),
+          );
+          if (!keys[sort]) continue;
+          const sign = direction === "asc" ? 1 : -1;
+          for (let index = 1; index < items.length; index++) {
+            const [left, right] = [items[index - 1], items[index]];
+            const [a, b] = [keys[sort](left), keys[sort](right)];
+            // Missing values sort last in either direction; ties go by id.
+            const order =
+              a === null || b === null
+                ? (a === null) - (b === null)
+                : sign * compare[sort](a, b);
+            assert(
+              order < 0 || (order === 0 && left.id < right.id),
+              `${sort} ${direction} at ${index}`,
+            );
+          }
+        }
+      const grouped = await every(
+        "/deployments/history?",
+        { group_id: groupId },
+        1,
+      );
+      assert.deepEqual(
+        grouped.map((item) => item.id).sort(),
+        [deploymentIds[30], deploymentIds[31]].sort(),
+      );
+      assert.equal((await get(route({ group_id: randomUUID() }))).total, 0);
+      for (const sort of ["device_name", "state", "generation"])
+        for (const direction of ["asc", "desc"]) {
+          const rows = await every(
+            `/deployments/${parent.id}/targets?`,
+            { sort, direction },
+            4,
+          );
+          assert.equal(rows.length, 151, sort + direction);
+          assert.equal(new Set(rows.map((row) => row.device_id)).size, 151);
+          if (sort === "state") continue;
+          const sign = direction === "asc" ? 1 : -1;
+          for (let index = 1; index < rows.length; index++) {
+            const [left, right] = [rows[index - 1], rows[index]];
+            const order =
+              sign *
+              (sort === "generation"
+                ? left.generation - right.generation
+                : compareText(left.device_name, right.device_name));
+            assert(
+              order < 0 || (order === 0 && left.device_id < right.device_id),
+              `${sort} ${direction} at ${index}`,
+            );
+          }
+        }
+    },
+  );
+  await check(
     "malformed, duplicate, overflow and unknown query fields fail closed on both surfaces",
     async () => {
       const common = [
@@ -749,7 +1618,17 @@ try {
         "scheduled=TRUE",
         "scheduled=true&scheduled=false",
         "state=failed",
-        "sort=name",
+        "sort=bogus",
+        "sort=NAME",
+        "sort=",
+        "sort=name&sort=status",
+        "direction=sideways",
+        "direction=ASC",
+        "direction=asc&direction=desc",
+        "group_id=not-a-uuid",
+        "group_id=" + groupId.toUpperCase(),
+        "group_id=" + groupId.replaceAll("-", ""),
+        `group_id=${groupId}&group_id=${groupId}`,
       ])
         await get("/deployments/history?" + query, admin, 400);
       for (const query of [
@@ -759,6 +1638,11 @@ try {
         "state=%C3%A9",
         "scheduled=true",
         "status=failed",
+        "sort=name",
+        "sort=bogus",
+        "sort=state&sort=generation",
+        "direction=up",
+        "direction=asc&direction=desc",
       ])
         await get(`/deployments/${parent.id}/targets?` + query, admin, 400);
       await get(`/deployments/${parent.id}/summary?include=config`, admin, 400);
