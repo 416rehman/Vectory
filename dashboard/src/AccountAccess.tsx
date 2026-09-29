@@ -23,7 +23,6 @@ import {
   AuthField,
   PasswordField,
   Unconfirmed,
-  formatAgo,
   formatRemaining,
 } from "./authControls";
 import { useKeyedRequest, NotSent, type KeyedRequest } from "./keyedRequest";
@@ -33,6 +32,7 @@ import { roles } from "./roles";
 import { DataTable, type TableColumn, type TableSort } from "./DataTable";
 import { matchesTableFilter, sortTableRows } from "./dataTableModel";
 import { Button, Modal, SearchBox, Spinner } from "./ui";
+import { relativeTime } from "./time";
 import "./account.css";
 import type { Notify } from "./toast";
 
@@ -741,7 +741,7 @@ export function WorkspaceAccess({
                         : undefined
                     }
                   >
-                    {formatAgo(person.last_login_at)}
+                    {relativeTime(person.last_login_at, Date.now(), "Never")}
                   </span>
                 ),
               },
@@ -819,7 +819,9 @@ export function WorkspaceAccess({
                 </div>
                 <div>
                   <dt>Last sign-in</dt>
-                  <dd>{formatAgo(person.last_login_at)}</dd>
+                  <dd>
+                    {relativeTime(person.last_login_at, Date.now(), "Never")}
+                  </dd>
                 </div>
               </dl>
               <div className="people-card-actions">{actions(person)}</div>

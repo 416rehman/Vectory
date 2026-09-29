@@ -244,7 +244,6 @@ const ComponentAggregateSchema = z.object({
     .record(z.string().max(100), z.number().min(0).max(1e15))
     .nullable(),
 });
-export type ComponentAggregate = z.infer<typeof ComponentAggregateSchema>;
 const aggregate = {
   generated_at: z.string(),
   devices_running: count,
@@ -262,7 +261,6 @@ export const VersionTelemetrySchema = z.object({
   configuration_id: z.string(),
   version_number: z.number().int().min(1),
 });
-export type VersionTelemetry = z.infer<typeof VersionTelemetrySchema>;
 export const ConfigurationTelemetrySchema = z.object({
   ...aggregate,
   configuration_id: z.string(),
@@ -275,6 +273,3 @@ export const ConfigurationTelemetrySchema = z.object({
     }),
   ),
 });
-export type ConfigurationTelemetry = z.infer<
-  typeof ConfigurationTelemetrySchema
->;

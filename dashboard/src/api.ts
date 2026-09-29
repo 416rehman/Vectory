@@ -1,3 +1,4 @@
+import { relativeTime } from "./time";
 import { z } from "zod";
 import { assertExactNumbers, stringifyExactJSON } from "./configurationNumbers";
 import { RollbackPreviewSchema } from "./rollbackReview";
@@ -450,7 +451,6 @@ export const PublishRequestLookupSchema = z
     (result) =>
       !result.found || result.request_id === result.version.request_id,
   );
-export type PublishRequestLookup = z.infer<typeof PublishRequestLookupSchema>;
 export const PublishRequestPageSchema = z
   .object({
     items: z
@@ -1598,7 +1598,6 @@ export const PipelineRequestPageSchema = z
   })
   .strict();
 export type PipelineRequestPage = z.infer<typeof PipelineRequestPageSchema>;
-export const listSchema = (schema: z.ZodType) => z.array(schema);
 export const PipelineSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1799,16 +1798,10 @@ export function when(value?: string | null) {
         minute: "2-digit",
       });
 }
+/** @deprecated Use relativeTime from time.ts; kept for its remaining callers. */
 export function ago(value?: string | null) {
-  if (!value) return "Never connected";
-  const diff = Math.max(0, Date.now() - new Date(value).getTime());
-  return diff < 60000
-    ? "Just now"
-    : diff < 3600000
-      ? `${Math.floor(diff / 60000)}m ago`
-      : diff < 86400000
-        ? `${Math.floor(diff / 3600000)}h ago`
-        : `${Math.floor(diff / 86400000)}d ago`;
+  const text = relativeTime(value, Date.now(), "never connected");
+  return text[0].toUpperCase() + text.slice(1);
 }
 export function download(name: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));

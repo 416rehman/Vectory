@@ -11,9 +11,7 @@ import {
   ArrowUpDown,
   Ban,
   CalendarClock,
-  Check,
   Clock,
-  Copy,
   ExternalLink,
   GitBranch,
   History,
@@ -55,6 +53,7 @@ import {
   StatusBadge,
   useNow,
   useResource,
+  CopyButton,
 } from "./ui";
 import { DataTable, TableCard } from "./DataTable";
 import AssignmentRemoval from "./AssignmentRemoval";
@@ -92,7 +91,6 @@ import {
   targetLabel,
   targetState,
 } from "./deploymentStatus";
-import { statusLabel } from "./status";
 import { relativeTime } from "./time";
 import {
   DeviceTimeline,
@@ -434,7 +432,6 @@ export function Deployments({
         <RecentDeploymentRequests
           key={user.id}
           onClose={() => setRecentRequestsOpen(false)}
-          statusLabel={(state) => statusLabel("deployment", state)}
           returnFocusRef={recentRequestsOpener}
         />
       )}
@@ -997,8 +994,7 @@ function TargetDetails({
 }
 
 function CopyLink({ route }: { route: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "fallback">("idle");
-  const [copying, setCopying] = useState(false);
+  const [manual, setManual] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
   const labelId = useId();
   const url = new URL(location.href);
@@ -1006,49 +1002,33 @@ function CopyLink({ route }: { route: string }) {
   url.hash = "/" + route;
   const link = url.href;
   useEffect(() => {
-    setState("idle");
+    setManual(false);
   }, [link]);
   useEffect(() => {
-    if (state === "fallback") {
+    if (manual) {
       input.current?.focus();
       input.current?.select();
     }
-  }, [state]);
+  }, [manual]);
   return (
     <div className="rollout-link">
       <div className="rollout-link-actions">
-        <Button
+        <CopyButton
+          text={link}
+          label="Copy link"
+          ariaLabel="Copy deployment link"
+          copiedMessage="Deployment link copied."
+          failedMessage=""
           variant="ghost compact"
-          icon={state === "copied" ? Check : Copy}
-          busy={copying}
-          aria-label="Copy deployment link"
-          onClick={async () => {
-            setCopying(true);
-            try {
-              if (!navigator.clipboard?.writeText)
-                throw Error("Clipboard unavailable");
-              await navigator.clipboard.writeText(link);
-              setState("copied");
-            } catch {
-              setState("fallback");
-            } finally {
-              setCopying(false);
-            }
-          }}
-        >
-          {state === "copied" ? "Copied" : "Copy link"}
-        </Button>
+          onCopied={() => setManual(false)}
+          onFailed={() => setManual(true)}
+        />
         <a href={link} target="_blank" rel="noopener noreferrer">
           Open in new tab
           <ExternalLink size={12} aria-hidden="true" />
         </a>
       </div>
-      {state === "copied" && (
-        <span className="rollout-link-status" role="status">
-          Deployment link copied.
-        </span>
-      )}
-      {state === "fallback" && (
+      {manual && (
         <div className="rollout-link-fallback">
           <label htmlFor={labelId}>Deployment link</label>
           <input

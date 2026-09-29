@@ -7,12 +7,7 @@ import {
   retryDelay,
   signedOutRecently,
 } from "./authRequests";
-import {
-  formatAgo,
-  formatCountdown,
-  formatExpiry,
-  formatRemaining,
-} from "./authControls";
+import { formatCountdown, formatExpiry, formatRemaining } from "./authControls";
 import { setupCommand } from "./AuthScreen";
 
 afterEach(() => {
@@ -135,20 +130,6 @@ describe("time formatting", () => {
     expect(formatRemaining("2026-09-29T00:45:00Z", base)).toBe("in 45 min");
     expect(formatRemaining("2026-09-28T23:00:00Z", base)).toBe("expired");
     expect(formatRemaining(null, base)).toBe("");
-  });
-  it("says how long ago someone signed in, and Never without a time", () => {
-    const now = Date.parse("2026-09-29T12:00:00Z");
-    expect(formatAgo("2026-09-29T11:59:40Z", now)).toBe("just now");
-    expect(formatAgo("2026-09-29T11:55:00Z", now)).toBe("5 min ago");
-    expect(formatAgo("2026-09-29T09:00:00Z", now)).toBe("3 h ago");
-    expect(formatAgo("2026-09-28T11:00:00Z", now)).toBe("1 day ago");
-    expect(formatAgo("2026-09-26T12:00:00Z", now)).toBe("3 days ago");
-    expect(formatAgo("2026-08-01T12:00:00Z", now)).toMatch(/Aug/);
-    expect(formatAgo("2025-08-01T12:00:00Z", now)).toMatch(/2025/);
-    // A clock slightly ahead of this browser still reads as recent.
-    expect(formatAgo("2026-09-29T12:00:30Z", now)).toBe("just now");
-    expect(formatAgo(null, now)).toBe("Never");
-    expect(formatAgo("not a date", now)).toBe("Never");
   });
 });
 

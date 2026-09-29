@@ -56,6 +56,16 @@
   animation: spin 2.4s linear infinite;
 }
 
+/* ---------- Copy ---------- */
+.copy-button {
+  flex: none;
+}
+.copy-note {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+
 /* ---------- Keyboard hints and tooltips ---------- */
 .kbd {
   display: inline-flex;

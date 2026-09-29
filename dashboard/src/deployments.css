@@ -1,16 +1,3 @@
-/* Deployment history list */
-.deployment-toolbar {
-  align-items: end;
-  justify-content: flex-start;
-  gap: 12px;
-}
-.deployment-toolbar .search-field {
-  margin-bottom: 1px;
-  flex: 1 1 240px;
-}
-.deployment-toolbar > .button {
-  margin-left: auto;
-}
 .deployment-table td:first-child {
   min-width: 180px;
 }
@@ -172,10 +159,6 @@ a.control-row-title {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
-}
-.rollout-link-status {
-  color: var(--muted);
-  font-size: 12px;
 }
 .rollout-link-fallback {
   display: grid;
@@ -557,10 +540,6 @@ a.control-row-title {
 }
 
 @media (max-width: 720px) {
-  .deployment-toolbar .search-field {
-    flex-basis: 100%;
-    min-width: 0;
-  }
   .deployment-device-results .pagination {
     gap: 10px;
     flex-wrap: wrap;
