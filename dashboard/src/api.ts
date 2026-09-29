@@ -973,6 +973,8 @@ export type SavedPolicyListItem = SavedPolicy & {
   revision?: number;
   updated_at?: string;
   applied_device_count?: number;
+  /** Given this template before its latest edit; still on the earlier values. */
+  outdated_device_count?: number;
   applied_devices?: { id: string; name: string }[];
 };
 export type GroupMembershipState = {
@@ -1008,6 +1010,40 @@ export type GroupMembershipPreview = {
     };
   }[];
 };
+const membershipState = z
+  .object({ assignment_id: z.string().nullable() })
+  .passthrough()
+  .nullable();
+const membershipPart = z
+  .object({
+    changed: z.boolean(),
+    before: membershipState,
+    after: membershipState,
+    pending: z.object({ id: z.string() }).passthrough().nullable(),
+  })
+  .passthrough();
+const GroupMembershipPreviewSchema = z
+  .object({
+    group_id: z.string(),
+    revision: z.number().int().nonnegative(),
+    stale: z.boolean(),
+    ready: z.boolean(),
+    blockers: z.array(z.object({ code: z.string(), reason: z.string() })),
+    devices: z
+      .array(
+        z
+          .object({
+            device_id: z.string(),
+            device_name: z.string().nullable(),
+            change: z.enum(["added", "removed"]),
+            configuration: membershipPart,
+            policy: membershipPart,
+          })
+          .passthrough(),
+      )
+      .max(10000),
+  })
+  .passthrough() as unknown as z.ZodType<GroupMembershipPreview>;
 /** Values each device already uses for a new version of the same pipeline. */
 export type BindingSuggestions = {
   devices: Record<string, Record<string, string | number | boolean>>;
@@ -1455,6 +1491,8 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return GroupRequestLookupSchema;
   if (path === "/groups")
     return method === "POST" ? GroupSchema : z.array(GroupSchema);
+  if (path === "/groups/membership-preview" && method === "POST")
+    return GroupMembershipPreviewSchema;
   if (/^\/groups\/[^/]+$/.test(path)) return GroupSchema;
   if (path === "/login") return LoginSchema;
   if (path === "/mfa" && method === "GET") return MfaStatusSchema;
