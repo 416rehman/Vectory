@@ -173,6 +173,8 @@ export function ReleaseStrategyFields({
                 type="radio"
                 name={name}
                 value={option.value}
+                aria-labelledby={`${name}-${option.value}`}
+                aria-describedby={`${name}-${option.value}-hint`}
                 checked={value.strategy === option.value}
                 onChange={() =>
                   onChange({
@@ -189,8 +191,8 @@ export function ReleaseStrategyFields({
               />
               <Icon size={17} aria-hidden="true" />
               <span>
-                <strong>{option.label}</strong>
-                <small>{option.hint}</small>
+                <strong id={`${name}-${option.value}`}>{option.label}</strong>
+                <small id={`${name}-${option.value}-hint`}>{option.hint}</small>
               </span>
             </label>
           );
@@ -291,19 +293,20 @@ export function ReleaseStrategyFields({
   );
 }
 
+/** Opens an existing assignment's rollout page without leaving the review. */
 function AssignmentLink({
-  assignment,
+  id,
   label,
   disabled,
 }: {
-  assignment: AssignmentDescription;
-  label?: string;
+  id: string;
+  label: string;
   disabled?: boolean;
 }) {
   return (
     <a
       className="target-assignment-link"
-      href={`#/${deploymentRoute(false, assignment.id, { search: "", status: "all", page: 1 })}`}
+      href={`#/${deploymentRoute(false, id, { search: "", status: "all", page: 1 })}`}
       target="_blank"
       rel="noopener noreferrer"
       aria-disabled={disabled || undefined}
@@ -311,7 +314,7 @@ function AssignmentLink({
         if (disabled) event.preventDefault();
       }}
     >
-      {label || assignmentName(assignment)}
+      {label}
       <ExternalLink size={12} aria-hidden="true" />
       <span className="sr-only"> (opens in a new tab)</span>
     </a>
@@ -413,7 +416,8 @@ export function ConflictTable({
                         className="target-conflict-winner"
                       >
                         <AssignmentLink
-                          assignment={assignment}
+                          id={assignment.id}
+                          label={assignmentName(assignment)}
                           disabled={busy}
                         />
                         <small>
