@@ -14,6 +14,7 @@ import {
   authAuthorityUnchanged,
   authUserMatches,
   isUncertainOutcome,
+  rememberSignInEmail,
   retryDelay,
   signedOutRecently,
   useAuthRequest,
@@ -326,6 +327,7 @@ export default function SessionRenewal({
       )
     )
       return;
+    rememberSignInEmail("");
     onSignInAgain();
   }
 
