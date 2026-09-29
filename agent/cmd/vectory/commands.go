@@ -61,6 +61,11 @@ func init() {
 			define: definePause(true)},
 		{name: "resume", group: "Day to day", summary: "Apply changes from the server again", usage: "resume [--state-dir PATH]", define: definePause(false)},
 		{name: "retry", group: "Day to day", summary: "Allow a failed configuration to be tried again", usage: "retry [--state-dir PATH]", define: defineRetry},
+		{name: "logs", group: "Day to day", summary: "Show Vector's own log on this host",
+			usage:    "logs [--lines N] [--follow] [--raw] [--state-dir PATH]",
+			about:    "Prints Vector's recent log lines (startup, reloads, component warnings and errors) from the agent's rotated log file. It never shows your events. Works while the service runs.",
+			examples: []string{"sudo vectory logs --follow", "sudo vectory logs --lines 500 --raw"},
+			define:   defineLogs},
 		{name: "configure-metrics", group: "Day to day", summary: "Set or clear the local Vector metrics URL",
 			usage: "configure-metrics (--metrics-url URL | --clear-metrics-url) [--state-dir PATH]", about: "Run it while the agent is stopped.",
 			examples: []string{"sudo vectory configure-metrics --metrics-url http://127.0.0.1:9598/metrics"},
@@ -223,6 +228,8 @@ func defineInstall(c *cli) func() int {
 	metrics := c.String("metrics-url", "", "URL", "Local Vector metrics endpoint, such as http://127.0.0.1:9598/metrics")
 	clearMetrics := c.Bool("clear-metrics-url", "Remove the local metrics endpoint setting")
 	secretFiles := c.String("secret-files", "", "PATH", "JSON map of vectory-secret names to private files")
+	dataDir := c.String("vector-data-dir", "", "PATH", "Data directory for pipelines that don't set data_dir; empty restores the automatic choice")
+	graceful := c.Int("graceful-shutdown-seconds", 0, "SECONDS", "Seconds Vector may drain on stop or restart, 5-300 (default 60)")
 	c.JSON("Print one JSON document")
 	return func() int {
 		if err := metricsOptionUsage(c.fs, *clearMetrics, false); err != nil {
@@ -264,6 +271,17 @@ func defineInstall(c *cli) func() int {
 				opts.CapabilityPolicy, err = agent.ReadInstallPolicy(*policyPath)
 			case "secret-files":
 				opts.SecretFiles, err = agent.ReadSecretBindings(*secretFiles)
+			case "vector-data-dir":
+				if *dataDir != "" {
+					var ok bool
+					if *dataDir, ok = c.resolvePath("vector-data-dir", *dataDir); !ok {
+						err = errors.New("invalid --vector-data-dir")
+						return
+					}
+				}
+				opts.VectorDataDir = dataDir
+			case "graceful-shutdown-seconds":
+				opts.GracefulShutdownSeconds = graceful
 			}
 		})
 		if err == nil {
@@ -446,6 +464,23 @@ func definePause(pause bool) func(c *cli) func() int {
 			}
 			return exitOK
 		}
+	}
+}
+
+func defineLogs(c *cli) func() int {
+	c.StateDir()
+	follow := c.Bool("follow", "Keep printing new lines until interrupted (also -f)")
+	c.fs.BoolVar(follow, "f", false, "Shorthand for --follow")
+	lines := c.Int("lines", 100, "N", "Number of recent lines to print")
+	raw := c.Bool("raw", "Print Vector's JSON log lines unchanged")
+	c.JSON("Same as --raw")
+	return func() int {
+		ctx, stop := interruptible()
+		defer stop()
+		if err := agent.WriteVectorLog(ctx, *c.state, *lines, *follow, *raw || *c.json, c.stdout); err != nil {
+			return c.fail(err)
+		}
+		return exitOK
 	}
 }
 

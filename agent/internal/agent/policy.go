@@ -171,16 +171,8 @@ func (p CapabilityPolicy) walk(v any, key string) error {
 				return e
 			}
 		}
-		if key == "address" {
-			allowed := false
-			for _, a := range p.AllowedListenAddresses {
-				if x == a {
-					allowed = true
-				}
-			}
-			if !allowed {
-				return errors.New("capability denied: listener is not locally allowed")
-			}
+		if key == "address" && !p.listenerAllowed(x) {
+			return errors.New("capability denied: listener is not locally allowed")
 		}
 		if key == "include" || key == "exclude" || key == "path" || strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_path") || strings.HasSuffix(key, "_dir") {
 			if e := p.file(x); e != nil {
@@ -189,6 +181,16 @@ func (p CapabilityPolicy) walk(v any, key string) error {
 		}
 	}
 	return nil
+}
+
+// listenerAllowed reports whether an exact listen address is locally allowed.
+func (p CapabilityPolicy) listenerAllowed(address string) bool {
+	for _, a := range p.AllowedListenAddresses {
+		if address == a {
+			return true
+		}
+	}
+	return false
 }
 func (p CapabilityPolicy) network(s string) error {
 	u, e := url.Parse(s)

@@ -40,6 +40,7 @@ func cloneIssue(issue *Issue) *Issue {
 		return nil
 	}
 	copy := *issue
+	copy.Diagnostics = append([]Diagnostic(nil), issue.Diagnostics...)
 	return &copy
 }
 func (e *Engine) currentAttempt() *ConfigurationAttempt {
@@ -63,8 +64,13 @@ func (e *Engine) attemptOutcome(attempt *ConfigurationAttempt, state string, iss
 	}
 }
 func (e *Engine) failAttempt(code, stage, message string) error {
-	e.attemptOutcome(e.currentAttempt(), "failed", &Issue{code, stage, message})
-	return e.fail(code, stage, message)
+	return e.failAttemptWith(code, stage, message, nil)
+}
+
+// failAttemptWith records a candidate failure with redacted diagnostics.
+func (e *Engine) failAttemptWith(code, stage, message string, diagnostics []Diagnostic) error {
+	e.attemptOutcome(e.currentAttempt(), "failed", &Issue{Code: code, Stage: stage, Message: message, Diagnostics: diagnostics})
+	return e.failWith(code, stage, message, diagnostics)
 }
 func (e *Engine) pauseAttempt() {
 	e.State.ApplyState = "paused"

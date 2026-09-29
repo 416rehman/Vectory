@@ -1,0 +1,76 @@
+.diagnostic-list {
+  --diagnostic-error: #a32d28;
+  --diagnostic-warning: #8a5b0c;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+[data-theme="dark"] .diagnostic-list {
+  --diagnostic-error: #ffb4ae;
+  --diagnostic-warning: #eed498;
+}
+.diagnostic {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.diagnostic-icon {
+  margin-top: 2px;
+}
+.diagnostic.error .diagnostic-icon {
+  color: var(--diagnostic-error);
+}
+.diagnostic.warning .diagnostic-icon {
+  color: var(--diagnostic-warning);
+}
+.diagnostic-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.diagnostic-message {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.diagnostic-place {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.diagnostic-place div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+.diagnostic-place dt {
+  font-weight: 500;
+}
+.diagnostic-place dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.diagnostic-place code,
+.diagnostic-hint code {
+  font-size: 12px;
+}
+.diagnostic-body .diagnostic-hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.diagnostic-hint strong {
+  margin-right: 6px;
+}

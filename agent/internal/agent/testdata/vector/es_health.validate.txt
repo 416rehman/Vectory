@@ -1,0 +1,6 @@
+√ Loaded ["es_health.json"]
+√ Transforms configuration
+√ Component configuration
+2026-09-29T02:47:41.781009Z  WARN vector::internal_events::http_client: HTTP error. error=error trying to connect: tcp connect error: Connection refused (os error 111) error_type="request_failed" stage="processing"
+2026-09-29T02:47:41.781160Z ERROR vector::topology::builder: msg="Healthcheck failed." error=Failed to make HTTP(S) request: error trying to connect: tcp connect error: Connection refused (os error 111) component_kind="sink" component_type="elasticsearch" component_id=es
+x Health check for "es" failed: Failed to make HTTP(S) request: error trying to connect: tcp connect error: Connection refused (os error 111)

@@ -285,7 +285,12 @@ await context.route("**/*", async (route) => {
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))
     return reply([]);
   if (
-    ["/deployments/history", "/issues/history", "/audit/history"].includes(path)
+    [
+      "/deployments/history",
+      "/issues/history",
+      "/issues/groups",
+      "/audit/history",
+    ].includes(path)
   )
     return reply({ items: [], total: 0, page: 1, page_size: 12 });
   if (path === "/configurations/library")

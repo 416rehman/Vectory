@@ -52,6 +52,10 @@ func (c *cli) Bool(name, help string) *bool {
 	c.record(name, "", help, false)
 	return c.fs.Bool(name, false, help)
 }
+func (c *cli) Int(name string, value int, arg, help string) *int {
+	c.record(name, arg, help, false)
+	return c.fs.Int(name, value, help)
+}
 func (c *cli) HiddenString(name, help string) *string {
 	c.record(name, "", help, true)
 	return c.fs.String(name, "", help)

@@ -131,7 +131,7 @@ test("native device metrics and persisted history appear without fabricated valu
     page.getByRole("heading", { name: "Operational metrics", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("img", { name: /Source events per second/ }),
+    page.getByRole("img", { name: /^Throughput, events \/ second/ }),
   ).toBeVisible();
   const history = await page.request
     .get(`/api/v1/devices/${native.device_id}/telemetry`)

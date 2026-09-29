@@ -22,7 +22,7 @@ type DeviceRecoveryProps = {
   onDone: (message: string) => void;
   onRefresh: () => Promise<void>;
 };
-function eligibleState(snapshot: Device) {
+export function eligibleState(snapshot: Device) {
   return [
     "failed",
     "rolled_back",
@@ -61,7 +61,9 @@ export function DeviceRecoveryActions(props: DeviceRecoveryProps) {
   );
 }
 type RetryRequest = { controller: AbortController; epoch: number };
-function DeviceApplicationRetry({
+// Also used by Issues for "Retry on device"; mount it keyed by the reviewed
+// assignment so a changed assignment retires the old review.
+export function DeviceApplicationRetry({
   device,
   user,
   onDone,

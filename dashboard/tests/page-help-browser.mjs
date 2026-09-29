@@ -187,6 +187,7 @@ await context.route("**/*", async (route) => {
       "/deployments/history",
       "/audit/history",
       "/issues/history",
+      "/issues/groups",
       `/configurations/${pipelineId}/history`,
     ].includes(path)
   )

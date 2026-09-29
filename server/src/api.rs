@@ -108,6 +108,7 @@ pub fn router(s: State) -> Router {
         )
         .route("/api/v1/audit/{id}", get(crate::audit::detail))
         .route("/api/v1/issues/history", get(crate::issues::history))
+        .route("/api/v1/issues/groups", get(crate::issues::groups))
         .route("/api/v1/issues/{id}", get(crate::issues::detail))
         .route(
             "/api/v1/issues/{id}/acknowledge",
@@ -171,7 +172,22 @@ pub fn router(s: State) -> Router {
             "/api/v1/configurations/{id}/revisions/{revision_id}",
             get(crate::pipelines::revision_detail),
         )
-        .route("/api/v1/devices/{id}/telemetry", get(telemetry_history))
+        .route(
+            "/api/v1/devices/{id}/telemetry",
+            get(crate::telemetry::device_history),
+        )
+        .route(
+            "/api/v1/telemetry/summary",
+            get(crate::telemetry::fleet_summary),
+        )
+        .route(
+            "/api/v1/versions/{id}/telemetry",
+            get(crate::telemetry::version_telemetry),
+        )
+        .route(
+            "/api/v1/configurations/{id}/telemetry",
+            get(crate::telemetry::configuration_telemetry),
+        )
         .route(
             "/api/v1/devices/{id}/revoke",
             post(crate::device_revocation::post),
@@ -289,33 +305,6 @@ async fn help_redirect(uri: Uri) -> Redirect {
         .query()
         .map_or_else(|| "/help/".to_string(), |query| format!("/help/?{query}"));
     Redirect::permanent(&location)
-}
-async fn telemetry_history(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
-    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=?")
-        .bind(&id)
-        .fetch_one(&s.pool)
-        .await?;
-    if exists == 0 {
-        return Err(ApiError::missing());
-    }
-    let rows = sqlx::query(
-        "SELECT bucket,data FROM telemetry WHERE device_id=? ORDER BY bucket DESC LIMIT 120",
-    )
-    .bind(&id)
-    .fetch_all(&s.pool)
-    .await?;
-    let mut samples = Vec::new();
-    for row in rows.into_iter().rev() {
-        let mut sample = db::parse(row.get("data"))?;
-        sample["bucket"] = json!(row.get::<i64, _>("bucket"));
-        samples.push(sample);
-    }
-    Ok(Json(json!({"device_id":id,"samples":samples})))
 }
 async fn openapi(AppState(s): AppState<State>, h: HeaderMap) -> Result<Response> {
     auth::authorize(&s, &h, &[], false).await?;

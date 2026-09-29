@@ -32,6 +32,7 @@ pub mod restored_access;
 pub mod rollback_review;
 pub mod rollout;
 pub mod scheduled_refresh;
+pub mod telemetry;
 pub mod token_requests;
 pub mod user_requests;
 pub mod validation;

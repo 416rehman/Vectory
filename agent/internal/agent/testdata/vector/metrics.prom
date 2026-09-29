@@ -1,0 +1,73 @@
+# HELP vector_buffer_max_event_size buffer_max_event_size
+# TYPE vector_buffer_max_event_size gauge
+vector_buffer_max_event_size{buffer_id="broken_http",buffer_type="memory",component_id="broken_http",component_kind="sink",component_type="http",host="probe",stage="0"} 500 1790646985224
+vector_buffer_max_event_size{buffer_id="blackhole",buffer_type="memory",component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe",stage="0"} 500 1790646985224
+vector_buffer_max_event_size{buffer_id="prom",buffer_type="memory",component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe",stage="0"} 500 1790646985224
+# HELP vector_buffer_max_size_events buffer_max_size_events
+# TYPE vector_buffer_max_size_events gauge
+vector_buffer_max_size_events{buffer_id="prom",buffer_type="memory",component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe",stage="0"} 500 1790646985224
+vector_buffer_max_size_events{buffer_id="blackhole",buffer_type="memory",component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe",stage="0"} 500 1790646985224
+vector_buffer_max_size_events{buffer_id="broken_http",buffer_type="memory",component_id="broken_http",component_kind="sink",component_type="http",host="probe",stage="0"} 500 1790646985224
+# HELP vector_buffer_size_bytes buffer_size_bytes
+# TYPE vector_buffer_size_bytes gauge
+vector_buffer_size_bytes{buffer_id="prom",buffer_type="memory",component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe",stage="0"} 0 1790646985224
+vector_buffer_size_bytes{buffer_id="blackhole",buffer_type="memory",component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe",stage="0"} 0 1790646985224
+vector_buffer_size_bytes{buffer_id="broken_http",buffer_type="memory",component_id="broken_http",component_kind="sink",component_type="http",host="probe",stage="0"} 148155 1790646985224
+# HELP vector_buffer_size_events buffer_size_events
+# TYPE vector_buffer_size_events gauge
+vector_buffer_size_events{buffer_id="prom",buffer_type="memory",component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe",stage="0"} 0 1790646985224
+vector_buffer_size_events{buffer_id="blackhole",buffer_type="memory",component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe",stage="0"} 0 1790646985224
+vector_buffer_size_events{buffer_id="broken_http",buffer_type="memory",component_id="broken_http",component_kind="sink",component_type="http",host="probe",stage="0"} 169 1790646985224
+# HELP vector_build_info build_info
+# TYPE vector_build_info gauge
+vector_build_info{arch="x86_64",debug="false",host="probe",revision="2bcad9b 2026-08-26 13:37:07.557544670",rust_version="1.95",version="0.58.0"} 1 1790646985224
+# HELP vector_component_discarded_events_total component_discarded_events_total
+# TYPE vector_component_discarded_events_total counter
+vector_component_discarded_events_total{component_id="only_errors",component_kind="transform",component_type="filter",host="probe",intentional="true"} 472 1790646985224
+vector_component_discarded_events_total{component_id="sampled",component_kind="transform",component_type="sample",host="probe",intentional="true"} 594 1790646985224
+# HELP vector_component_latency_mean_seconds component_latency_mean_seconds
+# TYPE vector_component_latency_mean_seconds gauge
+vector_component_latency_mean_seconds{component_id="parse",component_kind="transform",component_type="remap",host="probe"} 0.00008673509094062156 1790646985224
+vector_component_latency_mean_seconds{component_id="sampled",component_kind="transform",component_type="sample",host="probe"} 0.000029212271265914463 1790646985224
+vector_component_latency_mean_seconds{component_id="only_errors",component_kind="transform",component_type="filter",host="probe"} 0.000047582529209856316 1790646985224
+# HELP vector_component_received_bytes_total component_received_bytes_total
+# TYPE vector_component_received_bytes_total counter
+vector_component_received_bytes_total{component_id="demo",component_kind="source",component_type="demo_logs",host="probe",protocol="none"} 0 1790646985224
+vector_component_received_bytes_total{component_id="metrics",component_kind="source",component_type="internal_metrics",host="probe",protocol="internal"} 3585237 1790646985224
+# HELP vector_component_received_events_total component_received_events_total
+# TYPE vector_component_received_events_total counter
+vector_component_received_events_total{component_id="only_errors",component_kind="transform",component_type="filter",host="probe"} 660 1790646985224
+vector_component_received_events_total{component_id="metrics",component_kind="source",component_type="internal_metrics",host="probe"} 4465 1790646985224
+vector_component_received_events_total{component_id="demo",component_kind="source",component_type="demo_logs",host="probe"} 661 1790646985224
+vector_component_received_events_total{component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe"} 256 1790646985224
+vector_component_received_events_total{component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe"} 4465 1790646985224
+vector_component_received_events_total{component_id="parse",component_kind="transform",component_type="remap",host="probe"} 661 1790646985224
+vector_component_received_events_total{component_id="broken_http",component_kind="sink",component_type="http",host="probe"} 13 1790646985224
+vector_component_received_events_total{component_id="sampled",component_kind="transform",component_type="sample",host="probe"} 660 1790646985224
+# HELP vector_component_sent_bytes_total component_sent_bytes_total
+# TYPE vector_component_sent_bytes_total counter
+vector_component_sent_bytes_total{component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe",protocol="http"} 190517 1790646985224
+vector_component_sent_bytes_total{component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe",protocol="blackhole"} 59950 1790646985224
+# HELP vector_component_sent_events_total component_sent_events_total
+# TYPE vector_component_sent_events_total counter
+vector_component_sent_events_total{component_id="demo",component_kind="source",component_type="demo_logs",host="probe",output="_default"} 661 1790646985224
+vector_component_sent_events_total{component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe"} 256 1790646985224
+vector_component_sent_events_total{component_id="parse",component_kind="transform",component_type="remap",host="probe",output="_default"} 660 1790646985224
+vector_component_sent_events_total{component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe"} 135 1790646985224
+vector_component_sent_events_total{component_id="sampled",component_kind="transform",component_type="sample",host="probe",output="_default"} 67 1790646985224
+vector_component_sent_events_total{component_id="only_errors",component_kind="transform",component_type="filter",host="probe",output="_default"} 189 1790646985224
+vector_component_sent_events_total{component_id="metrics",component_kind="source",component_type="internal_metrics",host="probe",output="_default"} 4465 1790646985224
+# HELP vector_http_client_errors_total http_client_errors_total
+# TYPE vector_http_client_errors_total counter
+vector_http_client_errors_total{component_id="broken_http",component_kind="sink",component_type="http",error_kind="error trying to connect: tcp connect error: Connection refused (os error 111)",host="probe"} 7 1790646985224
+# HELP vector_uptime_seconds uptime_seconds
+# TYPE vector_uptime_seconds gauge
+vector_uptime_seconds{host="probe"} 33 1790646985224
+# HELP vector_utilization utilization
+# TYPE vector_utilization gauge
+vector_utilization{component_id="only_errors",component_kind="transform",component_type="filter",host="probe"} 0.0007 1790646985224
+vector_utilization{component_id="broken_http",component_kind="sink",component_type="http",host="probe"} 0 1790646985224
+vector_utilization{component_id="prom",component_kind="sink",component_type="prometheus_exporter",host="probe"} 0.0004 1790646985224
+vector_utilization{component_id="sampled",component_kind="transform",component_type="sample",host="probe"} 0.0003 1790646985224
+vector_utilization{component_id="blackhole",component_kind="sink",component_type="blackhole",host="probe"} 0 1790646985224
+vector_utilization{component_id="parse",component_kind="transform",component_type="remap",host="probe"} 0.0024 1790646985224
