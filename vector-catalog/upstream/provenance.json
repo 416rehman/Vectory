@@ -19,12 +19,59 @@
   },
   "captured_schema_sha256": "6fb93485e8ee61aa54ce59910e0dfdb9212f9af4a14fd39093fb207dcbf2e30d",
   "experimental_upstream_schema": true,
-  "generated_catalog_sha256": "7193783b0ad47b86642c536edd501423f82eff7cc71c1d6a405c8c79e926ea10",
-  "generated_schema_sha256": "750b3f954022601721b4d8cde077f4c9f6efe1a967cea0bff8e31e79e900f502",
-  "generator_sha256": "40ee77de49f414a70621f59a554a8042159e6cf9239d7dc040d6c14d3411499e",
+  "generated_catalog_sha256": "a41dd43b9f8f2a1da1fff4c9a6274ab71f9458ee7bf0b11dc1ee256261f1c168",
+  "generated_schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
+  "generator_sha256": "7656d09ed22a14c3b4c7f10a083ebf99cfcc9cf1ca63a886eeeca3b6f43f04e2",
   "inventory_verification": "Exact kind/type set equals the pinned official generated CUE inventory after excluding unit_test and unit_test_stream.",
   "license_file": "LICENSE",
   "native_components": 125,
+  "reviewed_credentials": [
+    {
+      "definition": "vector_core::tls::settings::TlsConfig",
+      "pointer": "/properties/key_pass",
+      "reason": "passphrase of the TLS private key"
+    },
+    {
+      "definition": "vector::common::mqtt::MqttCommonConfig",
+      "pointer": "/properties/password",
+      "reason": "MQTT password"
+    },
+    {
+      "definition": "vector::sources::okta::client::OktaConfig",
+      "pointer": "/properties/token",
+      "reason": "Okta API token"
+    },
+    {
+      "definition": "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/password",
+      "reason": "basic authentication password"
+    },
+    {
+      "definition": "vector::sinks::redis::config::RedisSinkConfig",
+      "pointer": "/allOf/0/properties/sentinel_connect/oneOf/1/properties/connections/oneOf/1/properties/password",
+      "reason": "Redis Sentinel connection password"
+    },
+    {
+      "definition": "vector::http::Auth",
+      "pointer": "/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::sinks::elasticsearch::config::ElasticsearchConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+      "pointer": "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+      "reason": "basic authentication user"
+    },
+    {
+      "definition": "vector::common::http::server_auth::HttpServerAuthConfig",
+      "pointer": "/oneOf/0/properties/username",
+      "reason": "basic authentication user"
+    }
+  ],
   "source_files": [
     {
       "path": "LICENSE",
@@ -261,7 +308,8 @@
     "Exclude internal unit test component registrations",
     "Add per-component schemas including common outer fields",
     "Project three Unix generated CUE metadata documents with explicit coverage limitations",
-    "Restore six Unix socket mode branches in five cross-platform components from pinned generated CUE"
+    "Restore six Unix socket mode branches in five cross-platform components from pinned generated CUE",
+    "Mark credential fields with _metadata.sensitive: every field whose type resolves to SensitiveString, plus the reviewed plain-string credentials, and list each component's sensitive_fields"
   ],
   "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
   "upstream_license": "MPL-2.0",

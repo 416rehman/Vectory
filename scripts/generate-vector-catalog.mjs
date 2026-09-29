@@ -632,6 +632,152 @@ for (const [kind, type, definition] of unixBranchComponents) {
   component.platform_coverage.macos = "unix-branches-source-reviewed-not-run";
 }
 
+// Credentials. Vector types a credential as SensitiveString, directly or through
+// its Option wrapper, and marks that definition `_metadata.sensitive`. Every
+// field whose type resolves to it carries the same mark here, so the editor
+// renders a secret reference picker. A few credentials are plain strings in the
+// pinned schema; they are named below by definition and reviewed with each
+// Vector upgrade. scripts/generate-secret-fields.mjs turns the resulting paths
+// into the agent's and the server's field tables.
+const sensitiveRef =
+    "#/definitions/vector_common::sensitive_string::SensitiveString",
+  optionalSensitiveRef =
+    "#/definitions/core::option::Option<vector_common::sensitive_string::SensitiveString>";
+const reviewedCredentials = [
+  // [definition, JSON pointer inside it, why it is a credential]
+  [
+    "vector_core::tls::settings::TlsConfig",
+    "/properties/key_pass",
+    "passphrase of the TLS private key",
+  ],
+  [
+    "vector::common::mqtt::MqttCommonConfig",
+    "/properties/password",
+    "MQTT password",
+  ],
+  [
+    "vector::sources::okta::client::OktaConfig",
+    "/properties/token",
+    "Okta API token",
+  ],
+  [
+    "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+    "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/password",
+    "basic authentication password",
+  ],
+  [
+    "vector::sinks::redis::config::RedisSinkConfig",
+    "/allOf/0/properties/sentinel_connect/oneOf/1/properties/connections/oneOf/1/properties/password",
+    "Redis Sentinel connection password",
+  ],
+  // Basic authentication user names. Vectory has always accepted a local
+  // secret in `auth.user` and refused plain text there.
+  ["vector::http::Auth", "/oneOf/0/properties/user", "basic authentication user"],
+  [
+    "vector::sinks::elasticsearch::config::ElasticsearchConfig",
+    "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+    "basic authentication user",
+  ],
+  [
+    "vector::sinks::prometheus::remote_write::config::RemoteWriteConfig",
+    "/allOf/0/properties/auth/oneOf/1/oneOf/0/properties/user",
+    "basic authentication user",
+  ],
+  [
+    "vector::common::http::server_auth::HttpServerAuthConfig",
+    "/oneOf/0/properties/username",
+    "basic authentication user",
+  ],
+];
+const stringTyped = (node) =>
+  node?.type === "string" ||
+  (Array.isArray(node?.type) &&
+    node.type.includes("string") &&
+    node.type.every((type) => type === "string" || type === "null"));
+const markSensitive = (node) =>
+  (node._metadata = { ...node._metadata, sensitive: true });
+(function markCredentialReferences(value) {
+  if (Array.isArray(value)) value.forEach(markCredentialReferences);
+  else if (value && typeof value === "object") {
+    if (value.$ref === sensitiveRef || value.$ref === optionalSensitiveRef)
+      markSensitive(value);
+    Object.values(value).forEach(markCredentialReferences);
+  }
+})(schema.definitions);
+for (const [definition, pointer, why] of reviewedCredentials) {
+  const node = pointer
+    .slice(1)
+    .split("/")
+    .reduce((at, key) => at?.[key], schema.definitions[definition]);
+  if (!stringTyped(node) || node.$ref || node.properties || node.items)
+    throw Error(
+      `Reviewed credential is no longer a plain string field (${why}): ${definition}${pointer}`,
+    );
+  if (node._metadata?.sensitive)
+    throw Error(
+      `Vector now marks this credential itself; drop the review entry: ${definition}${pointer}`,
+    );
+  markSensitive(node);
+}
+// Sensitive leaf paths of one component: `a.b` for fields, `[]` for list items
+// and `*` for map values. Alternatives (oneOf/anyOf) contribute their union.
+function sensitivePaths(root) {
+  const found = new Set();
+  const join = (path, key) => {
+    if (/[.[\]*]/.test(key))
+      throw Error("Field name cannot be expressed as a path: " + key);
+    return path ? `${path}.${key}` : key;
+  };
+  const mapValue = (path) => (path ? `${path}.*` : "*");
+  function visit(node, path, refs) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return;
+    if (node.$ref === sensitiveRef) {
+      found.add(path);
+      return;
+    }
+    if (
+      node._metadata?.sensitive === true &&
+      stringTyped(node) &&
+      !node.properties &&
+      !node.items
+    ) {
+      found.add(path);
+      return;
+    }
+    if (typeof node.$ref === "string" && !refs.includes(node.$ref)) {
+      const target = node.$ref
+        .slice(2)
+        .split("/")
+        .reduce(
+          (at, key) => at?.[key.replaceAll("~1", "/").replaceAll("~0", "~")],
+          schema,
+        );
+      visit(target, path, [...refs, node.$ref]);
+    }
+    for (const key of ["allOf", "oneOf", "anyOf"])
+      for (const branch of node[key] || []) visit(branch, path, refs);
+    for (const key of ["then", "else"]) visit(node[key], path, refs);
+    for (const [key, child] of Object.entries(node.properties || {}))
+      visit(child, join(path, key), refs);
+    for (const child of Object.values(node.patternProperties || {}))
+      visit(child, mapValue(path), refs);
+    if (node.additionalProperties && typeof node.additionalProperties === "object")
+      visit(node.additionalProperties, mapValue(path), refs);
+    for (const child of [
+      ...(Array.isArray(node.items) ? node.items : [node.items]),
+      ...(node.prefixItems || []),
+    ])
+      visit(child, `${path}[]`, refs);
+  }
+  visit(root, "", []);
+  if (found.has("")) throw Error("A component cannot itself be a credential");
+  return [...found].sort();
+}
+for (const component of components) {
+  const fields = sensitivePaths({ $ref: component.schema_ref });
+  if (fields.length) component.sensitive_fields = fields;
+}
+
 components.sort(
   (a, b) =>
     kinds.indexOf(a.kind) - kinds.indexOf(b.kind) ||
@@ -718,7 +864,11 @@ const provenance = {
     "Add per-component schemas including common outer fields",
     "Project three Unix generated CUE metadata documents with explicit coverage limitations",
     "Restore six Unix socket mode branches in five cross-platform components from pinned generated CUE",
+    "Mark credential fields with _metadata.sensitive: every field whose type resolves to SensitiveString, plus the reviewed plain-string credentials, and list each component's sensitive_fields",
   ],
+  reviewed_credentials: reviewedCredentials.map(
+    ([definition, pointer, reason]) => ({ definition, pointer, reason }),
+  ),
   source_files: await Promise.all(
     [
       ...sourcePaths,

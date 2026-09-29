@@ -16,6 +16,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::amqp",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "amqp"
     },
@@ -70,6 +73,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::aws_kinesis_firehose",
+      "sensitive_fields": [
+        "access_key",
+        "access_keys[]",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "aws_kinesis_firehose"
     },
@@ -88,6 +96,13 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::aws_s3",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "sqs.tls_options.key_pass",
+        "tls_options.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "aws_s3"
     },
@@ -106,6 +121,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::aws_sqs",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "aws_sqs"
     },
@@ -124,6 +145,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::datadog_agent",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "datadog_agent"
     },
@@ -279,6 +303,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::fluent",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "supplemental_source_sha256": "935f3fb6cd93a74d921536cc1a2f2434d9c3c5f45824dbfa83769c2655e20bd2",
       "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/fluent.cue",
@@ -299,6 +326,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::gcp_pubsub",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "gcp_pubsub"
     },
@@ -317,6 +348,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::heroku_logs",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "heroku_logs"
     },
@@ -356,6 +392,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::http",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "http"
     },
@@ -374,6 +415,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::http_client",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "http_client"
     },
@@ -392,6 +442,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::http_server",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "http_server"
     },
@@ -468,6 +523,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::kafka",
+      "sensitive_fields": [
+        "sasl.password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "kafka"
     },
@@ -504,6 +563,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::logstash",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "logstash"
     },
@@ -540,6 +602,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::mqtt",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "mqtt"
     },
@@ -558,6 +624,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::nats",
+      "sensitive_fields": [
+        "auth.token.value",
+        "auth.user_password.password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "nats"
     },
@@ -576,6 +647,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::nginx_metrics",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "nginx_metrics"
     },
@@ -594,6 +674,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::okta",
+      "sensitive_fields": [
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "okta"
     },
@@ -612,6 +696,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::opentelemetry",
+      "sensitive_fields": [
+        "grpc.tls.key_pass",
+        "http.tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "opentelemetry"
     },
@@ -648,6 +736,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::prometheus_pushgateway",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "prometheus_pushgateway"
     },
@@ -666,6 +759,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::prometheus_remote_write",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "prometheus_remote_write"
     },
@@ -684,6 +782,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::prometheus_scrape",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "prometheus_scrape"
     },
@@ -702,6 +809,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::pulsar",
+      "sensitive_fields": [
+        "auth.token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "pulsar"
     },
@@ -739,6 +849,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::socket",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "supplemental_source_sha256": "da804d4ac357e34714d9aa22efee58b5ec821f94d4281ef61f5583b420ec704c",
       "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/socket.cue",
@@ -759,6 +872,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::splunk_hec",
+      "sensitive_fields": [
+        "tls.key_pass",
+        "token",
+        "valid_tokens[]"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "splunk_hec"
     },
@@ -796,6 +914,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::statsd",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "supplemental_source_sha256": "8101e47522a856464823ad359c74b5808606eea3295ffeb941a09faeb76c8050",
       "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/statsd.cue",
@@ -835,6 +956,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::syslog",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "supplemental_source_sha256": "f2c7c3704931ed1f92142feab1f430feb5a3f9f6a7836bfc16ab1a3a97a3f692",
       "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/syslog.cue",
@@ -855,6 +979,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::vector",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "vector"
     },
@@ -873,6 +1000,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sources::websocket",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
       "type": "websocket"
     },
@@ -1235,6 +1371,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::amqp",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "amqp"
     },
@@ -1253,6 +1392,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::appsignal",
+      "sensitive_fields": [
+        "push_api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "appsignal"
     },
@@ -1271,6 +1414,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_cloudwatch_logs",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_cloudwatch_logs"
     },
@@ -1289,6 +1438,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_cloudwatch_metrics",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_cloudwatch_metrics"
     },
@@ -1307,6 +1462,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_kinesis_firehose",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_kinesis_firehose"
     },
@@ -1325,6 +1486,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_kinesis_streams",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_kinesis_streams"
     },
@@ -1343,6 +1510,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_s3",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_s3"
     },
@@ -1361,6 +1534,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_sns",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_sns"
     },
@@ -1379,6 +1558,12 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::aws_sqs",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "aws_sqs"
     },
@@ -1397,6 +1582,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::axiom",
+      "sensitive_fields": [
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "axiom"
     },
@@ -1415,6 +1604,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::azure_blob",
+      "sensitive_fields": [
+        "auth.azure_client_secret",
+        "auth.certificate_password",
+        "connection_string"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "azure_blob"
     },
@@ -1433,6 +1627,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::azure_logs_ingestion",
+      "sensitive_fields": [
+        "auth.azure_client_secret",
+        "auth.certificate_password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "azure_logs_ingestion"
     },
@@ -1469,6 +1668,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::clickhouse",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "clickhouse"
     },
@@ -1505,6 +1713,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::databend",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "databend"
     },
@@ -1523,6 +1740,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::databricks_zerobus",
+      "sensitive_fields": [
+        "auth.client_id",
+        "auth.client_secret"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "databricks_zerobus"
     },
@@ -1541,6 +1762,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::datadog_events",
+      "sensitive_fields": [
+        "default_api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "datadog_events"
     },
@@ -1559,6 +1784,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::datadog_logs",
+      "sensitive_fields": [
+        "default_api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "datadog_logs"
     },
@@ -1577,6 +1806,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::datadog_metrics",
+      "sensitive_fields": [
+        "default_api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "datadog_metrics"
     },
@@ -1595,6 +1828,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::datadog_traces",
+      "sensitive_fields": [
+        "default_api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "datadog_traces"
     },
@@ -1613,6 +1850,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::doris",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "doris"
     },
@@ -1631,6 +1877,14 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::elasticsearch",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.password",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "elasticsearch"
     },
@@ -1667,6 +1921,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::gcp_chronicle_unstructured",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "gcp_chronicle_unstructured"
     },
@@ -1685,6 +1943,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::gcp_cloud_storage",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "gcp_cloud_storage"
     },
@@ -1703,6 +1965,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::gcp_pubsub",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "gcp_pubsub"
     },
@@ -1721,6 +1987,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::gcp_stackdriver_logs",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "gcp_stackdriver_logs"
     },
@@ -1739,6 +2009,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::gcp_stackdriver_metrics",
+      "sensitive_fields": [
+        "api_key",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "gcp_stackdriver_metrics"
     },
@@ -1760,6 +2034,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::greptimedb",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "greptimedb"
     },
@@ -1778,6 +2056,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::greptimedb_logs",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "greptimedb_logs"
     },
@@ -1796,6 +2078,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::greptimedb_metrics",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "greptimedb_metrics"
     },
@@ -1814,6 +2100,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::honeycomb",
+      "sensitive_fields": [
+        "api_key"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "honeycomb"
     },
@@ -1832,6 +2121,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::http",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "http"
     },
@@ -1850,6 +2148,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::humio_logs",
+      "sensitive_fields": [
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "humio_logs"
     },
@@ -1868,6 +2170,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::humio_metrics",
+      "sensitive_fields": [
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "humio_metrics"
     },
@@ -1886,6 +2192,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::influxdb_logs",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "influxdb_logs"
     },
@@ -1904,6 +2215,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::influxdb_metrics",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass",
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "influxdb_metrics"
     },
@@ -1922,6 +2238,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::kafka",
+      "sensitive_fields": [
+        "sasl.password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "kafka"
     },
@@ -1940,6 +2260,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::keep",
+      "sensitive_fields": [
+        "api_key"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "keep"
     },
@@ -1958,6 +2281,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::loki",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "loki"
     },
@@ -1976,6 +2308,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::mezmo",
+      "sensitive_fields": [
+        "api_key"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "mezmo"
     },
@@ -1994,6 +2329,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::mqtt",
+      "sensitive_fields": [
+        "password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "mqtt"
     },
@@ -2012,6 +2351,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::nats",
+      "sensitive_fields": [
+        "auth.token.value",
+        "auth.user_password.password",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "nats"
     },
@@ -2030,6 +2374,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::new_relic",
+      "sensitive_fields": [
+        "account_id",
+        "license_key"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "new_relic"
     },
@@ -2048,6 +2396,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::opentelemetry",
+      "sensitive_fields": [
+        "protocol.auth.auth.access_key_id",
+        "protocol.auth.auth.secret_access_key",
+        "protocol.auth.auth.session_token",
+        "protocol.auth.password",
+        "protocol.auth.token",
+        "protocol.auth.user",
+        "protocol.tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "opentelemetry"
     },
@@ -2066,6 +2423,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::papertrail",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "papertrail"
     },
@@ -2102,6 +2462,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::prometheus_exporter",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "prometheus_exporter"
     },
@@ -2120,6 +2489,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::prometheus_remote_write",
+      "sensitive_fields": [
+        "auth.access_key_id",
+        "auth.password",
+        "auth.secret_access_key",
+        "auth.session_token",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "prometheus_remote_write"
     },
@@ -2138,6 +2516,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::pulsar",
+      "sensitive_fields": [
+        "auth.token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "pulsar"
     },
@@ -2156,6 +2537,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::redis",
+      "sensitive_fields": [
+        "sentinel_connect.connections.password"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "redis"
     },
@@ -2174,6 +2558,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::sematext_logs",
+      "sensitive_fields": [
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "sematext_logs"
     },
@@ -2192,6 +2579,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::sematext_metrics",
+      "sensitive_fields": [
+        "token"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "sematext_metrics"
     },
@@ -2210,6 +2600,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::socket",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "socket"
     },
@@ -2228,6 +2621,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::splunk_hec_logs",
+      "sensitive_fields": [
+        "default_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "splunk_hec_logs"
     },
@@ -2246,6 +2643,10 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::splunk_hec_metrics",
+      "sensitive_fields": [
+        "default_token",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "splunk_hec_metrics"
     },
@@ -2265,6 +2666,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::statsd",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "supplemental_source_sha256": "4d9b0583f2802bf2407c5f63f35d6e7d9491c01dbbfb137826c441d3249b5144",
       "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sinks/generated/statsd.cue",
@@ -2285,6 +2689,9 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::vector",
+      "sensitive_fields": [
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "vector"
     },
@@ -2321,6 +2728,15 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::websocket",
+      "sensitive_fields": [
+        "auth.auth.access_key_id",
+        "auth.auth.secret_access_key",
+        "auth.auth.session_token",
+        "auth.password",
+        "auth.token",
+        "auth.user",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "websocket"
     },
@@ -2339,6 +2755,11 @@
       },
       "platforms": [],
       "schema_ref": "#/definitions/vectory::components::sinks::websocket_server",
+      "sensitive_fields": [
+        "auth.password",
+        "auth.username",
+        "tls.key_pass"
+      ],
       "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
       "type": "websocket_server"
     }
@@ -2355,7 +2776,7 @@
     "unit_test_stream"
   ],
   "experimental_upstream_schema": true,
-  "schema_sha256": "750b3f954022601721b4d8cde077f4c9f6efe1a967cea0bff8e31e79e900f502",
+  "schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
   "schema_standard": "https://json-schema.org/draft/2019-09/schema",
   "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
   "vector_version": "0.58.0"
