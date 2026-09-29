@@ -174,6 +174,8 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
       ? data.connectivityWarning
       : undefined;
   const live = data.live as NodeLive | null | undefined;
+  // Samples the tester sent to each output of this step, from its last run.
+  const trace = data.trace as Record<string, number> | undefined;
   return (
     <div
       className={`pipeline-node pipeline-node-v2 pipeline-node-${kind}${connectivityWarning ? " pipeline-node-unconnected" : ""}${selected ? " pipeline-node-selected" : ""}${data.hasIssue ? " pipeline-node-issue" : ""}`}
@@ -341,6 +343,7 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
               className="pipeline-node-output-row"
               key={port}
               data-port-state={portState(validOutputs.has(port))}
+              data-traced={trace?.[port] ? true : undefined}
             >
               <span title={port}>
                 {port === "output"
@@ -349,6 +352,14 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
                     ? "Unmatched"
                     : port}
               </span>
+              {trace && (
+                <span
+                  className="pipeline-node-trace"
+                  title={`${trace[port] ?? 0} of the tester's samples`}
+                >
+                  {trace[port] ?? 0}
+                </span>
+              )}
               <ArrowRight size={12} aria-hidden="true" />
               <Handle
                 {...handleProps}

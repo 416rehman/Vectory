@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseSamples } from "./sampleStore";
-import { eventsOnPort, sourceSamples, upstreamOf } from "./sampleUpstream";
+import {
+  eventsOnPort,
+  routeCounts,
+  sourceSamples,
+  upstreamOf,
+} from "./sampleUpstream";
 
 const nginx = {
   sources: { nginx: { type: "file", include: ["/var/log/nginx/access.log"] } },
@@ -133,5 +138,29 @@ describe("example events from the source", () => {
     ).toBe("");
     expect(sourceSamples({ id: "k", type: "kafka", component: {} })).toBe("");
     expect(sourceSamples(null)).toBe("");
+  });
+});
+
+describe("where a route sent its samples", () => {
+  const result = (sample: number, port: string) => ({
+    sample,
+    outcome: "emitted" as const,
+    outputs: [{ port, event: {}, timestamps: [] }],
+  });
+  it("counts samples per output, and only for routes", () => {
+    const results = [
+      result(0, "errors"),
+      result(1, "_unmatched"),
+      result(2, "errors"),
+    ];
+    expect(routeCounts(results, "route")).toEqual({
+      errors: 2,
+      _unmatched: 1,
+    });
+    expect(routeCounts(results, "exclusive_route")).toEqual({
+      errors: 2,
+      _unmatched: 1,
+    });
+    expect(routeCounts(results, "remap")).toEqual({});
   });
 });

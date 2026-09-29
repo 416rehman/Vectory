@@ -174,6 +174,27 @@
   color: var(--ed-warning);
   background: var(--ed-warning-bg);
 }
+/* Route outputs that received samples in the tester. */
+.pipeline-node-output-row[data-traced] > span:first-child {
+  font-weight: 650;
+}
+.pipeline-node-trace {
+  min-width: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+}
+.pipeline-node-output-row[data-traced] .pipeline-node-trace {
+  border-color: var(--ed-success-line);
+  color: var(--ed-success);
+  background: var(--ed-success-bg);
+}
 @media (max-width: 600px) {
   .editor-live-panel {
     margin: 10px;

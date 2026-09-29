@@ -337,6 +337,7 @@ export default function PipelineSettings({
   focus,
   upstream,
   inputPatterns = [],
+  onTrace,
 }: {
   id: string;
   kind: Kind;
@@ -362,6 +363,8 @@ export default function PipelineSettings({
   upstream?: Upstream;
   /** This step's wildcard inputs and what they match now. */
   inputPatterns?: readonly PatternInput[];
+  /** Samples per route output from the last sample run, for the canvas. */
+  onTrace?: (counts: Record<string, number> | null) => void;
 }) {
   const definition = catalog.find(
     (c) => c.kind === kind && c.type === component.type,
@@ -539,6 +542,7 @@ export default function PipelineSettings({
         onSaveTests={onSaveTests}
         onCompile={setCompiled}
         onPaths={setPathHints}
+        onTrace={onTrace}
         onJump={jump}
         wide={wide}
         upstream={upstream}

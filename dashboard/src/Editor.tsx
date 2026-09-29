@@ -465,6 +465,10 @@ export default function Editor({
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
     [live, setLive] = useState(readLiveSetting),
     [findOpen, setFindOpen] = useState(false),
+    [trace, setTrace] = useState<{
+      id: string;
+      counts: Record<string, number>;
+    } | null>(null),
     [telemetry, setTelemetry] = useState<{
       data: PipelineTelemetry | null;
       error: string;
@@ -2725,7 +2729,7 @@ export default function Editor({
       return (
         target === document.body ||
         !!graphRef.current?.contains(target) ||
-        target.closest(".editor-workspace") !== null
+        target.closest(".editor-workspace, .editor-content") !== null
       );
     };
     const onCopy = (event: ClipboardEvent) => {
@@ -3534,6 +3538,13 @@ export default function Editor({
           inputPatterns={patterns.filter(
             (input) => input.target === selectedNode.id,
           )}
+          onTrace={(counts) =>
+            setTrace(
+              counts && Object.keys(counts).length
+                ? { id: selectedNode.id, counts }
+                : null,
+            )
+          }
         />
       )
     ) : null;
@@ -3714,11 +3725,14 @@ export default function Editor({
           ? nodeLive(liveData, node.id)
           : undefined;
     const liveKey = reading === undefined ? "" : JSON.stringify(reading);
+    const traced = trace && trace.id === node.id ? trace.counts : undefined;
+    const traceKey = traced ? JSON.stringify(traced) : "";
     return cachedFlowObject(
       `node:${node.id}`,
       [
         node,
         liveKey,
+        traceKey,
         highlight,
         isSelected,
         problem.hasIssue,
@@ -3751,6 +3765,7 @@ export default function Editor({
           ...node.data,
           ...problem,
           live: reading,
+          trace: traced,
           connectivityWarning: warning,
           editable: editable && !busy,
           openMenu: stableHandlers(`node:${node.id}`).menu,

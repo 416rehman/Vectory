@@ -91,6 +91,22 @@ export function eventsOnPort(results: readonly SampleResult[], port: string) {
   return events;
 }
 
+/**
+ * How many samples each output of a route received, in first-seen order
+ * (a sample matching two routes counts for both). Empty for other steps.
+ */
+export function routeCounts(
+  results: readonly SampleResult[],
+  type: string,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  if (type !== "route" && type !== "exclusive_route") return counts;
+  for (const result of results)
+    for (const output of result.outputs)
+      counts[output.port] = (counts[output.port] ?? 0) + 1;
+  return counts;
+}
+
 const jsonl = (events: readonly object[]) =>
   events.map((event) => JSON.stringify(event)).join("\n");
 
