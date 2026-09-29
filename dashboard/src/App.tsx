@@ -625,11 +625,14 @@ export default function App() {
     if (!user || !mobileNavigation || !sidebar) return;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const frame = requestAnimationFrame(() =>
+    // The header avatar opens the drawer with the account menu already open;
+    // moving focus to the close button then would dismiss that menu.
+    const frame = requestAnimationFrame(() => {
+      if (accountOpenRef.current) return;
       navigationRef.current
         ?.querySelector<HTMLButtonElement>(".sidebar-close")
-        ?.focus({ preventScroll: true }),
-    );
+        ?.focus({ preventScroll: true });
+    });
     const containFocus = (event: KeyboardEvent) => {
       if (accountOpenRef.current || event.defaultPrevented) return;
       if (event.key === "Escape") {

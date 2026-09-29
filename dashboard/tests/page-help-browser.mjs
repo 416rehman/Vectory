@@ -151,6 +151,12 @@ await context.route("**/*", async (route) => {
     return reply({ instance_name: "Synthetic help workspace" });
   if (path === "/mfa") return reply({ enabled: false });
   if (path === "/users") return reply([user]);
+  // A server without the fleet summary answers 404; the Overview falls back.
+  if (path === "/telemetry/summary")
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "NOT_FOUND", message: "Not found" } },
+    });
   if (path === "/overview")
     return reply({
       devices_total: 1,

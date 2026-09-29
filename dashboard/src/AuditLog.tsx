@@ -352,6 +352,28 @@ export function AuditLog({
     },
   ].filter(Boolean) as FilterChip[];
   const eventFilter = !!(query.action || query.family);
+  // The event name is the keyboard path to its details; rows and cards also
+  // open them on click.
+  const eventLink = (item: AuditSummary) => (
+    <a
+      className="audit-event-title"
+      href={`#/${auditRoute(item.id, query)}`}
+      onClick={(event) => {
+        if (
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        openDetail(item.id, event.currentTarget);
+      }}
+    >
+      {auditActionLabel(item.action)}
+    </a>
+  );
   const columns: TableColumn<AuditSummary>[] = [
     {
       id: "action",
@@ -410,24 +432,7 @@ export function AuditLog({
       },
       cell: (item) => (
         <span className="audit-event">
-          <a
-            className="audit-event-title"
-            href={`#/${auditRoute(item.id, query)}`}
-            onClick={(event) => {
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              openDetail(item.id, event.currentTarget);
-            }}
-          >
-            {auditActionLabel(item.action)}
-          </a>
+          {eventLink(item)}
           {(item.target_name || item.target) && (
             <span className="audit-target">
               <ResourceLink
@@ -689,8 +694,7 @@ export function AuditLog({
             noun: "events",
           }}
           mobileCard={(item) => ({
-            title: auditActionLabel(item.action),
-            href: `#/${auditRoute(item.id, query)}`,
+            title: eventLink(item),
             status: <Result outcome={item.outcome} />,
             meta: [
               targetLabel(item),
