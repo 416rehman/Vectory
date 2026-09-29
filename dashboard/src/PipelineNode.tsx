@@ -15,6 +15,7 @@ import {
 import type { Config } from "./api";
 import type { Kind } from "./catalog";
 import ComponentIcon from "./ComponentIcon";
+import { formatRate, type NodeLive } from "./liveGraph";
 import "./pipeline-categories.css";
 import {
   componentSummary,
@@ -33,6 +34,57 @@ const kindLabels: Record<Kind, string> = {
   transforms: "Transform",
   sinks: "Destination",
 };
+
+/**
+ * Events in and out per second, with errors, drops and buffer fill spelled
+ * out (never color alone). Null: no device reports this step.
+ */
+function LiveReading({
+  kind,
+  reading,
+}: {
+  kind: Kind;
+  reading: NodeLive | null;
+}) {
+  if (!reading)
+    return (
+      <p className="pipeline-node-live" data-empty>
+        No device reports this step
+      </p>
+    );
+  const flow = [
+    kind !== "sources" && `in ${formatRate(reading.received)}`,
+    kind !== "sinks" && `out ${formatRate(reading.sent)}`,
+  ].filter(Boolean);
+  const devices = `${reading.devices} ${reading.devices === 1 ? "device" : "devices"}`;
+  return (
+    <p
+      className="pipeline-node-live"
+      title={`${flow.join(", ")} across ${devices}${reading.filtered ? `; ${formatRate(reading.filtered, "/min")} filtered` : ""}`}
+    >
+      <span className="pipeline-node-live-flow">{flow.join(" · ")}</span>
+      {!!reading.errors && (
+        <span className="pipeline-node-live-badge" data-tone="error">
+          <CircleX size={12} aria-hidden="true" />
+          {formatRate(reading.errors, "/min")} errors
+        </span>
+      )}
+      {!!reading.dropped && (
+        <span className="pipeline-node-live-badge" data-tone="warning">
+          {formatRate(reading.dropped, "/min")} dropped
+        </span>
+      )}
+      {reading.buffer !== null && reading.buffer >= 0.01 && (
+        <span
+          className="pipeline-node-live-badge"
+          data-tone={reading.buffer >= 0.8 ? "warning" : undefined}
+        >
+          buffer {Math.round(reading.buffer * 100)}%
+        </span>
+      )}
+    </p>
+  );
+}
 
 function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
   const kind: Kind =
@@ -121,6 +173,7 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
     typeof data.connectivityWarning === "string"
       ? data.connectivityWarning
       : undefined;
+  const live = data.live as NodeLive | null | undefined;
   return (
     <div
       className={`pipeline-node pipeline-node-v2 pipeline-node-${kind}${connectivityWarning ? " pipeline-node-unconnected" : ""}${selected ? " pipeline-node-selected" : ""}${data.hasIssue ? " pipeline-node-issue" : ""}`}
@@ -203,13 +256,17 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
           >
             {summary.primary}
           </p>
-          {summary.secondary && (
-            <p
-              className="pipeline-node-summary-secondary"
-              title={summary.secondary}
-            >
-              {summary.secondary}
-            </p>
+          {live !== undefined ? (
+            <LiveReading kind={kind} reading={live} />
+          ) : (
+            summary.secondary && (
+              <p
+                className="pipeline-node-summary-secondary"
+                title={summary.secondary}
+              >
+                {summary.secondary}
+              </p>
+            )
           )}
         </div>
         <div className="pipeline-node-footer">

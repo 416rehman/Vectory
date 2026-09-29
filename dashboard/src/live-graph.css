@@ -1,0 +1,181 @@
+@import "./editor-tokens.css";
+
+/* Live numbers on the canvas: a toggle, a status line, edge rates and a
+   reading on each node. Numbers use tabular figures; state is always spelled
+   out, never color alone. */
+.editor-live-panel {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  max-width: min(360px, calc(100% - 36px));
+  margin: 18px;
+}
+.editor-live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 2px 8px #00000008;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.editor-live-toggle:hover {
+  background: var(--surface-hover);
+}
+.editor-live-toggle[aria-pressed="true"] {
+  border-color: var(--ed-success-line, var(--line-strong));
+  color: var(--ed-success, var(--ink));
+  background: var(--ed-success-bg, var(--surface));
+}
+.editor-live-toggle[aria-pressed="true"] svg {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+.editor-live-toggle:focus-visible,
+.editor-live-status button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@keyframes live-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.editor-live-status {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 4px 16px #0000000d;
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+.editor-live-status[data-tone="empty"],
+.editor-live-status[data-tone="loading"] {
+  color: var(--muted);
+}
+.editor-live-status[data-tone="error"] {
+  border-color: var(--ed-danger-line);
+  color: var(--ed-danger);
+}
+.editor-live-status small {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.editor-live-status button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pipeline-edge-rate {
+  position: absolute;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: var(--ed-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pipeline-edge-rate[data-empty] {
+  color: var(--muted);
+  border-style: dashed;
+}
+.editor-graph
+  .react-flow__edge.pipeline-connection
+  .react-flow__edge-path.pipeline-edge-flowing {
+  stroke-dasharray: 6 5;
+  animation: pipeline-edge-flow 900ms linear infinite;
+}
+.editor-graph
+  .react-flow__edge.pipeline-connection
+  .react-flow__edge-path.pipeline-edge-idle {
+  opacity: 0.55;
+}
+@keyframes pipeline-edge-flow {
+  to {
+    stroke-dashoffset: -11;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-graph
+    .react-flow__edge.pipeline-connection
+    .react-flow__edge-path.pipeline-edge-flowing {
+    animation: none;
+    stroke-dasharray: none;
+  }
+  .editor-live-toggle[aria-pressed="true"] svg {
+    animation: none;
+  }
+}
+
+.pipeline-node-v2 .pipeline-node-summary > p.pipeline-node-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+}
+.pipeline-node-v2 .pipeline-node-summary > p.pipeline-node-live[data-empty] {
+  color: var(--muted);
+  font-style: italic;
+}
+.pipeline-node-live-flow {
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
+}
+.pipeline-node-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+.pipeline-node-live-badge[data-tone="error"] {
+  border-color: var(--ed-danger-line);
+  color: var(--ed-danger);
+  background: var(--ed-danger-bg);
+}
+.pipeline-node-live-badge[data-tone="warning"] {
+  border-color: var(--ed-warning-line);
+  color: var(--ed-warning);
+  background: var(--ed-warning-bg);
+}
+@media (max-width: 600px) {
+  .editor-live-panel {
+    margin: 10px;
+  }
+}
