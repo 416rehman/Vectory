@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { RotateCcw } from "lucide-react";
 import {
   APIError,
@@ -105,12 +111,15 @@ function outcomeFor(error: unknown): Outcome {
 export default function DeploymentRetry({
   deployment,
   scope,
+  returnFocusRef,
   onClose,
   onDone,
 }: {
   deployment: DeploymentSummary;
   /** One failure group, or null for every failed device in the rollout. */
   scope: RolloutFailure | null;
+  /** Where focus goes when the dialog closes. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   onClose(): void;
   onDone(message: string): void;
 }) {
@@ -291,6 +300,7 @@ export default function DeploymentRetry({
       open
       wide
       className="deployment-retry-modal"
+      returnFocusRef={returnFocusRef}
       onClose={() => {
         if (!sendingRef.current) onClose();
       }}
