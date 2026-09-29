@@ -178,9 +178,18 @@ fn reason(devices: &[&Value]) -> Option<String> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for device in devices {
         let error = &device["configuration_attempt"]["error"];
-        let summary = error["diagnostics"][0]["message"]
+        // The error's own summary first, then its first error diagnostic:
+        // diagnostics can start with a warning, which is not why it failed.
+        let summary = error["message"]
             .as_str()
-            .or_else(|| error["message"].as_str().filter(|m| !m.is_empty()))
+            .filter(|m| !m.is_empty())
+            .or_else(|| {
+                error["diagnostics"]
+                    .as_array()?
+                    .iter()
+                    .find(|d| d["severity"] != "warning")?["message"]
+                    .as_str()
+            })
             .or_else(|| error["code"].as_str());
         if let Some(summary) = summary {
             *counts

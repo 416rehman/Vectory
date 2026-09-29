@@ -269,6 +269,14 @@ impl App {
         headers: &axum::http::HeaderMap,
         peer: Option<std::net::IpAddr>,
     ) -> String {
+        if !self.settings.trust_proxy_headers && headers.contains_key("x-forwarded-for") {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "Requests carry X-Forwarded-For but VECTORY_TRUST_PROXY_HEADERS is off, so every client behind that proxy shares one sign-in and rate-limit budget. Set VECTORY_TRUST_PROXY_HEADERS=true only when the HTTP listener is reachable solely through the proxy."
+                )
+            });
+        }
         let forwarded = self
             .settings
             .trust_proxy_headers
