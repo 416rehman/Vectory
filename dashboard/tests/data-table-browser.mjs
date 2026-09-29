@@ -128,6 +128,16 @@ try {
       }));
       expect(bounds.page).toBeLessThanOrEqual(bounds.viewport + 1);
       measurements.push({ width, theme, ...bounds });
+      // Only a region that scrolls sideways is a keyboard stop.
+      const region = page.getByRole("region", {
+        name: "Synthetic devices table",
+        exact: true,
+      });
+      if (
+        await region.evaluate((node) => node.scrollWidth > node.clientWidth + 1)
+      )
+        await expect(region).toHaveAttribute("tabindex", "0");
+      else await expect(region).not.toHaveAttribute("tabindex");
       const scan = await new AxeBuilder({ page }).analyze();
       expect(scan.violations).toEqual([]);
       accessibility.push({ width, theme, violations: scan.violations.length });

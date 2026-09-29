@@ -857,11 +857,11 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
         </>
       ),
     },
-    // Numbers sort; a text filter on a rate helps nobody.
     ...visible.map((column): TableColumn<ComponentTelemetry> => ({
       id: column.id,
       header: column.title,
       value: (component) => column.read(component) ?? null,
+      filter: { placeholder: "Filter reported value" },
       cell: (component) => {
         const reading = column.read(component);
         return present(reading) ? (
@@ -892,10 +892,10 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
           ) : undefined,
           meta: [
             component.type?.replaceAll("_", " ") || null,
-            ...visible.slice(0, 3).map((column) => {
+            ...visible.map((column) => {
               const reading = column.read(component);
               return present(reading)
-                ? `${column.title} ${column.format(reading)}`
+                ? `${column.title}: ${column.format(reading)}`
                 : null;
             }),
           ],
@@ -976,6 +976,7 @@ function SampleTable({ points }: { points: TimelinePoint[] }) {
       id: column.id,
       header: column.title,
       value: (point) => column.read(point.sample) ?? null,
+      filter: { placeholder: "Filter reported value" },
       cell: (point) => {
         const reading = column.read(point.sample);
         return present(reading) ? (

@@ -13,7 +13,10 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow: visible;
+  /* Clip, not visible: until the overflow is measured (a frame after a resize)
+     a wide table must not widen the page. Clip keeps scrollWidth honest and
+     leaves sticky headers on the page's scroll. */
+  overflow-x: clip;
   border-radius: inherit;
 }
 .data-table-scroll[data-overflow] {
