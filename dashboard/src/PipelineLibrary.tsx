@@ -52,6 +52,7 @@ import {
   pipelineDestinationLabel,
   type PipelineDestination,
 } from "./pipelineDestination";
+import { useCommand } from "./commands";
 import "./pipeline-library.css";
 
 export type PipelineLibraryQuery = {
@@ -187,11 +188,19 @@ export default function PipelineLibrary({
       setRefreshing(false);
     }
   }
-  function beginCreate(trigger: HTMLButtonElement) {
+  // ⌘K and the Overview checklist open the create dialog through this command.
+  useCommand(
+    "pipeline.create",
+    () => beginCreate(document.activeElement as HTMLButtonElement | null),
+    can(user, "edit"),
+  );
+  function beginCreate(trigger: HTMLButtonElement | null) {
     if (active.current) return;
     createOpener.current = trigger;
     if (unresolved) {
-      recoveryRef.current?.openSaved(trigger);
+      recoveryRef.current?.openSaved(
+        trigger || document.getElementById("main-content")!,
+      );
       return;
     }
     setNotice(null);
