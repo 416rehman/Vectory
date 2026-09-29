@@ -39,6 +39,27 @@ describe("restricted-host approvals", () => {
       allowed_listen_addresses: ["0.0.0.0:1514"],
     });
   });
+  it("does not take an HTTP route's path for a file root", () => {
+    expect(
+      hostApprovals({
+        sources: {
+          in: { type: "http_server", address: "0.0.0.0:8080", path: "/ingest" },
+        },
+        sinks: {
+          loki: {
+            type: "loki",
+            endpoint: "https://logs.example.net",
+            path: "/loki/api/v1/push",
+            inputs: [],
+          },
+        },
+      }),
+    ).toEqual({
+      destinations: ["logs.example.net:443"],
+      listeners: ["0.0.0.0:8080"],
+      fileRoots: [],
+    });
+  });
   it("needs nothing for a self-contained pipeline", () => {
     expect(
       hostApprovals({
@@ -91,6 +112,108 @@ describe("what a pipeline asks of its devices", () => {
       label: "Host approval: /var/log/nginx, logs.example.net:443",
     });
   });
+  it("treats a function's name inside data as data, not a call", () => {
+    const pipeline = (source: string) => ({
+      sources: { demo: { type: "demo_logs", format: "json" } },
+      transforms: { r: { type: "remap", inputs: ["demo"], source } },
+      sinks: { out: { type: "blackhole", inputs: ["r"] } },
+    });
+    for (const source of [
+      '.kind = "http_request_log"',
+      '.name = "http_requests_total"',
+      ".parse_proto = 1\n.get_env_var = 2",
+    ])
+      expect(fullModeRequirements(pipeline(source), catalog)).toEqual([]);
+    // A step called http_requests, a metric of that name, a tag named file.
+    expect(
+      fullModeRequirements(
+        {
+          sources: { demo: { type: "demo_logs", format: "json" } },
+          transforms: {
+            http_requests: {
+              type: "log_to_metric",
+              inputs: ["demo"],
+              metrics: [
+                {
+                  type: "counter",
+                  field: "message",
+                  name: "http_requests_total",
+                  tags: { file: "app" },
+                },
+              ],
+            },
+          },
+          sinks: { out: { type: "blackhole", inputs: ["http_requests"] } },
+        },
+        catalog,
+      ),
+    ).toEqual([]);
+  });
+
+  it("names every call a restricted device would refuse", () => {
+    const pipeline = (source: string) => ({
+      sources: { demo: { type: "demo_logs", format: "json" } },
+      transforms: { r: { type: "remap", inputs: ["demo"], source } },
+      sinks: { out: { type: "blackhole", inputs: ["r"] } },
+    });
+    for (const source of [
+      'http_request!("https://example.test")',
+      'http_request! ("https://example.test")',
+      '.a, err = http_request("https://example.test")',
+      'get_env_var!("HOME")',
+      "dns_lookup!(.host)",
+      'validate_json_schema!(.message, "/schema.json")',
+      'parse_proto!(.message, "/d.desc", "a.B")',
+      'encode_proto!(.message, "/d.desc", "a.B")',
+      'get_enrichment_table_record!("t", {})',
+      'find_enrichment_table_records!("t", {})',
+    ])
+      expect(fullModeRequirements(pipeline(source), catalog), source).toEqual([
+        "VRL access to device resources",
+      ]);
+    expect(
+      fullModeRequirements(
+        {
+          ...pipeline(".x = 1"),
+          transforms: {
+            r: { type: "remap", inputs: ["demo"], file: "/etc/program.vrl" },
+          },
+        },
+        catalog,
+      ),
+    ).toEqual(["Native capability: file"]);
+  });
+
+  it("accepts unit tests, whose events are data and whose VRL is held to the same list", () => {
+    const base = {
+      sources: { demo: { type: "demo_logs", format: "json" } },
+      transforms: { r: { type: "remap", inputs: ["demo"], source: ".x = 1" } },
+      sinks: { out: { type: "blackhole", inputs: ["r"] } },
+    };
+    const tests = (source: string) => [
+      {
+        name: "sets x",
+        inputs: [
+          {
+            insert_at: "r",
+            type: "log",
+            log_fields: { message: "GET /etc/passwd $HOME {{ x }}" },
+          },
+        ],
+        outputs: [{ extract_from: "r", conditions: [{ type: "vrl", source }] }],
+      },
+    ];
+    expect(
+      fullModeRequirements({ ...base, tests: tests(".x == 1") }, catalog),
+    ).toEqual([]);
+    expect(
+      fullModeRequirements(
+        { ...base, tests: tests('get_env_var!("HOME") == "/root"') },
+        catalog,
+      ),
+    ).toEqual(["VRL access to device resources"]);
+  });
+
   it("says nothing for a self-contained pipeline", () => {
     expect(
       describeNeeds(

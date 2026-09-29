@@ -845,3 +845,90 @@ async fn tests_vector_refuses_to_run_are_never_reported_as_a_pass() {
     assert_eq!(ran["diagnostics"], json!([]), "{ran}");
     child.kill().await.ok();
 }
+
+#[tokio::test]
+async fn worker_never_reads_files_an_author_named() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; file-function guard unverified");
+        return;
+    };
+    // VRL's validate_json_schema quotes the schema file's own values in its error.
+    let dir = tempfile::tempdir().unwrap();
+    let schema = dir.path().join("schema.json");
+    std::fs::write(&schema, r#"{"type":"object","required":["hunter2secret"]}"#).unwrap();
+    let program = format!(
+        "_, err = validate_json_schema(.message, \"{}\")\n.err = err",
+        schema.display()
+    );
+    let (mut child, url, client) = start_worker(&vector).await;
+    let single = post(
+        &client,
+        &url,
+        "vrl-test",
+        json!({"program": program, "sample": {"message": "x"}}),
+    )
+    .await;
+    assert_eq!(single["valid"], false, "{single}");
+    assert!(
+        single["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("validate_json_schema"),
+        "{single}"
+    );
+    assert!(!single.to_string().contains("hunter2secret"), "{single}");
+    let transform = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({"transform": {"type": "remap", "source": program}, "samples": [{"message": "x"}]}),
+    )
+    .await;
+    assert_eq!(transform["compiled"], false, "{transform}");
+    assert_eq!(
+        transform["diagnostics"][0]["code"],
+        "vrl_function_unavailable"
+    );
+    assert!(
+        !transform.to_string().contains("hunter2secret"),
+        "{transform}"
+    );
+
+    // The static check compiles the program, which would open the file too: the
+    // step is replaced by a stand-in and the device checks it.
+    let config = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"check": {"type": "remap", "inputs": ["in"], "source": program}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["check"]}},
+    });
+    let checked = post(&client, &url, "validate", json!({"config": config})).await;
+    assert_eq!(checked["valid"], true, "{checked}");
+    assert_eq!(checked["stubbed"], json!(["check"]), "{checked}");
+    assert!(!checked.to_string().contains("hunter2secret"), "{checked}");
+    assert!(
+        checked["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "device_check"
+                && d["message"] == "This step reads a file on each device."),
+        "{checked}"
+    );
+    let mut with_tests = config.clone();
+    with_tests["tests"] = json!([{"name": "reads", "inputs": [{"insert_at": "check", "type": "log", "log_fields": {"message": "x"}}],
+        "outputs": [{"extract_from": "check", "conditions": [{"type": "vrl", "source": ".err == null"}]}]}]);
+    let tests = post(&client, &url, "tests", json!({"config": with_tests})).await;
+    assert_eq!(tests["tests_run"], false, "{tests}");
+    assert_eq!(tests["diagnostics"][0]["code"], "vrl_function_unavailable");
+    assert!(!tests.to_string().contains("hunter2secret"), "{tests}");
+    // Control: a program that reads nothing still runs.
+    let plain = post(
+        &client,
+        &url,
+        "vrl-test",
+        json!({"program": ".ok = true", "sample": {"message": "x"}}),
+    )
+    .await;
+    assert_eq!(plain["valid"], true, "{plain}");
+    child.kill().await.ok();
+}

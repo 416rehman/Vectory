@@ -43,7 +43,7 @@ Within those components, restricted mode also:
 - requires explicit destinations and listeners, so a component can't fall back to a default address;
 - refuses environment variables (`$NAME`, `${NAME}`), `{{ }}` templates and other substitutions anywhere in the pipeline;
 - refuses secret providers, enrichment tables, external VRL files and any setting that runs a program;
-- refuses VRL functions that read the environment, secrets, DNS or enrichment tables;
+- refuses VRL that calls a function reaching outside the event: `get_env_var`, `get_secret`, `set_secret`, `remove_secret`, `dns_lookup`, `reverse_dns`, `http_request`, `get_enrichment_table_record`, `find_enrichment_table_records`, and the functions that read a file (`validate_json_schema`, `parse_proto`, `encode_proto`). Only a call counts: a metric named `http_requests_total` or an event value `"http_request"` is data;
 - refuses to turn off TLS certificate or host name verification.
 
 **Full Vector** mode accepts anything the host's Vector build supports. Only the host can enable it, with `vectory install --allow-full-vector-config`; the dashboard shows the mode and blocks deployments that need full mode on restricted devices. Allowances don't apply in full mode.

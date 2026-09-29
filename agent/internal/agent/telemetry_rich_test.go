@@ -312,6 +312,14 @@ func TestSeriesOfARetypedComponentAreIgnored(t *testing.T) {
 	if byID(o, "app") == nil || o.Counters["c:app:sent"] != 100 {
 		t.Fatal("the other components stay")
 	}
+	// The device totals leave it out too: neither type's series is counted, so
+	// the totals never mix the blackhole's 90 with the http sink's 5.
+	if _, counted := o.Counters["d:out"]; counted || value(o.Errors) != 0 {
+		t.Fatalf("a component with two types reached the totals: out=%v errors=%v", o.Counters["d:out"], value(o.Errors))
+	}
+	if o.Counters["d:in"] != 100 {
+		t.Fatalf("events in = %v", o.Counters["d:in"])
+	}
 }
 
 func TestComponentTypesComeFromTheRunningConfiguration(t *testing.T) {
@@ -321,6 +329,32 @@ func TestComponentTypesComeFromTheRunningConfiguration(t *testing.T) {
 	}
 	if componentTypes([]byte("not json")) != nil {
 		t.Fatal("an unreadable configuration declares nothing")
+	}
+}
+
+// Restricted mode allows data_dir, api, healthchecks, tests, timezone and
+// acknowledgements next to the components. Those are scalars and arrays; they
+// must not make the configuration unreadable, or a retyped component would be
+// measured under both of its types.
+func TestComponentTypesSurviveTheOtherTopLevelSettings(t *testing.T) {
+	components := `"sources":{"app":{"type":"demo_logs"}},"sinks":{"out":{"type":"http"}}`
+	for _, extra := range []string{
+		`"data_dir":"/var/lib/vector"`,
+		`"healthchecks":{"enabled":true}`,
+		`"api":{"enabled":true,"address":"127.0.0.1:8686"}`,
+		`"tests":[{"name":"t","inputs":[],"outputs":[]}]`,
+		`"timezone":"UTC"`,
+		`"acknowledgements":{"enabled":true}`,
+	} {
+		got := componentTypes([]byte(`{` + components + `,` + extra + `}`))
+		if len(got) != 2 || got["app"] != "demo_logs" || got["out"] != "http" {
+			t.Errorf("with %s: types = %v", extra, got)
+		}
+	}
+	// One component that cannot be read does not hide the others.
+	got := componentTypes([]byte(`{"sources":{"app":{"type":"demo_logs"},"odd":"text"},"sinks":"not an object","transforms":{"t":{"type":7}}}`))
+	if len(got) != 1 || got["app"] != "demo_logs" {
+		t.Errorf("types = %v", got)
 	}
 }
 

@@ -30,6 +30,38 @@ function isLoopbackSocketAddress(value: unknown): boolean {
     return false;
   }
 }
+/**
+ * VRL functions that reach outside the event: the environment, secrets,
+ * enrichment tables, DNS, HTTP and files (a JSON schema or a protobuf
+ * descriptor). A restricted device refuses them. The same names are in the
+ * server (`DEVICE_VRL_FUNCTIONS`) and the agent (`externalVRL`);
+ * `tests/security/test_vrl_function_lists.py` fails when the lists drift.
+ */
+export const deviceVrlFunctions = [
+  "get_env_var",
+  "get_secret",
+  "set_secret",
+  "remove_secret",
+  "get_enrichment_table_record",
+  "find_enrichment_table_records",
+  "dns_lookup",
+  "reverse_dns",
+  "http_request",
+  "validate_json_schema",
+  "parse_proto",
+  "encode_proto",
+] as const;
+/**
+ * A call, not a mention: `name(` or `name!(` that is not the end of a longer
+ * identifier or a field path. A metric named `http_requests_total` or an event
+ * value `"http_request"` is data. The server and the agent match the same way.
+ */
+const deviceVrlCall = new RegExp(
+  `(?:^|[^A-Za-z0-9_.])(?:${deviceVrlFunctions.join("|")})\\s*(?:!\\s*)?\\(`,
+);
+export function callsDeviceFunction(program: string): boolean {
+  return deviceVrlCall.test(program);
+}
 export function fullModeRequirements(
   config: Record<string, any>,
   agentCatalog: AgentCatalog,
@@ -44,6 +76,7 @@ export function fullModeRequirements(
     "acknowledgements",
     "healthchecks",
     "timezone",
+    "tests",
   ]);
   for (const key of Object.keys(config))
     if (!restrictedRoots.has(key)) required.add(`Global setting: ${key}`);
@@ -65,22 +98,31 @@ export function fullModeRequirements(
         required.add(`${kind.slice(0, -1)}: ${component?.type || "unknown"}`);
       if (component?.type === "console" && component.target !== "stderr")
         required.add("Console output to stdout");
+      // `remap.file` loads a VRL program from the device's disk.
+      if (
+        kind === "transforms" &&
+        component?.type === "remap" &&
+        component.file != null
+      )
+        required.add("Native capability: file");
     }
   }
-  function inspect(value: any) {
+  /**
+   * Unit tests insert sample events into transforms: their events are data,
+   * not resources, so only their VRL can need a full-mode device.
+   */
+  function inspect(value: any, testsOnly = false) {
     if (typeof value === "string") {
-      if (/\$[A-Za-z_{]|SECRET\[|\{\{|%\{/.test(value))
+      if (!testsOnly && /\$[A-Za-z_{]|SECRET\[|\{\{|%\{/.test(value))
         required.add("Native secrets, environment values or dynamic templates");
-      if (
-        /get_env_var|get_secret|set_secret|remove_secret|dns_lookup|get_enrichment_table|find_enrichment_table/i.test(
-          value,
-        )
-      )
+      if (callsDeviceFunction(value))
         required.add("VRL access to device resources");
-    } else if (Array.isArray(value)) value.forEach(inspect);
+    } else if (Array.isArray(value))
+      value.forEach((item) => inspect(item, testsOnly));
     else if (value && typeof value === "object")
       for (const [key, child] of Object.entries(value)) {
         if (
+          !testsOnly &&
           [
             "command",
             "exec",
@@ -94,16 +136,20 @@ export function fullModeRequirements(
         )
           required.add(`Native capability: ${key}`);
         if (
+          !testsOnly &&
           ["verify_certificate", "verify_hostname"].includes(
             key.toLowerCase(),
           ) &&
           child === false
         )
           required.add("Disabled TLS verification");
-        inspect(child);
+        inspect(child, testsOnly);
       }
   }
-  inspect(config);
+  for (const [key, child] of Object.entries(config)) {
+    if (key === "tests") inspect(child, true);
+    else inspect({ [key]: child });
+  }
   return [...required];
 }
 
@@ -142,11 +188,14 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
   const destinations = new Set<string>();
   const listeners = new Set<string>();
   const fileRoots = new Set<string>();
-  const walk = (value: unknown, key: string) => {
-    if (Array.isArray(value)) value.forEach((item) => walk(item, key));
+  // A `path` names a file only for a Unix socket. For an http_server or loki
+  // it is the URL path, which needs no file allowance.
+  const walk = (value: unknown, key: string, pathIsFile: boolean) => {
+    if (Array.isArray(value))
+      value.forEach((item) => walk(item, key, pathIsFile));
     else if (value && typeof value === "object")
       for (const [child, nested] of Object.entries(value))
-        walk(nested, child.toLowerCase());
+        walk(nested, child.toLowerCase(), pathIsFile);
     else if (typeof value === "string") {
       if (destinationKeys.has(key) || value.includes("://")) {
         const found = destination(value);
@@ -156,7 +205,7 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
       if (
         (key === "include" ||
           key === "exclude" ||
-          key === "path" ||
+          (key === "path" && pathIsFile) ||
           key.endsWith("_file") ||
           key.endsWith("_path") ||
           key.endsWith("_dir")) &&
@@ -166,7 +215,14 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
     }
   };
   for (const kind of ["sources", "transforms", "sinks"])
-    walk(config[kind] || {}, kind);
+    for (const component of Object.values(
+      (config[kind] as Record<string, any>) || {},
+    ))
+      walk(
+        component,
+        kind,
+        component?.type === "syslog" && component?.mode === "unix",
+      );
   if (typeof config.data_dir === "string" && config.data_dir.startsWith("/"))
     fileRoots.add(fileRoot(config.data_dir));
   return {

@@ -94,3 +94,102 @@ func TestStatusAndDoctorPrintTheProblems(t *testing.T) {
 		t.Fatalf("doctor:\n%s", rendered)
 	}
 }
+
+// A function's name inside data is not a call. The canonical Prometheus metric,
+// an event value and a step called http_requests are ordinary pipelines, and
+// restricted mode is the default.
+func TestRestrictedModeAllowsPipelinesThatOnlyMentionAFunctionName(t *testing.T) {
+	p := CapabilityPolicy{}
+	for name, config := range map[string]string{
+		"metric name":    `{"transforms":{"m":{"type":"log_to_metric","inputs":["in"],"metrics":[{"type":"counter","field":"message","name":"http_requests_total"}]}},"sinks":{"out":{"type":"blackhole","inputs":["m"]}}}`,
+		"event value":    `{"transforms":{"f":{"type":"filter","inputs":["in"],"condition":".event == \"http_request\""}},"sinks":{"out":{"type":"blackhole","inputs":["f"]}}}`,
+		"string":         `{"transforms":{"r":{"type":"remap","inputs":["in"],"source":".kind = \"http_request_log\""}},"sinks":{"out":{"type":"blackhole","inputs":["r"]}}}`,
+		"step name":      `{"transforms":{"http_requests":{"type":"remap","inputs":["in"],"source":".x = 1"}},"sinks":{"out":{"type":"blackhole","inputs":["http_requests"]}}}`,
+		"field path":     `{"transforms":{"r":{"type":"remap","inputs":["in"],"source":".parse_proto = 1\n.get_env_var = 2"}},"sinks":{"out":{"type":"blackhole","inputs":["r"]}}}`,
+		"tag named file": `{"transforms":{"m":{"type":"log_to_metric","inputs":["in"],"metrics":[{"type":"counter","field":"message","name":"lines","tags":{"file":"app"}}]}},"sinks":{"out":{"type":"blackhole","inputs":["m"]}}}`,
+	} {
+		if err := p.Check([]byte(config)); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+}
+
+// Calls are refused in every spelling VRL accepts, including the ones that
+// read a file on the device.
+func TestRestrictedModeRefusesEveryCallSpelling(t *testing.T) {
+	p := CapabilityPolicy{}
+	for source, function := range map[string]string{
+		`http_request!(\"http://10.0.0.1/\")`:                 "http_request",
+		`http_request! (\"http://10.0.0.1/\")`:                "http_request",
+		`.a, err = http_request(\"http://10.0.0.1/\")`:        "http_request",
+		`get_env_var!(\"HOME\")`:                              "get_env_var",
+		`.h = dns_lookup!(.host)`:                             "dns_lookup",
+		`get_enrichment_table_record!(\"t\", {})`:             "get_enrichment_table_record",
+		`find_enrichment_table_records!(\"t\", {})`:           "find_enrichment_table_records",
+		`validate_json_schema!(.message, \"/x/schema.json\")`: "validate_json_schema",
+		`parse_proto!(.message, \"/x/d.desc\", \"a.B\")`:      "parse_proto",
+		`encode_proto!(.message, \"/x/d.desc\", \"a.B\")`:     "encode_proto",
+	} {
+		config := `{"transforms":{"r":{"type":"remap","inputs":["in"],"source":"` + source + `"}}}`
+		var refusal *PolicyRefusal
+		if err := p.Check([]byte(config)); !errors.As(err, &refusal) || refusal.Code != "DYNAMIC_CAPABILITY_DENIED" || refusal.Resource != function {
+			t.Errorf("%s: got %v", source, err)
+		}
+	}
+	// The same calls inside a unit test's VRL.
+	tested := `{"tests":[{"name":"t","inputs":[],"outputs":[{"extract_from":"t","conditions":[{"type":"vrl","source":"validate_json_schema!(.m, \"/x.json\")"}]}]}]}`
+	var refusal *PolicyRefusal
+	if err := p.Check([]byte(tested)); !errors.As(err, &refusal) || refusal.Resource != "validate_json_schema" {
+		t.Errorf("test VRL accepted: %v", err)
+	}
+}
+
+// remap.file loads a VRL program from any path on the device. It is refused
+// like files, with a message that says what to do instead.
+func TestRestrictedModeRefusesAProgramLoadedFromAFile(t *testing.T) {
+	p := CapabilityPolicy{AllowedFileRoots: []string{"/var/log/app"}}
+	for _, field := range []string{"file", "files"} {
+		value := `"/etc/vector/program.vrl"`
+		if field == "files" {
+			value = `["/etc/vector/program.vrl"]`
+		}
+		config := `{"transforms":{"r":{"type":"remap","inputs":["in"],"` + field + `":` + value + `}}}`
+		var refusal *PolicyRefusal
+		if err := p.Check([]byte(config)); !errors.As(err, &refusal) || refusal.Code != "UNSUPPORTED_LOCAL_CAPABILITY" || refusal.Field != field {
+			t.Fatalf("%s: got %v", field, err)
+		}
+		d := refusal.Diagnostic()
+		if d.Message != `Transform "r" (remap) loads its program from a file on this device, which restricted mode doesn't allow.` ||
+			!strings.Contains(d.Hint, `Paste the program into "source"`) {
+			t.Errorf("%s: %+v", field, d)
+		}
+	}
+}
+
+// An HTTP route's path is part of a URL, not a file. Judging it as one made
+// restricted mode refuse ordinary listeners and sinks, and its hint told the
+// operator to allow "/".
+func TestAnHTTPRoutePathIsNotAFilePath(t *testing.T) {
+	p := CapabilityPolicy{AllowedListenAddresses: []string{"127.0.0.1:8080"}, AllowedNetworkHosts: []string{"loki.example.net:443"}}
+	for name, config := range map[string]string{
+		"http_server": `{"sources":{"in":{"type":"http_server","address":"127.0.0.1:8080","path":"/ingest"}}}`,
+		"loki":        `{"sinks":{"out":{"type":"loki","inputs":["in"],"endpoint":"https://loki.example.net","path":"/loki/api/v1/push","labels":{"job":"vector"},"encoding":{"codec":"json"}}}}`,
+	} {
+		if err := p.Check([]byte(config)); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	// A path that does name a file is still checked, and a top-level directory
+	// is never suggested as the allowance.
+	var refusal *PolicyRefusal
+	err := p.Check([]byte(`{"sources":{"logs":{"type":"file","include":["/data/app.log"]}}}`))
+	if !errors.As(err, &refusal) || refusal.Code != "FILE_ACCESS_DENIED" {
+		t.Fatalf("file source: %v", err)
+	}
+	if refusal.Suggested != "" {
+		t.Errorf("suggested %q", refusal.Suggested)
+	}
+	if hint := refusal.Diagnostic().Hint; !strings.Contains(hint, "Choose the directory that holds these files") || strings.Contains(hint, `Add "/"`) {
+		t.Errorf("hint: %s", hint)
+	}
+}

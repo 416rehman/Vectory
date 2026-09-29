@@ -404,16 +404,24 @@ func telemetrySinks(config []byte) map[string]bool {
 // componentTypes maps every component ID of a configuration to its type. An
 // unreadable configuration declares nothing.
 func componentTypes(config []byte) map[string]string {
-	var root map[string]map[string]struct {
-		Type string `json:"type"`
-	}
+	// Other top-level settings (data_dir, api, tests, healthchecks...) are
+	// scalars and arrays; a component or section that cannot be read is skipped
+	// on its own, not the whole configuration.
+	var root map[string]json.RawMessage
 	if json.Unmarshal(config, &root) != nil {
 		return nil
 	}
 	types := map[string]string{}
 	for _, section := range []string{"sources", "transforms", "sinks"} {
-		for id, component := range root[section] {
-			if component.Type != "" {
+		var components map[string]json.RawMessage
+		if json.Unmarshal(root[section], &components) != nil {
+			continue
+		}
+		for id, raw := range components {
+			var component struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(raw, &component) == nil && component.Type != "" {
 				types[id] = component.Type
 			}
 		}

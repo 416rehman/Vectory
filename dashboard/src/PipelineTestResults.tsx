@@ -38,8 +38,7 @@ export function testHeadline(run: PipelineTestRun, expected = 0) {
   if (unreported(run, expected)) return "Vector didn't run these tests";
   if (!ran(run) && run.deferred)
     return "These tests need the device environment";
-  if (run.tests_run === false)
-    return "Vector couldn't run these tests";
+  if (run.tests_run === false) return "Vector couldn't run these tests";
   if (!tests.length)
     return run.valid ? "Pipeline tests passed" : "Pipeline tests failed";
   const passed = tests.filter((test) => test.passed).length;
@@ -80,9 +79,7 @@ export default function PipelineTestResults({
   expected?: number;
 }) {
   const tests = run.tests ?? [];
-  const failures = tests.filter(
-    (test) => !test.passed && !test.not_run,
-  ).length;
+  const failures = tests.filter((test) => !test.passed && !test.not_run).length;
   const skipped = tests.some((test) => test.not_run);
   // The headline already counts failures; keep only other messages.
   const errors = (run.errors ?? []).filter(
