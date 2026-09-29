@@ -456,7 +456,19 @@
 .editor-canvas-empty {
   pointer-events: none;
 }
-.editor-canvas-empty .button {
+.editor-canvas-empty .button,
+.editor-canvas-empty .canvas-template {
+  pointer-events: auto;
+}
+.editor-canvas-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.editor-canvas-empty .canvas-templates-grid {
+  max-height: min(260px, 38vh);
+  overflow: auto;
   pointer-events: auto;
 }
 
