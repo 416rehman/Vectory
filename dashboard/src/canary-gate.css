@@ -95,3 +95,12 @@
     padding: 12px;
   }
 }
+.canary-gate-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 28px;
+}
+.canary-gate-footer .canary-gate-timing {
+  margin: 0;
+}
