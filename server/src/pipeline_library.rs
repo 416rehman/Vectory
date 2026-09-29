@@ -104,7 +104,12 @@ fn page_query(
           FROM records AS v WHERE v.kind='version' AND json_extract(v.data,'$.configuration_id')=+c.id \
           ORDER BY CAST(json_extract(v.data,'$.number') AS INTEGER) DESC,v.id ASC LIMIT 1)),\
         'assigned_devices',(SELECT count(*) FROM devices AS d WHERE d.revoked=0 AND d.desired_version_id IN \
-          (SELECT v.id FROM records AS v WHERE v.kind='version' AND json_extract(v.data,'$.configuration_id')=+c.id))) \
+          (SELECT v.id FROM records AS v WHERE v.kind='version' AND json_extract(v.data,'$.configuration_id')=+c.id)),\
+        'running_versions',json((SELECT COALESCE(json_group_array(json_object('id',r.id,'number',r.number,'devices',r.devices)),'[]') FROM \
+          (SELECT v.id AS id,CAST(json_extract(v.data,'$.number') AS INTEGER) AS number,count(*) AS devices \
+           FROM devices AS d JOIN records AS v ON v.kind='version' AND v.id=json_extract(d.data,'$.verified_configuration_attempt.version_id') \
+           WHERE d.revoked=0 AND json_extract(v.data,'$.configuration_id')=+c.id \
+           GROUP BY v.id ORDER BY number DESC,v.id ASC) AS r))) \
         FROM page AS c ORDER BY ");
     query.push(order);
     query

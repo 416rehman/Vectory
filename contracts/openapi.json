@@ -14524,6 +14524,40 @@
           "assigned_devices": {
             "type": "integer",
             "minimum": 0
+          },
+          "running_versions": {
+            "type": "array",
+            "description": "Non-revoked devices grouped by the version of this pipeline they last verified, highest number first",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "devices": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "number",
+                "devices"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
