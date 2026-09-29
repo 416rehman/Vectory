@@ -1,9 +1,10 @@
-import { CircleCheck, Clock3 } from "lucide-react";
+import { CircleCheck, Clock3, Wrench } from "lucide-react";
 import type { DeploymentTarget, RolloutFailure, RolloutLane } from "./api";
 import {
   countdown,
-  explainError,
   exactTime,
+  failureText,
+  pipelineFixable,
   progressSegments,
   targetLabel,
   targetTone,
@@ -261,17 +262,64 @@ export function StageLanes({
   );
 }
 
-/** Failures grouped by what the agent reported, most common first. */
+/** The devices a failure group names, linked, with how many more. */
+function GroupDevices({
+  failure,
+  navigate,
+}: {
+  failure: RolloutFailure;
+  navigate(path: string): void;
+}) {
+  return (
+    <p className="rollout-failure-devices">
+      {failure.devices.map((device, position) => (
+        <span key={device.device_id}>
+          {position > 0 && ", "}
+          <a
+            href={`#/devices/${encodeURIComponent(device.device_id)}`}
+            onClick={(event) => {
+              if (event.button !== 0 || event.metaKey || event.ctrlKey) return;
+              event.preventDefault();
+              navigate(`devices/${encodeURIComponent(device.device_id)}`);
+            }}
+          >
+            {device.device_name || device.device_id}
+          </a>
+        </span>
+      ))}
+      {failure.count > failure.devices.length &&
+        ` and ${failure.count - failure.devices.length} more`}
+    </p>
+  );
+}
+
+/**
+ * Failures grouped by what the agent reported, most common first. Each card
+ * says the reason once; a failure only the pipeline can clear (a port in use,
+ * a VRL error) leads with Fix in pipeline, and Retry comes second. When the
+ * rollout stopped, the first card that offers a retry says what a retry does.
+ */
 export function FailureGroups({
   failures,
   navigate,
   onRetry,
+  fixHref,
+  stopped = false,
 }: {
   failures: RolloutFailure[];
   navigate(path: string): void;
   onRetry?(failure: RolloutFailure): void;
+  /** The pipeline, for failures only a pipeline change can clear. */
+  fixHref?: string | null;
+  /** The rollout stopped: a retry doesn't restart it. */
+  stopped?: boolean;
 }) {
   if (!failures.length) return null;
+  const retryable = (failure: RolloutFailure) =>
+    !!onRetry &&
+    failure.state !== "degraded" &&
+    failure.state !== "verification_unknown";
+  const noted = stopped ? failures.findIndex(retryable) : -1;
   return (
     <section className="rollout-failures" aria-labelledby="rollout-failures">
       <h2 id="rollout-failures">Why devices failed</h2>
@@ -285,11 +333,9 @@ export function FailureGroups({
                 navigate={navigate}
               />
             );
-          const explained = explainError(failure.message);
-          const reason =
-            failure.diagnostic ||
-            explained?.summary ||
-            "The agent did not report a reason.";
+          const text = failureText(failure.diagnostic, failure.message);
+          const fix = fixHref && pipelineFixable(failure.code) ? fixHref : null;
+          const code = failure.code || text.code;
           return (
             <li key={`${failure.state}-${index}`}>
               <div className="rollout-failure-head">
@@ -298,53 +344,59 @@ export function FailureGroups({
                   value={failure.state}
                   label={`${targetLabel(failure.state)} on ${failure.count} ${failure.count === 1 ? "device" : "devices"}`}
                 />
-                {onRetry && failure.state !== "verification_unknown" && (
-                  <button
-                    type="button"
-                    className="button secondary compact"
-                    onClick={() => onRetry(failure)}
-                  >
-                    Retry these
-                  </button>
+                {(fix || retryable(failure)) && (
+                  <span className="rollout-failure-actions">
+                    {fix && (
+                      <a className="button secondary compact" href={fix}>
+                        <Wrench size={14} aria-hidden="true" />
+                        Fix in pipeline
+                      </a>
+                    )}
+                    {retryable(failure) && (
+                      <button
+                        type="button"
+                        className={`button ${fix ? "ghost" : "secondary"} compact`}
+                        onClick={() => onRetry!(failure)}
+                      >
+                        Retry these
+                      </button>
+                    )}
+                  </span>
                 )}
               </div>
               <p className="rollout-failure-reason">
-                {failure.diagnostic ? <code>{reason}</code> : reason}
+                {text.reason || "The agent did not report a reason."}
               </p>
-              {failure.diagnostic && explained && (
-                <p className="rollout-failure-detail">{explained.summary}</p>
+              {text.effect && (
+                <p className="rollout-failure-detail">{text.effect}</p>
               )}
-              {explained?.code && (
-                <p className="rollout-failure-detail">
-                  Agent code <code>{explained.code}</code>
+              {(failure.component_id || code) && (
+                <p className="rollout-failure-detail rollout-failure-origin">
+                  {failure.component_id && (
+                    <span>
+                      Step <code>{failure.component_id}</code>
+                      {failure.field && (
+                        <>
+                          {" "}
+                          · field <code>{failure.field}</code>
+                        </>
+                      )}
+                    </span>
+                  )}
+                  {code && (
+                    <span>
+                      Agent code <code>{code}</code>
+                    </span>
+                  )}
                 </p>
               )}
-              <p className="rollout-failure-devices">
-                {failure.devices.map((device, position) => (
-                  <span key={device.device_id}>
-                    {position > 0 && ", "}
-                    <a
-                      href={`#/devices/${encodeURIComponent(device.device_id)}`}
-                      onClick={(event) => {
-                        if (
-                          event.button !== 0 ||
-                          event.metaKey ||
-                          event.ctrlKey
-                        )
-                          return;
-                        event.preventDefault();
-                        navigate(
-                          `devices/${encodeURIComponent(device.device_id)}`,
-                        );
-                      }}
-                    >
-                      {device.device_name || device.device_id}
-                    </a>
-                  </span>
-                ))}
-                {failure.count > failure.devices.length &&
-                  ` and ${failure.count - failure.devices.length} more`}
-              </p>
+              <GroupDevices failure={failure} navigate={navigate} />
+              {index === noted && (
+                <p className="rollout-failure-footer">
+                  Retrying a device sends the same version again. It
+                  doesn&apos;t restart the rollout or release waiting devices.
+                </p>
+              )}
             </li>
           );
         })}
@@ -385,28 +437,25 @@ function DeliveryFailure({
           <strong>Fix</strong> {failure.fix}
         </p>
       )}
-      <p className="rollout-failure-devices">
-        {failure.devices.map((device, position) => (
-          <span key={device.device_id}>
-            {position > 0 && ", "}
-            <a
-              href={`#/devices/${encodeURIComponent(device.device_id)}`}
-              onClick={(event) => {
-                if (event.button !== 0 || event.metaKey || event.ctrlKey)
-                  return;
-                event.preventDefault();
-                navigate(`devices/${encodeURIComponent(device.device_id)}`);
-              }}
-            >
-              {device.device_name || device.device_id}
-            </a>
+      {failure.component_id && (
+        <p className="rollout-failure-detail rollout-failure-origin">
+          <span>
+            Step <code>{failure.component_id}</code>
+            {bufferFill(failure.buffer_utilization) &&
+              ` · buffer ${bufferFill(failure.buffer_utilization)} full`}
           </span>
-        ))}
-        {failure.count > failure.devices.length &&
-          ` and ${failure.count - failure.devices.length} more`}
-      </p>
+        </p>
+      )}
+      <GroupDevices failure={failure} navigate={navigate} />
     </li>
   );
+}
+
+/** A buffer's reported fill as a whole percentage, or null when unknown. */
+export function bufferFill(value: number | null | undefined) {
+  return typeof value === "number" && value >= 0 && value <= 1
+    ? `${Math.round(value * 100)}%`
+    : null;
 }
 
 /** Released → downloaded → validated → applied → verified for one device. */

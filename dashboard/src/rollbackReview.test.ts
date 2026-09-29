@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   RollbackPreviewSchema,
   assertReviewedRollbackReceipt,
+  excludedDetail,
   locallyConfigured,
   nothingToRollBackTo,
+  rollbackStory,
   type RollbackPreview,
   type RollbackReviewContext,
 } from "./rollbackReview";
@@ -128,6 +130,88 @@ describe("reviewed rollback scope", () => {
       expect(() => assertReviewedRollbackReceipt(review, id(1), wrong)).toThrow(
         /reviewed rollback/,
       );
+  });
+});
+
+describe("rolling back a live canary", () => {
+  const edge = {
+    configuration_name: "Edge syslog processing",
+    version_number: 1,
+  };
+  const canary = (): RollbackPreview => ({
+    ...preview(),
+    source_status: "active",
+    previous_configuration_name: "Edge syslog processing",
+    previous_version_number: 1,
+    eligible_devices: [
+      {
+        device_id: id(5),
+        device_name: "edge-nyc-02",
+        artifact_sha256: "a".repeat(64),
+      },
+    ],
+    excluded_devices: [
+      {
+        device_id: id(6),
+        device_name: "edge-fra-01",
+        reason: "not_released",
+        effect: "unchanged",
+        current: edge,
+        next: null,
+      },
+      {
+        device_id: id(7),
+        device_name: "edge-nyc-01",
+        reason: "not_released",
+        effect: "unchanged",
+        current: edge,
+        next: null,
+      },
+    ],
+  });
+  it("accepts what excluded devices run afterwards and rejects anything else", () => {
+    expect(RollbackPreviewSchema.parse(canary())).toEqual(canary());
+    const bad = canary();
+    (bad.excluded_devices[0] as Record<string, unknown>).effect = "moves";
+    expect(RollbackPreviewSchema.safeParse(bad).success).toBe(false);
+    const extra = canary();
+    (extra.excluded_devices[0].current as Record<string, unknown>).id = id(9);
+    expect(RollbackPreviewSchema.safeParse(extra).success).toBe(false);
+  });
+  it("says who returns, who keeps what, and that the rollout stops", () => {
+    expect(rollbackStory(canary(), "r15-demo v1").map((l) => l.text)).toEqual([
+      "edge-nyc-02 returns to Edge syslog processing v1.",
+      "edge-fra-01 and edge-nyc-01 never received r15-demo v1 and keep Edge syslog processing v1 (no change).",
+      "The rollout stops here.",
+    ]);
+    expect(excludedDetail(canary().excluded_devices[0], "r15-demo v1")).toBe(
+      "Never received r15-demo v1 · keeps Edge syslog processing v1 (no change)",
+    );
+    // A stopped rollout doesn't stop again.
+    expect(
+      rollbackStory({ ...canary(), source_status: "failed" }, "r15-demo v1").at(
+        -1,
+      )?.text,
+    ).not.toBe("The rollout stops here.");
+  });
+  it("names a device that would switch, and one still waiting for a rollout", () => {
+    const web = { configuration_name: "Web access logs", version_number: 2 };
+    const review = canary();
+    review.excluded_devices = [
+      { ...review.excluded_devices[0], effect: "fallback", next: web },
+      { ...review.excluded_devices[1], effect: "retained_pending", next: web },
+    ];
+    const lines = rollbackStory(review, "r15-demo v1");
+    expect(lines[1]).toEqual({
+      text: "edge-fra-01 never received r15-demo v1 but would switch to Web access logs v2 once the rollout stops.",
+      tone: "danger",
+    });
+    expect(lines[2].text).toBe(
+      "edge-nyc-01 never received r15-demo v1 and keeps Edge syslog processing v1 until Web access logs v2 reaches it.",
+    );
+    expect(excludedDetail(review.excluded_devices[0], "r15-demo v1")).toBe(
+      "Never received r15-demo v1 · would switch to Web access logs v2",
+    );
   });
 });
 

@@ -227,9 +227,10 @@ export function DeploymentRecoveryDialog({
           </p>
         ) : operation.review ? (
           <p>
-            {operation.review.configuration_name || "Previous pipeline"}
+            Returns to{" "}
+            {operation.review.configuration_name || "the previous pipeline"}
             {operation.review.version_number !== null &&
-              ` · Version ${operation.review.version_number}`}
+              ` v${operation.review.version_number}`}
             <br />
             {(operation.review.configuration_name === null ||
               operation.review.version_number === null) && (
@@ -238,9 +239,13 @@ export function DeploymentRecoveryDialog({
                 <br />
               </>
             )}
-            {operation.review.device_ids.length} reviewed devices ·{" "}
-            {operation.review.excluded_count} excluded. Recovery keeps the
-            original reviewed scope.
+            {operation.review.device_ids.length === 1
+              ? "1 reviewed device"
+              : `${operation.review.device_ids.length} reviewed devices`}
+            {operation.review.excluded_count
+              ? ` · ${operation.review.excluded_count} left out`
+              : ""}
+            . Checking or sending again covers exactly these devices.
           </p>
         ) : (
           <p>

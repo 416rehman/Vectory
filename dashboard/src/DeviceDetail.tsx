@@ -57,7 +57,6 @@ import {
   useResource,
 } from "./ui";
 import {
-  applyStepLabels,
   connectionState,
   dataPlaneIssues,
   deviceDisplayStatus,
@@ -66,6 +65,7 @@ import {
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
 import {
+  applyStepTable,
   failedApplyStep,
   failureStagePhrase,
   type ApplyStep,
@@ -88,21 +88,10 @@ const assignmentLink = (assignmentId?: string) =>
 
 /* ---------- Apply progress ---------- */
 
-const steps = [
-  { state: "desired", label: applyStepLabels.released },
-  { state: "downloaded", label: applyStepLabels.downloaded },
-  { state: "validated", label: applyStepLabels.validated },
-  { state: "written", label: applyStepLabels.written },
-  { state: "reload_requested", label: applyStepLabels.reloaded },
-  { state: "verified_applied", label: applyStepLabels.applied },
-];
-const applyStepIndex: Record<ApplyStep, number> = {
-  downloaded: 1,
-  validated: 2,
-  written: 3,
-  reloaded: 4,
-  verified: 5,
-};
+// One table with the rollout page, so both blame the same step.
+const steps = applyStepTable;
+const applyStepIndex = (step: ApplyStep) =>
+  steps.findIndex((entry) => entry.key === step);
 type StepState = "done" | "current" | "failed" | "unknown" | "todo" | "paused";
 export function applySteps(device: Device, version?: Version | null) {
   const attempt = currentConfigurationAttempt(device, version);
@@ -119,7 +108,9 @@ export function applySteps(device: Device, version?: Version | null) {
     outcome = "done";
   } else if (state === "failed" || state === "rolled_back") {
     const step = failedApplyStep(attempt?.error?.stage);
-    failedAt = step ? applyStepIndex[step] : state === "rolled_back" ? 4 : 2;
+    failedAt = applyStepIndex(
+      step ?? (state === "rolled_back" ? "reloaded" : "validated"),
+    );
     reached = failedAt;
   } else if (state === "verification_unknown") {
     reached = steps.length - 1;

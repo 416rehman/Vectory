@@ -162,6 +162,82 @@ describe("activity sentences", () => {
       expect(links(describeActivity(item(extra)))).toEqual([]);
   });
 
+  it("says what was rolled back, where, and what those devices run now", () => {
+    const rollback = (extra: Partial<ActivityItem> = {}) =>
+      describeActivity(
+        item({
+          action: "deployment.rollback",
+          actor: "Demo operator",
+          target_kind: "deployment",
+          target_id: uuid(5),
+          target_name: "r15-demo v1",
+          device_names: ["edge-nyc-02"],
+          deployment: {
+            configuration_name: "r15-demo",
+            version_number: 1,
+            policy: false,
+            rollout_kind: "canary",
+            priority: 100,
+            target_count: 3,
+            rolled_back_to_configuration_name: "Edge syslog processing",
+            rolled_back_to_version_number: 1,
+            rolled_back_device_count: 1,
+            rollback_of_configuration_name: null,
+            rollback_of_version_number: null,
+          },
+          ...extra,
+        }),
+      );
+    expect(sentence(rollback())).toBe(
+      "Demo operator rolled back r15-demo v1 on edge-nyc-02 (now Edge syslog processing v1)",
+    );
+    expect(links(rollback())).toEqual([
+      ["r15-demo v1", `#/deployments/${uuid(5)}`],
+    ]);
+    // Older servers name only the rolled-back deployment: never "to" it.
+    expect(
+      sentence(
+        rollback({
+          device_names: undefined,
+          deployment: {
+            configuration_name: "r15-demo",
+            version_number: 1,
+            policy: false,
+            rollout_kind: "canary",
+            priority: 100,
+            target_count: 3,
+          },
+        }),
+      ),
+    ).toBe("Demo operator rolled back r15-demo v1");
+    // The rollback's own deployment says what it rolled back.
+    expect(
+      sentence(
+        describeActivity(
+          item({
+            action: "deployment.create",
+            actor: "Demo operator",
+            target_kind: "deployment",
+            target_id: uuid(6),
+            target_name: null,
+            deployment: {
+              configuration_name: "Edge syslog processing",
+              version_number: 1,
+              policy: false,
+              rollout_kind: "all",
+              priority: 101,
+              target_count: 1,
+              rollback_of_configuration_name: "r15-demo",
+              rollback_of_version_number: 1,
+            },
+          }),
+        ),
+      ),
+    ).toBe(
+      "Demo operator deployed Edge syslog processing v1 to 1 device (rollback of r15-demo v1)",
+    );
+  });
+
   it("attributes automatic work to Vectory and keeps unknown actions readable", () => {
     const released = describeActivity(
       item({

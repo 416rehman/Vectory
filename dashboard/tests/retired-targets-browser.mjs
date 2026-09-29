@@ -451,8 +451,12 @@ try {
               }),
             }),
         ).toContainText("Applied");
+        // Roll back lives in the header's Roll back or remove menu.
         await dialog(page)
-          .getByRole("button", { name: "Roll back", exact: true })
+          .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
+          .click();
+        await page
+          .getByRole("menuitem", { name: "Roll back", exact: true })
           .click();
         // This fixture's server does not offer reviewed rollback, so the
         // review says so and never sends anything.
@@ -619,8 +623,7 @@ try {
             ).toContainText("No longer targeted");
             await expect(
               dialog(page).getByRole("button", {
-                name: "Roll back",
-                exact: true,
+                name: /^(Roll back|Stop rollout|Roll back or remove)$/,
               }),
             ).toHaveCount(0);
             expect(

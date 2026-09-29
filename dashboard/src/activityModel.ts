@@ -27,6 +27,13 @@ export type ActivityItem = {
     rollout_kind: string | null;
     priority: number | null;
     target_count: number;
+    /** A rolled-back deployment: what its rollback restored, and where. */
+    rolled_back_to_configuration_name?: string | null;
+    rolled_back_to_version_number?: number | null;
+    rolled_back_device_count?: number | null;
+    /** A rollback deployment: the deployment it rolled back. */
+    rollback_of_configuration_name?: string | null;
+    rollback_of_version_number?: number | null;
   };
 };
 export type Part = { text: string; href?: string | null; strong?: boolean };
@@ -127,7 +134,13 @@ export function describeActivity(item: ActivityItem): Part[] {
             actor,
             { text: " deployed " },
             targetPart(item, pipelineLabel(item)),
-            { text: `${toDevices}${canary}` },
+            {
+              text: `${toDevices}${canary}${
+                item.deployment?.rollback_of_configuration_name
+                  ? ` (rollback of ${item.deployment.rollback_of_configuration_name}${item.deployment.rollback_of_version_number ? ` v${item.deployment.rollback_of_version_number}` : ""})`
+                  : ""
+              }`,
+            },
           ];
     case "deployment.schedule":
       return [
@@ -167,12 +180,23 @@ export function describeActivity(item: ActivityItem): Part[] {
         { text: " cancelled the rollout of " },
         targetPart(item, pipelineLabel(item)),
       ];
-    case "deployment.rollback":
+    case "deployment.rollback": {
+      // The event names the rolled-back deployment; its rollback restored
+      // the earlier version, usually of another pipeline.
+      const deployment = item.deployment;
+      const restored = deployment?.rolled_back_to_configuration_name
+        ? `${deployment.rolled_back_to_configuration_name}${deployment.rolled_back_to_version_number ? ` v${deployment.rolled_back_to_version_number}` : ""}`
+        : null;
+      const returned = deployment?.rolled_back_device_count ?? 0;
       return [
         actor,
-        { text: " rolled back to " },
+        { text: " rolled back " },
         targetPart(item, pipelineLabel(item)),
+        {
+          text: `${devices.length || returned ? ` on ${nameList(devices, Math.max(returned, devices.length))}` : ""}${restored ? ` (now ${restored})` : ""}`,
+        },
       ];
+    }
     case "deployment.unassign":
       return [
         actor,

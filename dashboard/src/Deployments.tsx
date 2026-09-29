@@ -6,12 +6,15 @@ import {
   useRef,
   useState,
 } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ArrowLeft,
   ArrowRight,
   ArrowUpDown,
   Ban,
   CalendarClock,
+  ChevronDown,
+  CircleAlert,
   Clock,
   ExternalLink,
   GitBranch,
@@ -25,6 +28,8 @@ import {
   Trash2,
   Undo2,
   Users,
+  Wrench,
+  type LucideIcon,
 } from "lucide-react";
 import {
   APIError,
@@ -55,7 +60,6 @@ import {
   StatusBadge,
   useNow,
   useResource,
-  CopyButton,
 } from "./ui";
 import { DataTable, TableCard } from "./DataTable";
 import AssignmentRemoval from "./AssignmentRemoval";
@@ -86,8 +90,12 @@ import {
   describeDeployment,
   explainError,
   exactTime,
+  failureText,
   isLive,
+  lineageLabel,
+  pipelineFixable,
   progressSegments,
+  takeRollbackReview,
   withDegraded,
   statusFilters,
   targetFilterStates,
@@ -99,6 +107,7 @@ import { relativeTime } from "./time";
 import {
   DeviceTimeline,
   FailureGroups,
+  bufferFill,
   ProgressBar,
   StageLanes,
   laneTitle,
@@ -169,7 +178,7 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
       <div className="deployment-devices-cell">
         <span className="control-muted">
           {moved
-            ? `${moved} ${moved === 1 ? "device" : "devices"} moved to ${latest?.version_number ? `v${latest.version_number}` : "a newer version"}`
+            ? `${moved} ${moved === 1 ? "device" : "devices"} moved to ${lineageLabel(latest || {}, d.configuration_name, "a newer version")}`
             : `${removed} ${removed === 1 ? "device" : "devices"} no longer targeted`}
         </span>
       </div>
@@ -271,6 +280,14 @@ export function Deployments({
   useEffect(() => {
     onQueryChange?.(query);
   }, [query, onQueryChange]);
+  // A rollout page's address is its link to share: keep it canonical (the
+  // lowercase identity and list context only, never an ignored action).
+  useEffect(() => {
+    if (!controlled || !detailId || invalidDetail) return;
+    const canonical = `#/${deploymentRoute(scheduled, detailId, query)}`;
+    if (location.hash !== canonical)
+      history.replaceState(history.state, "", canonical);
+  }, [controlled, detailId, invalidDetail, scheduled, query]);
   useEffect(() => {
     const timer = setTimeout(
       () =>
@@ -407,7 +424,6 @@ export function Deployments({
         onBack={closeDetail}
         backHref={`#/${deploymentRoute(scheduled, null, query)}`}
         originLabel={originLabel}
-        permalinkRoute={deploymentRoute(scheduled, detailId, query)}
       />
     );
   return (
@@ -615,9 +631,15 @@ export function Deployments({
                           <span className="deployment-lineage">
                             {" "}
                             · Rollback of{" "}
-                            {d.rollback_of_version
-                              ? `v${d.rollback_of_version}`
-                              : "an earlier rollout"}
+                            {lineageLabel(
+                              {
+                                configuration_name:
+                                  d.rollback_of_configuration_name,
+                                version_number: d.rollback_of_version,
+                              },
+                              d.configuration_name,
+                              "an earlier rollout",
+                            )}
                           </span>
                         )}
                       </small>
@@ -1051,13 +1073,15 @@ function TargetDetails({
       ? gateReasonLabels[readGateReason(t.gate_reason)!]
       : null;
   const explained = explainError(t.error);
-  if (t.diagnostic)
+  if (t.diagnostic) {
+    const text = failureText(t.diagnostic, t.error);
     return (
       <span className="rollout-diagnostic">
-        <code>{t.diagnostic}</code>
-        {explained && <small>{explained.summary}</small>}
+        <span>{text.reason}</span>
+        {text.effect && <small>{text.effect}</small>}
       </span>
     );
+  }
   if (gate)
     return (
       <span>
@@ -1097,60 +1121,6 @@ function TargetDetails({
   );
 }
 
-function CopyLink({ route }: { route: string }) {
-  const [manual, setManual] = useState(false);
-  const input = useRef<HTMLInputElement | null>(null);
-  const labelId = useId();
-  const url = new URL(location.href);
-  url.search = "";
-  url.hash = "/" + route;
-  const link = url.href;
-  useEffect(() => {
-    setManual(false);
-  }, [link]);
-  useEffect(() => {
-    if (manual) {
-      input.current?.focus();
-      input.current?.select();
-    }
-  }, [manual]);
-  return (
-    <div className="rollout-link">
-      <div className="rollout-link-actions">
-        <CopyButton
-          text={link}
-          label="Copy link"
-          ariaLabel="Copy deployment link"
-          copiedMessage="Deployment link copied."
-          failedMessage=""
-          variant="ghost compact"
-          onCopied={() => setManual(false)}
-          onFailed={() => setManual(true)}
-        />
-        <a href={link} target="_blank" rel="noopener noreferrer">
-          Open in new tab
-          <ExternalLink size={12} aria-hidden="true" />
-        </a>
-      </div>
-      {manual && (
-        <div className="rollout-link-fallback">
-          <label htmlFor={labelId}>Deployment link</label>
-          <input
-            ref={input}
-            id={labelId}
-            readOnly
-            value={link}
-            onFocus={(event) => event.currentTarget.select()}
-          />
-          <p className="control-muted" role="status">
-            Clipboard access is unavailable. Select and copy the link above.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** The rollout page's shape while its first read is in flight. */
 function RolloutSkeleton() {
   return (
@@ -1178,7 +1148,6 @@ function RolloutPage({
   navigate,
   onBack,
   backHref,
-  permalinkRoute,
   originLabel,
 }: {
   id: string;
@@ -1187,7 +1156,6 @@ function RolloutPage({
   navigate(path: string): void;
   onBack(): void;
   backHref: string;
-  permalinkRoute: string;
   originLabel: string;
 }) {
   // Poll faster while the rollout can still move. Background polls never
@@ -1293,6 +1261,25 @@ function RolloutPage({
   }, [loading && !deployment]);
   const live = !!deployment && isLive(deployment.status);
   useEffect(() => setPolling(live), [live]);
+  // The Overview's Roll back opens this review once the rollout loaded; the
+  // review still needs an explicit confirmation.
+  const reviewAsked = useRef(false);
+  useEffect(() => {
+    if (!deployment || reviewAsked.current) return;
+    reviewAsked.current = true;
+    if (
+      takeRollbackReview(id) &&
+      can(user, "operate") &&
+      deployment.version_id &&
+      !deployment.rolled_back_by &&
+      ["active", "paused", "completed", "cancelled", "failed"].includes(
+        deployment.status,
+      )
+    )
+      begin("rollback", heading.current);
+    // Read once, when the rollout first loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!deployment]);
   useEffect(() => {
     mounted.current = true;
     const guard = (event: Event) => {
@@ -1321,7 +1308,11 @@ function RolloutPage({
     setRevision((old) => old + 1);
     await Promise.all([reload(), lanes.reload()]);
   }
-  function begin(name: string) {
+  /**
+   * Opens an action's dialog. `opener` is the control focus returns to when a
+   * menu item, which closes, started it.
+   */
+  function begin(name: string, opener?: HTMLElement | null) {
     if (
       busyRef.current ||
       assignmentCommittingRef.current ||
@@ -1329,7 +1320,8 @@ function RolloutPage({
       checkingStatusRef.current
     )
       return;
-    rememberOpener();
+    if (opener !== undefined) actionReturnFocus.current = opener;
+    else rememberOpener();
     if (name === "rollback") {
       const registry = readDeploymentRegistry(user.id);
       if (registry.errors.length) {
@@ -1530,6 +1522,46 @@ function RolloutPage({
       setBusy(false);
     }
   }
+  /**
+   * The rollback review's "Cancel rollout, then review rollback": cancels (the
+   * same request as Cancel), then reads the review again for the stopped
+   * rollout. An unconfirmed cancel locks actions until its status is checked.
+   */
+  async function cancelThenReview() {
+    if (
+      busyRef.current ||
+      assignmentCommittingRef.current ||
+      uncertainRef.current ||
+      checkingStatusRef.current ||
+      !can(user, "operate")
+    )
+      return;
+    busyRef.current = true;
+    setBusy(true);
+    setActionError("");
+    try {
+      const result = await boundedPost<Deployment>(`/deployments/${id}/cancel`);
+      if (result?.id !== id || !knownStatuses.has(result.status))
+        throw Error("The response did not identify the requested deployment.");
+      if (!mounted.current) return;
+      await changed(
+        "Rollout cancelled. Released devices keep what they received until you roll them back.",
+      );
+    } catch (e) {
+      if (!mounted.current) return;
+      let message = (e as Error).message;
+      if (!isDeploymentActionRejection(e)) {
+        uncertainRef.current = true;
+        setActionUncertain(true);
+        message =
+          "The response could not be confirmed. Check the current deployment status before trying this action again.";
+      }
+      setActionError(message);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
   const stageByDevice = useMemo(() => {
     const map = new Map<string, string>();
     for (const lane of lanes.data?.stages || [])
@@ -1597,6 +1629,80 @@ function RolloutPage({
     navigate(
       deploymentRoute(false, target, { search: "", status: "all", page: 1 }),
     );
+  const failures = lanes.data?.failures || [];
+  // Devices that still run this version and aren't delivering (P1-6).
+  const notDelivering = deployment?.rolled_back_by
+    ? []
+    : failures.filter((failure) => failure.state === "degraded");
+  const pipelineHref = deployment?.configuration_id
+    ? `#/configurations/${encodeURIComponent(deployment.configuration_id)}`
+    : null;
+  // A failure only the pipeline can clear leads with Fix in pipeline.
+  const fixable =
+    !!pipelineHref &&
+    !deployment?.rolled_back_by &&
+    failures.some(
+      (failure) =>
+        failure.state !== "degraded" && pipelineFixable(failure.code),
+    );
+  const released = currentTargets - (deployment?.state_counts.pending || 0);
+  // The delivery gate stopped it and devices still run it: roll back first.
+  const deliveryStop =
+    deployment?.failure_reason === "data_plane" &&
+    notDelivering.length > 0 &&
+    canRollBack &&
+    !rollbackUnavailable &&
+    released > 0;
+  const onlyDevice =
+    released === 1 && notDelivering.length === 1 && notDelivering[0].count === 1
+      ? notDelivering[0].devices[0]?.device_name || null
+      : null;
+  const retryable =
+    failedCount > 0 && !!deployment?.version_id && !deployment?.rolled_back_by;
+  const keeps = deployment?.policy
+    ? "these settings"
+    : deployment?.version_number
+      ? `v${deployment.version_number}`
+      : "this version";
+  const stopActions: RolloutAction[] = [];
+  if (status === "active")
+    stopActions.push({
+      key: "pause",
+      label: "Pause",
+      hint: `Resume later. Released devices keep ${keeps}.`,
+      icon: Pause,
+      run: (opener) => begin("pause", opener),
+    });
+  if (["active", "paused", "scheduled"].includes(status))
+    stopActions.push({
+      key: "cancel",
+      label: status === "scheduled" ? "Cancel schedule" : "Cancel",
+      hint:
+        status === "scheduled"
+          ? "Nothing was released. The schedule stays in history."
+          : `Stop releasing. Released devices keep ${keeps}.`,
+      icon: Ban,
+      run: (opener) => begin("cancel", opener),
+    });
+  if (canRollBack)
+    stopActions.push({
+      key: "rollback",
+      label: "Roll back",
+      hint: rollbackUnavailable
+        ? unavailableReason
+        : "Return released devices to their previous version.",
+      icon: Undo2,
+      unavailable: rollbackUnavailable,
+      run: (opener) => begin("rollback", opener),
+    });
+  if (candidate)
+    stopActions.push({
+      key: "remove",
+      label: "Remove assignment",
+      hint: "Devices move to their next assignment, or keep their last working config.",
+      icon: Trash2,
+      run: (opener) => removeAssignment(opener),
+    });
   return (
     <div
       className="control-page rollout-page"
@@ -1732,41 +1838,58 @@ function RolloutPage({
             >
               {operate && (
                 <div className="rollout-action-row">
-                  {deployment.rolled_back_by && (
+                  {deployment.rolled_back_by ? (
                     <Button
                       icon={ArrowRight}
                       disabled={locked}
                       onClick={() => goToDeployment(deployment.rolled_back_by!)}
                     >
                       Open rollback
-                      {deployment.rolled_back_to_version
-                        ? ` (v${deployment.rolled_back_to_version})`
+                      {deployment.rolled_back_to_version ||
+                      deployment.rolled_back_to_configuration_name
+                        ? ` (${lineageLabel(
+                            {
+                              configuration_name:
+                                deployment.rolled_back_to_configuration_name,
+                              version_number: deployment.rolled_back_to_version,
+                            },
+                            deployment.configuration_name,
+                          )})`
                         : ""}
                     </Button>
-                  )}
-                  {failedCount > 0 &&
-                    deployment.version_id &&
-                    !deployment.rolled_back_by && (
-                      <Button
-                        icon={RotateCcw}
-                        disabled={locked}
-                        onClick={() => openRetry(null)}
-                      >
-                        Retry failed ({failedCount})
-                      </Button>
-                    )}
-                  {status === "active" && (
+                  ) : deliveryStop ? (
                     <Button
-                      variant="secondary"
-                      icon={Pause}
+                      icon={Undo2}
                       disabled={locked}
-                      onClick={() => begin("pause")}
+                      onClick={(event) =>
+                        begin("rollback", event.currentTarget)
+                      }
                     >
-                      Pause
+                      {onlyDevice
+                        ? `Roll back ${onlyDevice}`
+                        : `Roll back ${released} ${released === 1 ? "device" : "devices"}`}
+                    </Button>
+                  ) : fixable && pipelineHref ? (
+                    <a className="button rollout-fix-link" href={pipelineHref}>
+                      <Wrench size={15} aria-hidden="true" />
+                      Fix in pipeline
+                    </a>
+                  ) : null}
+                  {retryable && (
+                    <Button
+                      variant={fixable || deliveryStop ? "secondary" : ""}
+                      icon={RotateCcw}
+                      disabled={locked}
+                      onClick={() => openRetry(null)}
+                    >
+                      Retry failed ({failedCount})
                     </Button>
                   )}
                   {status === "paused" && (
                     <Button
+                      variant={
+                        fixable || deliveryStop || retryable ? "secondary" : ""
+                      }
                       icon={Play}
                       disabled={locked}
                       onClick={() => begin("resume")}
@@ -1787,64 +1910,17 @@ function RolloutPage({
                       Review scheduled devices
                     </Button>
                   )}
-                  {["active", "paused", "scheduled"].includes(status) && (
-                    <Button
-                      variant="secondary"
-                      icon={Ban}
-                      disabled={locked}
-                      onClick={() => begin("cancel")}
-                    >
-                      {status === "scheduled" ? "Cancel schedule" : "Cancel"}
-                    </Button>
-                  )}
-                  {canRollBack &&
-                    (rollbackUnavailable ? (
-                      // Still focusable and clickable: it explains why and offers removal.
-                      <span
-                        className="rollout-hint"
-                        data-hint={unavailableReason}
-                      >
-                        <Button
-                          variant="secondary"
-                          icon={Undo2}
-                          disabled={locked}
-                          aria-disabled="true"
-                          aria-describedby="rollback-unavailable-reason"
-                          className="is-unavailable"
-                          onClick={() => begin("rollback")}
-                        >
-                          Roll back
-                        </Button>
-                        <span
-                          id="rollback-unavailable-reason"
-                          className="sr-only"
-                        >
-                          {unavailableReason}
-                        </span>
-                      </span>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        icon={Undo2}
-                        disabled={locked}
-                        onClick={() => begin("rollback")}
-                      >
-                        Roll back
-                      </Button>
-                    ))}
-                  {candidate && (
-                    <Button
-                      variant="ghost"
-                      icon={Trash2}
-                      disabled={locked}
-                      onClick={(event) => removeAssignment(event.currentTarget)}
-                    >
-                      Remove assignment
-                    </Button>
-                  )}
+                  <RolloutMenu
+                    label={
+                      live || status === "scheduled"
+                        ? "Stop rollout"
+                        : "Roll back or remove"
+                    }
+                    actions={stopActions}
+                    disabled={locked}
+                  />
                 </div>
               )}
-              <CopyLink route={permalinkRoute} />
             </PageHeader>
             {error && (
               <InlineError
@@ -1979,15 +2055,28 @@ function RolloutPage({
                 <Undo2 size={14} aria-hidden="true" />
                 <span>
                   Rolled back to{" "}
-                  {deployment.rolled_back_to_version
-                    ? `v${deployment.rolled_back_to_version}`
-                    : "the earlier version"}
+                  {lineageLabel(
+                    {
+                      configuration_name:
+                        deployment.rolled_back_to_configuration_name,
+                      version_number: deployment.rolled_back_to_version,
+                    },
+                    deployment.configuration_name,
+                    "the earlier version",
+                  )}
                   {deployment.rolled_back_at
                     ? ` at ${exactTime(deployment.rolled_back_at)}`
                     : ""}
                   . Fix the pipeline and publish a new version to try again.
                 </span>
               </p>
+            )}
+            {notDelivering.length > 0 && (
+              <NotDeliveringBanner
+                failures={notDelivering}
+                running={deployment.configuration_name || title(deployment)}
+                version={deployment.version_number}
+              />
             )}
             {lanes.data && lanes.data.failures.length > 0 && (
               <FailureGroups
@@ -1998,16 +2087,13 @@ function RolloutPage({
                     ? (failure) => openRetry(failure)
                     : undefined
                 }
+                fixHref={deployment.rolled_back_by ? null : pipelineHref}
+                stopped={
+                  deployment.status === "failed" &&
+                  deployment.rollout.kind === "canary"
+                }
               />
             )}
-            {deployment.status === "failed" &&
-              !deployment.rolled_back_by &&
-              deployment.rollout.kind === "canary" && (
-                <p className="control-muted rollout-note">
-                  Retrying a device sends the same version again. It doesn't
-                  restart the rollout or release waiting devices.
-                </p>
-              )}
             <DeviceResults
               deployment={deployment}
               revision={revision}
@@ -2072,6 +2158,12 @@ function RolloutPage({
           rollbackPreview={rollbackPreview}
           rollbackRejected={rollbackRejected}
           onRollbackChange={rollbackReviewChanged}
+          revision={revision}
+          onCancelFirst={
+            live && can(user, "operate")
+              ? () => void cancelThenReview()
+              : undefined
+          }
           label={actionLabel}
           returnFocusRef={actionReturnFocus}
           onClose={closeAction}
@@ -2150,29 +2242,44 @@ function Lineage({
   deployment: DeploymentSummary;
   go(id: string): void;
 }) {
+  const own = deployment.configuration_name;
   const links: { key: string; label: string; target: string }[] = [];
   if (deployment.rollback_of)
     links.push({
       key: "of",
-      label: `Rollback of ${deployment.rollback_of_version ? `v${deployment.rollback_of_version}` : "an earlier rollout"}`,
+      label: `Rollback of ${lineageLabel(
+        {
+          configuration_name: deployment.rollback_of_configuration_name,
+          version_number: deployment.rollback_of_version,
+        },
+        own,
+        "an earlier rollout",
+      )}`,
       target: deployment.rollback_of,
     });
   if (deployment.rolled_back_by)
     links.push({
       key: "by",
-      label: `Rolled back to ${deployment.rolled_back_to_version ? `v${deployment.rolled_back_to_version}` : "an earlier version"}${deployment.rolled_back_at ? ` at ${exactTime(deployment.rolled_back_at)}` : ""}`,
+      label: `Rolled back to ${lineageLabel(
+        {
+          configuration_name: deployment.rolled_back_to_configuration_name,
+          version_number: deployment.rolled_back_to_version,
+        },
+        own,
+        "an earlier version",
+      )}${deployment.rolled_back_at ? ` at ${exactTime(deployment.rolled_back_at)}` : ""}`,
       target: deployment.rolled_back_by,
     });
   for (const entry of deployment.replaces || [])
     links.push({
       key: `replaces-${entry.deployment_id}`,
-      label: `Replaces ${entry.version_number ? `v${entry.version_number}` : "an earlier assignment"}`,
+      label: `Replaces ${entry.rollback ? "the rollback to " : ""}${lineageLabel(entry, own, "an earlier assignment")}`,
       target: entry.deployment_id,
     });
   for (const entry of deployment.replaced_by || [])
     links.push({
       key: `replaced-${entry.deployment_id}`,
-      label: `Replaced by ${entry.version_number ? `v${entry.version_number}` : "a newer assignment"} on ${entry.device_count} ${entry.device_count === 1 ? "device" : "devices"}`,
+      label: `Replaced by ${lineageLabel(entry, own, "a newer assignment")} on ${entry.device_count} ${entry.device_count === 1 ? "device" : "devices"}`,
       target: entry.deployment_id,
     });
   if (!links.length) return null;
@@ -2201,6 +2308,159 @@ function Lineage({
   );
 }
 
+type RolloutAction = {
+  key: string;
+  label: string;
+  /** One line on what it does, so the choices read apart. */
+  hint: string;
+  icon: LucideIcon;
+  /** Opens its dialog anyway, which explains why nothing can be done. */
+  unavailable?: boolean;
+  run(opener: HTMLElement | null): void;
+};
+
+/**
+ * The ways to stop or undo a rollout, each with what it does: one menu, so
+ * the page's primary action stays the only prominent one. A single choice is
+ * a plain button.
+ */
+function RolloutMenu({
+  label,
+  actions,
+  disabled,
+}: {
+  label: string;
+  actions: RolloutAction[];
+  disabled: boolean;
+}) {
+  const base = useId();
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const chosen = useRef(false);
+  if (!actions.length) return null;
+  if (actions.length === 1) {
+    const [only] = actions;
+    return (
+      <>
+        <Button
+          variant="secondary"
+          icon={only.icon}
+          disabled={disabled}
+          aria-describedby={`${base}-${only.key}-hint`}
+          className={only.unavailable ? "is-unavailable" : undefined}
+          onClick={(event) => only.run(event.currentTarget)}
+        >
+          {only.label}
+        </Button>
+        <span id={`${base}-${only.key}-hint`} className="sr-only">
+          {only.hint}
+        </span>
+      </>
+    );
+  }
+  return (
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          ref={trigger}
+          variant="secondary"
+          className="rollout-menu-trigger"
+          disabled={disabled}
+        >
+          {label}
+          <ChevronDown size={15} aria-hidden="true" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="rollout-menu"
+          align="end"
+          sideOffset={6}
+          collisionPadding={12}
+          loop
+          aria-label={label}
+          onCloseAutoFocus={(event) => {
+            if (!chosen.current) return;
+            // The chosen action's dialog takes focus and returns it to the
+            // trigger when it closes; if none opened, return it now.
+            chosen.current = false;
+            event.preventDefault();
+            requestAnimationFrame(() => {
+              if (!document.activeElement?.closest('[role="dialog"]'))
+                trigger.current?.focus({ preventScroll: true });
+            });
+          }}
+        >
+          {actions.map((action) => (
+            <DropdownMenu.Item
+              key={action.key}
+              className="rollout-menu-item"
+              data-unavailable={action.unavailable || undefined}
+              aria-labelledby={`${base}-${action.key}-label`}
+              aria-describedby={`${base}-${action.key}-hint`}
+              onSelect={() => {
+                chosen.current = true;
+                action.run(trigger.current);
+              }}
+            >
+              <action.icon size={16} aria-hidden="true" />
+              <span>
+                <strong id={`${base}-${action.key}-label`}>
+                  {action.label}
+                </strong>
+                <small id={`${base}-${action.key}-hint`}>{action.hint}</small>
+              </span>
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+/**
+ * Devices that still run this version and aren't delivering: what they run,
+ * where delivery stops and how full that buffer is, as the devices last
+ * reported. No trend is claimed.
+ */
+function NotDeliveringBanner({
+  failures,
+  running,
+  version,
+}: {
+  failures: RolloutFailure[];
+  running: string;
+  version: number | null;
+}) {
+  const count = failures.reduce((sum, failure) => sum + failure.count, 0);
+  const named = failures
+    .flatMap((failure) => failure.devices)
+    .map((device) => device.device_name || "Unnamed device");
+  const names =
+    count === 1
+      ? named[0] || "A device"
+      : count === 2 && named.length === 2
+        ? `${named[0]} and ${named[1]}`
+        : `${named[0] || "A device"} and ${count - 1} more`;
+  const [first] = failures;
+  const fill = bufferFill(first.buffer_utilization);
+  const detail = first.diagnostic || first.message;
+  return (
+    <div className="rollout-delivery-banner" role="note">
+      <CircleAlert size={16} aria-hidden="true" />
+      <div>
+        <strong>
+          {names} still {count === 1 ? "runs" : "run"} {running}
+          {version !== null ? ` v${version}` : ""} and{" "}
+          {count === 1 ? "isn't" : "aren't"} delivering
+          {first.component_id ? ` to ${first.component_id}` : ""}
+          {fill ? ` (buffer ${fill} full)` : ""}.
+        </strong>
+        {detail && <span>{detail}</span>}
+      </div>
+    </div>
+  );
+}
+
 function ActionDialog({
   action,
   deployment,
@@ -2215,6 +2475,8 @@ function ActionDialog({
   rollbackPreview,
   rollbackRejected,
   onRollbackChange,
+  revision,
+  onCancelFirst,
   label,
   returnFocusRef,
   onClose,
@@ -2234,6 +2496,8 @@ function ActionDialog({
   rollbackPreview: RollbackPreview | null;
   rollbackRejected: boolean;
   onRollbackChange(value: RollbackPreview | null): void;
+  revision: number;
+  onCancelFirst?: () => void;
   label(name: string): string;
   returnFocusRef: React.RefObject<HTMLElement | null>;
   onClose(): void;
@@ -2255,7 +2519,7 @@ function ActionDialog({
       className={rollback ? "rollback-review-modal" : ""}
       description={
         rollback
-          ? "Review the version and devices before confirming."
+          ? "Check what each device runs afterwards, then confirm."
           : action === "resume"
             ? "Release this change to the devices still waiting."
             : action === "pause"
@@ -2285,6 +2549,17 @@ function ActionDialog({
           <RollbackReviewPanel
             id={id}
             versionId={deployment?.version_id ?? undefined}
+            source={
+              // What devices received: the pipeline version, not the
+              // rollout's own name.
+              deployment
+                ? deployment.policy
+                  ? deployment.policy_name || "these settings"
+                  : `${deployment.configuration_name || title(deployment)}${deployment.version_number !== null ? ` v${deployment.version_number}` : ""}`
+                : "this rollout"
+            }
+            revision={revision}
+            onCancelFirst={onCancelFirst}
             supported={
               deployment?.rollback_review === true &&
               deployment.rollback_idempotency === true &&
