@@ -1585,6 +1585,48 @@ async fn redeploying_a_fix_after_a_rollback_takes_one_round_and_reaches_every_de
         assert_eq!(version.as_deref(), Some(fix.as_str()), "{id}");
         assert_eq!(assignment.as_deref(), created["id"].as_str());
     }
+    // The fix's lineage tells the rollback it replaced apart from the rollout
+    // that rollback stopped, though both read "… v1".
+    let (status, summary) = call(
+        &c.app,
+        "GET",
+        &format!(
+            "/api/v1/deployments/{}/summary",
+            created["id"].as_str().unwrap()
+        ),
+        Value::Null,
+        &c.cookie,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    let mut replaces: Vec<(String, bool, String)> = summary["replaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["deployment_id"].as_str().unwrap().to_owned(),
+                entry["rollback"].as_bool().unwrap(),
+                entry["configuration_name"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    replaces.sort();
+    let mut expected = vec![
+        (
+            c.canary["id"].as_str().unwrap().to_owned(),
+            false,
+            "r15-demo".to_owned(),
+        ),
+        (
+            rollback["id"].as_str().unwrap().to_owned(),
+            true,
+            "Edge syslog processing".to_owned(),
+        ),
+    ];
+    expected.sort();
+    assert_eq!(replaces, expected);
 }
 
 /// Declining the suggestion leaves conflicts and a higher-priority rollback

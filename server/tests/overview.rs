@@ -411,7 +411,7 @@ async fn rollback_lineage_and_failing_groups_name_their_rollout() {
     );
     assert_eq!(
         summary["replaces"],
-        json!([{"deployment_id":base["id"],"version_number":1,"configuration_name":"Edge syslog processing"}])
+        json!([{"deployment_id":base["id"],"version_number":1,"configuration_name":"Edge syslog processing","rollback":false}])
     );
     let history = get(&app, &actor, "/api/v1/deployments/history?page_size=12").await;
     let restored = history["items"]
