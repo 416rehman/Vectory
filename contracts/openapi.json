@@ -531,7 +531,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/account/sessions/{id}/revoke": {
@@ -637,7 +640,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/logout": {
@@ -9643,7 +9649,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/invite/preview": {
@@ -9749,7 +9758,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/invite/accept": {
@@ -9837,7 +9849,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/users/{id}/two-factor-reset": {
@@ -9957,7 +9972,7 @@
           }
         },
         "tags": [
-          "Sign-in and account"
+          "Users"
         ]
       }
     },
@@ -10396,7 +10411,10 @@
           "429": {
             "description": "Rate limit"
           }
-        }
+        },
+        "tags": [
+          "Sign-in and account"
+        ]
       }
     },
     "/api/v1/mfa/disable": {

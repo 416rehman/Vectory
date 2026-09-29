@@ -301,7 +301,7 @@ const spec={openapi:'3.1.0',info:{title:'Vectory control plane',version:'0.1.0',
 // default authentication. It never changes a path, parameter, schema, response
 // or an operation's own security. The longest matching path prefix wins.
 const tagGroups=[
-  ['Sign-in and account',['/api/v1/status','/api/v1/bootstrap','/api/v1/login','/api/v1/session','/api/v1/logout','/api/v1/password-reset','/api/v1/account/','/api/v1/mfa'],'First-run setup, sign-in, sessions, your password and two-factor authentication.'],
+  ['Sign-in and account',['/api/v1/status','/api/v1/bootstrap','/api/v1/login','/api/v1/session','/api/v1/logout','/api/v1/password-reset','/api/v1/invite/','/api/v1/account/','/api/v1/mfa'],'First-run setup, sign-in, sessions, your password and two-factor authentication.'],
   ['Pipelines',['/api/v1/configurations','/api/v1/vrl/'],'Pipelines and their drafts, history, validation and tests.'],
   ['Versions',['/api/v1/versions/','/api/v1/configurations/{id}/publish','/api/v1/configurations/{id}/versions','/api/v1/configurations/publish-requests'],'Publishing a pipeline as an immutable version, and reading published versions.'],
   ['Deployments',['/api/v1/deployments'],'Assigning versions to devices: previews, rollouts, canary gates, pauses, removal and rollback.'],
