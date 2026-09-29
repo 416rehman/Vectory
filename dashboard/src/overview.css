@@ -271,46 +271,6 @@ a.kpi-tile:focus-visible {
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
-.health-bar-segment {
-  flex-basis: 0;
-  min-width: 6px;
-  height: 100%;
-  border-radius: 2px;
-}
-.health-bar-segment[data-bucket="applied"],
-.health-legend a[data-bucket="applied"] svg {
-  --bucket: var(--mark-success);
-}
-.health-bar-segment[data-bucket="updating"],
-.health-legend a[data-bucket="updating"] svg {
-  --bucket: var(--mark-info);
-}
-.health-bar-segment[data-bucket="check"],
-.health-legend a[data-bucket="check"] svg {
-  --bucket: var(--mark-warning);
-}
-.health-bar-segment[data-bucket="failed"],
-.health-legend a[data-bucket="failed"] svg {
-  --bucket: var(--mark-danger);
-}
-.health-bar-segment[data-bucket="offline"],
-.health-legend a[data-bucket="offline"] svg {
-  --bucket: var(--mark-serious);
-}
-.health-bar-segment[data-bucket="paused"],
-.health-legend a[data-bucket="paused"] svg {
-  --bucket: var(--mark-paused);
-}
-.health-bar-segment[data-bucket="unmanaged"],
-.health-legend a[data-bucket="unmanaged"] svg {
-  --bucket: var(--text-subtle);
-}
-.health-bar-segment {
-  background: var(--bucket, var(--mark-empty));
-}
-.health-bar-segment[data-bucket="unmanaged"] {
-  background: var(--mark-empty);
-}
 .health-legend {
   display: flex;
   flex-wrap: wrap;
@@ -331,6 +291,9 @@ a.kpi-tile:focus-visible {
 .health-legend a svg {
   color: var(--bucket);
   flex-shrink: 0;
+}
+.health-legend a[data-bucket="unmanaged"] svg {
+  color: var(--text-subtle);
 }
 .health-legend a strong {
   color: var(--text);

@@ -56,11 +56,14 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Actor) {
     (temp, s.clone(), api::router(s), actor)
 }
 async fn overview(app: &Router, actor: &Actor) -> Value {
+    get(app, actor, "/api/v1/overview").await
+}
+async fn get(app: &Router, actor: &Actor, uri: &str) -> Value {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/overview")
+                .uri(uri)
                 .header("cookie", &actor.cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -237,6 +240,17 @@ async fn overview_groups_needs_rollouts_and_fleet_changes_from_stored_state() {
     );
     assert_eq!(activity[1]["version_number"], 2);
     assert_eq!(value["security_events_hidden"], 1);
+
+    // Device list rows name their desired version; unmanaged rows stay bare.
+    let devices = get(&app, &actor, "/api/v1/devices").await;
+    let rows = devices.as_array().unwrap();
+    let named = rows.iter().find(|d| d["id"] == failed.as_str()).unwrap();
+    assert_eq!(
+        named["desired_version"],
+        json!({"number":2,"configuration_id":pipeline,"configuration_name":"Edge syslog processing"})
+    );
+    let bare = rows.iter().find(|d| d["name"] == "edge-02").unwrap();
+    assert!(bare.get("desired_version").is_none());
 }
 
 #[tokio::test]
