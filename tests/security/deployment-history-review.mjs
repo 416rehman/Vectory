@@ -488,7 +488,43 @@ try {
       attempt.error.diagnostics[0].message = "   ";
       diagnostic = null;
     }
-    return { attempt, terminal, diagnostic };
+    // The apply step that failed: a token of lower-case letters and underscores,
+    // at most 32 long, from this generation's terminal attempt first. Anything
+    // else the agent stored there (case, digits, hyphens, length, type, another
+    // generation, the marker) reads as none.
+    let stage = null;
+    if (attempt) {
+      const stored = {
+        14: "reload",
+        35: "Validation",
+        42: "a".repeat(33),
+        49: marker,
+        56: "a".repeat(32),
+        63: "step2",
+        70: "",
+        77: 7,
+        84: "reload_step",
+        91: "hyphen-ated",
+      };
+      const shown = {
+        14: "reload",
+        21: "rollback",
+        28: null,
+        35: null,
+        42: null,
+        49: null,
+        56: "a".repeat(32),
+        63: null,
+        70: null,
+        77: null,
+        84: "reload_step",
+        91: null,
+      };
+      attempt.error.stage = index in stored ? stored[index] : "validation";
+      if (terminal) terminal.error.stage = "rollback";
+      stage = index in shown ? shown[index] : "validation";
+    }
+    return { attempt, terminal, diagnostic, stage };
   }
   // Agent settings for a device and the check-in interval a reader may see: an
   // integer from 10 to 3600 seconds. The column default (60 seconds) applies
@@ -552,7 +588,7 @@ try {
   const deviceIds = [];
   for (let index = 0; index < 151; index++) {
     const state = targetStates[index % targetStates.length];
-    const { attempt, terminal, diagnostic } = attemptFor(index);
+    const { attempt, terminal, diagnostic, stage } = attemptFor(index);
     const settings = settingsFor(index);
     const lastSeen =
       index === 10
@@ -581,6 +617,24 @@ try {
       configuration_attempt: attempt,
       terminal_configuration_attempt: terminal,
       policy_generation: settings.acknowledged ? 5 : undefined,
+      // An open data-plane problem on the version deployment 21 delivers. Only
+      // four fields of it may reach a verified row of that deployment.
+      data_plane:
+        index === 6
+          ? {
+              version_id: versions[21].id,
+              issues: [
+                {
+                  code: "DATA_PLANE_STALLED",
+                  title: "Nothing is being delivered",
+                  message: "No events were read in the last 10 minutes.",
+                  hint: "Check that the source can reach its input.",
+                  private: marker,
+                  detail: { private: marker },
+                },
+              ],
+            }
+          : undefined,
       private: marker,
     };
     deviceIds.push(device.id);
@@ -615,6 +669,7 @@ try {
             ? deploymentIds[4]
             : null,
       diagnostic,
+      failure_stage: stage,
       check_in_seconds: settings.seconds,
       timeline: expectedTimelines.get(index) || [],
     };
@@ -768,9 +823,16 @@ try {
     "last_seen",
     "replaced_by",
     "diagnostic",
+    "failure_stage",
     "check_in_seconds",
     "timeline",
   ].sort();
+  const deliveryCodes = [
+    "DATA_PLANE_STALLED",
+    "DATA_PLANE_SINK_ERRORS",
+    "DATA_PLANE_BUFFER_FULL",
+    "DATA_PLANE_ERROR_DROPS",
+  ];
   const route = (query = {}) =>
     "/deployments/history?" + new URLSearchParams(query);
   const targetRoute = (id, query = {}) =>
@@ -868,7 +930,11 @@ try {
     "state",
     "verified_count",
   ];
+  // Why a released device does not yet count toward the canary's proof:
+  // measuring and degraded come from the data-plane check on its version.
   const gateReasons = [
+    "degraded",
+    "measuring",
     "paused",
     "stale",
     "superseded",
@@ -977,7 +1043,7 @@ try {
   // One target row. A canary gate adds a per-target reason to a paused or
   // active deployment's rows.
   function targetProjection(target, gated = false) {
-    const { gate_reason, ...rest } = target;
+    const { gate_reason, delivery, ...rest } = target;
     if (gated)
       assert(gate_reason === null || gateReasons.includes(gate_reason));
     else assert.equal(gate_reason, undefined);
@@ -996,6 +1062,27 @@ try {
     assert(bounded(target.last_seen, 64));
     assert(isId(target.replaced_by));
     assert(bounded(target.diagnostic, 500));
+    assert(
+      target.failure_stage === null ||
+        (typeof target.failure_stage === "string" &&
+          /^[a-z_]{1,32}$/.test(target.failure_stage)),
+    );
+    // Present only on a verified row whose device has an open data-plane
+    // problem on this deployment's version: four fields, nothing else stored.
+    if (delivery !== undefined) {
+      assert.equal(target.state, "verified_applied");
+      assert.deepEqual(Object.keys(delivery).sort(), [
+        "code",
+        "hint",
+        "message",
+        "title",
+      ]);
+      assert(deliveryCodes.includes(delivery.code));
+      assert(
+        typeof delivery.title === "string" && characters(delivery.title) <= 120,
+      );
+      assert(bounded(delivery.message, 300) && bounded(delivery.hint, 200));
+    }
     assert(
       target.check_in_seconds === null ||
         (Number.isInteger(target.check_in_seconds) &&
@@ -1080,6 +1167,24 @@ try {
       }
       await get(`/deployments/${randomUUID()}/summary`, admin, 404);
       await get(targetRoute(randomUUID()), admin, 404);
+    },
+  );
+  await check(
+    "a data-plane delivery problem is projected only on the verified row it belongs to, as four fields",
+    async () => {
+      const page = await get(targetRoute(deployments[21].id));
+      pageEnvelope(page, targetKeys);
+      assert.equal(page.total, 1);
+      assert.equal(page.items[0].device_id, deviceIds[6]);
+      assert.deepEqual(page.items[0].delivery, {
+        code: "DATA_PLANE_STALLED",
+        title: "Nothing is being delivered",
+        message: "No events were read in the last 10 minutes.",
+        hint: "Check that the source can reach its input.",
+      });
+      // The same device on another deployment, and every other row, carry none.
+      for (const row of (await get(targetRoute(parent.id))).items)
+        assert.equal(row.delivery, undefined);
     },
   );
   await check(
