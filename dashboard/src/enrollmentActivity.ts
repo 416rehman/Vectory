@@ -63,6 +63,29 @@ export function refusal(event: { reason_code?: string | null }) {
   );
 }
 
+/**
+ * The day's attempts plus what the live watch saw since, newest first and
+ * each attempt once: the history list moves as a device enrolls on the page.
+ */
+export function mergeAttempts(
+  history: EnrollmentEvent[],
+  live: EnrollmentEvent[],
+): EnrollmentEvent[] {
+  const seen = new Set<string>();
+  const merged: EnrollmentEvent[] = [];
+  for (const event of [...live, ...history]) {
+    const key = event.id || `${event.created_at}|${event.device_name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged.sort(
+    (a, b) =>
+      (Date.parse(b.created_at || "") || 0) -
+      (Date.parse(a.created_at || "") || 0),
+  );
+}
+
 /** "linux/amd64, agent 0.1.0" and similar, from whatever the device sent. */
 export function describeAgent(event: {
   agent_os?: string | null;

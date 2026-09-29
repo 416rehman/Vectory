@@ -1458,6 +1458,16 @@ export const AgentInstallSchema = z.object({
       publicly_trusted: z.boolean(),
       ca_sha256: sha256Hex.nullable(),
       ca_fingerprint: z.string().max(95).nullable().optional(),
+      // Public, like the fingerprint. Only base64 lines between the markers,
+      // so a command can carry it in single quotes.
+      ca_pem: z
+        .string()
+        .max(16384)
+        .regex(
+          /^-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]{1,76}\n)+-----END CERTIFICATE-----\n?$/,
+        )
+        .nullable()
+        .optional(),
       ca_name: z.string().max(200).nullable().optional(),
       ca_issuer: z.string().max(200).nullable().optional(),
       ca_not_after: z.string().nullable().optional(),

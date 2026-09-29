@@ -693,6 +693,21 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
         "Onboarding test agent CA"
     );
     assert_eq!(details["certificate"]["publicly_trusted"], false);
+    // The CA certificate itself, for the command that fetches the installer:
+    // exactly the certificate the fingerprint names.
+    let ca_pem = details["certificate"]["ca_pem"].as_str().unwrap().to_owned();
+    {
+        use rustls::pki_types::{CertificateDer, pem::PemObject};
+        let der = CertificateDer::from_pem_slice(ca_pem.as_bytes()).unwrap();
+        assert_eq!(db::hash(der.as_ref()), d.ca_sha256);
+    }
+    assert!(
+        ca_pem
+            .lines()
+            .all(|line| line.bytes().all(|b| b.is_ascii_alphanumeric()
+                || b"+/=- ".contains(&b))),
+        "the PEM must be safe to single-quote in a shell: {ca_pem}"
+    );
     assert_eq!(
         details["installer"]["platforms"],
         json!(["linux/amd64", "darwin/arm64"])
@@ -722,6 +737,25 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     }
     assert!(!script.contains("windows/amd64)"));
     assert!(!script.contains(&token), "the installer holds a token");
+    assert!(script.contains(ca_pem.trim_end()), "the installer lacks the CA");
+    // Nothing in the installer turns certificate verification off.
+    for word in script.split_whitespace() {
+        let word = word.trim_matches(|c| c == '\'' || c == '"');
+        assert!(
+            !["--insecure", "--no-check-certificate", "-SkipCertificateCheck"]
+                .contains(&word),
+            "the installer skips certificate checks: {word}"
+        );
+        // A cluster of short options such as -fsSg, never one with k.
+        let short_options = word.len() > 1
+            && word.starts_with('-')
+            && !word.starts_with("--")
+            && word[1..].chars().all(|c| c.is_ascii_alphabetic());
+        assert!(
+            !(short_options && word.contains('k')),
+            "the installer passes a -k option: {word}"
+        );
+    }
     // HTTP/2 clients name the host in the request URI instead of a Host header.
     let http2 = Request::builder()
         .uri("https://vectory.example.test:8443/agent/v1/install.sh")
@@ -764,7 +798,7 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
     );
     fake(
         "curl",
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\ncp \"$ca\" \"$FAKE_CURL_CA\" || exit 60\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_CURL_ARGS\"\nout= ca= url=\nwhile [ $# -gt 0 ]; do case $1 in -o) out=$2; shift ;; --cacert) ca=$2; shift ;; --proto | --connect-timeout | --retry | --retry-max-time) shift ;; -*) ;; *) url=$1 ;; esac; shift; done\nprintf '%s\\n' \"$url\" > \"$FAKE_CURL_URL\"\nif [ -n \"$ca\" ]; then cp \"$ca\" \"$FAKE_CURL_CA\" || exit 60; else echo 'system trust' > \"$FAKE_CURL_CA\"; fi\ncp \"$FAKE_DOWNLOAD\" \"$out\"\n",
     );
     let download = root.join("download");
     let run_with = |bytes: &[u8], install_dir: &Path, extra: &[&str]| {
@@ -854,6 +888,58 @@ async fn the_installer_embeds_the_pin_and_digests_and_installs_only_verified_age
             "none",
         ]
     );
+    // The operator's own trust choice replaces the pin, for the download and
+    // for setup: a CA certificate file on the host, or its trusted certificates.
+    let own_ca = root.join("own-ca.pem");
+    std::fs::write(&own_ca, &ca_pem).unwrap();
+    let own_ca_path = own_ca.display().to_string();
+    let output = run_with(
+        &d.mirror_linux,
+        &root.join("with-ca-file"),
+        &["--ca-file", &own_ca_path],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let curl = std::fs::read_to_string(root.join("curl-args")).unwrap();
+    assert!(
+        curl.contains(&format!("--cacert {own_ca_path}")),
+        "the download must use the named CA: {curl}"
+    );
+    let args = std::fs::read_to_string(root.join("agent-args")).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--ca-file", own_ca_path.as_str()])
+            && !args.contains(&"--ca-sha256"),
+        "{args:?}"
+    );
+    let output = run_with(&d.mirror_linux, &root.join("system-trust"), &["--ca-file="]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("curl-ca.pem"))
+            .unwrap()
+            .trim(),
+        "system trust",
+        "--ca-file= downloads with this host's trusted certificates"
+    );
+    let args = std::fs::read_to_string(root.join("agent-args")).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    assert!(
+        args.contains(&"--ca-file=") && !args.contains(&"--ca-sha256"),
+        "{args:?}"
+    );
+    let missing = root.join("no-such-ca.pem").display().to_string();
+    let output = run_with(
+        &d.mirror_linux,
+        &root.join("missing-ca"),
+        &["--ca-file", &missing],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains(&format!("Can't read the CA certificate {missing}.")),
+        "{output:?}"
+    );
+    assert!(!root.join("missing-ca").join("vectory").exists());
     // A dry run installs nothing and plans for the directory that was chosen,
     // not the default one.
     let planned = root.join("planned");

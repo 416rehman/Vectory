@@ -7922,6 +7922,19 @@
                     }
                   ]
                 },
+                "ca_pem": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 16384,
+                      "pattern": "^-----BEGIN CERTIFICATE-----\\n(?:[A-Za-z0-9+/=]{1,76}\\n)+-----END CERTIFICATE-----\\n?$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The CA certificate itself (PEM), public like its fingerprint. Add device writes it on the host so the command that fetches the installer verifies the server against it."
+                },
                 "ca_name": {
                   "anyOf": [
                     {
