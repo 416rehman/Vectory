@@ -654,25 +654,28 @@ export default function DeviceDetail({
             </aside>
           </div>
         ) : (
-          <EmptyState
-            variant="error"
-            title="This device couldn't be loaded"
-            action={
-              <Button
-                variant="secondary"
-                onClick={() => void resource.reload()}
-              >
-                Try again
-              </Button>
-            }
-            secondaryAction={
-              <Button variant="ghost" onClick={() => navigate("devices")}>
-                Back to devices
-              </Button>
-            }
-          >
-            {resource.error || "The device may have been removed."}
-          </EmptyState>
+          // No stale device to keep, so the failure itself is the alert.
+          <div role="alert">
+            <EmptyState
+              variant="error"
+              title="This device couldn't be loaded"
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => void resource.reload()}
+                >
+                  Try again
+                </Button>
+              }
+              secondaryAction={
+                <Button variant="ghost" onClick={() => navigate("devices")}>
+                  Back to devices
+                </Button>
+              }
+            >
+              {resource.error || "The device may have been removed."}
+            </EmptyState>
+          </div>
         )}
       </div>
     );

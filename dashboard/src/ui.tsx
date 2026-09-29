@@ -849,7 +849,7 @@ export function LiveStatus({
             aria-label="Refresh now"
             aria-busy={refreshing || undefined}
             data-live-refresh=""
-            disabled={refreshing}
+            // Stays enabled: a new explicit refresh replaces a slow one.
             onClick={() => onRefresh()}
           >
             <RotateCw

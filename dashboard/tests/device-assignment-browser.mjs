@@ -312,7 +312,7 @@ try {
       await page.getByText("Technical details", { exact: true }).click();
       const details = page.locator(".device-disclosure[open]");
       await expect(
-        details.locator("div").filter({
+        details.locator("dl > div").filter({
           has: page.locator("dt", { hasText: /^Last verified generation$/ }),
         }),
       ).toContainText("4");
@@ -694,7 +694,14 @@ try {
           await expect(settingsLink()).toBeVisible();
           await pipelineLink().focus();
           await expect(pipelineLink()).toBeFocused();
-          await page.keyboard.press("Tab");
+          // The settings link sits in the side column; reach it by keyboard.
+          for (let step = 0; step < 60; step++) {
+            if (
+              await settingsLink().evaluate((n) => n === document.activeElement)
+            )
+              break;
+            await page.keyboard.press("Tab");
+          }
           await expect(settingsLink()).toBeFocused();
           const size = await page.evaluate(() => ({
             width: innerWidth,
