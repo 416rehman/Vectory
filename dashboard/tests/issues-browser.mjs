@@ -34,7 +34,7 @@ const server = await createServer({
       },
       load(id) {
         if (id !== virtual) return;
-        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import {AuditLog} from '/src/Control.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
+        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import AuditLog from '/src/AuditLog.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
