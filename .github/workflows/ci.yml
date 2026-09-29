@@ -554,3 +554,114 @@ jobs:
           VECTORY_BOOTSTRAP_SECRET_FILE: /tmp/bootstrap
       - run: docker build -f deploy/Dockerfile -t vectory-ci .
       - run: docker build -f deploy/Dockerfile --target validator -t vectory-validator-ci .
+  # Specification section 15, first acceptance test, on a fresh instance: the
+  # first administrator, the agent downloaded from the release listing and
+  # checked by SHA-256, then install, enroll, publish, assign, heartbeat,
+  # fetch, validate, activate and observe with the pinned Vector. The Add
+  # device installer, the live API schemas and the starter pipelines follow.
+  end-to-end:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VECTORY_PREVIEW_DIR: ${{ github.workspace }}/.local/preview
+      VECTORY_NATIVE_WORKFLOW_OUTPUT: artifacts/end-to-end
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        timeout-minutes: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 10
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        timeout-minutes: 10
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
+      - name: Install the dashboard packages the checks load
+        timeout-minutes: 10
+        working-directory: dashboard
+        run: npm ci
+      - name: Build the server, the validator and vectory-admin
+        timeout-minutes: 10
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bins
+      - name: Provide the pinned Vector 0.58.0
+        timeout-minutes: 10
+        env:
+          VECTOR_ARCHIVE: vector-0.58.0-x86_64-unknown-linux-gnu.tar.gz
+          VECTOR_SHA256: a4634bea859a7ad7064ff3dd6f6ad7eb0e8dd4493cc41657d84da8dd66f09d09
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$VECTOR_ARCHIVE" "https://github.com/vectordotdev/vector/releases/download/v0.58.0/$VECTOR_ARCHIVE"
+          echo "$VECTOR_SHA256  $VECTOR_ARCHIVE" | sha256sum -c -
+          mkdir vector
+          tar -xzf "$VECTOR_ARCHIVE" -C vector
+          binary="$RUNNER_TEMP/vector/vector-x86_64-unknown-linux-gnu/bin/vector"
+          version="$("$binary" --version)"
+          echo "$version"
+          [[ "$version" == "vector 0.58.0 "* ]]
+          echo "VECTORY_PREVIEW_VECTOR=$binary" >> "$GITHUB_ENV"
+          echo "VECTORY_VECTOR_BIN=$binary" >> "$GITHUB_ENV"
+      - name: Start a fresh instance with the real validator and agents for every platform
+        id: instance
+        timeout-minutes: 10
+        run: scripts/preview.sh start
+      - name: Run the clean-install workflow with the downloaded agent
+        id: workflow
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/native-workflow.mjs
+      - name: Install and enroll a second device with the Add device installer
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          VECTORY_URL: http://127.0.0.1:8080
+          VECTORY_CA_FILE: ${{ github.workspace }}/.local/pki/ca.pem
+          VECTORY_CREDENTIALS: ${{ github.workspace }}/.local/preview/credentials.json
+          VECTORY_BOOTSTRAP_SECRET_FILE: ${{ github.workspace }}/.local/preview/bootstrap.secret
+        run: node scripts/check-installer.mjs --output artifacts/end-to-end
+      - name: Check live API responses against the shared schemas
+        if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          mkdir -p docs/evidence artifacts/end-to-end
+          node tests/contracts.mjs
+          cp docs/evidence/contract-tests.json artifacts/end-to-end/
+      - name: Validate every starter pipeline with the pinned Vector
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: node tests/templates.mjs
+      - name: Stop the agent and the instance, and collect their logs
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set +e
+          mkdir -p artifacts/end-to-end/logs
+          run="$VECTORY_PREVIEW_DIR/native-run.json"
+          if [ -f "$run" ]; then
+            pid=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pid' "$run")
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -TERM "$pid"
+              for _ in $(seq 1 90); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+              kill -0 "$pid" 2>/dev/null && kill -KILL "$pid"
+            fi
+          fi
+          scripts/preview.sh stop
+          cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log artifacts/end-to-end/logs/
+          # Logs only: the agent's state folder also holds its private key.
+          for dir in "$GITHUB_WORKSPACE"/.local/native\ workflow\ */; do
+            cp "$dir"agent.log "$dir"agent-error.log "$dir"state/vector.log* artifacts/end-to-end/logs/
+          done
+          exit 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: end-to-end
+          path: artifacts/end-to-end
+          if-no-files-found: warn
