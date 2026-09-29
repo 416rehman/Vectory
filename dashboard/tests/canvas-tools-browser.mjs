@@ -108,12 +108,51 @@ function sortedKeys(value) {
     );
   return value;
 }
-const emptyTelemetry = {
+// The server's aggregate, complete: the dashboard refuses anything short of it.
+const totals = {
+  events_in_per_second: null,
+  events_out_per_second: null,
+  bytes_in_per_second: null,
+  bytes_out_per_second: null,
+  errors_per_minute: null,
+  filtered_per_minute: null,
+  dropped_per_minute: null,
+};
+const componentAggregate = (id, values = {}) => ({
+  id,
+  kind: null,
+  type: null,
+  devices_reporting: 1,
+  received_events_per_second: null,
+  sent_events_per_second: null,
+  received_bytes_per_second: null,
+  sent_bytes_per_second: null,
+  errors_per_minute: null,
+  filtered_per_minute: null,
+  dropped_per_minute: null,
+  buffer_events: null,
+  buffer_bytes: null,
+  buffer_utilization_max: null,
+  utilization_max: null,
+  latency_mean_seconds_max: null,
+  sent_by_output: null,
+  ...values,
+});
+const telemetryOf = (values = {}) => ({
+  generated_at: created,
   devices_running: 0,
   devices_reporting: 0,
+  device_ids: [],
+  oldest_sample_at: null,
+  newest_sample_at: null,
+  ...totals,
+  coverage: {},
   components: [],
+  configuration_id: pipelineId,
   versions: [],
-};
+  ...values,
+});
+const emptyTelemetry = telemetryOf();
 
 async function load({
   document = baseDocument(),
@@ -244,7 +283,7 @@ async function load({
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: vrl,
+        body: typeof vrl === "function" ? vrl(request.postData()) : vrl,
       });
     }
     unexpected.push(`${method} ${path}`);
@@ -403,12 +442,18 @@ try {
         source: ".status = 503",
       };
       document.config.transforms.branch.inputs = ["parse"];
-      const routed = (sample, port) =>
+      const emitted = (sample, port) =>
         `{"sample":${sample},"outcome":"emitted","outputs":[{"port":"${port}","event":{"status":${sample}},"timestamps":[]}]}`;
+      const answer = (...results) =>
+        `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${results.join(",")}]}`;
       await load({
         document,
-        // Every step answers the same canned run: sample 0 to accepted, 1 to nothing.
-        vrl: `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${routed(0, "accepted")},${routed(1, "_unmatched")}]}`,
+        // The remap passes both samples on; the route sends one to accepted
+        // and the other to no route.
+        vrl: (body) =>
+          body.includes('"type":"remap"')
+            ? answer(emitted(0, ""), emitted(1, ""))
+            : answer(emitted(0, "accepted"), emitted(1, "_unmatched")),
       });
       await node("branch").click();
       await expect(inspector().locator(".sample-upstream")).toContainText(
@@ -556,8 +601,11 @@ try {
     const find = page.getByRole("combobox", { name: "Find a step" });
     await expect(find).toBeFocused();
     await find.fill("oth");
-    await expect(page.getByRole("option")).toHaveCount(1);
-    await expect(page.getByRole("option")).toContainText("other");
+    const matches = page
+      .getByRole("listbox", { name: "Matching steps" })
+      .getByRole("option");
+    await expect(matches).toHaveCount(1);
+    await expect(matches).toContainText("other");
     await page.keyboard.press("Enter");
     await expect(find).toHaveCount(0);
     await expect(inspector().locator("h2")).toContainText("Discard events");
@@ -583,7 +631,7 @@ try {
         lonely: { type: "blackhole", inputs: ["zzz*", "b1"] },
       };
       await load({ document });
-      await expect(page.locator(".pipeline-edge-pattern-chip")).toHaveCount(3);
+      await expect(page.locator(".pipeline-edge-pattern-chip")).toHaveCount(2);
       await expect(
         page.locator(".pipeline-edge-pattern-chip").first(),
       ).toHaveText("a*");
@@ -630,23 +678,21 @@ try {
       await load({
         document,
         published: structuredClone(document.config),
-        telemetry: {
+        telemetry: telemetryOf({
           devices_running: 2,
           devices_reporting: 2,
           components: [
-            {
-              id: "seed",
+            componentAggregate("seed", {
               devices_reporting: 2,
               sent_events_per_second: 12,
               sent_by_output: { _default: 12 },
-            },
-            {
-              id: "sample",
+            }),
+            componentAggregate("sample", {
               devices_reporting: 2,
               received_events_per_second: 12,
               sent_events_per_second: 1.2,
               errors_per_minute: 3,
-            },
+            }),
           ],
           versions: [
             {
@@ -656,7 +702,7 @@ try {
               devices_reporting: 2,
             },
           ],
-        },
+        }),
       });
       await button("Live").click();
       const status = page.locator(".editor-live-status");
@@ -681,10 +727,9 @@ try {
       await load({
         document,
         published: structuredClone(document.config),
-        telemetry: {
+        telemetry: telemetryOf({
           devices_running: 1,
           devices_reporting: 0,
-          components: [],
           versions: [
             {
               version_id: versionId,
@@ -693,7 +738,7 @@ try {
               devices_reporting: 0,
             },
           ],
-        },
+        }),
       });
       await button("Live").click();
       const status = page.locator(".editor-live-status");
@@ -727,7 +772,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(11);
+  expect(results).toHaveLength(12);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {
