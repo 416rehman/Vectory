@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  bridgeSlots,
+  bridgedSlots,
   formatBytes,
   formatNumber,
   formatPercent,
+  isolatedPoints,
   niceMax,
+  readableSlot,
   seriesPath,
   timeline,
 } from "./telemetryChart";
@@ -65,6 +69,46 @@ describe("telemetry timeline", () => {
       (value) => value,
     );
     expect(path).toBe("M0.00,1.00 L10.00,2.00 M40.00,4.00");
+    expect(isolatedPoints([1, 2, undefined, null, 4])).toEqual([4]);
+  });
+  it("crosses empty slots shorter than one check-in, never longer ones", () => {
+    // A 60 s heartbeat with jitter can skip one 1-minute slot, not two.
+    expect(bridgeSlots(60, 60)).toBe(1);
+    expect(bridgeSlots(10, 60)).toBe(0);
+    expect(bridgeSlots(300, 60)).toBe(6);
+    expect(bridgeSlots(60, 300)).toBe(0);
+    expect(bridgeSlots(Number.NaN, 60)).toBe(0);
+    const values = [1, undefined, 3, undefined, undefined, 6, 7];
+    const x = (index: number) => index * 10,
+      y = (value: number) => value;
+    expect(seriesPath(values, x, y, 1)).toBe(
+      "M0.00,1.00 L20.00,3.00 M50.00,6.00 L60.00,7.00",
+    );
+    expect(seriesPath(values, x, y, 2)).toBe(
+      "M0.00,1.00 L20.00,3.00 L50.00,6.00 L60.00,7.00",
+    );
+    expect(isolatedPoints([5, undefined, undefined, 8], 1)).toEqual([0, 3]);
+    expect(isolatedPoints([5, undefined, 8], 1)).toEqual([]);
+  });
+  it("reads a bridged slot from its nearest report and skips it by key", () => {
+    const reported = [true, false, false, true, false, false, false, true];
+    const bridged = bridgedSlots(reported, 2);
+    expect(bridged).toEqual([
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(readableSlot(1, reported, bridged)).toBe(0);
+    expect(readableSlot(2, reported, bridged)).toBe(3);
+    expect(readableSlot(2, reported, bridged, -1)).toBe(0);
+    expect(readableSlot(1, reported, bridged, 1)).toBe(3);
+    // A real gap stays readable as "no report".
+    expect(readableSlot(5, reported, bridged)).toBe(5);
   });
   it("scales axes to clean maxima and formats readings", () => {
     expect([0, 0.3, 1, 1.2, 3, 7, 12, 480].map(niceMax)).toEqual([

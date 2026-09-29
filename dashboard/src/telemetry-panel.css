@@ -256,6 +256,10 @@
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
+/* A report no line reaches: a short, slightly heavier mark. */
+.telemetry-series line {
+  stroke-width: 3;
+}
 .telemetry-series.out path,
 .telemetry-series.out line {
   stroke: var(--series-out);

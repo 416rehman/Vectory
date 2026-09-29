@@ -13,12 +13,16 @@ import type {
 } from "./runtimeModel";
 import {
   axisTime,
+  bridgeSlots,
+  bridgedSlots,
   formatBytes,
   formatDuration,
   formatNumber,
   formatPercent,
+  isolatedPoints,
   niceMax,
   present,
+  readableSlot,
   seriesPath,
   timeline,
   type TimelinePoint,
@@ -152,6 +156,8 @@ export default function TelemetryPanel({
   const hasValues =
     !!latest || visibleCharts.length > 0 || components.length > 0;
   const span = ranges.find((option) => option.value === range)!.minutes;
+  // Lines cross empty slots shorter than one check-in: not a missed report.
+  const bridge = bridgeSlots(heartbeat, history.step_seconds ?? 60);
   const runtime = device.host_runtime;
   const disabled = device.effective_policy?.telemetry_enabled === false;
   return (
@@ -229,6 +235,7 @@ export default function TelemetryPanel({
                   chart={chart}
                   points={points}
                   span={span}
+                  bridge={bridge}
                   hover={hover}
                   onHover={setHover}
                 />
@@ -242,8 +249,9 @@ export default function TelemetryPanel({
           )}
           {visibleCharts.length > 0 && (
             <p className="telemetry-note">
-              Gaps mean the device reported nothing for that period. Move over a
-              chart or focus it and use the arrow keys to read values.
+              A gap means the device sent no metrics for longer than one
+              check-in. Move over a chart or focus it and use the arrow keys to
+              read values.
             </p>
           )}
           <ProcessStats sample={latest} runtime={runtime} />
@@ -500,18 +508,25 @@ function MetricChart({
   chart,
   points,
   span,
+  bridge,
   hover,
   onHover,
 }: {
   chart: Chart;
   points: TimelinePoint[];
   span: number;
+  /** Empty slots a line may cross (see bridgeSlots). */
+  bridge: number;
   hover: number | null;
   onHover: (index: number | null) => void;
 }) {
   const series = chart.series.filter((item) =>
     points.some((point) => present(value(point.sample, item.key))),
   );
+  const reported = points.map((point) =>
+    series.some((item) => present(value(point.sample, item.key))),
+  );
+  const bridged = bridgedSlots(reported, bridge);
   const peak = Math.max(
     0,
     ...points.flatMap((point) =>
@@ -525,25 +540,28 @@ function MetricChart({
       : (index / (points.length - 1)) * chartWidth;
   const y = (reading: number) =>
     chartHeight - Math.min(1, reading / max) * (chartHeight - 4);
-  const selected = hover !== null && hover < points.length ? hover : null;
+  const selected =
+    hover !== null && hover < points.length
+      ? readableSlot(hover, reported, bridged)
+      : null;
   const readoutIndex = selected ?? lastReported(points, series);
   const readoutPoint = readoutIndex === null ? undefined : points[readoutIndex];
   function move(event: KeyboardEvent<HTMLDivElement>) {
     const last = points.length - 1;
     const current = selected ?? readoutIndex ?? last;
-    const next =
-      event.key === "ArrowLeft"
-        ? current - 1
-        : event.key === "ArrowRight"
-          ? current + 1
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? last
-              : null;
+    const step =
+      event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : null;
+    const next = step
+      ? current + step
+      : event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? last
+          : null;
     if (next === null) return;
     event.preventDefault();
-    onHover(Math.max(0, Math.min(last, next)));
+    const slot = Math.max(0, Math.min(last, next));
+    onHover(step ? readableSlot(slot, reported, bridged, step) : slot);
   }
   const label = `${chart.title}, ${chart.unit}, ${series.map((item) => item.label).join(" and ")}. Gaps mean no report.`;
   return (
@@ -649,20 +667,16 @@ function MetricChart({
                 key={String(item.key)}
                 className={`telemetry-series ${item.tone}`}
               >
-                <path d={seriesPath(values, x, y)} />
-                {values.map((reading, index) =>
-                  present(reading) &&
-                  !present(values[index - 1]) &&
-                  !present(values[index + 1]) ? (
-                    <line
-                      key={index}
-                      x1={Math.max(0, x(index) - 4)}
-                      x2={Math.min(chartWidth, x(index) + 4)}
-                      y1={y(reading)}
-                      y2={y(reading)}
-                    />
-                  ) : null,
-                )}
+                <path d={seriesPath(values, x, y, bridge)} />
+                {isolatedPoints(values, bridge).map((index) => (
+                  <line
+                    key={index}
+                    x1={Math.max(0, x(index) - 4)}
+                    x2={Math.min(chartWidth, x(index) + 4)}
+                    y1={y(values[index]!)}
+                    y2={y(values[index]!)}
+                  />
+                ))}
               </g>
             );
           })}
@@ -847,6 +861,7 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
       id: column.id,
       header: column.title,
       value: (component) => column.read(component) ?? null,
+      filter: { placeholder: "Filter reported value" },
       cell: (component) => {
         const reading = column.read(component);
         return present(reading) ? (
@@ -880,57 +895,82 @@ function ComponentTable({ components }: { components: ComponentTelemetry[] }) {
   );
 }
 
+const sampleColumns: {
+  id: string;
+  title: string;
+  read: (sample: TelemetrySample) => number | null | undefined;
+  format: (value: number) => string;
+}[] = [
+  {
+    id: "in",
+    title: "In / s",
+    read: (sample) => sample.events_per_second,
+    format: formatNumber,
+  },
+  {
+    id: "out",
+    title: "Out / s",
+    read: (sample) => sample.events_out_per_second,
+    format: formatNumber,
+  },
+  {
+    id: "errors",
+    title: "Errors / min",
+    read: (sample) => sample.errors_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "dropped",
+    title: "Dropped / min",
+    read: (sample) => sample.dropped_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "filtered",
+    title: "Filtered / min",
+    read: (sample) => sample.filtered_per_minute,
+    format: formatNumber,
+  },
+  {
+    id: "buffer",
+    title: "Buffer fill",
+    read: (sample) => sample.buffer_utilization,
+    format: formatPercent,
+  },
+];
+
 function SampleTable({ points }: { points: TimelinePoint[] }) {
   const rows = points.filter(
     (point): point is TimelinePoint & { sample: TelemetrySample } =>
       !!point.sample,
   );
-  const cell = (reading: number | null | undefined, format = formatNumber) =>
-    present(reading) ? format(reading) : "—";
+  // Only what the device reported: no column of dashes.
+  const visible = sampleColumns.filter((column) =>
+    rows.some((point) => present(column.read(point.sample))),
+  );
   const columns: TableColumn<(typeof rows)[number]>[] = [
     {
       id: "at",
       header: "Time",
       value: (point) => point.at,
       sortValue: (point) => point.bucket,
+      filter: { placeholder: "Date or time (ISO)" },
       cell: (point) => when(point.at),
     },
-    {
-      id: "in",
-      header: "In / s",
-      value: (point) => point.sample.events_per_second ?? null,
-      cell: (point) => cell(point.sample.events_per_second),
-    },
-    {
-      id: "out",
-      header: "Out / s",
-      value: (point) => point.sample.events_out_per_second ?? null,
-      cell: (point) => cell(point.sample.events_out_per_second),
-    },
-    {
-      id: "errors",
-      header: "Errors / min",
-      value: (point) => point.sample.errors_per_minute ?? null,
-      cell: (point) => cell(point.sample.errors_per_minute),
-    },
-    {
-      id: "dropped",
-      header: "Dropped / min",
-      value: (point) => point.sample.dropped_per_minute ?? null,
-      cell: (point) => cell(point.sample.dropped_per_minute),
-    },
-    {
-      id: "filtered",
-      header: "Filtered / min",
-      value: (point) => point.sample.filtered_per_minute ?? null,
-      cell: (point) => cell(point.sample.filtered_per_minute),
-    },
-    {
-      id: "buffer",
-      header: "Buffer fill",
-      value: (point) => point.sample.buffer_utilization ?? null,
-      cell: (point) => cell(point.sample.buffer_utilization, formatPercent),
-    },
+    ...visible.map((column): TableColumn<(typeof rows)[number]> => ({
+      id: column.id,
+      header: column.title,
+      value: (point) => column.read(point.sample) ?? null,
+      filter: { placeholder: "Filter reported value" },
+      cell: (point) => {
+        const reading = column.read(point.sample);
+        return present(reading) ? (
+          column.format(reading)
+        ) : (
+          <span title="Not reported">—</span>
+        );
+      },
+    })),
   ];
   return (
     <details className="telemetry-samples">
