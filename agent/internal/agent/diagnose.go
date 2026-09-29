@@ -137,26 +137,40 @@ func (r *redactor) addSecret(value string) {
 func isWordRune(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_' }
 
 // replaceWord replaces word only where it stands alone, not touching a letter,
-// digit or underscore on either side.
+// digit or underscore on either side. It searches from an offset into the
+// original string, so a skipped match keeps its left context ("abab" is one
+// word, not "ab" followed by a standalone "ab").
+//
+// Two trade-offs of whole-word matching, for credentials under four bytes:
+//   - a credential of one to three digits redacts every standalone number
+//     equal to it, as in "line «redacted», column 12";
+//   - CJK text has no spaces, so a short credential inside it touches letters
+//     on both sides and is not redacted.
 func replaceWord(s, word, with string) string {
+	if word == "" {
+		return s
+	}
 	var out strings.Builder
-	for {
-		i := strings.Index(s, word)
+	copied := 0
+	for from := 0; ; {
+		i := strings.Index(s[from:], word)
 		if i < 0 {
-			out.WriteString(s)
-			return out.String()
+			break
 		}
+		i += from
 		end := i + len(word)
 		before, nb := utf8.DecodeLastRuneInString(s[:i])
 		after, na := utf8.DecodeRuneInString(s[end:])
-		out.WriteString(s[:i])
 		if (nb > 0 && isWordRune(before)) || (na > 0 && isWordRune(after)) {
-			out.WriteString(word)
-		} else {
-			out.WriteString(with)
+			from = i + 1
+			continue
 		}
-		s = s[end:]
+		out.WriteString(s[copied:i])
+		out.WriteString(with)
+		copied, from = end, end
 	}
+	out.WriteString(s[copied:])
+	return out.String()
 }
 
 func containsWord(s, word string) bool {

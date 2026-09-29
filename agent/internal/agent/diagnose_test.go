@@ -214,7 +214,7 @@ func TestPrivilegedPortIsNotAPathProblem(t *testing.T) {
 	unprivilegedPortStart = func() int { return 1024 }
 	// A Unix socket that can't be created is a path problem.
 	unix := []vectorRecord{{Level: "ERROR", Message: "Error binding socket.", Error: "Permission denied (os error 13)", ErrorCode: "socket_bind", Target: "vector::internal_events::socket", ComponentID: "sys", ComponentKind: "source", ComponentType: "syslog"}}
-	if got := testRedactor(`{"sources":{"sys":{"type":"syslog","mode":"unix","path":"/run/app/syslog.sock"}}`+sink).parseRuntimeRecords(unix); len(got) != 1 || got[0].Code != "PERMISSION_DENIED" || !strings.Contains(got[0].Hint, "path") {
+	if got := testRedactor(`{"sources":{"sys":{"type":"syslog","mode":"unix","path":"/run/app/syslog.sock"}}` + sink).parseRuntimeRecords(unix); len(got) != 1 || got[0].Code != "PERMISSION_DENIED" || !strings.Contains(got[0].Hint, "path") {
 		t.Fatalf("unix socket: %+v", got)
 	}
 }
@@ -272,6 +272,22 @@ func TestCredentialsUnderFourBytesAreRedactedAsWholeWords(t *testing.T) {
 	one.addSecret("7")
 	if got := one.text("port 87 attempt 7 of 9 _7"); got != "port 87 attempt "+redactedToken+" of 9 _7" {
 		t.Fatalf("single character credential: %q", got)
+	}
+	// A skipped match keeps its left context: "abab" is one word.
+	ab := newRedactor()
+	ab.addSecret("ab")
+	for input, want := range map[string]string{
+		"abab":    "abab",
+		"ababab":  "ababab",
+		"xab ab":  "xab " + redactedToken,
+		"ab-ab":   redactedToken + "-" + redactedToken,
+		"ab_ab":   "ab_ab",
+		"(ab)":    "(" + redactedToken + ")",
+		"abab ab": "abab " + redactedToken,
+	} {
+		if got := ab.text(input); got != want {
+			t.Errorf("text(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

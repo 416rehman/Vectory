@@ -129,7 +129,8 @@ func (l *vectorLog) handle(line []byte) {
 	case rec.Message == "Vector has reloaded." && rec.Target == "vector":
 		l.signals.reloaded++
 		l.notify()
-	case rec.Message == "Reload was not successful." && rec.Target == "vector::internal_events::process":
+	case (rec.Message == "Reload was not successful." || rec.Message == "Failed to load config files, reload aborted.") && rec.Target == "vector::internal_events::process":
+		// The second is a reload whose configuration doesn't even load.
 		l.signals.reloadFailed++
 		l.notify()
 	}
