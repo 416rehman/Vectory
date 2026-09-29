@@ -170,14 +170,9 @@ async function check(name, run) {
 }
 async function signOutAndIn() {
   await page.getByRole("button", { name: "Your account", exact: true }).click();
+  // Signing out no longer asks for confirmation.
   await page.getByRole("menuitem", { name: "Sign out", exact: true }).click();
-  await page
-    .getByRole("alertdialog", { name: "Sign out of Vectory?" })
-    .getByRole("button", { name: "Sign out", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Sign in", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Sign in/ })).toBeVisible();
   await page.getByLabel("Email address", { exact: true }).fill(nextLogin.email);
   await page
     .getByLabel("Password", { exact: true })
