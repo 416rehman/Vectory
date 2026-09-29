@@ -237,7 +237,9 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
         'replaced_by',json(COALESCE((SELECT json_group_array(json_object('deployment_id',json_extract(e.value,'$.deployment_id'),'device_count',json_extract(e.value,'$.device_count'),'at',json_extract(e.value,'$.at'),'version_number',(SELECT json_extract(nv.data,'$.number') FROM records n JOIN records nv ON nv.kind='version' AND nv.id=json_extract(n.data,'$.version_id') WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')),'configuration_name',(SELECT ");
     q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=json_extract(e.value,'$.deployment_id')))) FROM json_each(d.data,'$.replaced_by') e WHERE json_type(d.data,'$.replaced_by')='array'),'[]')),\
         'replaces',json(COALESCE((SELECT json_group_array(json_object('deployment_id',r.value,'version_number',(SELECT json_extract(rv.data,'$.number') FROM records rd JOIN records rv ON rv.kind='version' AND rv.id=json_extract(rd.data,'$.version_id') WHERE rd.kind='deployment' AND rd.id=r.value),'configuration_name',(SELECT ");
-    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=r.value))) FROM json_each(d.data,'$.replaces') r WHERE json_type(d.data,'$.replaces')='array'),'[]'))) FROM page d");
+    // `rollback` tells a rollback's snapshot apart from the assignment it
+    // restored: both run the same pipeline version.
+    q.push(PIPELINE_NAME).push(" WHERE n.kind='deployment' AND n.id=r.value),'rollback',json(CASE WHEN EXISTS(SELECT 1 FROM records rr WHERE rr.kind='deployment' AND rr.id=r.value AND json_type(rr.data,'$.rollback_of')='text') THEN 'true' ELSE 'false' END))) FROM json_each(d.data,'$.replaces') r WHERE json_type(d.data,'$.replaces')='array'),'[]'))) FROM page d");
     q.push(JOINS).push(" ORDER BY ").push(order);
 }
 fn page_query(

@@ -5997,12 +5997,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "rollback": {
+                "type": "boolean",
+                "description": "The replaced assignment is itself a rollback, so it runs the version it restored."
               }
             },
             "required": [
               "deployment_id",
               "version_number",
-              "configuration_name"
+              "configuration_name",
+              "rollback"
             ],
             "additionalProperties": false
           }

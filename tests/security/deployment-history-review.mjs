@@ -338,7 +338,14 @@ try {
         },
         { deployment_id: randomUUID(), device_count: 1, at: at(2, 6) },
       ];
-    if (index === 3) fields.replaces = [deploymentIds[2], randomUUID()];
+    // A replaced rollback (11) says so; a malformed rollback_of (14) doesn't.
+    if (index === 3)
+      fields.replaces = [
+        deploymentIds[2],
+        deploymentIds[11],
+        deploymentIds[14],
+        randomUUID(),
+      ];
     if (index === 5) fields.replaced_by = "not-an-array";
     if (index === 6) fields.replaces = { private: marker };
     return fields;
@@ -943,6 +950,10 @@ try {
             deployment_id: id,
             version_number: versionNumberOf(id),
             configuration_name: pipelineNameOf(id),
+            // A replaced rollback runs the version it restored.
+            rollback:
+              typeof deployments.find((d) => d.id === id)?.rollback_of ===
+              "string",
           }))
         : [],
     };
@@ -1044,11 +1055,13 @@ try {
       assert.deepEqual(Object.keys(entry).sort(), [
         "configuration_name",
         "deployment_id",
+        "rollback",
         "version_number",
       ]);
       assert(isId(entry.deployment_id) && entry.deployment_id !== null);
       assert(isNumber(entry.version_number));
       assert(bounded(entry.configuration_name, 240));
+      assert.equal(typeof entry.rollback, "boolean");
     }
     assert(value.name === null || typeof value.name === "string");
     if (typeof value.name === "string") assert([...value.name].length <= 120);
@@ -1260,6 +1273,8 @@ try {
               exercised.add(key);
           }
           if (item.rollback_available === false) exercised.add("not_available");
+          if (item.replaces.some((entry) => entry.rollback))
+            exercised.add("replaced_rollback");
           assert.equal(
             item.name,
             typeof original.name === "string"
@@ -1292,7 +1307,7 @@ try {
       // The fixtures reached every new field with a real value, so the checks
       // above proved more than the absence of data.
       assert.deepEqual(
-        [...newSummaryKeys, "not_available"].filter(
+        [...newSummaryKeys, "not_available", "replaced_rollback"].filter(
           (key) => !exercised.has(key),
         ),
         [],
