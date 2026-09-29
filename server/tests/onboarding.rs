@@ -297,8 +297,16 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
         .rev()
         .filter(|e| e["outcome"] == "failure")
         .collect();
-    assert_eq!(failures.len(), attempts.len());
-    for (event, (body, reason, token)) in failures.iter().zip(&attempts) {
+    // A second tokenless refusal from the same client within a minute is
+    // refused the same way but not audited again.
+    let recorded: Vec<_> = attempts
+        .iter()
+        .enumerate()
+        .filter(|(n, _)| *n != 1)
+        .map(|(_, attempt)| attempt)
+        .collect();
+    assert_eq!(failures.len(), recorded.len());
+    for (event, (body, reason, token)) in failures.iter().zip(recorded) {
         assert_eq!(event["reason_code"], *reason, "{event}");
         assert_eq!(event["token_id"], json!(token), "{event}");
         assert_eq!(
@@ -317,7 +325,7 @@ async fn refusals_stay_generic_for_devices_and_explain_themselves_to_administrat
     assert!(success["device_id"].is_string());
 
     // The audit trail shows the same allowlisted details, and never a token.
-    let id = failures[2]["id"].as_str().unwrap();
+    let id = failures[1]["id"].as_str().unwrap();
     let (status, _, bytes) = f
         .get(
             &f.api,
@@ -922,4 +930,40 @@ async fn doctor_can_prove_a_credential_and_the_token_list_shows_its_devices() {
     assert_eq!(listed["devices"][0]["name"], "rack-7-a");
     assert_eq!(listed["devices"][0]["revoked"], false);
     assert!(listed["last_used_at"].is_string());
+}
+
+#[tokio::test]
+async fn one_noisy_client_cannot_block_enrollment_for_the_fleet() {
+    let f = fixture(|_, _| {}).await;
+    let junk = json!({"protocol_version":1,"token":"0".repeat(64)});
+    let post = |router: Router| {
+        let junk = junk.clone();
+        async move {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/agent/v1/enroll")
+                .header("content-type", "application/json")
+                .body(Body::from(junk.to_string()))
+                .unwrap();
+            send(&router, request).await.0
+        }
+    };
+    let noisy = agent(&f.s);
+    for _ in 0..60 {
+        assert_eq!(post(noisy.clone()).await, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(post(noisy.clone()).await, StatusCode::TOO_MANY_REQUESTS);
+    let neighbour = device::router(f.s.clone()).layer(Extension(ConnectInfo(SocketAddr::from((
+        [10, 0, 4, 18],
+        50124,
+    )))));
+    assert_eq!(post(neighbour).await, StatusCode::UNAUTHORIZED);
+    // 61 junk attempts left one audit row, not 61.
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='device.enroll'",
+    )
+    .fetch_one(&f.s.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 2, "one per client and reason each minute");
 }
