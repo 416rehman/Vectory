@@ -148,6 +148,7 @@ export default function PublishReview({
   );
   const Icon = statusIcons[status];
   const errors = problems.filter((problem) => problem.severity === "error");
+  const warnings = problems.filter((problem) => problem.severity === "warning");
   const rows = useMemo(
     () => groupChanges(review.components),
     [review.components],
@@ -215,6 +216,32 @@ export default function PublishReview({
           {errors.length > 8 && (
             <li className="publish-review-more">
               {errors.length - 8} more in the Problems panel.
+            </li>
+          )}
+        </ul>
+      )}
+      {warnings.length > 0 && (
+        <ul
+          className="publish-review-problems publish-review-warnings"
+          aria-label="Warnings"
+        >
+          {warnings.slice(0, 4).map((problem) => (
+            <li key={problem.key}>
+              <span>
+                {problem.component && <code>{problem.component}</code>}
+                <ProblemText text={problem.message} />
+              </span>
+              <Button
+                variant="ghost compact"
+                onClick={() => onGoToProblem(problem)}
+              >
+                Go to warning
+              </Button>
+            </li>
+          ))}
+          {warnings.length > 4 && (
+            <li className="publish-review-more">
+              {warnings.length - 4} more in the Problems panel.
             </li>
           )}
         </ul>
