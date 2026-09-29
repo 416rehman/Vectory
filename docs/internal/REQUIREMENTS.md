@@ -15,7 +15,7 @@ Specification: `docs/product-specification.md`, 342 lines, SHA-256 `4b47c5563655
 | Spec | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
 | L5 | A working product: Rust API, React/TypeScript dashboard, SQLite persistence and a portable Go agent in a dedicated repository | Met | `server/Cargo.toml`, `dashboard/package.json`, `agent/go.mod`, `ci:server`, `ci:dashboard`, `ci:agent` (build, unit) | — |
-| L7 | Record consequential decisions in ADRs | Partial | `docs/adr/0001-architecture.md`, `docs/adr/0002-publish-time-static-validation.md`, `docs/adr/0003-sign-in-throttling.md` (doc) | Only three ADRs. No record of the domain model, restricted mode as the default, the artifact hash, the state machines, the device-secret field table, the notification address policy or automatic CA pinning |
+| L7 | Record consequential decisions in ADRs | Partial | `docs/adr/0001-architecture.md`, `docs/adr/0004-domain-model-and-records-table.md`, `docs/adr/0005-restricted-mode-by-default.md`, `docs/adr/0006-artifact-hash.md`, `docs/adr/0007-state-machines.md`, `docs/adr/0008-device-secret-field-table.md`, `docs/adr/0009-notification-address-policy.md`, `docs/adr/0010-automatic-server-ca-pinning.md` (doc) | ADRs 0004 to 0010 record existing decisions and are still Proposed. No ADR yet for the `curl -k` installer bootstrap, the agent-supervised Vector child, agents bundled in the server image, or the fixed one-hour late-start deadline |
 | L7 | Prepare everything reviewable and report the exact prerequisites that need the maintainer (publishing, signing, infrastructure) | Met | `docs/internal/HANDOFF.md`, `packaging/README.md` (doc) | — |
 
 ## 1. Product outcome and fixed constraints
