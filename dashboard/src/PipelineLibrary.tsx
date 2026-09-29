@@ -5,7 +5,6 @@ import {
   Copy,
   History,
   MoreHorizontal,
-  RefreshCw,
   Plus,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -36,7 +35,7 @@ import {
   useResource,
 } from "./ui";
 import type { StartImport } from "./PipelineStartChoice";
-import PipelineStatus from "./PipelineStatus";
+import PipelineStatus, { libraryStatus } from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
 } from "./PipelineCreationRecovery";
@@ -135,7 +134,6 @@ export default function PipelineLibrary({
     };
   }, []);
   const [search, setSearch] = useState(initialQuery?.search || "");
-  const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState(
     initialQuery || {
       search: "",
@@ -155,10 +153,13 @@ export default function PipelineLibrary({
     page_size: "12",
   });
   if (query.direction) parameters.set("direction", query.direction);
-  const { data, loading, error, reload } = useResource<PipelineLibraryPage>(
-    `/configurations/library?${parameters}`,
-    { items: [], total: 0, page: query.page, page_size: 12 },
-  );
+  const { data, loading, error, reload, refreshing, updatedAt } =
+    useResource<PipelineLibraryPage>(`/configurations/library?${parameters}`, {
+      items: [],
+      total: 0,
+      page: query.page,
+      page_size: 12,
+    });
   const searching = search.trim() !== query.search;
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correctingPage = !loading && !error && query.page > lastPage;
@@ -191,14 +192,6 @@ export default function PipelineLibrary({
     configuration: PipelineSummary;
     action: PipelineAction;
   } | null>(null);
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await reload();
-    } finally {
-      setRefreshing(false);
-    }
-  }
   // ⌘K and the Overview checklist open the create dialog through this command.
   useCommand(
     "pipeline.create",
@@ -357,6 +350,13 @@ export default function PipelineLibrary({
         title="Pipelines"
         help={{ topic: "pipelines", section: "find-and-organize-pipelines" }}
         description="Build, publish, and maintain your event pipelines."
+        live={{
+          updatedAt,
+          error,
+          loading,
+          refreshing,
+          onRefresh: () => void reload(),
+        }}
       >
         {can(user, "edit") && (
           <Button
@@ -417,8 +417,8 @@ export default function PipelineLibrary({
           placeholder="Search pipelines"
           maxLength={200}
         />
-        <div className="pipeline-library-toolbar-tools">
-          {can(user, "edit") && (
+        {can(user, "edit") && (
+          <div className="pipeline-library-toolbar-tools">
             <IconButton
               icon={History}
               label="Your pipeline requests"
@@ -426,25 +426,42 @@ export default function PipelineLibrary({
                 recoveryRef.current?.openRecent(event.currentTarget)
               }
             />
-          )}
-          <IconButton
-            icon={RefreshCw}
-            label="Refresh"
-            className={refreshing ? "is-busy" : undefined}
-            aria-busy={refreshing || undefined}
-            onClick={refresh}
-            disabled={loading || searching || refreshing}
-          />
-        </div>
+          </div>
+        )}
       </div>
-      {error && !searching && <ErrorBox message={error} retry={refresh} />}
       <div className="pipeline-library-list">
         <DataTable
           label="Pipeline library"
           className="pipeline-library-table"
-          data={error ? [] : data.items}
+          data={data.items}
           rowKey={(pipeline) => pipeline.id}
           loading={loading || searching || correctingPage}
+          error={
+            error
+              ? {
+                  title: updatedAt
+                    ? "Couldn't refresh pipelines."
+                    : "Couldn't load pipelines.",
+                  message: error,
+                  updatedAt,
+                  retry: () => void reload(),
+                  retrying: refreshing,
+                }
+              : null
+          }
+          mobileCard={(pipeline) => {
+            const status = libraryStatus(pipeline);
+            return {
+              title: pipeline.name,
+              href: `#/${pipelineRoute(pipeline.id, initialDeviceId, destination)}`,
+              status: status.changed ? (
+                <span className="pipeline-status-chip">
+                  Unpublished changes
+                </span>
+              ) : undefined,
+              meta: [status.primary, status.detail],
+            };
+          }}
           manualSorting
           sort={{
             column: query.sort,
@@ -462,7 +479,7 @@ export default function PipelineLibrary({
               });
           }}
           pagination={
-            loading || searching || correctingPage || error
+            loading || searching || correctingPage
               ? undefined
               : {
                   total: data.total,
@@ -472,39 +489,35 @@ export default function PipelineLibrary({
                 }
           }
           empty={
-            error ? (
-              "Pipelines could not be loaded."
-            ) : (
-              <section className="pipeline-library-empty">
-                <h2>
-                  {query.search
-                    ? "No matching pipelines"
-                    : query.state === "archived"
-                      ? "No archived pipelines"
-                      : "Create your first pipeline"}
-                </h2>
-                <p>
-                  {query.search
-                    ? "Try a different name or change the Status column filter."
-                    : query.state === "archived"
-                      ? "Archived pipelines stay available here with their history and published versions."
-                      : "Start with a source and a destination. Add transformations when you need to filter or change events."}
-                </p>
-                {query.search ? (
-                  <Button variant="secondary" onClick={() => setSearch("")}>
-                    Clear search
-                  </Button>
-                ) : query.state === "active" && can(user, "edit") ? (
-                  <Button
-                    onPointerEnter={prefetchStartChoice}
-                    onFocus={prefetchStartChoice}
-                    onClick={(event) => beginCreate(event.currentTarget)}
-                  >
-                    {unresolved ? "Review saved requests" : "Create pipeline"}
-                  </Button>
-                ) : null}
-              </section>
-            )
+            <section className="pipeline-library-empty">
+              <h2>
+                {query.search
+                  ? "No matching pipelines"
+                  : query.state === "archived"
+                    ? "No archived pipelines"
+                    : "Create your first pipeline"}
+              </h2>
+              <p>
+                {query.search
+                  ? "Try a different name or change the Status column filter."
+                  : query.state === "archived"
+                    ? "Archived pipelines stay available here with their history and published versions."
+                    : "Start with a source and a destination. Add transformations when you need to filter or change events."}
+              </p>
+              {query.search ? (
+                <Button variant="secondary" onClick={() => setSearch("")}>
+                  Clear search
+                </Button>
+              ) : query.state === "active" && can(user, "edit") ? (
+                <Button
+                  onPointerEnter={prefetchStartChoice}
+                  onFocus={prefetchStartChoice}
+                  onClick={(event) => beginCreate(event.currentTarget)}
+                >
+                  {unresolved ? "Review saved requests" : "Create pipeline"}
+                </Button>
+              ) : null}
+            </section>
           }
           columns={[
             {

@@ -6,8 +6,14 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -20,7 +26,7 @@ const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  server: { host: "127.0.0.1", port: 5196, strictPort: true, proxy: {} },
+  server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
       name: "pipeline-library-session-fixture",
@@ -72,7 +78,8 @@ const user = (id) => ({
 });
 let signedIn = user("first"),
   nextLogin = user("second"),
-  empty = false;
+  empty = false,
+  failing = false;
 const records = [false, true].flatMap((archived) =>
   Array.from({ length: 13 }, (_, index) => ({
     id: `${archived ? "archived" : "active"}-${index}`,
@@ -133,6 +140,13 @@ await context.route("**/api/v1/**", async (route) => {
     requests.push(query);
     if (query.page_size !== "12")
       throw Error("Library request is not bounded to 12");
+    if (failing)
+      return reply(
+        {
+          error: { code: "UNAVAILABLE", message: "Synthetic library outage" },
+        },
+        503,
+      );
     let rows = empty
       ? []
       : records.filter(
@@ -183,7 +197,7 @@ async function signOutAndIn() {
   ).toBeVisible();
 }
 try {
-  await page.goto("http://127.0.0.1:5196/__library-fixture#/configurations");
+  await page.goto(`http://127.0.0.1:${port}/__library-fixture#/configurations`);
   await expect(page.locator(".pipeline-library-table tbody tr")).toHaveCount(
     12,
   );
@@ -309,11 +323,79 @@ try {
     },
   );
   await check(
+    "a failed refresh keeps the pipelines dimmed under one message with Retry, the header says so, and phones get cards",
+    async () => {
+      const rows = page.locator(".pipeline-library-table tbody tr");
+      await expect(rows).toHaveCount(12);
+      failing = true;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      const alert = page.getByRole("alert").filter({
+        hasText: "Couldn't refresh pipelines.",
+      });
+      await expect(alert).toContainText("Showing data from");
+      await expect(rows).toHaveCount(12);
+      await expect(page.locator(".pipeline-library-table")).toHaveAttribute(
+        "data-stale",
+        "",
+      );
+      await expect(page.locator(".live-status")).toContainText(
+        "Stale · last update",
+      );
+      await page.screenshot({
+        path: resolve(output, "stale-desktop.png"),
+        animations: "disabled",
+      });
+      failing = false;
+      await alert.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(alert).toHaveCount(0);
+      await expect(page.locator(".live-status")).toContainText("Updated");
+      // Phones read the list as cards: name, published state and where it runs.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const cards = page
+        .getByRole("list", { name: "Pipeline library", exact: true })
+        .locator("li.data-list-item");
+      await expect(cards).toHaveCount(12);
+      await expect(cards.first()).toContainText("Not published");
+      await expect(cards.first().getByRole("link")).toHaveAttribute(
+        "href",
+        /^#\/configurations\//,
+      );
+      const appearance = await page.evaluate(
+        () => document.documentElement.dataset.theme ?? null,
+      );
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (theme) => (document.documentElement.dataset.theme = theme),
+          theme,
+        );
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        await page.screenshot({
+          path: resolve(output, `mobile-${theme}.png`),
+          animations: "disabled",
+        });
+      }
+      await page.evaluate((theme) => {
+        if (theme === null) delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = theme;
+      }, appearance);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expect(rows).toHaveCount(12);
+    },
+  );
+  await check(
     "whitespace-only search uses the unfiltered empty-library guidance",
     async () => {
       empty = true;
       await page.getByLabel("Search pipelines").fill("   ");
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(
         page.getByRole("heading", {
           name: "Create your first pipeline",
