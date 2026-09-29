@@ -1,0 +1,76 @@
+.vector-log {
+  --vector-log-error: #a32d28;
+  --vector-log-warning: #8a5b0c;
+  display: grid;
+  gap: 10px;
+}
+[data-theme="dark"] .vector-log {
+  --vector-log-error: #ffb4ae;
+  --vector-log-warning: #eed498;
+}
+.vector-log-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+.vector-log-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.vector-log-heading span,
+.vector-log-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.vector-log-note {
+  margin: 0;
+  line-height: 1.6;
+}
+.vector-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.vector-log-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 14px;
+}
+.vector-log-item + .vector-log-item {
+  border-top: 1px solid var(--line);
+}
+.vector-log-icon {
+  margin-top: 2px;
+}
+.vector-log-item.error .vector-log-icon {
+  color: var(--vector-log-error);
+}
+.vector-log-item.warn .vector-log-icon {
+  color: var(--vector-log-warning);
+}
+.vector-log-item p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.vector-log-message {
+  font-size: 13px;
+  line-height: 1.55;
+}
+.vector-log-item .vector-log-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.vector-log-meta strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+.vector-log-meta code {
+  font-size: 12px;
+}

@@ -9,6 +9,18 @@ import {
   MfaSetupSchema,
   MfaStatusSchema,
 } from "./mfaActionModel";
+import {
+  ConfigurationTelemetrySchema,
+  DiagnosticsSchema,
+  HostRuntimeSchema,
+  TelemetryHistorySchema,
+  TelemetrySummarySchema,
+  VectorLogSummarySchema,
+  VersionTelemetrySchema,
+  type HostRuntime,
+  type TelemetrySample,
+  type VectorLogSummary,
+} from "./runtimeModel";
 
 export class APIError extends Error {
   constructor(
@@ -357,11 +369,15 @@ export const PublishReceiptSchema = z
     source_revision: publishRevision,
     graph: z.object({ nodes: z.array(z.any()), edges: z.array(z.any()) }),
     config: z.record(z.string(), z.any()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     artifact: z.string(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     size: z.number().int().nonnegative().max(1048576),
@@ -472,11 +488,9 @@ export type Device = {
   sync_paused: boolean;
   local_paused?: boolean;
   pause_acknowledged: boolean;
-  telemetry?: {
-    sampled_at: string;
-    events_per_second?: number | null;
-    errors?: number | null;
-  };
+  telemetry?: TelemetrySample | null;
+  host_runtime?: HostRuntime;
+  vector_log_summary?: VectorLogSummary;
   assignment?: Assignment;
   policy_assignment?: Assignment;
   created_at: string;
@@ -991,12 +1005,23 @@ export const IssueSchema = z.object({
   device_revoked: z.boolean().nullable(),
   code: z.string(),
   stage: z.string(),
+  // Rendered by the server from the code and first diagnostic.
+  title: z.string().max(120).optional(),
   message: z.string(),
+  diagnostics: DiagnosticsSchema.default([]),
+  // Distinct failed attempts; `reports` counts every check-in.
   count: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative().optional(),
   first_seen: z.string().nullable(),
   last_seen: z.string().nullable(),
   desired_version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable().optional(),
+  configuration_id: z.string().nullable().optional(),
+  configuration_name: z.string().nullable().optional(),
+  deployment_id: z.string().nullable().optional(),
   resolved: z.boolean(),
+  resolved_reason: z.enum(["verified", "unassigned"]).nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
   revision: z.number().int().positive(),
   acknowledged: z.boolean(),
   acknowledged_at: z.string().nullable(),
@@ -1013,6 +1038,34 @@ export const IssueHistoryPageSchema = z.object({
   page_size: z.number().int().min(1).max(50),
 });
 export type IssueHistoryPage = z.infer<typeof IssueHistoryPageSchema>;
+/** Issues of one version failing with one code, across devices. */
+export const IssueGroupSchema = z.object({
+  key: z.string(),
+  code: z.string(),
+  title: z.string(),
+  message: z.string(),
+  diagnostics: DiagnosticsSchema,
+  version_id: z.string().nullable(),
+  version_number: z.number().int().positive().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+  deployment_ids: z.array(z.string()).max(50),
+  device_count: z.number().int().nonnegative(),
+  issue_count: z.number().int().nonnegative(),
+  attempts: z.number().int().nonnegative(),
+  reports: z.number().int().nonnegative(),
+  first_seen: z.string().nullable(),
+  last_seen: z.string().nullable(),
+  devices: z.array(IssueSchema).max(50),
+});
+export type IssueGroup = z.infer<typeof IssueGroupSchema>;
+export const IssueGroupPageSchema = z.object({
+  items: z.array(IssueGroupSchema).max(50),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(50),
+});
+export type IssueGroupPage = z.infer<typeof IssueGroupPageSchema>;
 export type Token = {
   id: string;
   name: string;
@@ -1061,6 +1114,7 @@ export const ConfigurationAttemptSchema = z
         code: z.string().min(1).max(128),
         stage: z.string().min(1).max(128),
         message: z.string().max(1000),
+        diagnostics: DiagnosticsSchema.optional(),
       })
       .strict()
       .optional(),
@@ -1098,9 +1152,15 @@ export const DeviceSchema = z
     apply_state: z.string(),
     reported_apply_state: z.string().optional(),
     configuration_attempt: ConfigurationAttemptSchema.optional(),
+    host_runtime: HostRuntimeSchema.optional(),
+    vector_log_summary: VectorLogSummarySchema.optional(),
     desired_generation: z.number(),
     reported_generation: z.number(),
-    desired_sha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+    desired_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .optional(),
   })
   .passthrough();
 export const ConfigurationSchema = z
@@ -1111,11 +1171,15 @@ export const ConfigurationSchema = z
     archived: z.boolean().default(false),
     archived_at: z.string().nullable().optional(),
     config: z.record(z.string(), z.unknown()),
-    variables: z.array(z.object({
-      name: z.string(),
-      path: z.string(),
-      type: z.enum(["string", "integer", "boolean"]),
-    })).optional(),
+    variables: z
+      .array(
+        z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.enum(["string", "integer", "boolean"]),
+        }),
+      )
+      .optional(),
     graph: z.object({
       nodes: z.array(z.unknown()),
       edges: z.array(z.unknown()),
@@ -1235,32 +1299,6 @@ export const PipelineLibraryPageSchema = z.object({
 });
 export type PipelineSummary = z.infer<typeof PipelineSummarySchema>;
 export type PipelineLibraryPage = z.infer<typeof PipelineLibraryPageSchema>;
-const metricSchema = z.number().min(0).max(1e15).nullable().optional();
-const telemetrySchema = z
-  .object({
-    sampled_at: z.string(),
-    events_per_second: metricSchema,
-    errors: metricSchema,
-    uptime_seconds: metricSchema,
-    memory_bytes: metricSchema,
-    cpu_seconds: metricSchema,
-    discarded_events: metricSchema,
-    buffer_bytes: metricSchema,
-    components: z
-      .array(
-        z.object({
-          id: z.string().max(100),
-          type: z.string().max(100).optional(),
-          events_per_second: metricSchema,
-          errors: metricSchema,
-          discarded_events: metricSchema,
-          buffer_bytes: metricSchema,
-        }),
-      )
-      .max(50)
-      .optional(),
-  })
-  .passthrough();
 function responseSchema(path: string, method: string): z.ZodType | undefined {
   path = path.split("?")[0];
   if (path === "/policies/requests" && method === "GET")
@@ -1302,6 +1340,7 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return AuditDetailSchema;
   if (/^\/issues\/[^/]+\/(acknowledge|reopen)$/.test(path)) return IssueSchema;
   if (path === "/issues/history") return IssueHistoryPageSchema;
+  if (path === "/issues/groups") return IssueGroupPageSchema;
   if (path === "/issues") return z.array(IssueSchema);
   if (/^\/issues\/[^/]+$/.test(path)) return IssueSchema;
   if (
@@ -1341,11 +1380,12 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
   if (/^\/deployments\/requests\/[^/]+$/.test(path))
     return DeploymentRequestLookupSchema;
   if (path === "/devices") return z.array(DeviceSchema);
-  if (/^\/devices\/[^/]+\/telemetry$/.test(path))
-    return z.object({
-      device_id: z.string(),
-      samples: z.array(telemetrySchema).max(120),
-    });
+  if (/^\/devices\/[^/]+\/telemetry$/.test(path)) return TelemetryHistorySchema;
+  if (path === "/telemetry/summary") return TelemetrySummarySchema;
+  if (/^\/versions\/[^/]+\/telemetry$/.test(path))
+    return VersionTelemetrySchema;
+  if (/^\/configurations\/[^/]+\/telemetry$/.test(path))
+    return ConfigurationTelemetrySchema;
   if (/^\/devices\/[^/]+$/.test(path)) return DeviceSchema;
   if (path === "/configurations") return z.array(ConfigurationSchema);
   if (path === "/configurations/library") return PipelineLibraryPageSchema;
