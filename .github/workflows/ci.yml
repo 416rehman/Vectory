@@ -702,7 +702,7 @@ jobs:
   # agent bundled in the image, and the validator's isolation, probed from inside.
   compose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: deploy
@@ -750,8 +750,10 @@ jobs:
             and .services.validator.user == "10002:10002"
             and .services.server.depends_on.validator.condition == "service_healthy"
           ' "$RUNNER_TEMP/compose.json"
+      # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,
+      # SQLite at -O3) of the server, plus the agents, on a small runner.
       - name: Build the server and validator images
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: docker compose build
       - name: Start the stack and wait until every service is healthy
         id: stack

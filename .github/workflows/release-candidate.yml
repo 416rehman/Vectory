@@ -196,13 +196,16 @@ jobs:
           if-no-files-found: error
   images:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         timeout-minutes: 10
+      # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,
+      # SQLite at -O3) of the server, plus the agents, on a small runner.
       - name: Build the server image
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: docker build -f deploy/Dockerfile --target runtime -t vectory-server:candidate .
+      # Reuses the server stage built above.
       - name: Build the validator image
         timeout-minutes: 10
         run: docker build -f deploy/Dockerfile --target validator -t vectory-validator:candidate .
