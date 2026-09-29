@@ -260,6 +260,9 @@ async function start(f = fixture(), options = {}) {
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic saved settings recovery" });
+      // The page looks for settings applied without saving in the history.
+      if (path === "/deployments/history")
+        return reply({ items: [], total: 0, page: 1, page_size: 50 });
       if (path === "/policies")
         return reply(
           f.records.map(
