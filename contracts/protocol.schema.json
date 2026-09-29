@@ -2286,9 +2286,10 @@
                 "verified",
                 "unassigned",
                 "healthy",
-                "superseded"
+                "superseded",
+                "unmonitored"
               ],
-              "description": "verified: a configuration verified after an apply failure. unassigned: the assignment was removed. healthy: a DATA_PLANE_* condition was clear for three evaluations. superseded: the device no longer runs the version a DATA_PLANE_* issue was measured on."
+              "description": "verified: a configuration verified after an apply failure. unassigned: the assignment was removed. healthy: a DATA_PLANE_* condition was clear for three evaluations. superseded: the device no longer runs the version a DATA_PLANE_* issue was measured on. unmonitored: the device's settings turned metrics off, so delivery can no longer be judged."
             },
             {
               "type": "null"

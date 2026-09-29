@@ -444,3 +444,81 @@ async fn verification_and_coalescing_never_resolve_or_double_count_delivery_issu
         .unwrap();
     assert_eq!(db::parse(&state).unwrap()["evaluations"], 2);
 }
+
+#[tokio::test]
+async fn turning_metrics_off_closes_delivery_issues_instead_of_leaving_a_stale_flag() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    beat(&f, &peer, &device, 1, failing()).await;
+    beat(&f, &peer, &device, 2, failing()).await;
+    assert_eq!(get(&f, "/api/v1/issues/history").await["total"], 1);
+    let flagged = get(&f, &format!("/api/v1/devices/{device}")).await;
+    assert_eq!(
+        flagged["data_plane"]["issues"][0]["code"],
+        "DATA_PLANE_SINK_ERRORS"
+    );
+    // The operator turns metrics off: delivery can't be judged any more.
+    sqlx::query(
+        "UPDATE devices SET policy=json_set(policy,'$.telemetry_enabled',json('false')) WHERE id=?",
+    )
+    .bind(&device)
+    .execute(&f.s.pool)
+    .await
+    .unwrap();
+    beat(&f, &peer, &device, 3, failing()).await;
+    assert_eq!(get(&f, "/api/v1/issues/history").await["total"], 0);
+    let resolved = get(&f, "/api/v1/issues/history?state=resolved").await;
+    assert_eq!(resolved["items"][0]["resolved_reason"], "unmonitored");
+    let record = get(&f, &format!("/api/v1/devices/{device}")).await;
+    assert!(record.get("data_plane").is_none(), "{record}");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM data_plane_state WHERE device_id=?")
+        .bind(&device)
+        .fetch_one(&f.s.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    assert_eq!(get(&f, "/api/v1/overview").await["devices_degraded"], 0);
+}
+
+#[tokio::test]
+async fn the_longest_component_names_never_fail_a_heartbeat() {
+    let f = fixture().await;
+    canary(&f).await;
+    let device = f.ids[0].clone();
+    let peer = agent(&f, &device).await;
+    let id = "s".repeat(100);
+    let long = json!({"events_per_second":5.0,"events_out_per_second":0.0,"components":[
+        {"id":id,"kind":"sink","type":"t".repeat(64),"received_events_per_second":0.0,"events_per_second":0.0,"errors_per_minute":123456789.0,"dropped_per_minute":123456789.0,"buffer_utilization":1.0}
+    ]});
+    // beat() asserts that every heartbeat is accepted.
+    for n in 1..=3 {
+        beat(&f, &peer, &device, n, long.clone()).await;
+    }
+    let record = get(&f, &format!("/api/v1/devices/{device}")).await;
+    let codes: Vec<&str> = record["data_plane"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "DATA_PLANE_STALLED",
+            "DATA_PLANE_SINK_ERRORS",
+            "DATA_PLANE_BUFFER_FULL",
+            "DATA_PLANE_ERROR_DROPS"
+        ]
+    );
+    // Every stored issue kept its diagnostics: they fit the stored bound.
+    let listed = get(&f, "/api/v1/issues/history").await;
+    assert_eq!(listed["total"], 4);
+    for item in listed["items"].as_array().unwrap() {
+        assert!(
+            !item["diagnostics"].as_array().unwrap().is_empty(),
+            "{item}"
+        );
+    }
+}
