@@ -40,7 +40,7 @@ Open the device and read its issue: it names the stage and the reason.
 | Issue code | What happened | Fix |
 | --- | --- | --- |
 | `VALIDATION_FAILED` | Vector rejected the configuration on the device, or its tests failed. | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
-| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. | Have the host operator allow the resource, or switch the device to full mode. The dashboard can't grant it. |
+| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator add the entry the fix names (such as `"127.0.0.1:9"` to `allowed_network_hosts`), or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, or its file can't be read. | Check the device's bindings and the secret file's permissions. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
