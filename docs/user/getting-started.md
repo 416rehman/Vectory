@@ -9,13 +9,13 @@ Vectory is a self-hosted control plane for [Vector](https://vector.dev/). Build 
 flowchart LR
   B["Your browser"] -->|"HTTPS 443"| P["TLS proxy"]
   subgraph S["Vectory server"]
-    P --> V["vectory-server<br/>dashboard · API · Help center<br/>agent listener · SQLite"]
+    P --> V["vectory-server<br/>dashboard · API · help<br/>agent listener :8443<br/>SQLite"]
     V -->|"internal network only"| W["Validator<br/>sandboxed Vector 0.58"]
   end
   subgraph H["Each device"]
-    A["vectory agent"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
+    A["vectory agent<br/>outbound HTTPS 8443<br/>mutual TLS"] -->|"starts · verifies · rolls back"| X["Vector 0.58"]
   end
-  A -->|"outbound HTTPS 8443, mutual TLS"| V
+  A --> V
   X -->|"your events"| D[("Your destinations")]
 ```
 
