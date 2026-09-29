@@ -1,6 +1,6 @@
 # Threat model and risk decisions
 
-Scope: single-instance self-hosted control plane, browser administrators, reusable enrollment tokens, outbound agents, locally managed Vector. This is an implementation checklist; passing evidence belongs in the requirements checklist (`docs/internal/REQUIREMENTS.md`) and the CI workflow `checks`, not in this document.
+Scope: single-instance self-hosted control plane, browser administrators, reusable enrollment tokens, outbound agents, locally managed Vector. This is an implementation checklist; passing evidence belongs in the [requirements checklist](../internal/REQUIREMENTS.md) and the CI workflow `checks`, not in this document.
 
 Assets include control-plane signing/device-CA and MFA sealing keys, sessions, enrollment verifiers, agent identity keys, immutable reference templates, device-local secret files, rendered managed/recovery configurations, generation/revision counters, and group membership. Pipeline event payloads are not telemetry.
 
