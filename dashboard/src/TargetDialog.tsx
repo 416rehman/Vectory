@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, Clock, Search } from "lucide-react";
+import { ArrowRight, Check, Clock, Repeat2, Search } from "lucide-react";
 import {
   boundedPost as post,
+  type AssignmentDescription,
+  type BindingSuggestions,
   type Deployment,
   type DeploymentPreview,
   type Device,
@@ -30,14 +32,40 @@ import {
   type DeploymentOperation,
   type DeploymentStorageIssue,
 } from "./deploymentRequests";
+import { releasePlan, type StatusTone } from "./deploymentStatus";
+import {
+  AssignmentLink,
+  ConflictTable,
+  CopyDetails,
+  OutcomeChip,
+  ReleaseStrategyFields,
+} from "./DeploymentReview";
+import {
+  assignmentMeta,
+  conflictRows,
+  defaultRelease,
+  devicesText,
+  inferPipelineName,
+  localInputValue,
+  pauseSource,
+  policySummary,
+  releaseErrors,
+  requestedName,
+  reviewHeadline,
+  rolloutFor,
+  runningName,
+  scheduledAt,
+  shortAssignmentName,
+  startsIn,
+  technicalDetails,
+  usesCanary,
+  type ReleaseSettings,
+  type RequestedChange,
+} from "./deploymentReview";
 import "./control.css";
-type PreviewBlocker = {
-  code: string;
-  reason: string;
-  resource: "configuration" | "policy";
-  device_ids: string[];
-  deployment_id?: string;
-};
+import "./target-dialog.css";
+
+type PreviewBlocker = NonNullable<DeploymentPreview["blockers"]>[number];
 function blockerTitle(code: string): string {
   switch (code) {
     case "ACTIVE_CANARY_OVERLAP":
@@ -157,6 +185,53 @@ function fullModeRequirements(config: Record<string, any>): string[] {
   inspect(config);
   return [...required];
 }
+const deviceStates: Record<string, string> = {
+  verified: "Online",
+  unmanaged: "Online",
+  online: "Online",
+  applying: "Applying a change",
+  failed: "Last change failed",
+  rolled_back: "Last change rolled back",
+  verification_unknown: "Needs verification",
+  paused: "Sync paused",
+  offline: "Offline, applies when it reconnects",
+  awaiting_first_check_in: "Waiting for its first check-in",
+  revoked: "Revoked",
+};
+function statusText(device: Device) {
+  return deviceStates[device.status] || device.status.replaceAll("_", " ");
+}
+/** Worth a second line in the review: anything but a healthy, idle device. */
+function notable(device: Device) {
+  return !["verified", "unmanaged", "online"].includes(device.status);
+}
+
+/** What the request changes and the assignments it may take over. */
+type Inputs = {
+  replaces: string[];
+  priority: number;
+  mode: string;
+  declined: boolean;
+};
+type Reviewed = DeploymentPreview & {
+  request: Record<string, any>;
+  key: string;
+};
+/** A same-pipeline (or pause) replacement adopted by default, and what it changed. */
+type Adoption = {
+  assignments: AssignmentDescription[];
+  previousPriority: number;
+  previousMode: string;
+};
+type Outcome = {
+  label: string;
+  tone: StatusTone;
+  detail: string | null;
+  assignment: AssignmentDescription | null;
+  /** Whether the device ends up with this request. */
+  takes: boolean;
+};
+
 export default function TargetDialog({
   userId,
   open,
@@ -166,6 +241,10 @@ export default function TargetDialog({
   onDone,
   initialDeviceIds = [],
   preserveExistingSettings = false,
+  pipelineName,
+  initialStrategy,
+  policyId,
+  policyName,
 }: {
   userId: string;
   open: boolean;
@@ -175,6 +254,13 @@ export default function TargetDialog({
   onDone: (message: string) => void;
   initialDeviceIds?: string[];
   preserveExistingSettings?: boolean;
+  /** The pipeline's display name, when the caller knows it. */
+  pipelineName?: string;
+  /** Preselects a release strategy (the Schedules page starts on Scheduled). */
+  initialStrategy?: ReleaseSettings["strategy"];
+  /** Saved agent settings being applied; recorded for attribution. */
+  policyId?: string;
+  policyName?: string;
 }) {
   const [initialRegistry] = useState(() => readDeploymentRegistry(userId));
   const [storageIssue, setStorageIssue] =
@@ -193,13 +279,28 @@ export default function TargetDialog({
       defaults: {},
       devices: {},
     }),
+    [release, setRelease] = useState<ReleaseSettings>(() =>
+      initialStrategy === "scheduled"
+        ? {
+            ...defaultRelease,
+            strategy: "scheduled",
+            schedule: localInputValue(
+              Math.ceil((Date.now() + 3600000) / 900000) * 900000,
+            ),
+          }
+        : { ...defaultRelease, strategy: initialStrategy || "all" },
+    ),
     [priority, setPriority] = useState(100),
+    [priorityTouched, setPriorityTouched] = useState(false),
     [mode, setMode] = useState("snapshot"),
-    [schedule, setSchedule] = useState(""),
-    [rollout, setRollout] = useState("all"),
-    [canary, setCanary] = useState(1),
-    [batch, setBatch] = useState(10),
-    [observe, setObserve] = useState(60),
+    [modeTouched, setModeTouched] = useState(false),
+    [replaces, setReplaces] = useState<string[]>([]),
+    [declined, setDeclined] = useState(false),
+    [adoption, setAdoption] = useState<Adoption | null>(null),
+    [prefill, setPrefill] = useState<{
+      values: number;
+      devices: number;
+    } | null>(null),
     [busy, setBusy] = useState(false),
     [created, setCreated] = useState<{
       id: string | null;
@@ -208,7 +309,7 @@ export default function TargetDialog({
       status: string;
     } | null>(null),
     [error, setError] = useState(""),
-    [preview, setPreview] = useState<any>(null);
+    [preview, setPreview] = useState<Reviewed | null>(null);
   const effective = useMemo(
     () =>
       new Set(
@@ -222,7 +323,8 @@ export default function TargetDialog({
     [selected, groupIds, exclude, groups.data],
   );
   const declarations = version?.variables || [];
-  const persistent = !schedule && mode === "persistent";
+  const scheduled = release.strategy === "scheduled";
+  const persistent = !scheduled && mode === "persistent";
   const bindingResult = useMemo(
     () =>
       resolveVariableBindings(
@@ -231,11 +333,17 @@ export default function TargetDialog({
         [...effective],
         persistent,
       ),
+    // The declarations belong to the version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [version?.variables, bindingInputs, effective, persistent],
   );
-  const body = useMemo(
-    () => ({
-      ...(version ? { version_id: version.id } : { policy }),
+  const releaseProblems = releaseErrors(release);
+  const releaseValid = Object.keys(releaseProblems).length === 0;
+  function buildBody(inputs: Inputs) {
+    return {
+      ...(version
+        ? { version_id: version.id }
+        : { policy, ...(policyId ? { policy_id: policyId } : {}) }),
       selector: {
         device_ids: selected,
         group_ids: groupIds,
@@ -244,40 +352,24 @@ export default function TargetDialog({
       ...(declarations.length
         ? { variable_bindings: bindingResult.bindings }
         : {}),
-      priority,
-      target_mode: schedule ? "snapshot" : mode,
-      scheduled_at: schedule ? new Date(schedule).toISOString() : null,
-      rollout: {
-        kind: rollout,
-        canary_size: canary,
-        batch_size: batch,
-        observation_seconds: observe,
-        failure_threshold: 0,
-      },
-    }),
-    [
-      version,
-      policy,
-      selected,
-      groupIds,
-      exclude,
-      declarations.length,
-      bindingResult.bindings,
-      priority,
-      mode,
-      schedule,
-      rollout,
-      canary,
-      batch,
-      observe,
-    ],
-  );
+      ...(inputs.replaces.length ? { replaces: inputs.replaces } : {}),
+      priority: inputs.priority,
+      target_mode: scheduled ? "snapshot" : inputs.mode,
+      scheduled_at: releaseValid ? scheduledAt(release) : null,
+      rollout: rolloutFor(release),
+    };
+  }
+  const inputs: Inputs = { replaces, priority, mode, declined };
+  const body = buildBody(inputs);
+  const builder = useRef(buildBody);
+  builder.current = buildBody;
   const currentBody = useRef("");
   const mounted = useRef(true);
   const currentActor = useRef(userId);
   currentActor.current = userId;
   const inFlight = useRef(false);
   const receiptLink = useRef<HTMLAnchorElement>(null);
+  const prefilledKeys = useRef(new Set<string>());
   useEffect(() => {
     mounted.current = true;
     const protectRequest = (event: Event) => {
@@ -300,16 +392,96 @@ export default function TargetDialog({
     if (created) receiptLink.current?.focus();
   }, [created]);
   currentBody.current = JSON.stringify(body);
+
+  // Prefill device-specific values from what each device already runs for
+  // this pipeline, so shipping a new version doesn't mean retyping them.
+  const effectiveKey = [...effective].sort().join(",");
+  useEffect(() => {
+    if (!version || !declarations.length || !effective.size) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await post<BindingSuggestions>(
+          "/deployments/binding-suggestions",
+          { version_id: version.id, device_ids: [...effective] },
+        );
+        if (cancelled || !mounted.current || !result?.devices) return;
+        applySuggestions(result);
+      } catch {
+        // Older servers don't suggest values; the fields stay empty.
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // Suggestions follow the version and the device set only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version?.id, effectiveKey]);
+  const latestInputs = useRef(bindingInputs);
+  latestInputs.current = bindingInputs;
+  function applySuggestions(result: BindingSuggestions) {
+    const old = latestInputs.current;
+    const next: BindingInputs = {
+      defaults: { ...old.defaults },
+      devices: { ...old.devices },
+    };
+    const targets = [...effective];
+    const applied: string[] = [];
+    const touched = new Set<string>();
+    for (const declaration of declarations) {
+      const name = declaration.name;
+      const suggested = targets.map((device) => {
+        const value = result.devices[device]?.[name];
+        return typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean"
+          ? String(value)
+          : null;
+      });
+      // One value everywhere becomes the default; otherwise per-device values.
+      const shared =
+        suggested.length > 1 &&
+        suggested.every((value) => value !== null && value === suggested[0]);
+      if (shared) {
+        const key = `default:${name}`;
+        if (
+          !prefilledKeys.current.has(key) &&
+          !Object.prototype.hasOwnProperty.call(next.defaults, name)
+        ) {
+          applied.push(key);
+          next.defaults[name] = suggested[0]!;
+          targets.forEach((device) => touched.add(device));
+        }
+        continue;
+      }
+      targets.forEach((device, index) => {
+        const value = suggested[index];
+        const key = `${device}:${name}`;
+        if (value === null || prefilledKeys.current.has(key)) return;
+        const current = next.devices[device] || {};
+        if (Object.prototype.hasOwnProperty.call(current, name)) return;
+        applied.push(key);
+        next.devices[device] = { ...current, [name]: value };
+        touched.add(device);
+      });
+    }
+    if (!applied.length) return;
+    // Never refill a value someone cleared on purpose.
+    applied.forEach((key) => prefilledKeys.current.add(key));
+    setBindingInputs(next);
+    setPrefill((previous) => ({
+      values: (previous?.values || 0) + applied.length,
+      devices: Math.max(previous?.devices || 0, touched.size),
+    }));
+    setPreview(null);
+  }
+
   const blockers = (preview?.blockers || []) as PreviewBlocker[];
-  const blockedDeviceNames = (blocker: PreviewBlocker) =>
-    blocker.device_ids.map(
-      (id) =>
-        (preview?.devices as Device[] | undefined)?.find(
-          (device) => device.id === id,
-        )?.name ||
-        devices.data.find((device) => device.id === id)?.name ||
-        id,
-    );
+  const deviceName = (id: string) =>
+    preview?.devices.find((device) => device.id === id)?.name ||
+    devices.data.find((device) => device.id === id)?.name ||
+    id;
   const blockersByDevice = new Map<string, string[]>();
   for (const blocker of blockers) {
     if (blocker.resource !== (policy ? "policy" : "configuration")) continue;
@@ -349,127 +521,208 @@ export default function TargetDialog({
           );
         })
       : [];
-  function change<T>(setter: (v: T) => void, value: T) {
-    setter(value);
+  /** Selection changes invalidate the review and any replacement chosen for it. */
+  function resetReview() {
     setPreview(null);
+    if (adoption) {
+      if (!priorityTouched) setPriority(adoption.previousPriority);
+      if (!modeTouched) setMode(adoption.previousMode);
+    }
+    setAdoption(null);
+    setReplaces([]);
+    setDeclined(false);
   }
   function toggle(
     value: string,
     list: string[],
     setter: (v: string[]) => void,
   ) {
-    change(
-      setter,
+    setter(
       list.includes(value) ? list.filter((v) => v !== value) : [...list, value],
     );
+    resetReview();
   }
-  async function submit() {
-    if (inFlight.current || created) return;
-    if (bindingResult.errors.length) {
-      setError("Complete the device-specific values before reviewing this deployment.");
-      return;
-    }
+  function registryReady() {
     const registry = readDeploymentRegistry(userId);
     if (registry.errors.length) {
       setStorageIssue(registry.errors[0]);
-      return;
+      return false;
     }
     const existing = registry.operations[0];
     if (existing) {
       setError("");
       setRecovery(existing);
+      return false;
+    }
+    return true;
+  }
+  /**
+   * Reviews the request. A new version of the pipeline a device already runs
+   * (or new settings for a device) replaces that assignment by default and
+   * keeps its priority, so shipping is never a conflict.
+   */
+  async function review(next: Inputs) {
+    if (inFlight.current || created) return;
+    if (bindingResult.errors.length) {
+      setError(
+        "Complete the device-specific values before reviewing this deployment.",
+      );
       return;
     }
+    if (!releaseValid) {
+      setError("Fix the release settings before reviewing this deployment.");
+      return;
+    }
+    if (!registryReady()) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      let chosen = next;
+      let request = builder.current(chosen);
+      let result = await post<DeploymentPreview>(
+        "/deployments/preview",
+        structuredClone(request),
+      );
+      let adopted: Adoption | null = null;
+      const suggested = result.suggested_replaces || [];
+      if (!chosen.declined && !chosen.replaces.length && suggested.length) {
+        const previousPriority = chosen.priority;
+        const previousMode = chosen.mode;
+        chosen = {
+          ...chosen,
+          replaces: suggested.map((entry) => entry.assignment.id),
+          priority: priorityTouched
+            ? chosen.priority
+            : (result.suggested_priority ?? chosen.priority),
+          mode:
+            !modeTouched &&
+            !scheduled &&
+            suggested.every(
+              (entry) => entry.assignment.target_mode === "persistent",
+            )
+              ? "persistent"
+              : chosen.mode,
+        };
+        request = builder.current(chosen);
+        result = await post<DeploymentPreview>(
+          "/deployments/preview",
+          structuredClone(request),
+        );
+        adopted = {
+          assignments: suggested.map((entry) => entry.assignment),
+          previousPriority,
+          previousMode,
+        };
+      }
+      if (!mounted.current || currentActor.current !== userId) return;
+      const key = JSON.stringify(request);
+      // The selection must not have changed while the review was running.
+      if (JSON.stringify(builder.current(chosen)) !== key) {
+        setError(
+          "Targets changed during preview. Review the current selection again.",
+        );
+        return;
+      }
+      setReplaces(chosen.replaces);
+      setPriority(chosen.priority);
+      setMode(chosen.mode);
+      setDeclined(chosen.declined);
+      if (adopted) setAdoption(adopted);
+      else if (!chosen.replaces.length) setAdoption(null);
+      setPreview({ ...result, request, key });
+    } catch (e) {
+      if (!mounted.current || currentActor.current !== userId) return;
+      setError((e as Error).message);
+      setStorageIssue(readDeploymentRegistry(userId).errors[0] || null);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+  async function send() {
+    if (inFlight.current || created || !preview) return;
+    if (!registryReady()) return;
     let operation: DeploymentOperation | null = null;
     inFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      if (!preview) {
-        const request = structuredClone(body),
-          key = JSON.stringify(request);
-        const result = await post<DeploymentPreview>(
-          "/deployments/preview",
-          request,
+      if (
+        preview.create_idempotency !== true ||
+        preview.request_correlation !== true
+      )
+        throw Error(
+          "Update the server before sending a deployment. This server cannot confirm the exact saved request.",
         );
-        if (!mounted.current || currentActor.current !== userId) return;
-        if (currentBody.current === key)
-          setPreview({ ...result, request, key });
-        else
-          setError(
-            "Targets changed during preview. Review the current selection again.",
-          );
-      } else {
-        if (
-          preview.create_idempotency !== true ||
-          preview.request_correlation !== true
-        )
-          throw Error(
-            "Update the server before sending a deployment. This server cannot confirm the exact saved request.",
-          );
-        if (blockers.length)
-          throw Error(
-            blockers
-              .map((blocker) => blocker.reason)
-              .filter(Boolean)
-              .join(" ") ||
-              "The deployment preview has blockers. Review the affected devices before sending.",
-          );
-        if (artifactReviewIncomplete)
-          throw Error(
-            "The server did not confirm a rendered artifact for every reviewed device. Review again after the server is updated.",
-          );
-        if (settingsMismatch.length)
-          throw Error(
-            "Some selected devices use different agent settings. Return to the device list and select devices with matching settings.",
-          );
-        if (capabilityBlocked)
-          throw Error(
-            "This pipeline requires full Vector mode on every selected device. Only the host operator can enable that mode.",
-          );
-        if (preview.key !== currentBody.current) {
-          setPreview(null);
-          throw Error(
-            "The selection changed. Preview it again before deploying.",
-          );
-        }
-        operation = beginDeploymentOperation(
-          userId,
-          {
-            ...preview.request,
-            expected_device_ids: preview.devices.map((d: Device) => d.id),
-          },
-          preview.create_idempotency === true,
-          policy ? "Agent settings" : `Pipeline version ${version?.number}`,
+      if (blockers.length)
+        throw Error(
+          blockers
+            .map((blocker) => blocker.reason)
+            .filter(Boolean)
+            .join(" ") ||
+            "The deployment preview has blockers. Review the affected devices before sending.",
         );
-        if (!setDeploymentRequestActive(operation, true)) {
-          setRecovery(operation);
-          return;
-        }
-        const result = assertDeploymentReceipt(
-          operation,
-          await post<Deployment>("/deployments", operation.request),
+      if (artifactReviewIncomplete)
+        throw Error(
+          "The server did not confirm a rendered artifact for every reviewed device. Review again after the server is updated.",
         );
-        try {
-          finishDeploymentOperation(operation);
-        } catch {
-          setError(
-            "Your deployment is saved, but this browser could not clear its recovery reminder. You can still open the deployment below.",
-          );
-        }
-        if (!mounted.current || currentActor.current !== userId) return;
-        setCreated({
-          id: result.id,
-          scheduled: !!preview.request.scheduled_at,
-          scheduledAt: preview.request.scheduled_at,
-          status: result.status,
-        });
-        onDone(
-          result.status === "scheduled"
-            ? "Deployment scheduled. Target membership is frozen."
-            : "Deployment saved. Open its progress to track device results.",
+      if (settingsMismatch.length)
+        throw Error(
+          "Some selected devices use different agent settings. Return to the device list and select devices with matching settings.",
+        );
+      if (capabilityBlocked)
+        throw Error(
+          "This pipeline requires full Vector mode on every selected device. Only the host operator can enable that mode.",
+        );
+      if (preview.key !== currentBody.current) {
+        setPreview(null);
+        throw Error(
+          "The selection changed. Preview it again before deploying.",
         );
       }
+      operation = beginDeploymentOperation(
+        userId,
+        {
+          ...(preview.request as any),
+          expected_device_ids: preview.devices.map((d) => d.id),
+        },
+        preview.create_idempotency === true,
+        policy
+          ? policyName
+            ? `Agent settings: ${policyName}`
+            : "Agent settings"
+          : `Pipeline version ${version?.number}`,
+      );
+      if (!setDeploymentRequestActive(operation, true)) {
+        setRecovery(operation);
+        return;
+      }
+      const result = assertDeploymentReceipt(
+        operation,
+        await post<Deployment>("/deployments", operation.request),
+      );
+      try {
+        finishDeploymentOperation(operation);
+      } catch {
+        setError(
+          "Your deployment is saved, but this browser could not clear its recovery reminder. You can still open the deployment below.",
+        );
+      }
+      if (!mounted.current || currentActor.current !== userId) return;
+      setCreated({
+        id: result.id,
+        scheduled: !!preview.request.scheduled_at,
+        scheduledAt: preview.request.scheduled_at,
+        status: result.status,
+      });
+      onDone(
+        result.status === "scheduled"
+          ? "Deployment scheduled. Its devices are fixed until it starts."
+          : policy
+            ? "Settings saved. Devices apply them on their next check-in."
+            : "Rollout started. Its page tracks each device until it verifies.",
+      );
     } catch (e) {
       if (!mounted.current || currentActor.current !== userId) return;
       // A rejected attempt cannot exclude another tab's same-key success.
@@ -510,39 +763,103 @@ export default function TargetDialog({
       setExclude((old) => old.filter((item) => item !== id));
       setSelected((old) => [...new Set([...old, id])]);
     }
-    setPreview(null);
+    resetReview();
   }
-  const currentState = (device: Device) =>
-    policy
-      ? device.sync_paused
-        ? "Sync paused"
-        : "Sync enabled"
-      : device.desired_version_id
-        ? device.desired_version_id === version?.id
-          ? `Version ${version.number}`
-          : "Another version assigned"
-        : "No pipeline assigned";
+  const resource = policy ? "policy" : "configuration";
+  const change: RequestedChange = policy
+    ? { kind: "policy", policy, name: policyName || null }
+    : {
+        kind: "configuration",
+        configurationId: version?.configuration_id || null,
+        pipeline:
+          pipelineName ||
+          inferPipelineName(preview, version?.configuration_id || null),
+        number: version?.number ?? null,
+      };
   const outcomes = new Map(
-    ((preview?.outcomes as DeploymentPreview["outcomes"]) || [])
-      .filter(
-        (entry) => entry.resource === (policy ? "policy" : "configuration"),
-      )
+    (preview?.outcomes || [])
+      .filter((entry) => entry.resource === resource)
       .map((entry) => [entry.device_id, entry]),
   );
-  const priorityOutcome = (device: Device) => {
+  const paused = new Set(preview?.paused_device_ids || []);
+  function outcomeFor(device: Device): Outcome | null {
     const outcome = outcomes.get(device.id);
-    if (outcome?.outcome === "higher_priority")
-      return `Higher priority wins${outcome.assignment ? ` (${outcome.assignment.priority})` : ""}`;
-    if (outcome?.outcome === "conflict") return "Conflicting assignment";
-    if (outcome?.outcome === "requested") return "No current priority conflict";
-    return "Priority outcome unavailable";
+    if (!outcome) return null;
+    if (outcome.outcome === "replace")
+      return {
+        label: "Replaces",
+        tone: "info",
+        detail: null,
+        assignment: outcome.replaces || null,
+        takes: true,
+      };
+    if (outcome.outcome === "conflict") {
+      const other = conflictRows(
+        {
+          outcomes: [outcome],
+          conflicts: preview?.conflicts || [],
+          devices: [device],
+        },
+        resource,
+      )[0]?.assignments[0];
+      return {
+        label: "Conflict",
+        tone: "danger",
+        detail: "Same priority, different content",
+        assignment: other || null,
+        takes: false,
+      };
+    }
+    if (outcome.outcome === "higher_priority")
+      return {
+        label: "Keeps current",
+        tone: "warning",
+        detail: `Priority ${outcome.assignment?.priority ?? "higher"} wins`,
+        assignment:
+          outcome.winner && outcome.winner.id === outcome.assignment?.id
+            ? outcome.winner
+            : null,
+        takes: false,
+      };
+    if (outcome.winner)
+      return {
+        label: "Takes over",
+        tone: "success",
+        detail: `From priority ${outcome.winner.priority}`,
+        assignment: outcome.winner,
+        takes: true,
+      };
+    return {
+      label: "New",
+      tone: "success",
+      detail:
+        resource === "policy" ? "No settings assigned" : "No pipeline assigned",
+      assignment: null,
+      takes: true,
+    };
+  }
+  const configurationId = version?.configuration_id || null;
+  const nowText = (device: Device) =>
+    policy
+      ? policySummary(device.effective_policy)
+      : runningName(device, configurationId);
+  const afterText = (device: Device) => {
+    const outcome = outcomeFor(device);
+    if (outcome && !outcome.takes)
+      return outcome.label === "Conflict"
+        ? "Blocked until resolved"
+        : "No change";
+    const next = policy
+      ? policySummary(policy)
+      : device.running_version?.configuration_id === configurationId &&
+          version?.number
+        ? `v${version.number}`
+        : requestedName(change);
+    return paused.has(device.id) ? `${next}, after sync resumes` : next;
   };
-  const overridden = ((preview?.devices as Device[]) || []).filter(
-    (device) => outcomes.get(device.id)?.outcome === "higher_priority",
-  );
-  const artifactPreviews = (preview?.artifact_previews || []) as NonNullable<
-    DeploymentPreview["artifact_previews"]
-  >;
+  const shortName = (assignment: AssignmentDescription) =>
+    shortAssignmentName(assignment, configurationId);
+  const artifactPreviews = preview?.artifact_previews || [];
   const artifactByDevice = new Map(
     artifactPreviews.map((artifact) => [artifact.device_id, artifact]),
   );
@@ -551,7 +868,7 @@ export default function TargetDialog({
     !!preview &&
     (artifactPreviews.length !== preview.devices.length ||
       artifactByDevice.size !== artifactPreviews.length ||
-      preview.devices.some((device: Device) => {
+      preview.devices.some((device) => {
         const artifact = artifactByDevice.get(device.id);
         return (
           !artifact ||
@@ -561,8 +878,7 @@ export default function TargetDialog({
         );
       }));
   const reviewedBindings = preview?.request?.variable_bindings as
-    | typeof bindingResult.bindings
-    | undefined;
+    typeof bindingResult.bindings | undefined;
   const bindingFor = (deviceId: string, name: string) => {
     const override = reviewedBindings?.devices?.[deviceId];
     if (override && Object.prototype.hasOwnProperty.call(override, name))
@@ -572,6 +888,67 @@ export default function TargetDialog({
       value: reviewedBindings?.defaults?.[name],
     };
   };
+  const checkIn = Math.max(
+    10,
+    ...devices.data
+      .filter((device) => effective.has(device.id))
+      .map((device) => device.check_in_seconds || 60),
+  );
+  const plan = releaseValid
+    ? releasePlan({
+        kind: usesCanary(release) ? "canary" : "all",
+        devices: effective.size,
+        canarySize: release.canary,
+        batchSize: release.batch,
+        observeSeconds: release.observe,
+        checkInSeconds: effective.size ? checkIn : 60,
+      })
+    : null;
+  const stopRule = usesCanary(release)
+    ? release.threshold === 0
+      ? "stops at the first failure"
+      : `stops if more than ${release.threshold} fail`
+    : null;
+  const planSentence = plan
+    ? [plan.sentence, stopRule].filter(Boolean).join(" · ")
+    : "Fix the highlighted fields to see the plan.";
+  const startText = (value: string) => {
+    const at = new Date(value);
+    if (Number.isNaN(at.valueOf())) return "";
+    const relative = startsIn(value);
+    return `${at.toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })}${relative ? ` (${relative})` : ""}`;
+  };
+  const conflictList = preview ? conflictRows(preview, resource) : [];
+  const replacements = preview?.replacements || [];
+  const headline = preview
+    ? reviewHeadline(preview, change, preview.devices.length)
+    : "";
+  const singleReplacement =
+    replacements.length === 1 &&
+    change.kind === "configuration" &&
+    replacements[0].device_ids.length === preview?.devices.length;
+  const pausedDevices = (preview?.devices || []).filter((device) =>
+    paused.has(device.id),
+  );
+  const single = preview?.devices.length === 1;
+  const title = policy
+    ? policyName
+      ? `Apply “${policyName}”`
+      : preserveExistingSettings
+        ? policy.sync_paused
+          ? "Pause sync"
+          : "Resume sync"
+        : "Apply agent settings"
+    : pipelineName
+      ? `Deploy ${pipelineName} v${version?.number ?? ""}`
+      : `Deploy version ${version?.number ?? ""}`;
+
   if (storageIssue?.actor_id === userId)
     return (
       <DeploymentStorageRecoveryDialog
@@ -591,10 +968,9 @@ export default function TargetDialog({
         onRecovered={onDone}
       />
     );
-  if (created) {
-    const scheduled = created.scheduled;
+  if (created && preview) {
     const awaitingSchedule = created.status === "scheduled";
-    const destination = deploymentRoute(scheduled, created.id, {
+    const destination = deploymentRoute(created.scheduled, created.id, {
       search: "",
       status: "all",
       page: 1,
@@ -604,7 +980,7 @@ export default function TargetDialog({
         open={open}
         onClose={onClose}
         title={awaitingSchedule ? "Deployment scheduled" : "Deployment created"}
-        description="The original request is saved. Open the deployment to review its current status and device results."
+        description="The request is saved. Its page tracks each device from release to verified."
       >
         <div className="modal-body target-receipt">
           {error && <ErrorBox message={error} />}
@@ -613,35 +989,27 @@ export default function TargetDialog({
               {awaitingSchedule ? <Clock size={20} /> : <Check size={20} />}
             </span>
             <div>
-              <strong>
-                {policy
-                  ? "Agent settings"
-                  : `Pipeline version ${version?.number}`}
-              </strong>
+              <strong>{headline}</strong>
               <p>
-                {preview.devices.length}{" "}
-                {preview.devices.length === 1 ? "device" : "devices"} in the
-                original review
+                {awaitingSchedule && created.scheduledAt
+                  ? `Starts ${startText(created.scheduledAt)}`
+                  : planSentence}
               </p>
             </div>
           </div>
           <dl className="control-summary-list">
             <div>
-              <dt>Reviewed timing</dt>
-              <dd>
-                {scheduled && created.scheduledAt
-                  ? new Date(created.scheduledAt).toLocaleString()
-                  : "After release and the next agent check-in"}
-              </dd>
+              <dt>Devices</dt>
+              <dd>{devicesText(preview.devices.length)} in the review</dd>
             </div>
             <div>
-              <dt>Reviewed priority</dt>
+              <dt>Priority</dt>
               <dd>{preview.request.priority}</dd>
             </div>
           </dl>
           <p className="control-muted">
-            This receipt confirms the request was saved. It does not confirm
-            that devices applied it.
+            This confirms the request was saved, not that devices applied it.
+            Each device counts only after its agent verifies the change.
           </p>
           {!created.id && (
             <ErrorBox message="The server accepted the request but did not return a deployment link. Find it in deployment history before creating another." />
@@ -654,7 +1022,7 @@ export default function TargetDialog({
           <a ref={receiptLink} className="button" href={`#/${destination}`}>
             {!created.id
               ? "View history"
-              : scheduled
+              : created.scheduled
                 ? "View schedule"
                 : "View deployment"}
             <ArrowRight size={16} aria-hidden="true" />
@@ -663,6 +1031,13 @@ export default function TargetDialog({
       </Modal>
     );
   }
+  const sendLabel = preview
+    ? scheduled
+      ? "Schedule deployment"
+      : policy
+        ? "Apply settings"
+        : "Deploy to devices"
+    : "Review deployment";
   return (
     <Modal
       open={open}
@@ -670,17 +1045,18 @@ export default function TargetDialog({
         if (!busy) onClose();
       }}
       wide
-      title={
-        policy
-          ? "Apply agent settings"
-          : `Deploy version ${version?.number ?? ""}`
+      className="target-dialog"
+      title={title}
+      description={
+        preview
+          ? "Check what changes on each device, then send."
+          : "Choose devices and how to release, then review exactly what changes."
       }
-      description="Choose devices, then review exactly what will be sent."
     >
       <div className="modal-body target-flow">
         <ol className="control-steps" aria-label="Deployment steps">
           <li aria-current={!preview ? "step" : undefined}>
-            <span>1</span>Choose devices
+            <span>1</span>Devices and release
           </li>
           <li aria-current={preview ? "step" : undefined}>
             <span>2</span>Review and send
@@ -691,7 +1067,7 @@ export default function TargetDialog({
         )}
         {!!settingsMismatch.length && (
           <ErrorBox
-            message={`To preserve check-in and telemetry settings, choose devices with matching settings. These devices differ or have no reported settings: ${settingsMismatch.map((device) => device.name).join(", ")}.`}
+            message={`To keep each device's check-in and metrics settings, choose devices that share them. These devices differ or haven't reported settings: ${settingsMismatch.map((device) => device.name).join(", ")}.`}
           />
         )}
         {!!requirements.length && (
@@ -729,276 +1105,333 @@ export default function TargetDialog({
           </div>
         )}
         {!preview ? (
-          <>
-            <fieldset className="target-selection" disabled={busy}>
-              <label className="target-search">
-                <Search size={17} />
-                <input
-                  aria-label="Find targets"
-                  placeholder="Search devices or groups"
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setDevicePage(1);
-                  }}
-                />
-              </label>
-              {groups.data.length > 0 && (
-                <details className="control-disclosure target-group-list">
-                  <summary>Choose groups ({groups.data.length})</summary>
-                  <div className="target-group-options">
-                    {groups.data
-                      .filter((g) =>
-                        g.name.toLowerCase().includes(search.toLowerCase()),
-                      )
-                      .map((g) => (
-                        <label className="target-option" key={g.id}>
-                          <input
-                            type="checkbox"
-                            checked={groupIds.includes(g.id)}
-                            onChange={() => toggle(g.id, groupIds, setGroupIds)}
-                          />
-                          <span>
-                            <strong>{g.name}</strong>
-                            <small>{g.device_ids.length} devices</small>
-                          </span>
-                        </label>
-                      ))}
-                  </div>
-                </details>
+          <fieldset className="target-selection" disabled={busy}>
+            <label className="target-search">
+              <Search size={17} />
+              <input
+                aria-label="Find targets"
+                placeholder="Search devices or groups"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setDevicePage(1);
+                }}
+              />
+            </label>
+            {groups.data.length > 0 && (
+              <details className="control-disclosure target-group-list">
+                <summary>
+                  Choose groups ({groups.data.length})
+                  {groupIds.length > 0 && `, ${groupIds.length} selected`}
+                </summary>
+                <div className="target-group-options">
+                  {groups.data
+                    .filter((g) =>
+                      g.name.toLowerCase().includes(search.toLowerCase()),
+                    )
+                    .map((g) => (
+                      <label className="target-option" key={g.id}>
+                        <input
+                          type="checkbox"
+                          checked={groupIds.includes(g.id)}
+                          onChange={() => toggle(g.id, groupIds, setGroupIds)}
+                        />
+                        <span>
+                          <strong>{g.name}</strong>
+                          <small>{devicesText(g.device_ids.length)}</small>
+                        </span>
+                      </label>
+                    ))}
+                </div>
+              </details>
+            )}
+            <div className="target-device-list">
+              <h3>Devices</h3>
+              {listedDevices.map((d) => (
+                <label className="target-option" key={d.id}>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${d.name}`}
+                    checked={effective.has(d.id)}
+                    onChange={() => chooseDevice(d.id)}
+                  />
+                  <span>
+                    <strong>{d.name}</strong>
+                    <small>
+                      {d.os} · {statusText(d)} ·{" "}
+                      {d.configuration_mode === "full"
+                        ? "Full Vector mode"
+                        : "Restricted mode"}
+                    </small>
+                  </span>
+                  <span className="target-option-now">
+                    <small>Now</small>
+                    {nowText(d)}
+                  </span>
+                </label>
+              ))}
+              {!visibleDevices.length && (
+                <p className="control-muted">
+                  {devices.data.length
+                    ? "No devices match your search."
+                    : "Add a device before deploying."}
+                </p>
               )}
-              <div className="target-device-list">
-                <h3>Devices</h3>
-                {listedDevices.map((d) => (
-                  <label className="target-option" key={d.id}>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${d.name}`}
-                      checked={effective.has(d.id)}
-                      onChange={() => chooseDevice(d.id)}
-                    />
-                    <span>
-                      <strong>{d.name}</strong>
-                      <small>
-                        {d.os},{" "}
-                        {d.status === "offline"
-                          ? "Offline, applies when reconnected"
-                          : d.status.replaceAll("_", " ")}
-                        {", "}
-                        {d.configuration_mode === "full"
-                          ? "Full Vector mode"
-                          : "Restricted mode"}
-                      </small>
-                    </span>
-                  </label>
-                ))}
-                {!visibleDevices.length && (
-                  <p className="control-muted">
-                    {devices.data.length
-                      ? "No devices match your search."
-                      : "Add a device before deploying."}
+            </div>
+            {visibleDevices.length > devicePageSize && (
+              <nav
+                className="target-device-pagination"
+                aria-label="Device selection pages"
+              >
+                <span aria-live="polite">
+                  Showing {devicePageStart + 1}–
+                  {Math.min(
+                    devicePageStart + devicePageSize,
+                    visibleDevices.length,
+                  )}{" "}
+                  of {visibleDevices.length} devices
+                </span>
+                <div>
+                  <Button
+                    variant="secondary compact"
+                    disabled={currentDevicePage === 1}
+                    onClick={() => setDevicePage(currentDevicePage - 1)}
+                  >
+                    Previous devices
+                  </Button>
+                  <span>
+                    Page {currentDevicePage} of {devicePageCount}
+                  </span>
+                  <Button
+                    variant="secondary compact"
+                    disabled={currentDevicePage === devicePageCount}
+                    onClick={() => setDevicePage(currentDevicePage + 1)}
+                  >
+                    Next devices
+                  </Button>
+                </div>
+              </nav>
+            )}
+            <div className="target-selection-summary">
+              {effective.size} {effective.size === 1 ? "device" : "devices"}{" "}
+              selected
+              {exclude.length > 0 && (
+                <span>, {exclude.length} excluded from selected groups</span>
+              )}
+            </div>
+            {declarations.length > 0 && (
+              <>
+                {prefill && (
+                  <p className="target-prefill" role="status">
+                    <Check size={15} aria-hidden="true" />
+                    Filled {prefill.values}{" "}
+                    {prefill.values === 1 ? "value" : "values"} from the version{" "}
+                    {prefill.devices === 1
+                      ? "this device runs"
+                      : "these devices run"}{" "}
+                    now. Change any of them before you review.
                   </p>
                 )}
-              </div>
-              {visibleDevices.length > devicePageSize && (
-                <nav
-                  className="target-device-pagination"
-                  aria-label="Device selection pages"
-                >
-                  <span aria-live="polite">
-                    Showing {devicePageStart + 1}–
-                    {Math.min(
-                      devicePageStart + devicePageSize,
-                      visibleDevices.length,
-                    )} of {visibleDevices.length} devices
-                  </span>
-                  <div>
-                    <Button
-                      variant="secondary compact"
-                      disabled={currentDevicePage === 1}
-                      onClick={() => setDevicePage(currentDevicePage - 1)}
-                    >
-                      Previous devices
-                    </Button>
-                    <span>
-                      Page {currentDevicePage} of {devicePageCount}
-                    </span>
-                    <Button
-                      variant="secondary compact"
-                      disabled={currentDevicePage === devicePageCount}
-                      onClick={() => setDevicePage(currentDevicePage + 1)}
-                    >
-                      Next devices
-                    </Button>
-                  </div>
-                </nav>
-              )}
-              <div className="target-selection-summary">
-                {effective.size} {effective.size === 1 ? "device" : "devices"}{" "}
-                selected
-                {exclude.length > 0 && (
-                  <span>, {exclude.length} excluded from selected groups</span>
-                )}
-              </div>
-              {declarations.length > 0 && (
-                <>
-                  <DeploymentVariableFields
-                    declarations={declarations}
-                    devices={devices.data.filter((device) => effective.has(device.id))}
-                    inputs={bindingInputs}
-                    persistent={persistent}
-                    onChange={(next) => {
-                      setBindingInputs(next);
-                      setPreview(null);
-                      setError("");
-                    }}
-                  />
-                  {effective.size > 0 && bindingResult.errors.length > 0 && (
-                    <ErrorBox message={bindingResult.errors.join("\n")} />
+                <DeploymentVariableFields
+                  declarations={declarations}
+                  devices={devices.data.filter((device) =>
+                    effective.has(device.id),
                   )}
-                </>
-              )}
-              <details className="control-disclosure target-advanced">
-                <summary>Advanced options</summary>
-                <div className="control-disclosure-content">
-                  <div className="control-two-col">
-                    <Field
-                      label="Assignment priority"
-                      hint="Higher priorities win. Equal priorities must agree."
-                    >
-                      <input
-                        type="number"
-                        min={-1000000}
-                        max={1000000}
-                        value={priority}
-                        onChange={(e) => change(setPriority, +e.target.value)}
-                      />
-                    </Field>
-                    <Field label="Target membership">
-                      <select
-                        value={schedule ? "snapshot" : mode}
-                        disabled={!!schedule}
-                        onChange={(e) => change(setMode, e.target.value)}
-                      >
-                        <option value="snapshot">
-                          Only the selected devices
-                        </option>
-                        <option value="persistent">
-                          Also include future group members
-                        </option>
-                      </select>
-                    </Field>
-                  </div>
+                  inputs={bindingInputs}
+                  persistent={persistent}
+                  onChange={(next) => {
+                    setBindingInputs(next);
+                    setPreview(null);
+                    setError("");
+                  }}
+                />
+                {effective.size > 0 && bindingResult.errors.length > 0 && (
+                  <ErrorBox message={bindingResult.errors.join("\n")} />
+                )}
+              </>
+            )}
+            <ReleaseStrategyFields
+              value={release}
+              errors={releaseProblems}
+              plan={
+                release.strategy === "scheduled" && release.schedule && plan
+                  ? `Starts ${startText(release.schedule)} · ${planSentence}`
+                  : planSentence
+              }
+              onChange={(patch) => {
+                setRelease((old) => ({ ...old, ...patch }));
+                setPreview(null);
+                setError("");
+              }}
+            />
+            <details className="control-disclosure target-advanced">
+              <summary>Advanced options</summary>
+              <div className="control-disclosure-content">
+                <div className="control-two-col">
                   <Field
-                    label="Schedule (optional)"
-                    hint={`Local time: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Scheduled targets stay fixed.`}
+                    label="Assignment priority"
+                    hint="Higher priorities win. Equal priorities must send the same thing."
                   >
                     <input
-                      type="datetime-local"
-                      value={schedule}
-                      min={new Date(
-                        Date.now() +
-                          60000 -
-                          new Date().getTimezoneOffset() * 60000,
-                      )
-                        .toISOString()
-                        .slice(0, 16)}
-                      onChange={(e) => change(setSchedule, e.target.value)}
+                      type="number"
+                      min={-1000000}
+                      max={1000000}
+                      value={priority}
+                      onChange={(e) => {
+                        setPriority(+e.target.value);
+                        setPriorityTouched(true);
+                        setPreview(null);
+                      }}
                     />
                   </Field>
-                  <Field label="Release strategy">
+                  <Field
+                    label="Target membership"
+                    hint={
+                      scheduled
+                        ? "A schedule always keeps the devices you chose."
+                        : undefined
+                    }
+                  >
                     <select
-                      value={rollout}
-                      onChange={(e) => change(setRollout, e.target.value)}
+                      value={scheduled ? "snapshot" : mode}
+                      disabled={scheduled}
+                      onChange={(e) => {
+                        setMode(e.target.value);
+                        setModeTouched(true);
+                        setPreview(null);
+                      }}
                     >
-                      <option value="all">All selected devices</option>
-                      <option value="canary">
-                        Start with a canary, then batches
+                      <option value="snapshot">
+                        Only the selected devices
+                      </option>
+                      <option value="persistent">
+                        Also include future group members
                       </option>
                     </select>
                   </Field>
-                  {rollout === "canary" && (
-                    <div className="control-three-col">
-                      <Field label="Canary devices">
-                        <input
-                          type="number"
-                          min={1}
-                          value={canary}
-                          onChange={(e) => change(setCanary, +e.target.value)}
-                        />
-                      </Field>
-                      <Field label="Batch size">
-                        <input
-                          type="number"
-                          min={1}
-                          value={batch}
-                          onChange={(e) => change(setBatch, +e.target.value)}
-                        />
-                      </Field>
-                      <Field label="Observe (seconds)">
-                        <input
-                          type="number"
-                          min={10}
-                          max={86400}
-                          value={observe}
-                          onChange={(e) => change(setObserve, +e.target.value)}
-                        />
-                      </Field>
-                    </div>
-                  )}
                 </div>
-              </details>
-            </fieldset>
-          </>
+              </div>
+            </details>
+          </fieldset>
         ) : (
           <div className="target-review">
             <div className="target-review-heading">
-              <h3>
-                {preview.devices.length}{" "}
-                {preview.devices.length === 1 ? "device" : "devices"} selected
-                for review
-              </h3>
+              <h3>{headline}</h3>
               <p>
-                {policy
-                  ? `Heartbeat every ${policy.heartbeat_seconds} seconds, ${policy.sync_paused ? "Pause configuration sync" : "Enable configuration sync"}, metrics ${policy.telemetry_enabled ? "on" : "off"}`
-                  : `Published version ${version?.number}`}
+                {scheduled && release.schedule
+                  ? `Starts ${startText(release.schedule)} · `
+                  : ""}
+                {planSentence}
               </p>
             </div>
-            <dl className="control-summary-list">
+            {(replacements.length > 1 ||
+              (replacements.length === 1 && !singleReplacement)) && (
+              <ul
+                className="target-replacements"
+                aria-label="Replaced assignments"
+              >
+                {replacements.map((replacement) => (
+                  <li key={replacement.assignment.id}>
+                    <Repeat2 size={15} aria-hidden="true" />
+                    <span>
+                      <span>
+                        Replaces{" "}
+                        <AssignmentLink
+                          assignment={replacement.assignment}
+                          label={shortName(replacement.assignment)}
+                          disabled={busy}
+                        />{" "}
+                        on {devicesText(replacement.device_ids.length)}
+                      </span>
+                      <small>
+                        {assignmentMeta(replacement.assignment)}
+                        {replacement.retires_assignment === false
+                          ? ". It keeps its other devices."
+                          : ""}
+                      </small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {adoption && replaces.length > 0 && (
+              <div className="target-adoption" role="status">
+                <p>
+                  {change.kind === "policy"
+                    ? change.policy.sync_paused
+                      ? `Replaces the settings ${single ? "this device follows" : "these devices follow"} now. Resuming later replaces the pause the same way.`
+                      : adoption.assignments.some((a) => a.policy?.sync_paused)
+                        ? "Replaces the pause, so it can't win again later."
+                        : `Replaces the settings ${single ? "this device follows" : "these devices follow"} now.`
+                    : `A new version replaces the one ${single ? "this device runs" : "these devices run"} now.`}{" "}
+                  Priority stays {priority}
+                  {mode === "persistent" && !scheduled
+                    ? " and it follows the same groups"
+                    : ""}
+                  .
+                </p>
+                <button
+                  type="button"
+                  className="target-link-button"
+                  disabled={busy}
+                  onClick={() =>
+                    void review({
+                      replaces: [],
+                      priority: priorityTouched
+                        ? priority
+                        : adoption.previousPriority,
+                      mode: modeTouched ? mode : adoption.previousMode,
+                      declined: true,
+                    })
+                  }
+                >
+                  Keep{" "}
+                  {adoption.assignments.length === 1
+                    ? shortName(adoption.assignments[0])
+                    : "the current assignments"}{" "}
+                  as well
+                </button>
+              </div>
+            )}
+            <dl className="control-summary-list target-summary">
               <div>
                 <dt>When</dt>
                 <dd>
-                  {schedule
-                    ? new Date(schedule).toLocaleString()
-                    : "After release and the next agent check-in"}
+                  {scheduled && release.schedule
+                    ? startText(release.schedule)
+                    : "On each device's next check-in"}
                 </dd>
               </div>
               <div>
                 <dt>Release</dt>
+                <dd>{planSentence}</dd>
+              </div>
+              <div>
+                <dt>Priority</dt>
                 <dd>
-                  {rollout === "canary"
-                    ? `${canary} canary devices, then batches of ${batch}`
-                    : "All selected devices"}
+                  {priority}
+                  {adoption && replaces.length > 0 && !priorityTouched
+                    ? " · kept from the assignment it replaces"
+                    : ""}
                 </dd>
               </div>
               <div>
                 <dt>Membership</dt>
                 <dd>
                   {body.target_mode === "persistent"
-                    ? "Follows selected groups"
-                    : "Fixed to the devices below"}
+                    ? "Follows the selected groups"
+                    : single
+                      ? "Fixed to this device"
+                      : `Fixed to these ${devicesText(preview.devices.length)}`}
                 </dd>
-              </div>
-              <div>
-                <dt>Priority</dt>
-                <dd>{priority}</dd>
               </div>
               {declarations.length > 0 && (
                 <div>
                   <dt>Device-specific values</dt>
                   <dd>
-                    {declarations.length} {declarations.length === 1 ? "field" : "fields"},
-                    reviewed per device
+                    {declarations.length}{" "}
+                    {declarations.length === 1 ? "field" : "fields"}, reviewed
+                    per device
                   </dd>
                 </div>
               )}
@@ -1022,7 +1455,7 @@ export default function TargetDialog({
                   <p>
                     {blocker.device_ids.length} affected{" "}
                     {blocker.device_ids.length === 1 ? "device" : "devices"}:{" "}
-                    {blockedDeviceNames(blocker).join(", ")}.
+                    {blocker.device_ids.map(deviceName).join(", ")}.
                   </p>
                 )}
                 {blocker.code === "ACTIVE_CANARY_OVERLAP" &&
@@ -1040,27 +1473,46 @@ export default function TargetDialog({
                   )}
               </div>
             ))}
-            {overridden.length > 0 && (
-              <div className="control-note" role="status">
+            <ConflictTable
+              rows={conflictList}
+              requestLabel={requestedName(change)}
+              priority={priority}
+              winningPriority={preview.winning_priority ?? null}
+              busy={busy}
+              onUsePriority={(next) => {
+                setPriorityTouched(true);
+                void review({ ...inputs, priority: next });
+              }}
+              onReplace={(ids) =>
+                void review({
+                  ...inputs,
+                  replaces: [...new Set([...replaces, ...ids])],
+                })
+              }
+            />
+            {pausedDevices.length > 0 && (
+              <div className="control-note target-paused" role="status">
                 <strong>
-                  Higher-priority assignments take precedence on{" "}
-                  {overridden.length}{" "}
-                  {overridden.length === 1 ? "device" : "devices"}
+                  {pausedDevices.length === 1
+                    ? "1 device has sync paused"
+                    : `${pausedDevices.length} devices have sync paused`}
                 </strong>
                 <p>
-                  This request will not replace them. Go back to change its
-                  priority or the selected devices.
+                  This change is saved now and waits until sync resumes on{" "}
+                  {pausedDevices.length === 1 ? "it" : "them"}.
                 </p>
+                <ul>
+                  {pausedDevices.slice(0, 6).map((device) => (
+                    <li key={device.id}>
+                      <strong>{device.name}</strong>{" "}
+                      {pauseSource(device) || "Sync paused."}
+                    </li>
+                  ))}
+                  {pausedDevices.length > 6 && (
+                    <li>and {pausedDevices.length - 6} more</li>
+                  )}
+                </ul>
               </div>
-            )}
-            {preview.conflicts?.length > 0 && (
-              <ErrorBox message="Some selected devices have a conflicting assignment. Go back and change the selection or priority before sending." />
-            )}
-            {preview.conflicts?.length > 0 && (
-              <details className="control-disclosure">
-                <summary>Conflict details</summary>
-                <pre>{JSON.stringify(preview.conflicts, null, 2)}</pre>
-              </details>
             )}
             <div className="target-review-table">
               <DataTable<Device>
@@ -1078,8 +1530,8 @@ export default function TargetDialog({
                       return (
                         <>
                           <strong>{device.name}</strong>
-                          {device.status === "offline" && (
-                            <small>Offline</small>
+                          {notable(device) && (
+                            <small>{statusText(device)}</small>
                           )}
                           {blocked.length > 0 && (
                             <small className="target-review-blocker">
@@ -1091,132 +1543,170 @@ export default function TargetDialog({
                     },
                   },
                   {
-                    id: "current",
-                    header: "Current",
-                    value: currentState,
-                    cell: currentState,
-                    filter: {
-                      options: [
-                        ...new Set<string>(
-                          (preview.devices as Device[]).map(currentState),
-                        ),
-                      ].map((value) => ({ value, label: value })),
-                    },
+                    id: "change",
+                    header: "Now → After",
+                    value: (device) =>
+                      `${nowText(device)} ${afterText(device)}`,
+                    cell: (device) => (
+                      <span className="target-now-after">
+                        <span>{nowText(device)}</span>
+                        <ArrowRight size={13} aria-label="then" />
+                        <strong
+                          data-unchanged={
+                            outcomeFor(device)?.takes === false || undefined
+                          }
+                        >
+                          {afterText(device)}
+                        </strong>
+                      </span>
+                    ),
                   },
                   {
                     id: "outcome",
-                    header: "Priority outcome",
-                    value: priorityOutcome,
-                    cell: (device) => (
-                      <>
-                        {priorityOutcome(device)}
-                        {outcomes.get(device.id)?.assignment && (
-                          <small>
-                            <a
-                              aria-disabled={busy || undefined}
-                              onClick={(event) => {
-                                if (inFlight.current) event.preventDefault();
-                              }}
-                              href={`#/${deploymentRoute(false, outcomes.get(device.id)!.assignment!.id, { search: "", status: "all", page: 1 })}`}
-                            >
-                              View assignment
-                            </a>
-                          </small>
-                        )}
-                      </>
-                    ),
+                    header: "Outcome",
+                    value: (device) =>
+                      outcomeFor(device)?.label || "Outcome unavailable",
+                    cell: (device) => {
+                      const outcome = outcomeFor(device);
+                      if (!outcome)
+                        return (
+                          <span className="control-muted">
+                            Outcome unavailable
+                          </span>
+                        );
+                      return (
+                        <span className="target-outcome">
+                          <OutcomeChip tone={outcome.tone}>
+                            {outcome.label}
+                          </OutcomeChip>
+                          {outcome.assignment ? (
+                            <small>
+                              <AssignmentLink
+                                assignment={outcome.assignment}
+                                label={shortName(outcome.assignment)}
+                                disabled={busy}
+                              />
+                              {outcome.detail ? ` · ${outcome.detail}` : ""}
+                            </small>
+                          ) : (
+                            outcome.detail && <small>{outcome.detail}</small>
+                          )}
+                        </span>
+                      );
+                    },
                     filter: {
                       options: [
                         ...new Set<string>(
-                          (preview.devices as Device[]).map(priorityOutcome),
+                          preview.devices.map(
+                            (device) =>
+                              outcomeFor(device)?.label ||
+                              "Outcome unavailable",
+                          ),
                         ),
                       ].map((value) => ({ value, label: value })),
                     },
                   },
                   ...(declarations.length > 0
-                    ? [{
-                        id: "bindings",
-                        header: "Values and rendered artifact",
-                        value: (device: Device) =>
-                          declarations
-                            .map((declaration) =>
-                              String(bindingFor(device.id, declaration.name).value ?? ""),
-                            )
-                            .join(" "),
-                        cell: (device: Device) => (
-                          <div className="target-review-variables">
-                            {declarations.map((declaration) => {
-                              const binding = bindingFor(device.id, declaration.name);
-                              return (
-                                <div key={declaration.name}>
-                                  <strong>{declaration.name}</strong>
-                                  <code>{JSON.stringify(binding.value)}</code>
-                                  <small>{binding.source}</small>
+                    ? [
+                        {
+                          id: "bindings",
+                          header: "Values and rendered artifact",
+                          value: (device: Device) =>
+                            declarations
+                              .map((declaration) =>
+                                String(
+                                  bindingFor(device.id, declaration.name)
+                                    .value ?? "",
+                                ),
+                              )
+                              .join(" "),
+                          cell: (device: Device) => (
+                            <div className="target-review-variables">
+                              {declarations.map((declaration) => {
+                                const binding = bindingFor(
+                                  device.id,
+                                  declaration.name,
+                                );
+                                return (
+                                  <div key={declaration.name}>
+                                    <strong>{declaration.name}</strong>
+                                    <code>{JSON.stringify(binding.value)}</code>
+                                    <small>{binding.source}</small>
+                                  </div>
+                                );
+                              })}
+                              {artifactByDevice.get(device.id) && (
+                                <div>
+                                  <strong>Rendered SHA-256</strong>
+                                  <code>
+                                    {artifactByDevice.get(device.id)!.sha256}
+                                  </code>
+                                  <small>
+                                    {artifactByDevice.get(device.id)!.size}{" "}
+                                    bytes
+                                  </small>
                                 </div>
-                              );
-                            })}
-                            {artifactByDevice.get(device.id) && (
-                              <div>
-                                <strong>Rendered SHA-256</strong>
-                                <code>{artifactByDevice.get(device.id)!.sha256}</code>
-                                <small>{artifactByDevice.get(device.id)!.size} bytes</small>
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      }]
+                              )}
+                            </div>
+                          ),
+                        },
+                      ]
                     : []),
                 ]}
                 empty="No reviewed devices match these filters."
               />
             </div>
-            <p className="control-muted">
-              Column filters only change this view. All {preview.devices.length}{" "}
-              reviewed devices remain included.
-            </p>
-            <div className="target-review-notes">
-              <p>
-                {schedule
-                  ? "Priority outcomes reflect current assignments. They are checked again when the schedule runs."
-                  : "Priority outcomes reflect current assignments. Eligible devices still wait for rollout release and agent verification."}
+            {preview.devices.length > 1 && (
+              <p className="control-muted target-filter-note">
+                Filters only change this view. All {preview.devices.length}{" "}
+                reviewed devices stay included.
               </p>
+            )}
+            <div className="target-review-notes">
+              {preview.warnings
+                ?.filter(
+                  (warning) =>
+                    !/sync paused/.test(warning) || !pausedDevices.length,
+                )
+                .map((warning: string) => (
+                  <p key={warning}>{warning}</p>
+                ))}
               {!preview.outcomes && (
                 <p>
-                  This server does not report priority outcomes. Review existing
+                  This server doesn't report outcomes. Review existing
                   assignments before sending.
                 </p>
               )}
-              {preview.warnings?.map((warning: string) => (
-                <p key={warning}>{warning}</p>
-              ))}
               <p>
-                Progress is complete only after each agent verifies the change.
+                {version
+                  ? "Each device checks the change against its own Vector and local resources before switching. It counts as done only when its agent verifies it."
+                  : "Each device counts as done only when its agent confirms the new settings."}
               </p>
-              {version && (
-                <p>
-                  Each device validates against its installed Vector build and
-                  local resources before activation. Full mode uses the Vector
-                  process's OS permissions; restricted mode also checks local
-                  file, network and listener rules. This page cannot verify
-                  those resources.
-                </p>
-              )}
             </div>
-            {version && (
-              <details className="control-disclosure">
-                <summary>Technical details</summary>
-                <dl className="control-summary-list">
-                  <div>
-                    <dt>{declarations.length ? "Published base SHA-256" : "Artifact SHA-256"}</dt>
-                    <dd className="control-wrap-code">{version.sha256}</dd>
-                  </div>
-                  <div>
-                    <dt>Priority</dt>
-                    <dd>{priority}</dd>
-                  </div>
-                </dl>
-              </details>
-            )}
+            <details className="control-disclosure">
+              <summary>Technical details</summary>
+              <div className="control-disclosure-content target-technical">
+                {version && (
+                  <dl className="control-summary-list">
+                    <div>
+                      <dt>
+                        {declarations.length
+                          ? "Published base SHA-256"
+                          : "Artifact SHA-256"}
+                      </dt>
+                      <dd className="control-wrap-code">{version.sha256}</dd>
+                    </div>
+                    <div>
+                      <dt>Priority</dt>
+                      <dd>{priority}</dd>
+                    </div>
+                  </dl>
+                )}
+                <CopyDetails
+                  text={() => technicalDetails(preview.request, preview)}
+                />
+              </div>
+            </details>
           </div>
         )}
       </div>
@@ -1236,6 +1726,7 @@ export default function TargetDialog({
             groups.loading ||
             !!devices.error ||
             !!groups.error ||
+            (!preview && !releaseValid) ||
             (!!preview && capabilityBlocked) ||
             (!!preview &&
               (preview.create_idempotency !== true ||
@@ -1243,18 +1734,14 @@ export default function TargetDialog({
             (!!preview && !!settingsMismatch.length) ||
             !!preview?.conflicts?.length ||
             blockers.length > 0 ||
-            (!preview && declarations.length > 0 && bindingResult.errors.length > 0) ||
+            (!preview &&
+              declarations.length > 0 &&
+              bindingResult.errors.length > 0) ||
             artifactReviewIncomplete
           }
-          onClick={submit}
+          onClick={() => void (preview ? send() : review(inputs))}
         >
-          {preview
-            ? schedule
-              ? "Schedule deployment"
-              : policy
-                ? "Apply settings"
-                : "Deploy to devices"
-            : "Review deployment"}
+          {sendLabel}
         </Button>
       </div>
     </Modal>
