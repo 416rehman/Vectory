@@ -711,10 +711,7 @@ try {
           has: f.page.getByText("Issue acknowledged", { exact: true }),
         });
         await prior
-          .getByRole("button", {
-            name: "Details: Issue acknowledged",
-            exact: true,
-          })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .click();
         await expect(f.dialog()).toContainText(
           "Original retired-device decision",
@@ -734,7 +731,7 @@ try {
         await f.page
           .getByRole("row")
           .filter({ has: f.page.getByText("Issue reopened", { exact: true }) })
-          .getByRole("button", { name: "Details: Issue reopened", exact: true })
+          .getByRole("link", { name: "Issue reopened", exact: true })
           .click();
         await expect(f.dialog()).toContainText("Later renewed review");
         expect(f.state.postRequests).toHaveLength(2);

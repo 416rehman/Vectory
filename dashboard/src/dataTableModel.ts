@@ -45,6 +45,46 @@ export function sortTableRows<T>(
     .map(({ row }) => row);
 }
 
+/**
+ * The first click sorts in the column's natural direction (newest first for
+ * times); later clicks toggle it.
+ */
+export function nextSort(
+  current: TableSort | null,
+  column: string,
+  defaultDirection: "asc" | "desc" = "asc",
+): TableSort {
+  if (current?.column !== column)
+    return { column, direction: defaultDirection };
+  return {
+    column,
+    direction: current.direction === "asc" ? "desc" : "asc",
+  };
+}
+
+/** How many rows each option would keep, for counts beside filter choices. */
+export function optionCounts<T>(
+  rows: T[],
+  value: (row: T) => TableValue | TableValue[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const values = value(row);
+    for (const item of new Set(Array.isArray(values) ? values : [values])) {
+      if (item === null || item === undefined) continue;
+      const key = String(item);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/** Clamp a requested page to the available range for a row count. */
+export function clampPage(page: number, count: number, size: number) {
+  const pages = Math.max(1, Math.ceil(count / Math.max(1, size)));
+  return Math.min(Math.max(1, page), pages);
+}
+
 export function matchesTableFilter(
   value: TableValue,
   query: string,

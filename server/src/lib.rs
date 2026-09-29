@@ -22,6 +22,7 @@ pub mod issues;
 pub mod login_challenges;
 pub mod maintenance;
 pub mod mfa;
+pub mod overview;
 pub mod pipeline_library;
 pub mod pipeline_requests;
 pub mod pipelines;

@@ -290,7 +290,21 @@ async function start(
     if (path.startsWith("/devices/")) {
       const record = f.devices.find((d) => path === "/devices/" + d.id);
       if (record) return respond(record);
+      // The device page also shows its telemetry.
+      const telemetry = f.devices.find(
+        (d) => path === "/devices/" + d.id + "/telemetry",
+      );
+      if (telemetry) return respond({ device_id: telemetry.id, samples: [] });
     }
+    // ...and group names, open issues and recent activity.
+    if (path === "/groups") return respond([]);
+    if (path === "/issues/history" || path === "/audit/history")
+      return respond({
+        items: [],
+        total: 0,
+        page: 1,
+        page_size: Number(query.page_size || 12),
+      });
     if (path === "/agent/releases") return respond([]);
     f.errors.push("Unexpected GET " + path);
     return route.fulfill({

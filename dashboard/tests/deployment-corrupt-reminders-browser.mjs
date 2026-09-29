@@ -724,10 +724,12 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (error) => errors.push(error.message));
+  // A cold Vite transform on a busy host can outlast the 7 s action timeout.
   await page.goto(
     origin +
       "/__rollback-recovery" +
       (app ? `#/deployments/${id(40)}?page=1` : ""),
+    { timeout: 60000 },
   );
   await page.waitForFunction(() => window.ready, undefined, { timeout: 30000 });
   await page.evaluate((theme) => {
@@ -750,6 +752,9 @@ async function load({
         exact: true,
       }),
     ).toBeVisible();
+  // The routed deployment opens in its dialog once the page has loaded;
+  // checks that leave it must not race that first render.
+  else await expect(details()).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 const dialog = () =>

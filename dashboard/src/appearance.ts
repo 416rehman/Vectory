@@ -47,6 +47,21 @@ export function observeAppearance(
   return () => {};
 }
 
+/** Browser chrome colour (mobile address bar) for each resolved theme. */
+export const THEME_COLORS: Record<ResolvedAppearance, string> = {
+  light: "#f5f3ef",
+  dark: "#1b1a1e",
+};
+
+/** Apply a resolved theme to the document, its UA color scheme and theme-color. */
+export function applyTheme(theme: ResolvedAppearance, root = document) {
+  const element = root.documentElement;
+  element.dataset.theme = theme;
+  element.style.colorScheme = theme;
+  for (const meta of root.querySelectorAll('meta[name="theme-color"]'))
+    meta.setAttribute("content", THEME_COLORS[theme]);
+}
+
 export function useAppearance(): [Appearance, (next: Appearance) => void] {
   const [appearance, setAppearanceState] = useState<Appearance>(readAppearance);
 
@@ -58,13 +73,7 @@ export function useAppearance(): [Appearance, (next: Appearance) => void] {
     } catch {
       // Automatic mode remains usable with a light fallback if media queries fail.
     }
-    return observeAppearance(
-      appearance,
-      (theme) => {
-        document.documentElement.dataset.theme = theme;
-      },
-      media,
-    );
+    return observeAppearance(appearance, (theme) => applyTheme(theme), media);
   }, [appearance]);
 
   useEffect(() => {

@@ -178,6 +178,21 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
     if (path === "/agent-install") return reply(agentInstall);
     if (path === "/agent-install/activity")
       return reply({ events: [], now: new Date().toISOString() });
+    // The device list also reads groups for its filter.
+    if (path === "/groups") return reply([]);
+    if (path === "/releases")
+      return reply(
+        ["windows", "linux", "darwin"].map((os) => ({
+          name: "Synthetic agent",
+          version: "synthetic",
+          os,
+          arch: os === "darwin" ? "arm64" : "amd64",
+          size: 12,
+          sha256: "a".repeat(64),
+          signed: false,
+          url: "/unused-synthetic-download",
+        })),
+      );
     if (path === "/tokens" && method === "GET") return reply(state.tokens);
     if (path.startsWith("/tokens/requests/") && method === "GET")
       return reply({
@@ -277,7 +292,8 @@ try {
         const f = await fixture({ role });
         try {
           await expect(
-            f.page.getByText("This page is unavailable for your account.", {
+            f.page.getByRole("heading", {
+              name: "Adding devices needs the Operator role",
               exact: true,
             }),
           ).toBeVisible();

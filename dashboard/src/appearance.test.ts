@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyTheme,
   observeAppearance,
   parseAppearance,
   resolveAppearance,
+  THEME_COLORS,
 } from "./appearance";
 
 function systemTheme(initial: boolean) {
@@ -103,5 +105,36 @@ describe("appearance preference and system theme", () => {
     expect(apply).toHaveBeenLastCalledWith("light");
     stop();
     expect(media.removeListener).toHaveBeenCalledWith(listener);
+  });
+});
+
+describe("applying a resolved theme", () => {
+  it("sets the theme, the UA color scheme and every theme-color meta", () => {
+    const metas = [0, 1].map(() => {
+      const attributes: Record<string, string> = {};
+      return {
+        attributes,
+        setAttribute: (name: string, value: string) => {
+          attributes[name] = value;
+        },
+      };
+    });
+    const root = {
+      documentElement: {
+        dataset: {} as Record<string, string>,
+        style: {} as Record<string, string>,
+      },
+      querySelectorAll: () => metas,
+    };
+    applyTheme("dark", root as unknown as Document);
+    expect(root.documentElement.dataset.theme).toBe("dark");
+    expect(root.documentElement.style.colorScheme).toBe("dark");
+    expect(metas.map((meta) => meta.attributes.content)).toEqual([
+      THEME_COLORS.dark,
+      THEME_COLORS.dark,
+    ]);
+    applyTheme("light", root as unknown as Document);
+    expect(root.documentElement.style.colorScheme).toBe("light");
+    expect(metas[1].attributes.content).toBe(THEME_COLORS.light);
   });
 });
