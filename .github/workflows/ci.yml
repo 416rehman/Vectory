@@ -589,12 +589,6 @@ jobs:
         run: |
           (cd help-center && npm ci)
           (cd dashboard && npm run build)
-      - name: Install Chromium for the dashboard specs
-        id: chromium
-        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' }}
-        timeout-minutes: 10
-        working-directory: dashboard
-        run: npx playwright install --with-deps chromium
       - name: Build the server, the validator and vectory-admin
         timeout-minutes: 10
         env:
@@ -646,6 +640,14 @@ jobs:
           mkdir -p docs/evidence artifacts/end-to-end
           node tests/contracts.mjs
           cp docs/evidence/contract-tests.json artifacts/end-to-end/
+      # Installed only here, so a failed browser download never hides the
+      # results above.
+      - name: Install Chromium for the dashboard specs
+        id: chromium
+        if: ${{ !cancelled() && steps.dashboard.outcome == 'success' }}
+        timeout-minutes: 10
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
       # The dashboard specs that pass against a real instance with this data;
       # the others and why are in docs/internal/CI.md.
       - name: Run the dashboard specs against the instance, including a 201-component pipeline
