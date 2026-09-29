@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { topics } from "../pages.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -111,21 +112,8 @@ async function test(name, run) {
   console.log("PASS", name);
 }
 try {
-  await test("all twelve public page Markdown assets retain their full published bytes", async () => {
-    for (const topic of [
-      "",
-      "getting-started",
-      "installation",
-      "pipelines",
-      "resources",
-      "deployments",
-      "telemetry",
-      "troubleshooting",
-      "administer",
-      "compatibility",
-      "glossary",
-      "api",
-    ]) {
+  await test("every public page's Markdown asset keeps its full published bytes", async () => {
+    for (const topic of ["", ...topics]) {
       const text = await markdown(topic);
       evidence.markdown.push({
         topic: topic || "index",
@@ -416,7 +404,7 @@ try {
       .selectOption("dark");
     await expect(
       page.getByRole("navigation", { name: "Breadcrumb", exact: true }),
-    ).toContainText("Use Vectory");
+    ).toContainText("Build pipelines");
     await page.setViewportSize({ width: 375, height: 812 });
     const table = page.locator(".sl-markdown-content table").first();
     await expect
