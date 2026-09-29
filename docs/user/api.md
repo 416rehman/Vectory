@@ -35,6 +35,27 @@ curl -fsS -b cookies.txt -X POST \
 
 `cookies.txt` and `csrf.txt` let anyone who reads them act as you until the session ends. Keep them private and delete them when you're done.
 
+## Read a large fleet
+
+Let the server filter, sort and count, and read a page at a time. `GET /api/v1/devices` still returns every device, which gets slow with thousands of them.
+
+| Request | Returns |
+| --- | --- |
+| `GET /api/v1/devices/inventory` | A page of devices (`page`, `page_size` up to 100, 50 by default) with `total` and counts per status. Filter with `q`, `status`, `view`, `group` and `version`; order with `sort` and `dir`. |
+| `GET /api/v1/devices/inventory/ids` | The IDs of every matching device, up to 10,000, to select them all. |
+| `GET /api/v1/devices/{id}` | One device. Add `include=groups` for its groups. |
+| `GET /api/v1/groups?slim=1` | Groups with a `member_count` instead of every member's ID. |
+| `GET /api/v1/groups/{id}/members` | A page of a group's members. Search it with `q`. |
+| `GET /api/v1/overview?slim=1` | The Overview's numbers, without a row per device. |
+
+`q` matches names, OS, architecture, pipelines, Vector and agent versions and group names as plain text. The inventory and member pages refuse an unknown or repeated parameter with `400`, so a typo never lists everything. They and the slim Overview can lag check-ins by up to two seconds; your own changes show at once.
+
+```sh
+curl -fsS -b cookies.txt \
+  'https://vectory.example.com/api/v1/devices/inventory?status=failed&sort=last_seen' \
+  | jq '.total, (.items[] | {name, status, last_seen})'
+```
+
 ## Use the interactive reference
 
 [Open the interactive API reference](/api-reference.html). It lists every operation by area, with request and response schemas.
