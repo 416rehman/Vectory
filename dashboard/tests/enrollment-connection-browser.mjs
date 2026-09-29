@@ -359,7 +359,15 @@ try {
         const save = f.page.getByRole("dialog", {
           name: "Save your enrollment token",
         });
-        if (await save.isVisible().catch(() => false))
+        // The prompt opens a moment after the route change, so wait for it
+        // rather than sampling once (a slow machine sampled too early).
+        const asked = await save
+          .waitFor({ state: "visible", timeout: 3000 })
+          .then(
+            () => true,
+            () => false,
+          );
+        if (asked)
           await save
             .getByRole("button", { name: "Discard token copy", exact: true })
             .click();
