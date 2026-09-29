@@ -102,7 +102,7 @@ export default function AccountMenu({
             </span>
             <span className="account-text">
               <span className="account-name">{user.name || user.email}</span>
-              <span className="account-role">{role}</span>
+              <span className="account-button-role">{role}</span>
             </span>
             <ChevronsUpDown size={15} aria-hidden="true" />
           </button>

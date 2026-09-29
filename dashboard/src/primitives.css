@@ -62,26 +62,6 @@
 .status-badge[data-state="validated"] > svg {
   animation: spin 2.4s linear infinite;
 }
-.status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--mark-paused);
-  flex-shrink: 0;
-}
-.status-dot[data-tone="success"] {
-  background: var(--mark-success);
-}
-.status-dot[data-tone="warning"] {
-  background: var(--mark-warning);
-}
-.status-dot[data-tone="danger"] {
-  background: var(--mark-danger);
-}
-.status-dot[data-tone="info"] {
-  background: var(--mark-info);
-}
 
 /* ---------- Keyboard hints and tooltips ---------- */
 .kbd {

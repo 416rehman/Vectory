@@ -236,6 +236,16 @@ async function load({
           state_counts: { verified_applied: 1 },
         });
       }
+      // The device page also shows telemetry, open issues and recent activity.
+      if (path === `/devices/${id(1)}/telemetry`)
+        return reply({ device_id: id(1), samples: [] });
+      if (path === "/issues/history" || path === "/audit/history")
+        return reply({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: Number(url.searchParams.get("page_size") || 12),
+        });
     }
     unexpected.push(`${method} ${path}`);
     return reply(
@@ -303,7 +313,7 @@ try {
           has: page.locator("dt", { hasText: /^Last verified generation$/ }),
         }),
       ).toContainText("4");
-      await expect(details).toContainText("Generation 5 · failed");
+      await expect(details).toContainText("Generation 5 · Failed");
       await expect(details).toContainText("Reported workload state");
       for (const mismatch of [
         { generation: 4 },
@@ -331,7 +341,7 @@ try {
         await page.getByText("Technical details", { exact: true }).click();
         await expect(
           page.locator(".device-disclosure[open]"),
-        ).not.toContainText("Generation 5 · failed");
+        ).not.toContainText("Generation 5 · Failed");
       }
       await load({
         device: {
@@ -585,6 +595,7 @@ try {
     async () => {
       for (const digest of [null, "a".repeat(64)]) {
         await load({
+          role: "operator",
           device: {
             ...baseDevice(),
             desired_version_id: null,
@@ -595,12 +606,10 @@ try {
           },
         });
         await deviceVisible();
-        const unassigned = page.locator(".device-pipeline").filter({
-          has: page.getByRole("heading", {
-            name: "No pipeline assigned",
-            exact: true,
-          }),
-        });
+        const unassigned = page
+          .locator(".device-pipeline")
+          .filter({ hasText: "No pipeline assigned" });
+        await expect(unassigned).toHaveCount(1);
         await expect(unassigned).toContainText(
           "An adopted local workload may continue running",
         );
@@ -616,7 +625,7 @@ try {
           .count()
           .then((count) => expect(count).toBe(1));
         await page
-          .getByRole("button", { name: "Choose pipeline", exact: true })
+          .getByRole("button", { name: "Deploy a pipeline", exact: true })
           .click();
         await expect(page).toHaveURL(
           new RegExp(`#/configurations\\?device=${id(1)}$`),
@@ -633,7 +642,9 @@ try {
       await load();
       await deviceVisible();
       state.failNext = true;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(page.getByRole("alert")).toContainText(
         "Synthetic device refresh failed",
       );
@@ -642,7 +653,9 @@ try {
         `#/deployments/${policyAssignmentId}?page=1`,
       );
       state.holdNext = true;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect.poll(() => state.holds.length).toBe(1);
       state.device = {
         ...state.device,
@@ -652,7 +665,9 @@ try {
           reason: "Newer policy winner",
         },
       };
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(settingsLink()).toHaveAttribute(
         "href",
         `#/deployments/${id(83)}?page=1`,
@@ -727,8 +742,9 @@ try {
   const source_sha256 = {};
   for (const path of [
     "dashboard/src/Fleet.tsx",
+    "dashboard/src/DeviceDetail.tsx",
     "dashboard/src/deviceApplication.ts",
-    "dashboard/src/fleet.css",
+    "dashboard/src/devices.css",
     "dashboard/src/deploymentRouting.ts",
     "dashboard/src/api.ts",
     "dashboard/src/ui.tsx",

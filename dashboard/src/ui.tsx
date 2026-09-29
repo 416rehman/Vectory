@@ -669,10 +669,6 @@ export function Badge({
     </span>
   );
 }
-/** A small coloured dot for dense lists; always pair it with text. */
-export function StatusDot({ tone }: { tone: StatusTone }) {
-  return <span className="status-dot" data-tone={tone} aria-hidden="true" />;
-}
 
 /* ---------- Page chrome ---------- */
 
@@ -1149,24 +1145,6 @@ export function EmptyState({
         </DocLink>
       )}
     </div>
-  );
-}
-/** @deprecated Use EmptyState. */
-export function Empty({
-  icon,
-  title,
-  children,
-  action,
-}: {
-  icon: LucideIcon;
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <EmptyState icon={icon} title={title} action={action}>
-      {children}
-    </EmptyState>
   );
 }
 export function Skeleton({

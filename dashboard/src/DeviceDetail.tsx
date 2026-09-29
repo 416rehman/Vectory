@@ -152,8 +152,8 @@ function ApplyProgress({
   const list = applySteps(device, version);
   const current = list.find((step) => step.state !== "done") ?? list.at(-1)!;
   return (
-    <div className="apply-progress">
-      <p className="apply-progress-title">
+    <div className="device-apply-progress">
+      <p className="device-apply-progress-title">
         Apply progress
         <span className="sr-only">
           : {current.label}{" "}
@@ -163,7 +163,7 @@ function ApplyProgress({
       <ol>
         {list.map((step) => (
           <li key={step.label} data-state={step.state}>
-            <span className="apply-step-marker" aria-hidden="true">
+            <span className="device-apply-step-marker" aria-hidden="true">
               {step.state === "done" ? (
                 <Check size={11} strokeWidth={3} />
               ) : step.state === "failed" ? (
@@ -176,7 +176,7 @@ function ApplyProgress({
                 <LoaderCircle size={11} className="spin" />
               ) : null}
             </span>
-            <span className="apply-step-label">
+            <span className="device-apply-step-label">
               {step.label}
               <span className="sr-only">
                 {" "}
@@ -213,14 +213,14 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
     );
   if (device.status === "verified")
     return (
-      <span className="running-value" data-tone="success">
+      <span className="device-running-value" data-tone="success">
         <Check size={14} aria-hidden="true" />
         {v}, verified running by the agent
       </span>
     );
   if (runsDesired(device))
     return (
-      <span className="running-value">
+      <span className="device-running-value">
         <Check size={14} aria-hidden="true" />
         {v} at the last report
         {device.last_seen && (
@@ -233,7 +233,7 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
     );
   if (device.status === "failed" || device.status === "rolled_back")
     return (
-      <span className="running-value" data-tone="danger">
+      <span className="device-running-value" data-tone="danger">
         <CircleX size={14} aria-hidden="true" />
         Its last working configuration.{" "}
         {device.status === "rolled_back"
@@ -243,27 +243,27 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
     );
   if (device.status === "verification_unknown")
     return (
-      <span className="running-value" data-tone="warning">
+      <span className="device-running-value" data-tone="warning">
         <CircleHelp size={14} aria-hidden="true" />
         {v} was written, but Vector wasn't confirmed running
       </span>
     );
   if (device.sync_paused || device.local_paused || device.status === "paused")
     return (
-      <span className="running-value">
+      <span className="device-running-value">
         <Pause size={14} aria-hidden="true" />
         Unchanged while sync is paused
       </span>
     );
   if (device.status === "offline")
     return (
-      <span className="running-value" data-tone="warning">
+      <span className="device-running-value" data-tone="warning">
         <WifiOff size={14} aria-hidden="true" />
         Unknown while the device is offline
       </span>
     );
   return (
-    <span className="running-value" data-tone="info">
+    <span className="device-running-value" data-tone="info">
       <LoaderCircle size={14} className="spin" aria-hidden="true" />
       Its previous configuration while {v} is{" "}
       {attempt && attempt.version_id === device.desired_version_id
@@ -283,8 +283,8 @@ function FailureDetails({
   if (!attempt?.error || !["failed", "rolled_back"].includes(attempt.state))
     return null;
   return (
-    <div className="failure-details" role="note">
-      <div className="failure-details-head">
+    <div className="device-failure-details" role="note">
+      <div className="device-failure-details-head">
         <CircleAlert size={15} aria-hidden="true" />
         <strong>
           {attempt.state === "rolled_back" ? "Rolled back" : "Apply failed"} at{" "}
@@ -293,7 +293,9 @@ function FailureDetails({
         <code>{attempt.error.code}</code>
       </div>
       {attempt.error.message && (
-        <pre className="failure-details-message">{attempt.error.message}</pre>
+        <pre className="device-failure-details-message">
+          {attempt.error.message}
+        </pre>
       )}
       <DocLink
         topic="troubleshooting"
@@ -373,7 +375,7 @@ function VectorLogs({ device }: { device: Device }) {
           )}
         </div>
       </div>
-      <ul className="vector-logs">
+      <ul className="device-vector-logs">
         {items.map((item) => (
           <li key={item.key} data-level={item.level}>
             {item.level === "warn" || item.level === "warning" ? (
@@ -835,12 +837,12 @@ export default function DeviceDetail({
                 }}
               />
             )}
-            <dl className="running-lines">
+            <dl className="device-running-lines">
               <div>
                 <dt>Desired</dt>
                 <dd>
                   {device.desired_version_id ? (
-                    <span className="running-value">
+                    <span className="device-running-value">
                       {pipelineId ? (
                         <a
                           href={`#/configurations/${encodeURIComponent(pipelineId)}`}
@@ -856,7 +858,9 @@ export default function DeviceDetail({
                         </span>
                       )}
                       {number !== undefined && (
-                        <span className="running-version">v{number}</span>
+                        <span className="device-running-version">
+                          v{number}
+                        </span>
                       )}
                       {version.data?.created_at && (
                         <span className="device-muted">
@@ -877,7 +881,7 @@ export default function DeviceDetail({
               </div>
             </dl>
             {version.data?.message && (
-              <p className="running-note">“{version.data.message}”</p>
+              <p className="device-running-note">“{version.data.message}”</p>
             )}
             <p className="device-explanation">
               {device.desired_version_id

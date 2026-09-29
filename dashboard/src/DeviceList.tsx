@@ -522,12 +522,12 @@ export default function DeviceList({
           />
           {selectedIds.length > 0 && operate && (
             <div
-              className="selection-bar"
+              className="devices-selection-bar"
               role="region"
               aria-label="Selected devices"
             >
               <strong>{selectedIds.length} selected</strong>
-              <div className="selection-bar-actions">
+              <div className="devices-selection-bar-actions">
                 <Button
                   variant="secondary compact"
                   disabled={!preserveSettings || stale}

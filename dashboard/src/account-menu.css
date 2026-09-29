@@ -27,7 +27,7 @@
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
 }
-.account-role {
+.account-button-role {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -188,7 +188,6 @@
 }
 
 .account-menu-signout,
-.account-menu-error,
 .account-menu-signout > svg {
   color: var(--danger-text);
 }
@@ -203,11 +202,6 @@
 
 .account-signout-dialog .modal-footer {
   flex-wrap: wrap;
-}
-
-.account-menu-error {
-  margin: 7px 10px;
-  font-size: var(--text-sm);
 }
 
 @media (prefers-reduced-motion: no-preference) {
