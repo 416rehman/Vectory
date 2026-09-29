@@ -890,6 +890,7 @@ async fn diagnostics_explain_the_failure_on_device_issue_and_target() {
         "host_runtime",
         "vector_log_summary",
         "telemetry_v2",
+        "secret_names",
     ] {
         assert!(
             features.as_array().unwrap().contains(&json!(feature)),
@@ -1049,6 +1050,47 @@ async fn diagnostics_host_runtime_and_log_summaries_are_bounded_and_atomic() {
     let d = shown(&s).await;
     assert!(d.get("host_runtime").is_none());
     assert!(d.get("vector_log_summary").is_none());
+}
+
+#[tokio::test]
+async fn bound_secret_names_are_names_only_bounded_and_cleared() {
+    let (_temp, s, _candidate) = fixture().await;
+    let names = |value: Value| {
+        let mut v = verified(2, true);
+        v["secret_names"] = value;
+        v
+    };
+    let many: Vec<String> = (0..65).map(|i| format!("NAME_{i}")).collect();
+    for body in [
+        names(json!(["/etc/vectory/secrets/api-token.txt"])),
+        names(json!(["API_TOKEN", "API_TOKEN"])),
+        names(json!(["1BAD"])),
+        names(json!([{"name":"API_TOKEN"}])),
+        names(json!("API_TOKEN")),
+        names(json!(many)),
+    ] {
+        let before = snapshot(&s).await;
+        let (status, error) = beat(&s, body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {error}");
+        assert!(!error.to_string().contains("/etc/vectory"));
+        assert_eq!(snapshot(&s).await, before);
+    }
+    assert_eq!(
+        beat(&s, names(json!(["KAFKA_PASSWORD", "DD_API_KEY"])))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        shown(&s).await["secret_names"],
+        json!(["DD_API_KEY", "KAFKA_PASSWORD"])
+    );
+    // A host without bindings says so; an agent that doesn't report names
+    // leaves nothing stale behind.
+    assert_eq!(beat(&s, names(json!([]))).await.0, StatusCode::OK);
+    assert_eq!(shown(&s).await["secret_names"], json!([]));
+    assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
+    assert!(shown(&s).await.get("secret_names").is_none());
 }
 
 async fn issue_records(s: &State) -> Vec<Value> {

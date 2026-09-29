@@ -395,6 +395,7 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
     "host_runtime",
     "vector_log_summary",
     "telemetry_v2",
+    "secret_names",
 ];
 
 fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
@@ -577,6 +578,14 @@ pub async fn heartbeat(
     let runtime = host_runtime(&v["host_runtime"])?;
     let logs = match v.get("vector_log_summary") {
         Some(list) => Some(log_summary(list)?),
+        None => None,
+    };
+    // Names bound with configure-secrets: names only, never files or values.
+    let secret_names = match v.get("secret_names") {
+        Some(list) => Some(
+            crate::validation::reported_secret_names(list)
+                .ok_or_else(|| ApiError::invalid("Invalid secret_names"))?,
+        ),
         None => None,
     };
     let mut tx = db::begin_write(&s.pool).await?;
@@ -822,6 +831,14 @@ pub async fn heartbeat(
         }
         None => {
             fields.remove("vector_log_summary");
+        }
+    }
+    match secret_names {
+        Some(names) => {
+            fields.insert("secret_names".into(), names);
+        }
+        None => {
+            fields.remove("secret_names");
         }
     }
     sqlx::query("UPDATE devices SET data=? WHERE id=?")

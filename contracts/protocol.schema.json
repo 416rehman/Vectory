@@ -5118,6 +5118,16 @@
           "additionalProperties": false,
           "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
         },
+        "secret_names": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+          },
+          "description": "Secret names bound on the device, sorted, as its agent last reported them; absent for agents that do not report them. A version needs the names of its vectory-secret:NAME references."
+        },
         "check_in_seconds": {
           "type": "integer",
           "minimum": 10,
@@ -8783,6 +8793,16 @@
             "$ref": "#/$defs/VectorLogGroup"
           },
           "description": "Sent only to servers that list the feature; an empty list means nothing to report."
+        },
+        "secret_names": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+          },
+          "description": "Names bound with vectory configure-secrets: names only, never file paths or values. Sent only to servers that list the secret_names feature; an empty list means the host binds none."
         }
       },
       "required": [
@@ -8886,7 +8906,7 @@
             "type": "string",
             "pattern": "^[a-z0-9_]{1,64}$"
           },
-          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2). Agents send those fields only when listed, so older servers keep their strict validation. Unknown names are ignored."
+          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names). Agents send those fields only when listed, so older servers keep their strict validation. Unknown names are ignored."
         }
       },
       "required": [
