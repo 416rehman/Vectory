@@ -34,6 +34,12 @@ pub fn router(s: State) -> Router {
         .route("/agent/v1/heartbeat", post(heartbeat))
         .route("/agent/v1/artifacts/{sha256}", get(artifact))
         .route("/agent/v1/renew", post(renew))
+        .route("/agent/v1/identity", get(crate::install::identity))
+        .route("/agent/v1/install.sh", get(crate::install::install_sh))
+        .route(
+            "/agent/v1/downloads/{os}/{arch}",
+            get(crate::install::download_platform),
+        )
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             s.clone(),
@@ -65,41 +71,134 @@ async fn bounded_request(
         .into_response(),
     }
 }
-async fn authenticated(s: &State, peer: &PeerCertificate) -> Result<String> {
+pub(crate) async fn authenticated(s: &State, peer: &PeerCertificate) -> Result<String> {
     let fp = peer.0.as_deref().ok_or_else(ApiError::unauthorized)?;
     let id:Option<String>=sqlx::query_scalar("SELECT c.device_id FROM credentials c JOIN devices d ON d.id=c.device_id WHERE c.fingerprint=? AND c.revoked=0 AND d.revoked=0 AND c.expires_at>?").bind(fp).bind(db::now()).fetch_optional(&s.pool).await?;
     id.ok_or_else(ApiError::unauthorized)
 }
-pub async fn enroll(AppState(s): AppState<State>, Json(v): Json<Value>) -> Result<Json<Value>> {
-    s.limit("enrollment".into(), 60, std::time::Duration::from_secs(60))?;
-    let result = enroll_inner(s.clone(), v).await;
-    if result.is_err() {
-        let _guard = s.writer.lock().await;
-        let mut tx = s.pool.begin().await?;
-        db::audit(
-            &mut tx,
-            "anonymous",
-            "device.enroll",
-            "unregistered",
-            "failure",
-        )
-        .await?;
-        tx.commit().await?;
-    }
-    result
+/// Why an enrollment was refused. Devices only ever receive the generic
+/// ENROLLMENT_FAILED response; the reason is recorded in the audit log so an
+/// administrator can see it (Add device and Activity).
+enum Refusal {
+    Refused {
+        reason: &'static str,
+        token_id: Option<String>,
+    },
+    Error(ApiError),
 }
-async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
-    let mode = configuration_mode(&v).map_err(|_| ApiError::enrollment())?;
-    if v["protocol_version"] != 1 {
-        return Err(ApiError::enrollment());
+impl From<ApiError> for Refusal {
+    fn from(e: ApiError) -> Self {
+        Refusal::Error(e)
     }
-    let token = v["token"]
-        .as_str()
-        .filter(|t| t.len() == 64)
-        .ok_or_else(ApiError::enrollment)?;
-    let request = db::string(&v, "request_id", 128).map_err(|_| ApiError::enrollment())?;
-    let name = db::string(&v, "name", 100)
-        .map_err(|_| ApiError::enrollment())?
+}
+impl From<sqlx::Error> for Refusal {
+    fn from(e: sqlx::Error) -> Self {
+        Refusal::Error(e.into())
+    }
+}
+fn refused(reason: &'static str, token_id: Option<&str>) -> Refusal {
+    Refusal::Refused {
+        reason,
+        token_id: token_id.map(str::to_owned),
+    }
+}
+/// Bounded, secret-free facts about an attempt for the audit record. The
+/// values come from an unauthenticated request, so only short printable text
+/// is kept; the token itself is never recorded.
+fn attempt_details(v: &Value, peer: Option<std::net::IpAddr>) -> Value {
+    let field = |key: &str, max: usize| {
+        v[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && t.len() <= max && t.bytes().all(|b| b.is_ascii_graphic()))
+            .map_or(Value::Null, |t| json!(t))
+    };
+    let name = field("name", 100);
+    json!({
+        "name":name.as_str().map(str::to_ascii_lowercase),
+        "agent_os":field("os",64),
+        "agent_arch":field("arch",64),
+        "agent_version":field("agent_version",64),
+        "configuration_mode":field("configuration_mode",16),
+        "client_address":peer.map(|ip|ip.to_string()),
+    })
+}
+pub async fn enroll(
+    AppState(s): AppState<State>,
+    crate::ClientAddress(peer): crate::ClientAddress,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    s.limit("enrollment".into(), 60, std::time::Duration::from_secs(60))?;
+    let mut details = attempt_details(&v, peer);
+    let (reason, token_id, error) = match enroll_inner(&s, &v, &details).await {
+        Ok(response) => return Ok(response),
+        Err(Refusal::Refused { reason, token_id }) => (reason, token_id, ApiError::enrollment()),
+        Err(Refusal::Error(error)) => ("INTERNAL", None, error),
+    };
+    details["reason_code"] = json!(reason);
+    details["token_id"] = json!(token_id);
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    db::insert(
+        &mut tx,
+        "audit",
+        &json!({"id":db::id(),"actor":"anonymous","action":"device.enroll","target":"unregistered","outcome":"failure","created_at":db::now(),"details":details}),
+    )
+    .await?;
+    tx.commit().await?;
+    Err(error)
+}
+/// Returns the stored response when `request` already enrolled this key with
+/// this token, so a device that lost the response can finish.
+async fn replay(
+    tx: &mut sqlx::SqliteConnection,
+    request: &str,
+    key_hash: &str,
+    token_id: &str,
+    name: &str,
+) -> std::result::Result<Option<Value>, Refusal> {
+    let Some(old) =
+        sqlx::query("SELECT key_hash,token_id,response FROM enrollments WHERE request_id=?")
+            .bind(request)
+            .fetch_optional(&mut *tx)
+            .await?
+    else {
+        return Ok(None);
+    };
+    if old.get::<String, _>("key_hash") != key_hash || old.get::<String, _>("token_id") != token_id
+    {
+        return Err(refused("REQUEST_MISMATCH", Some(token_id)));
+    }
+    let response = db::parse(old.get("response"))?;
+    let active: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=? AND name=? AND revoked=0")
+            .bind(text(&response, "device_id"))
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await?;
+    if active != 1 {
+        return Err(refused("DEVICE_REVOKED", Some(token_id)));
+    }
+    Ok(Some(response))
+}
+async fn enroll_inner(
+    s: &State,
+    v: &Value,
+    details: &Value,
+) -> std::result::Result<Json<Value>, Refusal> {
+    let malformed = || refused("MALFORMED", None);
+    let mode = configuration_mode(v).map_err(|_| malformed())?;
+    if v["protocol_version"] != 1 {
+        return Err(malformed());
+    }
+    let token = v["token"].as_str().ok_or_else(malformed)?;
+    if token.len() != 64 {
+        // A truncated or mistyped paste can't match any token.
+        return Err(refused("TOKEN_UNKNOWN", None));
+    }
+    let request = db::string(v, "request_id", 128).map_err(|_| malformed())?;
+    let name = db::string(v, "name", 100)
+        .map_err(|_| malformed())?
         .trim()
         .to_ascii_lowercase();
     if name.is_empty()
@@ -108,64 +207,61 @@ async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
     {
-        return Err(ApiError::enrollment());
+        return Err(malformed());
     }
     for field in ["os", "arch", "agent_version", "vector_version"] {
-        db::string(&v, field, 64).map_err(|_| ApiError::enrollment())?;
+        db::string(v, field, 64).map_err(|_| malformed())?;
     }
-    let csr = db::string(&v, "csr_pem", 16384).map_err(|_| ApiError::enrollment())?;
-    let key_hash = crate::crypto::Keys::csr_key_hash(csr)?;
+    let csr = db::string(v, "csr_pem", 16384).map_err(|_| malformed())?;
+    let key_hash = crate::crypto::Keys::csr_key_hash(csr).map_err(|_| malformed())?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
     let row = sqlx::query("SELECT id,data FROM enrollment_tokens WHERE verifier=?")
         .bind(db::hash(token))
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(ApiError::enrollment)?;
+        .ok_or_else(|| refused("TOKEN_UNKNOWN", None))?;
     let token_id: String = row.get("id");
     let mut record = db::parse(row.get("data"))?;
-    if record["revoked"] == true
-        || text(&record, "expires_at") <= db::now().as_str()
-        || record["name_prefix"]
-            .as_str()
-            .is_some_and(|prefix| !name.starts_with(prefix))
+    let token_ref = Some(token_id.as_str());
+    let recovery = record["recovery_device_id"].is_string();
+    // A retry after a lost response must succeed even when the token expired,
+    // was revoked or used up in the meantime: the enrollment already happened.
+    // Recovery tokens keep their stricter order, so cancelling an authorized
+    // recovery also ends its replay.
+    if !recovery
+        && let Some(response) = replay(&mut tx, request, &key_hash, &token_id, &name).await?
     {
-        return Err(ApiError::enrollment());
+        return Ok(Json(response));
+    }
+    if record["revoked"] == true {
+        return Err(refused("TOKEN_REVOKED", token_ref));
+    }
+    if text(&record, "expires_at") <= db::now().as_str() {
+        return Err(refused("TOKEN_EXPIRED", token_ref));
+    }
+    if record["name_prefix"]
+        .as_str()
+        .is_some_and(|prefix| !name.starts_with(prefix))
+    {
+        return Err(refused("NAME_PREFIX_MISMATCH", token_ref));
     }
     if record["recovery_name"]
         .as_str()
         .is_some_and(|expected| name != expected)
     {
-        return Err(ApiError::enrollment());
+        return Err(refused("RECOVERY_NAME_MISMATCH", token_ref));
     }
-    if let Some(old) =
-        sqlx::query("SELECT key_hash,token_id,response FROM enrollments WHERE request_id=?")
-            .bind(request)
-            .fetch_optional(&mut *tx)
-            .await?
+    if recovery
+        && let Some(response) = replay(&mut tx, request, &key_hash, &token_id, &name).await?
     {
-        if old.get::<String, _>("key_hash") != key_hash
-            || old.get::<String, _>("token_id") != token_id
-        {
-            return Err(ApiError::enrollment());
-        }
-        let response = db::parse(old.get("response"))?;
-        let active: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=? AND name=? AND revoked=0")
-                .bind(text(&response, "device_id"))
-                .bind(&name)
-                .fetch_one(&mut *tx)
-                .await?;
-        if active != 1 {
-            return Err(ApiError::enrollment());
-        }
         return Ok(Json(response));
     }
     if record["max_uses"]
         .as_u64()
         .is_some_and(|max| record["uses"].as_u64().unwrap_or(0) >= max)
     {
-        return Err(ApiError::enrollment());
+        return Err(refused("TOKEN_EXHAUSTED", token_ref));
     }
     let exists: Option<String> = sqlx::query_scalar("SELECT id FROM devices WHERE name=?")
         .bind(&name)
@@ -173,7 +269,7 @@ async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
         .await?;
     if let Some(ref existing) = exists {
         if record["recovery_device_id"].as_str() != Some(existing.as_str()) {
-            return Err(ApiError::enrollment());
+            return Err(refused("NAME_TAKEN", token_ref));
         }
         let retired = format!("{name}#retired-{existing}");
         sqlx::query("UPDATE devices SET revoked=1,name=?,data=json_set(data,'$.name',?,'$.status','revoked') WHERE id=?").bind(&retired).bind(&retired).bind(existing).execute(&mut *tx).await?;
@@ -183,11 +279,11 @@ async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
             .await?;
         crate::groups::remove_device(&mut tx, existing).await?;
         crate::rollout::retire_persistent_targets(&mut tx, existing).await?;
-    } else if record["recovery_device_id"].is_string() {
-        return Err(ApiError::enrollment());
+    } else if recovery {
+        return Err(refused("RECOVERY_TARGET_MISSING", token_ref));
     }
     let id = db::id();
-    let issued = s.keys.issue(&id, csr)?;
+    let issued = s.keys.issue(&id, csr).map_err(|_| malformed())?;
     let device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"configuration_mode":mode,"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
     sqlx::query("INSERT INTO devices(id,name,data) VALUES(?,?,?)")
         .bind(&id)
@@ -217,7 +313,16 @@ async fn enroll_inner(s: State, v: Value) -> Result<Json<Value>> {
         .bind(&token_id)
         .execute(&mut *tx)
         .await?;
-    db::audit(&mut tx, &id, "device.enroll", &id, "success").await?;
+    let mut details = details.clone();
+    details["name"] = json!(name);
+    details["configuration_mode"] = json!(mode);
+    details["token_id"] = json!(token_id);
+    db::insert(
+        &mut tx,
+        "audit",
+        &json!({"id":db::id(),"actor":id,"action":"device.enroll","target":id,"outcome":"success","created_at":db::now(),"details":details}),
+    )
+    .await?;
     if let Some(old) = exists {
         db::audit(
             &mut tx,
@@ -888,7 +993,7 @@ pub async fn serve_tls(
     let handshakes = std::sync::Arc::new(tokio::sync::Semaphore::new(128));
     tracing::info!(%addr,"device TLS listener ready");
     loop {
-        let (socket, _) = listener.accept().await?;
+        let (socket, address) = listener.accept().await?;
         let Ok(permit) = semaphore.clone().try_acquire_owned() else {
             continue;
         };
@@ -924,8 +1029,13 @@ pub async fn serve_tls(
                     .and_then(|c| c.first())
                     .map(db::hash),
             );
-            let service =
-                hyper_util::service::TowerToHyperService::new(router.layer(Extension(peer)));
+            // The TCP peer, for enrollment audits and download throttling.
+            // Nothing proxies this listener, so forwarded headers are ignored.
+            let service = hyper_util::service::TowerToHyperService::new(
+                router
+                    .layer(Extension(peer))
+                    .layer(Extension(axum::extract::ConnectInfo(address))),
+            );
             let mut builder =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
             builder

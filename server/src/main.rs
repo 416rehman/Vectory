@@ -1,8 +1,25 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use vectory_server::{Settings, api, device, initialize, rollout};
+use vectory_server::{Settings, api, device, initialize, install, rollout};
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
+/// An optional public origin from the environment, normalized, or an error
+/// that names the variable when it isn't a bare origin.
+fn optional_origin(key: &str, schemes: &[&str]) -> anyhow::Result<Option<String>> {
+    match env::var(key) {
+        Ok(value) if !value.trim().is_empty() => install::origin(&value, schemes)
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{key} must be a bare {} origin such as {}://vectory.example.com:8443 (no path, query or user name)",
+                    schemes.join(" or "),
+                    schemes[0]
+                )
+            }),
+        _ => Ok(None),
+    }
 }
 
 fn validation_url_for_mode(
@@ -69,10 +86,14 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let data = PathBuf::from(env_or("VECTORY_DATA_DIR", "./data"));
     let development = env_or("VECTORY_DEVELOPMENT", "false") == "true";
-    let secret = if let Ok(path) = env::var("VECTORY_BOOTSTRAP_SECRET_FILE") {
-        std::fs::read_to_string(path)?.trim().to_owned()
+    // Where the setup secret comes from, for the banner; never its value.
+    let (secret, secret_source) = if let Ok(path) = env::var("VECTORY_BOOTSTRAP_SECRET_FILE") {
+        (std::fs::read_to_string(&path)?.trim().to_owned(), path)
     } else {
-        env::var("VECTORY_BOOTSTRAP_SECRET").unwrap_or_default()
+        (
+            env::var("VECTORY_BOOTSTRAP_SECRET").unwrap_or_default(),
+            "the VECTORY_BOOTSTRAP_SECRET environment variable".to_owned(),
+        )
     };
     if secret.len() < 24 && !data.join("vectory.db").exists() {
         anyhow::bail!(
@@ -106,6 +127,19 @@ async fn main() -> anyhow::Result<()> {
             "Development preview has no isolated Vector validator; checks and publication are structural-only until each device validates the configuration"
         );
     }
+    let public_agent_url = optional_origin("VECTORY_PUBLIC_AGENT_URL", &["https"])?;
+    let public_url = optional_origin("VECTORY_PUBLIC_URL", &["https", "http"])?;
+    let public_downloads = env_or("VECTORY_PUBLIC_AGENT_DOWNLOADS", "true");
+    if public_downloads != "true" && public_downloads != "false" {
+        anyhow::bail!("VECTORY_PUBLIC_AGENT_DOWNLOADS must be true or false")
+    }
+    let agent_port = agent_addr
+        .as_deref()
+        .and_then(|address| address.rsplit(':').next()?.parse::<u16>().ok());
+    let agent_certificate_pem = match (&agent_addr, &cert) {
+        (Some(_), Some(path)) => std::fs::read_to_string(path).ok(),
+        _ => None,
+    };
     let settings = Settings {
         data_dir: data.clone(),
         bootstrap_secret: secret,
@@ -118,8 +152,21 @@ async fn main() -> anyhow::Result<()> {
         instance_name: env_or("VECTORY_INSTANCE_NAME", "Vectory"),
         validation_url,
         trust_proxy_headers: env_or("VECTORY_TRUST_PROXY_HEADERS", "false") == "true",
+        bundled_releases_dir: env::var("VECTORY_BUNDLED_RELEASES_DIR")
+            .ok()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from),
+        public_agent_url,
+        public_url,
+        disable_public_agent_downloads: public_downloads == "false",
+        agent_port,
+        agent_certificate_pem,
     };
     let state = initialize(settings).await?;
+    tracing::info!(
+        "{}",
+        install::startup_banner(&state, &web_addr, &secret_source).await
+    );
     let scheduler = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
