@@ -642,3 +642,84 @@ async fn real_vector_worker_runs_samples_and_tests() {
     assert_eq!(failed["tests"][0]["outputs"][0]["message"], "SYNTHETIC");
     child.kill().await.unwrap();
 }
+
+#[tokio::test]
+async fn worker_never_sends_requests_an_author_wrote() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; network-function guard unverified");
+        return;
+    };
+    // A listener that counts connections: VRL's http_request would open one.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = connections.clone();
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    let (mut child, url, client) = start_worker(&vector).await;
+    let program = format!(
+        "resp, err = http_request(\"http://127.0.0.1:{port}/probe\")\n.reached = err == null\n.body = resp"
+    );
+    let single = post(
+        &client,
+        &url,
+        "vrl-test",
+        json!({"program": program, "sample": {"message": "x"}}),
+    )
+    .await;
+    assert_eq!(single["valid"], false, "{single}");
+    assert!(
+        single["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("http_request"),
+        "{single}"
+    );
+    let transform = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({"transform": {"type": "remap", "source": program}, "samples": [{"message": "x"}]}),
+    )
+    .await;
+    assert_eq!(transform["compiled"], false, "{transform}");
+    assert_eq!(
+        transform["diagnostics"][0]["code"],
+        "vrl_function_unavailable"
+    );
+    let tests = post(
+        &client,
+        &url,
+        "tests",
+        json!({"config": {
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"call": {"type": "remap", "inputs": ["in"], "source": program}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["call"]}},
+            "tests": [{"name": "calls out", "inputs": [{"insert_at": "call", "type": "log", "log_fields": {"message": "x"}}],
+                "outputs": [{"extract_from": "call", "conditions": [{"type": "vrl", "source": ".reached == true"}]}]}]
+        }}),
+    )
+    .await;
+    assert_eq!(tests["tests_run"], false, "{tests}");
+    assert_eq!(tests["diagnostics"][0]["code"], "vrl_function_unavailable");
+    assert_eq!(tests["diagnostics"][0]["severity"], "warning");
+    // Control: a program without network calls still runs.
+    let plain = post(
+        &client,
+        &url,
+        "vrl-test",
+        json!({"program": ".ok = true", "sample": {"message": "x"}}),
+    )
+    .await;
+    assert_eq!(plain["valid"], true, "{plain}");
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(
+        connections.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the worker connected to a server the author's program named"
+    );
+    child.kill().await.ok();
+}

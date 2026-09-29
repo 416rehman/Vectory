@@ -411,19 +411,10 @@ fn requires_full_mode(config: &Value) -> bool {
     // VRL functions that reach outside the event (the agent refuses them in
     // restricted mode too).
     fn external_vrl(value: &str) -> bool {
-        [
-            "get_env_var",
-            "get_secret",
-            "set_secret",
-            "remove_secret",
-            "dns_lookup",
-            "reverse_dns",
-            "http_request",
-            "get_enrichment_table",
-            "find_enrichment_table",
-        ]
-        .iter()
-        .any(|function| value.to_ascii_lowercase().contains(function))
+        let lowered = value.to_ascii_lowercase();
+        crate::validation::DEVICE_VRL_FUNCTIONS
+            .iter()
+            .any(|function| lowered.contains(function))
     }
     fn test_vrl(value: &Value) -> bool {
         match value {
