@@ -33,7 +33,8 @@ export const healthStates: Record<HealthBucket, string[]> = {
   updating: ["applying"],
   check: ["verification_unknown"],
   failed: ["failed", "rolled_back", "conflict"],
-  offline: ["offline"],
+  // Never connected is still not connected: it is not an update in progress.
+  offline: ["offline", "awaiting_first_check_in"],
   paused: ["paused", "pause_requested"],
   unmanaged: ["unmanaged"],
 };

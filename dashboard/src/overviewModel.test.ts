@@ -43,9 +43,11 @@ describe("fleet health buckets", () => {
   });
 
   it("never reads a new, unknown state as healthy", () => {
-    expect(healthBucket({ status: "awaiting_first_check_in" })).toBe(
-      "updating",
-    );
+    expect(healthBucket({ status: "adopted_elsewhere" })).toBe("updating");
+  });
+
+  it("counts a device that never checked in as not connected", () => {
+    expect(healthBucket({ status: "awaiting_first_check_in" })).toBe("offline");
   });
 });
 
