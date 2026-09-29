@@ -56,6 +56,7 @@ func defineSetup(c *cli) func() int {
 	dashboard := c.HiddenString("dashboard-url", "dashboard address for the device link (set by the installer)")
 	agentPath := c.HiddenString("agent-path", "where the service runs the agent from (set by the installer)")
 	dryRun := c.Bool("dry-run", "Check everything and show the plan without changing anything")
+	noWake := c.Bool("no-wake", noWakeHelp)
 	c.JSON("Print one JSON document instead of progress lines")
 	return func() int {
 		if *pin != "" && c.supplied("ca-file") {
@@ -75,6 +76,9 @@ func defineSetup(c *cli) func() int {
 		}
 		if c.supplied("service-user") {
 			options.ServiceUser = *account
+		}
+		if c.supplied("no-wake") {
+			options.NoWake = noWake
 		}
 		for flagName, target := range map[string]*string{"managed-config": &options.ManagedConfig, "capability-policy": &options.CapabilityPolicy} {
 			value := map[string]string{"managed-config": *managed, "capability-policy": *policy}[flagName]

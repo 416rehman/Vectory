@@ -32,6 +32,7 @@ pub fn router(s: State) -> Router {
     Router::new()
         .route("/agent/v1/enroll", post(enroll))
         .route("/agent/v1/heartbeat", post(heartbeat))
+        .route("/agent/v1/wait", get(crate::wake::wait))
         .route("/agent/v1/artifacts/{sha256}", get(artifact))
         .route("/agent/v1/renew", post(renew))
         .route("/agent/v1/identity", get(crate::install::identity))
@@ -47,6 +48,11 @@ pub fn router(s: State) -> Router {
             bounded_request,
         ))
         .layer(axum::middleware::from_fn(crate::api::security_headers))
+        // An identity recovery revokes the old device: its parked wait answers.
+        .layer(axum::middleware::from_fn_with_state(
+            s.clone(),
+            crate::wake::middleware,
+        ))
         .with_state(s)
 }
 async fn bounded_request(
@@ -411,6 +417,16 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
     "service_manager",
     "vector_running",
 ];
+
+/// The manifest's `features`: the heartbeat fields above, plus `wake` while
+/// this server holds waits (`GET /agent/v1/wait`).
+fn features(s: &State) -> Vec<&'static str> {
+    let mut features = HEARTBEAT_FEATURES.to_vec();
+    if s.wake.enabled() {
+        features.push(crate::wake::FEATURE);
+    }
+    features
+}
 
 /// What keeps an agent running, as the agent reports it.
 const SERVICE_MANAGERS: &[&str] = &["systemd", "launchd", "windows", "none"];
@@ -1031,7 +1047,7 @@ pub async fn heartbeat(
     )
     .await?;
     let issued = Utc::now();
-    let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":HEARTBEAT_FEATURES});
+    let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":features(&s)});
     let signing_id: Option<String> =
         sqlx::query_scalar("SELECT signing_key_id FROM credentials WHERE fingerprint=?")
             .bind(peer.0.as_deref().unwrap_or(""))

@@ -17,7 +17,12 @@ stop() {
     local pid_file="$preview/$name.pid"
     if [[ -f "$pid_file" ]]; then
       local pid; pid="$(cat "$pid_file")"
-      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; wait "$pid" 2>/dev/null || true; fi
+      if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid"
+        # Not this shell's child, so `wait` can't: the server answers parked
+        # agent waits before it exits and releases its data directory.
+        for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      fi
       rm -f "$pid_file"
     fi
   done

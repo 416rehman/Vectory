@@ -107,6 +107,7 @@ See [Keep credentials on the device](resources.md#keep-credentials-on-the-device
 | Status | Check |
 | --- | --- |
 | Offline target | The device needs to reconnect before it can apply anything. |
+| Applies on its next check-in | Its agent isn't waiting for changes: an older agent, wake-ups turned off on the host (`--no-wake`) or on the server (`VECTORY_AGENT_WAKE_LIMIT=0`), or a network that cuts idle connections. It still applies at its next check-in. |
 | Scheduled | The start time, and whether the schedule was missed. |
 | Canary waiting | The canary devices: each must report **Applied** with a fresh check-in for the whole observation period. |
 | Sync paused | Whether the pause was set on the rollout, in agent settings or on the host (`vectory resume` clears only a host pause). |

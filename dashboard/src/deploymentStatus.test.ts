@@ -9,6 +9,7 @@ import {
   failureText,
   lineageLabel,
   pipelineFixable,
+  pickupText,
   progressSegments,
   releasePlan,
   requestRollbackReview,
@@ -596,5 +597,25 @@ describe("one apply table for the device page and the rollout page", () => {
       ["Loaded in Vector", "reload_requested"],
       ["Applied", "verified_applied"],
     ]);
+  });
+});
+
+describe("when a released device picks its version up", () => {
+  it("says seconds only while its agent holds a wait", () => {
+    expect(
+      pickupText({ wake: { listening: true }, check_in_seconds: 60 }),
+    ).toBe("Waiting for the agent (connected, usually a few seconds).");
+  });
+  it("keeps the check-in interval otherwise", () => {
+    expect(
+      pickupText({ wake: { listening: false }, check_in_seconds: 60 }),
+    ).toBe("Applies on its next check-in (within 60 s).");
+    // Servers without wake-ups say nothing about waits.
+    expect(pickupText({ check_in_seconds: 300 })).toBe(
+      "Applies on its next check-in (within 300 s).",
+    );
+    expect(pickupText({ wake: null, check_in_seconds: null })).toBe(
+      "Applies on its next check-in.",
+    );
   });
 });

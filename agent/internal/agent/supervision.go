@@ -20,6 +20,8 @@ type workloadSupervisor struct {
 	nextAttempt  time.Time
 	healthySince time.Time
 	attempts     int
+	// wakeResume: the server asked (Retry-After) not to wait before then.
+	wakeResume time.Time
 }
 
 func (e *Engine) observeProcessExit() error {
@@ -87,11 +89,21 @@ func (s *workloadSupervisor) check(ctx context.Context, e *Engine) error {
 	return err
 }
 
-func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Duration, report func(string)) bool {
+// wait sleeps until the next check-in, keeping the workload supervised. With
+// wake set it also holds a wait open (see wake.go) and ends early, at most
+// once per wakeSpacing, when the server says this device's desired state
+// changed. It reports false when the agent is stopping.
+func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Duration, report func(string), wake bool) bool {
+	began := time.Now()
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	tick := time.NewTicker(workloadCheckInterval)
 	defer tick.Stop()
+	var current *listening
+	if wake {
+		current = s.listen(ctx, e)
+	}
+	defer func() { current.stop() }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,6 +114,31 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 			if err := s.check(ctx, e); err != nil {
 				report(err.Error())
 			}
+		case answer := <-current.answer():
+			held := time.Since(current.started)
+			current.cancel()
+			current = nil
+			switch {
+			case answer.err != nil:
+				// The ordinary schedule covers this interval; nothing to report.
+				if answer.retryAfter > 0 {
+					s.wakeResume = time.Now().Add(answer.retryAfter)
+				}
+			case answer.changed:
+				soonest := wakeSpacing - time.Since(began)
+				if soonest <= 0 {
+					return true
+				}
+				if soonest < delay-time.Since(began) {
+					timer.Reset(soonest)
+				}
+			case held >= wakeSpacing:
+				// The server's hold ended: wait again.
+				current = s.listen(ctx, e)
+			}
+			// A wait that ends at once without a change (another process
+			// with this identity replaced it, or the server is stopping) is
+			// not renewed before the next check-in.
 		}
 	}
 }

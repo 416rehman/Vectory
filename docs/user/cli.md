@@ -66,6 +66,7 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 | `--service-user NAME`, `--create-user` | Account the service runs as, and whether to create it. |
 | `--keep-existing-vector` | Continue even though another Vector is running. Setup leaves that Vector untouched. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
+| `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). Saved as a local setting; `--no-wake=false` turns them back on. |
 | `--json` | Print the result as JSON for scripts. |
 
 `setup` never adopts a Vector that is already running. If it finds one, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
@@ -101,6 +102,7 @@ sudo vectory install \
 | `--secret-files PATH` | JSON map of secret names to absolute private files. Replaces all bindings. |
 | `--vector-data-dir PATH` | Data directory for pipelines that don't set `data_dir`. Empty restores the automatic choice: the adopted configuration's `data_dir`, then `/var/lib/vector` if it exists and is writable (not on Windows), then `<state-dir>/vector-data`. The automatic choice is made once, at the first activation, and kept, so checkpoints and disk buffers never move. |
 | `--graceful-shutdown-seconds N` | How long Vector may drain on stop or restart before it is killed, 5 to 300. Default 60. |
+| `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). `--no-wake=false` turns them back on. |
 
 All options are checked together before anything is saved. Options you leave out keep their values.
 
@@ -135,8 +137,11 @@ Run the agent in the foreground. It starts Vector, applies versions and checks i
 sudo vectory run
 ```
 
+Between check-ins, the agent keeps one request open to the server, so a new version or setting reaches it within seconds instead of at its next check-in. The agent opens that request itself, and the answer only tells it to check in now. If the request fails, for example on a network that cuts idle connections, the agent quietly keeps its schedule.
+
 | Flag | Meaning |
 | --- | --- |
+| `--no-wake` | Check in on schedule only for this run, whatever the saved setting. |
 | `--once` | (Testing) Check in and reconcile once, then stop. |
 
 ## status

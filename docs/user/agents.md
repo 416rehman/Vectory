@@ -18,7 +18,7 @@ The dashboard shows the same device from the server's side. A recent check-in pr
 
 ## Change local settings
 
-Local settings belong to the host: allowances, mode, the metrics endpoint and secret bindings. The dashboard can't change them.
+Local settings belong to the host: allowances, mode, the metrics endpoint, secret bindings and wake-ups. The dashboard can't change them.
 
 <!-- steps -->
 1. Stop the agent through its service: `sudo vectory service-stop`.
@@ -59,6 +59,17 @@ Before you return to restricted mode, deploy a pipeline that fits restricted mod
 
 - Metrics: [Enable real metrics](telemetry.md#enable-real-metrics) uses `vectory configure-metrics`.
 - Secrets: [Keep credentials on the device](resources.md#keep-credentials-on-the-device) uses `vectory configure-secrets`.
+
+### Turn off wake-ups
+
+Between check-ins, the agent keeps one request open to the server, so a deployment reaches the device within seconds. The agent opens it like every other connection; nothing on the device listens. On a network that cuts idle connections, the agent quietly falls back to its schedule. To keep a device on its schedule only, turn wake-ups off:
+
+```sh
+sudo vectory install --no-wake         # check in on schedule only
+sudo vectory install --no-wake=false   # wake-ups back on
+```
+
+`vectory setup --no-wake` saves the same setting. While a deployment waits for a device, the dashboard says **connected, usually a few seconds** only when that device's agent holds the request; otherwise it says the version applies at the next check-in.
 
 ## Pause configuration sync
 

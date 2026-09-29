@@ -46,6 +46,7 @@ pub mod user_requests;
 pub mod validation;
 pub mod variables;
 pub mod vector_diagnostics;
+pub mod wake;
 #[cfg(windows)]
 mod windows_acl;
 
@@ -86,6 +87,8 @@ pub struct Settings {
     /// How notifications reach receivers. Production leaves this default;
     /// tests supply a scripted resolver and trusted roots.
     pub outbound: outbound::Options,
+    /// Agent wake-ups: how many waits may be parked and how long each is held.
+    pub wake: wake::Options,
 }
 pub struct App {
     pub pool: SqlitePool,
@@ -110,6 +113,8 @@ pub struct App {
     pub notifier: notifier::Runtime,
     /// The fleet projection inventory, group members and the Overview share.
     pub fleet: fleet::Cache,
+    /// Agents holding a wait, answered when their desired state changes.
+    pub wake: wake::Registry,
 }
 pub type State = Arc<App>;
 /// Tracked rate-limit keys per limiter partition. A full partition evicts
@@ -187,6 +192,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         )
     }
     let audit_exports = audit_exports::Store::initialize(&settings.data_dir)?;
+    let wake = wake::Registry::new(settings.wake.clone());
     Ok(Arc::new(App {
         pool,
         writer: Mutex::new(()),
@@ -200,6 +206,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         release_hashes: Default::default(),
         notifier: Default::default(),
         fleet: Default::default(),
+        wake,
         agent_request_slots: tokio::sync::Semaphore::new(128),
         validation_slots: tokio::sync::Semaphore::new(2),
         instance_lock,
@@ -216,7 +223,8 @@ impl App {
         let authenticated_device = key.starts_with("heartbeat:")
             || key.starts_with("artifact:")
             || key.starts_with("renew:")
-            || key.starts_with("identity:");
+            || key.starts_with("identity:")
+            || key.starts_with("wait:");
         let partition = if authenticated_device {
             &self.device_limits
         } else if PUBLIC_LIMIT_PREFIXES
