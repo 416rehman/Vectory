@@ -3,7 +3,9 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
+  History,
   MoreHorizontal,
+  RefreshCw,
   Plus,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -28,10 +30,12 @@ import {
   Field,
   Modal,
   PageHeader,
-  RefreshButton,
+  IconButton,
   SearchBox,
   useResource,
 } from "./ui";
+import PipelineStartChoice, { type StartImport } from "./PipelineStartChoice";
+import PipelineStatus from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
 } from "./PipelineCreationRecovery";
@@ -167,6 +171,7 @@ export default function PipelineLibrary({
     [name, setName] = useState(""),
     [description, setDescription] = useState(""),
     [template, setTemplate] = useState("empty"),
+    [imported, setImported] = useState<StartImport | null>(null),
     [busy, setBusy] = useState(false),
     [nameError, setNameError] = useState(""),
     [formError, setFormError] = useState("");
@@ -193,6 +198,7 @@ export default function PipelineLibrary({
     setName("");
     setDescription("");
     setTemplate("empty");
+    setImported(null);
     setNameError("");
     setFormError("");
     setOpen(true);
@@ -217,11 +223,24 @@ export default function PipelineLibrary({
     try {
       let config: Config = { sources: {}, transforms: {}, sinks: {} },
         graph = { nodes: [], edges: [] } as Configuration["graph"];
-      if (template === "starter") {
-        const { starter, toGraph } = await import("./catalog");
+      if (template === "import" && !imported?.config) {
+        setFormError("Choose a Vector configuration file to import.");
+        return;
+      }
+      if (template !== "empty") {
+        const [{ toGraph }, { arrangeGraph }, { pipelineTemplate }] =
+          await Promise.all([
+            import("./catalog"),
+            import("./pipelineEditing"),
+            import("./pipelineTemplates"),
+          ]);
         if (!current()) return;
-        config = structuredClone(starter);
-        graph = toGraph(config);
+        config = structuredClone(
+          template === "import"
+            ? imported!.config!
+            : pipelineTemplate(template)!.config,
+        );
+        graph = arrangeGraph(toGraph(config));
       }
       operation = beginPipelineCreationOperation(user.id, {
         operation: "create",
@@ -320,6 +339,7 @@ export default function PipelineLibrary({
         <PipelineCreationRecovery
           ref={recoveryRef}
           user={user}
+          showRecent={false}
           onRecovered={() => {
             void reload();
           }}
@@ -363,13 +383,25 @@ export default function PipelineLibrary({
           placeholder="Search pipelines"
           maxLength={200}
         />
-        <RefreshButton
-          onClick={refresh}
-          busy={refreshing}
-          disabled={loading || searching}
-        >
-          Refresh
-        </RefreshButton>
+        <div className="pipeline-library-toolbar-tools">
+          {can(user, "edit") && (
+            <IconButton
+              icon={History}
+              label="Your pipeline requests"
+              onClick={(event) =>
+                recoveryRef.current?.openRecent(event.currentTarget)
+              }
+            />
+          )}
+          <IconButton
+            icon={RefreshCw}
+            label="Refresh"
+            className={refreshing ? "is-busy" : undefined}
+            aria-busy={refreshing || undefined}
+            onClick={refresh}
+            disabled={loading || searching || refreshing}
+          />
+        </div>
       </div>
       {error && !searching && <ErrorBox message={error} retry={refresh} />}
       <div className="pipeline-library-list">
@@ -470,7 +502,7 @@ export default function PipelineLibrary({
                 onChange: (state) =>
                   setQuery({ ...query, search: search.trim(), state, page: 1 }),
               },
-              cell: (c) => (c.archived ? "Archived" : `Draft ${c.revision}`),
+              cell: (c) => <PipelineStatus pipeline={c} />,
             },
             {
               id: "updated",
@@ -621,38 +653,13 @@ export default function PipelineLibrary({
                 {nameError}
               </p>
             )}
-            <fieldset className="pipeline-library-templates">
-              <legend>How would you like to start?</legend>
-              <label>
-                <input
-                  type="radio"
-                  disabled={busy || !!notice || unresolved}
-                  name="pipeline-start"
-                  checked={template === "empty"}
-                  onChange={() => setTemplate("empty")}
-                />
-                <span>
-                  <strong>Build a pipeline</strong>
-                  <small>Choose a source and destination step by step.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  disabled={busy || !!notice || unresolved}
-                  name="pipeline-start"
-                  checked={template === "starter"}
-                  onChange={() => setTemplate("starter")}
-                />
-                <span>
-                  <strong>Try a synthetic example</strong>
-                  <small>
-                    Generated logs → edit fields → console. No application files
-                    or external destinations.
-                  </small>
-                </span>
-              </label>
-            </fieldset>
+            <PipelineStartChoice
+              value={template}
+              disabled={busy || !!notice || unresolved}
+              imported={imported}
+              onChange={setTemplate}
+              onImport={setImported}
+            />
             <Field label="Description (optional)">
               <textarea
                 rows={2}

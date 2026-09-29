@@ -1224,8 +1224,12 @@ export const PipelineSummarySchema = z.object({
       id: z.string(),
       number: z.number().int().positive(),
       created_at: z.string(),
+      // Additive: absent from servers before the library status fields.
+      author: z.string().nullable().optional(),
+      draft_changed: z.boolean().optional(),
     })
     .nullable(),
+  assigned_devices: z.number().int().nonnegative().optional(),
 });
 export const PipelineLibraryPageSchema = z.object({
   items: z.array(PipelineSummarySchema).max(50),
