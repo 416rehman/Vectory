@@ -7,11 +7,15 @@ import (
 	"testing"
 )
 
-// On macOS the temporary directory lives under the /var -> /private/var link,
-// which strict path checks refuse; tests work in its canonical location.
+// Tests work in the canonical temporary directory: strict path checks refuse
+// aliases such as macOS's /var -> /private/var link and a Windows runner's
+// 8.3 short TEMP (C:\Users\RUNNER~1\...), which EvalSymlinks expands.
 func TestMain(m *testing.M) {
-	if runtime.GOOS != "windows" {
-		if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+	if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+		if runtime.GOOS == "windows" {
+			_ = os.Setenv("TMP", dir)
+			_ = os.Setenv("TEMP", dir)
+		} else {
 			_ = os.Setenv("TMPDIR", dir)
 		}
 	}

@@ -32,36 +32,46 @@ func ParseCAFingerprint(value string) ([]byte, error) {
 	return sum, nil
 }
 
+// errPinnedChainChecked ends the probe's handshake once the chain is judged.
+var errPinnedChainChecked = errors.New("pinned chain checked")
+
 // ProbePinnedCA returns the server certificate whose SHA-256 equals pin, after
 // proving that the server's presented chain verifies against it as the only
-// root, including the host name and validity period. No token or credential is
-// ever sent: when this host doesn't already trust the server, the handshake is
-// abandoned before any request, and verification uses the presented chain.
-// This is the specification's "trust fingerprint obtained through a separately
-// trusted channel": the fingerprint comes from the authenticated dashboard,
-// and a certificate is never trusted merely because it was presented.
+// root, including the host name and validity period. No request, token or
+// credential is ever sent: the handshake is abandoned as soon as the chain is
+// judged. This host's own roots and platform verifier play no part, so the
+// result and its explanation are the same on every OS. This is the
+// specification's "trust fingerprint obtained through a separately trusted
+// channel": the fingerprint comes from the authenticated dashboard, and a
+// certificate is never trusted merely because it was presented.
 func ProbePinnedCA(ctx context.Context, server string, pin []byte) (*x509.Certificate, error) {
 	base, err := NormalizeServer(server)
 	if err != nil {
 		return nil, err
 	}
 	target, _ := url.Parse(base)
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		roots = x509.NewCertPool()
-	}
-	var presented []*x509.Certificate
+	var (
+		pinned  *x509.Certificate
+		judged  bool
+		refusal error
+	)
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 		DisableKeepAlives:     true,
 		DisableCompression:    true,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots,
-			// Runs only after ordinary verification against this host's roots succeeded.
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13,
+			// Not skipped: replaced. VerifyConnection verifies the presented
+			// chain with the pinned certificate as the only root, and the
+			// handshake never completes, so nothing is sent either way.
+			InsecureSkipVerify: true,
 			VerifyConnection: func(state tls.ConnectionState) error {
-				presented = state.PeerCertificates
-				return nil
+				judged = true
+				if pinned, refusal = verifyPinnedChain(target, state.PeerCertificates, pin, time.Now()); refusal != nil {
+					return refusal
+				}
+				return errPinnedChainChecked
 			}},
 	}
 	defer transport.CloseIdleConnections()
@@ -72,19 +82,19 @@ func ProbePinnedCA(ctx context.Context, server string, pin []byte) (*x509.Certif
 	}
 	request.Header.Set("User-Agent", "Vectory/"+Version)
 	response, err := client.Do(request)
-	var verification *tls.CertificateVerificationError
-	var unknown x509.UnknownAuthorityError
-	switch {
-	case err == nil:
-		// This host already trusts the server; the pin must still match.
+	if err == nil {
+		// Unreachable: the handshake always ends in VerifyConnection.
 		response.Body.Close()
-	case errors.As(err, &verification) && errors.As(verification.Err, &unknown):
-		presented = verification.UnverifiedCertificates
-	default:
-		proxy, _ := http.ProxyFromEnvironment(request)
-		return nil, classifyTransport(target, proxy, false, err)
+		return nil, errors.New("the pinned-certificate check did not run")
 	}
-	return verifyPinnedChain(target, presented, pin, time.Now())
+	switch {
+	case judged && refusal != nil:
+		return nil, refusal
+	case judged && pinned != nil:
+		return pinned, nil
+	}
+	proxy, _ := http.ProxyFromEnvironment(request)
+	return nil, classifyTransport(target, proxy, false, err)
 }
 
 func verifyPinnedChain(target *url.URL, chain []*x509.Certificate, pin []byte, now time.Time) (*x509.Certificate, error) {

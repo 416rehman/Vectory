@@ -221,6 +221,24 @@ func classifyCertificate(target *url.URL, err error, presented []*x509.Certifica
 			e.Fix = "Check the server certificate and this host's clock."
 		}
 	default:
+		// Platform verifiers (macOS in particular) report some failures with
+		// OS-specific errors. Judge the presented chain with Go's own
+		// verifier and its own last certificate as the root: if that passes,
+		// the chain is sound and only its issuer isn't trusted here.
+		if len(presented) > 0 {
+			roots, intermediates := x509.NewCertPool(), x509.NewCertPool()
+			roots.AddCert(presented[len(presented)-1])
+			for _, certificate := range presented[1:] {
+				intermediates.AddCert(certificate)
+			}
+			_, own := presented[0].Verify(x509.VerifyOptions{DNSName: target.Hostname(), Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+			switch {
+			case own == nil:
+				return classifyCertificate(target, x509.UnknownAuthorityError{Cert: presented[0]}, presented)
+			case errors.As(own, &hostname), errors.As(own, &invalid) && invalid.Reason == x509.Expired:
+				return classifyCertificate(target, own, presented)
+			}
+		}
 		e.Code = "TLS_VERIFICATION_FAILED"
 		e.Message = "The server's certificate couldn't be verified."
 		e.Fix = "Check the certificate chain configured for the agent listener."

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -105,6 +104,20 @@ func defineSetup(c *cli) func() int {
 		}
 		human := !*c.json
 		color := human && colorEnabled(c.stdout)
+		// Refuse an unsafe token file before any check or change; the token
+		// itself is read only when enrollment needs it.
+		tokenPath := ""
+		if *tokenFile != "" {
+			var ok bool
+			if tokenPath, ok = c.resolvePath("token-file", *tokenFile); !ok {
+				return exitUsage
+			}
+			f, err := agent.OpenEnrollmentTokenFile(tokenPath)
+			if err != nil {
+				return c.fail(err)
+			}
+			_ = f.Close()
+		}
 		if human {
 			fmt.Fprintf(c.stdout, "Vectory agent setup %s%s\n", agent.Version, map[bool]string{true: " (dry run: nothing will change)"}[*dryRun])
 			options.Progress = func(step agent.SetupStep) { printStep(c.stdout, step, color) }
@@ -113,12 +126,8 @@ func defineSetup(c *cli) func() int {
 			switch {
 			case *tokenStdin:
 				return readToken(os.Stdin)
-			case *tokenFile != "":
-				path, ok := c.resolvePath("token-file", *tokenFile)
-				if !ok {
-					return "", errors.New("invalid --token-file")
-				}
-				f, err := agent.OpenEnrollmentTokenFile(path)
+			case tokenPath != "":
+				f, err := agent.OpenEnrollmentTokenFile(tokenPath)
 				if err != nil {
 					return "", err
 				}

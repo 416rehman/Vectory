@@ -24,20 +24,32 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// hermeticTestEnvironment makes t.TempDir() return canonical paths (on macOS
-// the temporary directory lives under the /var -> /private/var symlink, which
-// strict path checks rightly refuse) and keeps proxy settings of the machine
-// running the tests out of network classification tests.
+// hermeticTestEnvironment makes t.TempDir() return canonical paths and keeps
+// proxy settings of the machine running the tests out of network
+// classification tests. Strict private-file and path checks rightly refuse
+// aliases: on macOS the temporary directory lives under the /var ->
+// /private/var symlink, and Windows CI runners use an 8.3 short TEMP
+// (C:\Users\RUNNER~1\...), which EvalSymlinks expands to the long name.
 func hermeticTestEnvironment() {
-	if runtime.GOOS != "windows" {
-		if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
-			_ = os.Setenv("TMPDIR", dir)
-		}
-	}
+	canonicalTempDir()
 	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
 		_ = os.Unsetenv(name)
 	}
 }
+
+func canonicalTempDir() {
+	dir, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = os.Setenv("TMP", dir)
+		_ = os.Setenv("TEMP", dir)
+		return
+	}
+	_ = os.Setenv("TMPDIR", dir)
+}
+
 func signed(t *testing.T, m Manifest, key ed25519.PrivateKey) Envelope {
 	t.Helper()
 	b, e := json.Marshal(m)
