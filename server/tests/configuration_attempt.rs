@@ -540,23 +540,86 @@ async fn legacy_success_marker_is_not_required_to_halt_unverified_workload() {
 #[tokio::test]
 async fn stale_attempt_error_never_binds_issue_to_current_desired_version() {
     let (_temp, s, _) = fixture().await;
-    let mut v = verified(2, true);
-    let mut old = attempt(1, "failed");
-    old["version_id"] = json!(A);
-    old["sha256"] = json!(db::hash(artifact(A)));
-    v["configuration_attempt"] = old;
-    v["apply_state"] = json!("failed");
-    v["error"] =
+    let stale = |error: Value| {
+        let mut v = verified(2, true);
+        let mut old = attempt(1, "failed");
+        old["version_id"] = json!(A);
+        old["sha256"] = json!(db::hash(artifact(A)));
+        v["configuration_attempt"] = old;
+        v["apply_state"] = json!("failed");
+        v["error"] = error;
+        v
+    };
+    // The old attempt's own failure, repeated, is not a new issue.
+    let echo =
         json!({"code":"VALIDATION_FAILED","stage":"validation","message":"private old attempt"});
-    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
-    let issues: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue'")
-        .fetch_all(&s.pool)
+    assert_eq!(beat(&s, stale(echo)).await.0, StatusCode::OK);
+    assert!(issue_records(&s).await.is_empty());
+    // A different workload failure is recorded, but never against the
+    // desired version the device has not reached.
+    let workload =
+        json!({"code":"PROCESS_EXITED","stage":"observation","message":"private workload failure"});
+    assert_eq!(beat(&s, stale(workload)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0]["code"], "PROCESS_EXITED");
+    assert!(issues[0]["desired_version_id"].is_null());
+    assert!(!issues[0].to_string().contains("private"));
+}
+
+#[tokio::test]
+async fn retry_echo_of_the_previous_attempt_is_not_a_new_issue() {
+    let (_temp, s, _candidate) = fixture().await;
+    // The device still runs version A, verified before candidate B.
+    let running =
+        json!({"generation":1,"version_id":A,"sha256":db::hash(artifact(A)),"secret_revision":0});
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.verified_configuration_attempt',json(?),'$.verified_effective_sha256',?) WHERE id=?")
+        .bind(running.to_string())
+        .bind(db::hash(artifact(A)))
+        .bind(DEVICE)
+        .execute(&s.pool)
         .await
         .unwrap();
+    let failed = |generation: i64| {
+        let mut v = heartbeat("failed", Some(attempt(generation, "failed")));
+        v["error"] = json!({"code":"VALIDATION_FAILED","stage":"validation","message":"private candidate failure"});
+        v
+    };
+    let occurrences = |issue: &Value| {
+        (
+            issue["desired_version_id"].clone(),
+            issue["count"].clone(),
+            issue["reports"].clone(),
+        )
+    };
+    assert_eq!(beat(&s, failed(2)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
     assert_eq!(issues.len(), 1);
-    let issue: Value = serde_json::from_str(&issues[0]).unwrap();
-    assert!(issue["desired_version_id"].is_null());
-    assert!(!issues[0].contains("private old attempt"));
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(1), json!(1)));
+    let api = session(&s).await;
+    let (status, retried, _) = dashboard(
+        &s,
+        "POST",
+        &format!("/api/v1/devices/{DEVICE}/retry"),
+        json!({"expected_version_id":B,"expected_generation":2}),
+        &api.0,
+        &api.1,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    // Until the retry reaches it, the agent repeats its previous attempt:
+    // neither the running version A nor candidate B failed again.
+    assert_eq!(beat(&s, failed(2)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(1), json!(1)));
+    assert_eq!(shown(&s).await["apply_state"], "desired");
+    // The retried attempt fails again: a second occurrence of the same issue.
+    assert_eq!(beat(&s, failed(3)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(2), json!(2)));
+    assert_eq!(shown(&s).await["apply_state"], "failed");
 }
 #[tokio::test]
 async fn durable_failure_latch_survives_restart_and_pause_preserves_own_outcome() {
