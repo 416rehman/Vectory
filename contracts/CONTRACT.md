@@ -224,7 +224,7 @@ Evaluation (`server/src/data_plane.rs`), all constants:
 
 Codes (issue `stage:"delivery"`), each keyed by device, version, code and component:
 
-- `DATA_PLANE_SINK_ERRORS` (per sink): `errors_per_minute >= 1`. Clean only when errors are below the threshold and the sink's buffer is below 50%, because a stuck sink backs off and stops counting errors while its buffer stays full.
+- `DATA_PLANE_SINK_ERRORS` (per sink): `errors_per_minute >= 1`. Clean only with evidence: errors below the threshold and either the sink's buffer observed below 50% or events sent in the window. Silence is not recovery: a stuck sink backs off and stops counting errors, and Vector's Prometheus exporter drops series that haven't changed for a minute (`flush_period_secs`), so a stuck sink also loses its buffer gauge. Such evaluations hold instead of counting as clean.
 - `DATA_PLANE_STALLED` (pipeline-wide, no component key): device `events_per_second >= 0.1`, `events_out_per_second <= 1%` of it, intentional filtering below half of it, and a struggling sink (errors, buffer at least 50%, or error drops; or no component breakdown). A route that matches nothing is not a stall. Its diagnostic names the likely sink. Clean when delivery resumes.
 - `DATA_PLANE_BUFFER_FULL` (per component with a buffer gauge): see the buffer thresholds above.
 - `DATA_PLANE_ERROR_DROPS` (per component): `dropped_per_minute >= 1` (the agent's rate of `discarded_error`).
