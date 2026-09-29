@@ -1195,19 +1195,22 @@ try {
     );
     expect(results).toHaveLength(2);
   } else if (splitSaveOnly) {
+    // While saving, the button shows a loading indicator in its name.
+    const saveButton = () =>
+      page.locator(".editor-toolbar .editor-save-button");
     const trigger = () => button("Save options");
     const saveMenu = () =>
       page.getByRole("menu", { name: "Save options", exact: true });
     const saveItem = () =>
       saveMenu().getByRole("menuitem", { name: "Save draft", exact: true });
+    const noteItem = () =>
+      saveMenu().getByRole("menuitem", {
+        name: "Save with note…",
+        exact: true,
+      });
     const openSave = async () => {
       await trigger().click();
       await expect(saveMenu()).toBeVisible();
-    };
-    const save = async () => {
-      await openSave();
-      await saveItem().click();
-      await expect(saveMenu()).toHaveCount(0);
     };
     const sample = async () => {
       await page.locator('.react-flow__node[data-id="sample"]').click();
@@ -1224,51 +1227,80 @@ try {
     const assertSaveOnly = () => {
       expect(fixture.validations).toEqual([]);
       expect(requests.filter((r) => r.method === "POST")).toEqual([]);
-      for (const attempt of fixture.saveAttempts)
-        expect(attempt.message).toBe("Saved from pipeline editor");
     };
     await check(
-      "split save opens with keyboard, closes on Escape/outside and saves without publishing or choosing targets",
+      "Save is visible beside publication, disabled until an edit, and Ctrl/Cmd+S saves with a summary note",
       async () => {
         for (const published of [false, true]) {
           await load({ published });
           await expect(
             button(published ? "Choose devices" : "Review & publish"),
           ).toBeVisible();
-          await openSave();
-          await expect(saveItem()).toBeDisabled();
-          await page.keyboard.press("Escape");
+          await expect(saveButton()).toBeDisabled();
+          await expect(saveButton()).toHaveAccessibleName("Save");
+          await expect(saveButton()).toHaveAttribute(
+            "aria-keyshortcuts",
+            "Control+S Meta+S",
+          );
+          // Nothing to save: the shortcut is swallowed and sends nothing.
+          await page.keyboard.press("ControlOrMeta+s");
           await sample();
           await rate().fill("11");
-          await trigger().focus();
-          await page.keyboard.press("ArrowDown");
-          await expect(saveMenu()).toBeVisible();
-          await expect(saveItem()).toBeFocused();
-          await page.keyboard.press("Escape");
-          await expect(saveMenu()).toHaveCount(0);
-          await expect(trigger()).toBeFocused();
-          await openSave();
-          const heading = await page.locator(".editor-title").boundingBox();
-          await page.mouse.click(heading.x + 8, heading.y + 8);
-          await expect(saveMenu()).toHaveCount(0);
-          expect(fixture.saveAttempts).toEqual([]);
-          await page.locator(".editor-tools-menu summary").click();
-          await expect(
-            page
-              .locator(".editor-tools-menu")
-              .getByRole("button", { name: /^Save draft/ }),
-          ).toHaveCount(0);
-          await page.keyboard.press("Escape");
-          await trigger().focus();
-          await page.keyboard.press("ArrowDown");
-          await page.keyboard.press("Enter");
+          await expect(saveButton()).toBeEnabled();
+          await rate().press("ControlOrMeta+s");
           await expect.poll(() => fixture.document.revision).toBe(2);
-          await expect(saveMenu()).toHaveCount(0);
+          await expect(page.locator(".pipeline-save-status")).toContainText(
+            "All changes saved",
+          );
+          await expect(saveButton()).toBeDisabled();
           expect(fixture.saveAttempts).toHaveLength(1);
-          expect(fixture.mutations).toHaveLength(1);
+          expect(fixture.saveAttempts[0].message).toBe("sample: rate changed");
           expect(fixture.document.config.transforms.sample.rate).toBe(11);
           assertSaveOnly();
         }
+      },
+    );
+    await check(
+      "Save options open with the keyboard, close on Escape or outside, and save with an edited note",
+      async () => {
+        await load();
+        await openSave();
+        await expect(saveItem()).toBeDisabled();
+        await expect(noteItem()).toBeDisabled();
+        await page.keyboard.press("Escape");
+        await sample();
+        await rate().fill("12");
+        await trigger().focus();
+        await page.keyboard.press("ArrowDown");
+        await expect(saveMenu()).toBeVisible();
+        await expect(saveItem()).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(saveMenu()).toHaveCount(0);
+        await expect(trigger()).toBeFocused();
+        await openSave();
+        const heading = await page.locator(".editor-title").boundingBox();
+        await page.mouse.click(heading.x + 8, heading.y + 8);
+        await expect(saveMenu()).toHaveCount(0);
+        expect(fixture.saveAttempts).toEqual([]);
+        await openSave();
+        await noteItem().click();
+        const dialog = page.getByRole("dialog", {
+          name: "Save draft",
+          exact: true,
+        });
+        const note = dialog.getByLabel("Note", { exact: true });
+        await expect(note).toHaveValue("sample: rate changed");
+        await note.fill("Sample one in twelve during the launch");
+        await dialog
+          .getByRole("button", { name: "Save draft", exact: true })
+          .click();
+        await expect(dialog).toHaveCount(0);
+        await expect.poll(() => fixture.document.revision).toBe(2);
+        expect(fixture.saveAttempts).toHaveLength(1);
+        expect(fixture.saveAttempts[0].message).toBe(
+          "Sample one in twelve during the launch",
+        );
+        assertSaveOnly();
       },
     );
     await check(
@@ -1294,13 +1326,23 @@ try {
               await input.fill("{pending");
             }
           }
+          await expect(saveButton()).toBeDisabled();
+          await input.press("ControlOrMeta+s");
+          await expect(
+            page
+              .getByText(
+                "Apply or discard unfinished code and field edits before saving the draft.",
+                { exact: true },
+              )
+              .first(),
+          ).toBeVisible();
           await openSave();
           await expect(saveItem()).toBeDisabled();
           await page.keyboard.press("Escape");
           await expect(trigger()).toBeFocused();
           if (kind === "scalar") await expect(input).toHaveValue("-");
           else await expect(input).toHaveText("{pending");
-          await page.waitForTimeout(2150);
+          await page.waitForTimeout(1200);
           expect(fixture.saveAttempts).toEqual([]);
           expect(fixture.document.config).toEqual(baseDocument().config);
         }
@@ -1313,22 +1355,24 @@ try {
         await sample();
         fixture.holdSave = true;
         await rate().fill("20");
-        await save();
+        await saveButton().click();
         await expect.poll(() => fixture.pendingSaves.length).toBe(1);
+        await expect(saveButton()).toBeDisabled();
         await expect(trigger()).toBeDisabled();
-        await trigger().evaluate((element) => element.click());
+        await saveButton().evaluate((element) => element.click());
+        await rate().press("ControlOrMeta+s");
         expect(fixture.saveAttempts).toHaveLength(1);
         expect(fixture.saveAttempts[0].revision).toBe(1);
         expect(fixture.saveAttempts[0].config.transforms.sample.rate).toBe(20);
         fixture.pendingSaves.shift()(true);
-        await expect(trigger()).toBeEnabled();
+        await expect(saveButton()).toBeEnabled();
         await expect(page.locator(".pipeline-save-status")).toContainText(
           "Save failed",
         );
         await expect(rate()).toHaveValue("20");
         expect(fixture.document.revision).toBe(1);
         fixture.holdSave = false;
-        await save();
+        await saveButton().click();
         await expect.poll(() => fixture.document.revision).toBe(2);
         await expect(page.locator(".pipeline-save-status")).toContainText(
           "All changes saved",
@@ -1343,20 +1387,19 @@ try {
       },
     );
     await check(
-      "editors retain direct Save draft while operators, viewers and archived pipelines have no draft-save affordance",
+      "editors save without publication while operators, viewers and archived pipelines have no draft-save affordance",
       async () => {
         await load({ role: "editor" });
-        await expect(trigger()).toHaveCount(0);
         await expect(button("Review & publish")).toHaveCount(0);
-        await expect(button("Save draft")).toBeDisabled();
+        await expect(saveButton()).toBeDisabled();
         await sample();
         await rate().fill("20");
-        await button("Save draft").click();
+        await saveButton().click();
         await expect.poll(() => fixture.document.revision).toBe(2);
         expect(fixture.document.config.transforms.sample.rate).toBe(20);
         assertSaveOnly();
         await rate().fill("-");
-        await expect(button("Save draft")).toBeDisabled();
+        await expect(saveButton()).toBeDisabled();
         for (const options of [
           { role: "operator" },
           { role: "viewer" },
@@ -1365,7 +1408,8 @@ try {
         ]) {
           await load(options);
           await expect(trigger()).toHaveCount(0);
-          await expect(button("Save draft")).toHaveCount(0);
+          await expect(saveButton()).toHaveCount(0);
+          await page.keyboard.press("ControlOrMeta+s");
           await page.locator(".editor-tools-menu summary").click();
           await expect(
             page
@@ -1390,13 +1434,15 @@ try {
           await page.evaluate((theme) => {
             document.documentElement.dataset.theme = theme;
           }, theme);
-          const primary = button("Review & publish");
           await expect(trigger()).toBeVisible();
-          const a = await primary.boundingBox(),
-            b = await trigger().boundingBox();
+          const a = await saveButton().boundingBox(),
+            b = await trigger().boundingBox(),
+            primary = await button("Review & publish").boundingBox();
+          // Save and its options read as one control beside publication.
           expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(1);
           expect(Math.abs(a.x + a.width - b.x)).toBeLessThanOrEqual(1);
           expect(b.x + b.width).toBeLessThanOrEqual(width);
+          expect(primary.x + primary.width).toBeLessThanOrEqual(width);
           await noOverflow("split toolbar " + width + " " + theme);
           await openSave();
           const bounds = await saveMenu().boundingBox();
@@ -1404,8 +1450,9 @@ try {
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
           measurements.push({
             label: "split save " + width + " " + theme,
-            primary: a,
+            save: a,
             trigger: b,
+            primary,
             menu: bounds,
           });
           await axe("split save " + width + " " + theme);
@@ -1419,7 +1466,58 @@ try {
         }
       },
     );
-    expect(results).toHaveLength(splitSaveFollowup ? 2 : 5);
+    await check(
+      "unsaved edits survive a reload in this browser and can be restored or discarded",
+      async () => {
+        await load();
+        page.on("dialog", (dialog) => dialog.accept());
+        await sample();
+        await rate().fill("33");
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              Object.keys(localStorage).some((key) =>
+                key.startsWith("vectory.draft.v1:"),
+              ),
+            ),
+          )
+          .toBe(true);
+        await page.reload();
+        const banner = page.locator(".editor-recovery");
+        await expect(banner).toContainText(
+          "are still in this browser. Restore them to keep editing, or discard them.",
+        );
+        await axe("draft recovery offer");
+        await page.screenshot({
+          path: resolve(output, "draft-recovery.png"),
+          animations: "disabled",
+        });
+        await banner
+          .getByRole("button", { name: "Restore changes", exact: true })
+          .click();
+        await expect(banner).toHaveCount(0);
+        await expect(saveButton()).toBeEnabled();
+        await sample();
+        await expect(rate()).toHaveValue("33");
+        await page.reload();
+        await banner
+          .getByRole("button", { name: "Discard", exact: true })
+          .click();
+        await expect(banner).toHaveCount(0);
+        expect(
+          await page.evaluate(() =>
+            Object.keys(localStorage).filter((key) =>
+              key.startsWith("vectory.draft.v1:"),
+            ),
+          ),
+        ).toEqual([]);
+        await page.reload();
+        await expect(page.locator(".react-flow__node").first()).toBeVisible();
+        await expect(banner).toHaveCount(0);
+        expect(fixture.saveAttempts).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(splitSaveFollowup ? 2 : 7);
   } else if (checkStateOnly) {
     const control = () => checkButton();
     const verdict = () => problemsPanel().locator(".problems-verdict");
@@ -2673,7 +2771,11 @@ try {
             exact: true,
           }),
         ).toHaveValue("23");
-        await expect(button("Save draft")).toBeEnabled();
+        await expect(
+          page
+            .locator(".editor-toolbar")
+            .getByRole("button", { name: "Save", exact: true }),
+        ).toBeEnabled();
         expect(fixture.mutations).toEqual([]);
       },
     );
@@ -2741,13 +2843,13 @@ try {
               : splitSaveOnly
                 ? splitSaveFollowup
                   ? "Final split-save follow-up: held-save failure/retry and 899/800/375px popup geometry/accessibility after nonmodal menu and error-reset changes; other earlier behavioral groups were not rerun. Synthetic in-memory API only."
-                  : "Focused actual App/editor split-save menu with isolated synthetic draft CAS, held/failed saves and published-version fixtures. No real preview validation, save, publication or deployment requests."
+                  : "Focused actual App/editor save controls: visible Save, Ctrl/Cmd+S, save options and notes, held/failed saves, role boundaries and browser draft recovery, with isolated synthetic draft CAS and published-version fixtures. No real preview validation, save, publication or deployment requests."
                 : checkStateOnly
-                  ? "Focused actual App/editor check-state and hover-result regressions with isolated synthetic validation and draft responses. Includes queued native input while a check is held; viewing cached results never initiates validation. No real server/preview validation or device/publication mutations."
+                  ? "Focused actual App/editor check states: labels, stale, pending and Code checks, unavailable checker, auto-check and color contrast, with isolated synthetic validation and draft responses. No real server/preview validation or device/publication mutations."
                   : nodeActionsOnly
                     ? "Focused node-action and inspector ownership review using the actual App/editor with isolated synthetic API: duplicate/remove, exact undo, declined pending-field removal, keyboard access, read-only guards and three viewport/theme accessibility scans. No real server, preview or native device mutations."
                     : checksLayoutOnly
-                      ? "Focused actual-App check-results hover/focus dismissal and viewport regression at 375px and 899px with a mocked structural-validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
+                      ? "Focused actual-App Problems panel containment, keyboard toggle and problem-to-field navigation at 375px and 899px with a mocked validation response. No real server validation or draft/publication/device mutations; earlier interaction groups were not rerun."
                       : menuLayoutOnly
                         ? "Focused CSS follow-up on actual App/editor: S3 icon sizing, compact two-result height, viewport containment and light/dark accessibility. Isolated GET-only synthetic API; the earlier seven interaction groups were not rerun for this CSS follow-up."
                         : "Actual App/editor with isolated synthetic API and in-memory draft CAS; no preview, publication, enrollment, deployment, or native activation. Accessibility scope is limited to scanned states.",
