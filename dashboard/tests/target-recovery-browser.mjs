@@ -1399,8 +1399,13 @@ try {
       const beta = table().locator("tbody tr").filter({ hasText: "Synthetic beta" });
       await expect(alpha).toContainText("Blocked: Full Vector mode required; Vector version incompatible");
       await expect(beta).toContainText("Blocked: Vector version incompatible");
-      await expect(alpha).toContainText("No pipeline assigned");
-      await expect(beta).toContainText("No pipeline assigned");
+      // A device the server won't release to is "Blocked", never a green "New".
+      await expect(alpha.locator(".target-outcome")).toContainText("Blocked");
+      await expect(alpha.locator(".target-outcome")).not.toContainText("New");
+      await expect(beta.locator(".target-outcome")).toContainText("Blocked");
+      await expect(beta.locator(".target-outcome")).toContainText(
+        "Vector version incompatible",
+      );
       await expect(
         dialog().getByRole("link", { name: "View active canary" }),
       ).toHaveCount(0);

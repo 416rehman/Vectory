@@ -630,8 +630,17 @@ try {
         await settingsLink()
           .count()
           .then((count) => expect(count).toBe(1));
+        // The button opens the same dialog as the Deployments page, with this
+        // device already chosen; with nothing published the way on keeps it.
         await page
           .getByRole("button", { name: "Deploy a pipeline", exact: true })
+          .click();
+        const picker = page.getByRole("dialog", {
+          name: "Deploy a pipeline to Synthetic edge",
+        });
+        await expect(picker).toBeVisible();
+        await picker
+          .getByRole("link", { name: "Start from a template", exact: true })
           .click();
         await expect(page).toHaveURL(
           new RegExp(`#/configurations\\?device=${id(1)}$`),
