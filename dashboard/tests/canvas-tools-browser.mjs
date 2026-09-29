@@ -394,6 +394,50 @@ try {
   );
 
   await check(
+    "a route's samples run through the steps before it and show where each one went, on the tester and on the canvas",
+    async () => {
+      const document = baseDocument();
+      document.config.transforms.parse = {
+        type: "remap",
+        inputs: ["seed"],
+        source: ".status = 503",
+      };
+      document.config.transforms.branch.inputs = ["parse"];
+      const routed = (sample, port) =>
+        `{"sample":${sample},"outcome":"emitted","outputs":[{"port":"${port}","event":{"status":${sample}},"timestamps":[]}]}`;
+      await load({
+        document,
+        // Every step answers the same canned run: sample 0 to accepted, 1 to nothing.
+        vrl: `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${routed(0, "accepted")},${routed(1, "_unmatched")}]}`,
+      });
+      await node("branch").click();
+      await expect(inspector().locator(".sample-upstream")).toContainText(
+        "Run through upstream steps",
+      );
+      await expect(inspector().locator(".sample-upstream")).toContainText(
+        "parse",
+      );
+      const summary = inspector().locator(".sample-route-summary");
+      await expect(summary).toContainText("accepted 1");
+      await expect(summary).toContainText("Unmatched 1");
+      await expect(node("branch").locator(".pipeline-node-trace")).toHaveText([
+        "1",
+        "1",
+      ]);
+      // Two runs: the upstream step first, then the route on what it emitted.
+      expect(fixture.vrlRequests.length).toBeGreaterThanOrEqual(2);
+      expect(fixture.vrlRequests[0]).toContain(".status = 503");
+      // Turning it off tests the route on the samples as they are.
+      await inspector()
+        .getByLabel(/Run through upstream steps/)
+        .uncheck();
+      await expect
+        .poll(() => fixture.vrlRequests.at(-1))
+        .toContain('"type":"route"');
+    },
+  );
+
+  await check(
     "a new step lands in free space, fed by the selection, and the picker explains what cannot connect",
     async () => {
       await load();
@@ -683,7 +727,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(10);
+  expect(results).toHaveLength(11);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

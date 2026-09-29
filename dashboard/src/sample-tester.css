@@ -227,6 +227,16 @@ div.sample-empty p {
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
+.sample-route-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.sample-route-summary .sample-port strong {
+  font-variant-numeric: tabular-nums;
+}
 .sample-held {
   margin: 0 0 8px;
   color: var(--muted);

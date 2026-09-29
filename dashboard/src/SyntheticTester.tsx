@@ -28,6 +28,7 @@ import {
 import { unitTestFromSample, type SampleResult } from "./sampleTests";
 import {
   eventsOnPort,
+  routeCounts,
   runnableStep,
   sourceSamples,
   type Upstream,
@@ -287,6 +288,7 @@ export default function SyntheticTester({
   onSaveTests,
   onCompile,
   onPaths,
+  onTrace,
   onJump,
   wide = false,
   upstream,
@@ -303,6 +305,8 @@ export default function SyntheticTester({
   /** Compile findings for this step, or null while unknown. */
   onCompile?: (diagnostics: VectorDiagnostic[] | null) => void;
   onPaths?: (paths: string[]) => void;
+  /** Samples per output of a route, for the canvas; null when unknown. */
+  onTrace?: (counts: Record<string, number> | null) => void;
   onJump?: (field: string, line: number, column: number) => void;
   wide?: boolean;
   /** What feeds this step; samples can run through it first. */
@@ -351,8 +355,8 @@ export default function SyntheticTester({
     steps.map((step) => [step.transform, step.port]),
   ]);
   const generation = useRef(0);
-  const callbacks = useRef({ onCompile, onPaths });
-  callbacks.current = { onCompile, onPaths };
+  const callbacks = useRef({ onCompile, onPaths, onTrace });
+  callbacks.current = { onCompile, onPaths, onTrace };
   const samplesId = useId();
 
   function update(next: SampleStore) {
@@ -449,6 +453,11 @@ export default function SyntheticTester({
         result.outputs.map((output) => output.event),
       );
       callbacks.current.onPaths?.(eventPaths([...events, ...outputs]));
+      callbacks.current.onTrace?.(
+        response.compiled === false
+          ? null
+          : routeCounts(response.results || [], String(transform.type)),
+      );
     } catch (failure) {
       if (current !== generation.current) return;
       const unavailable =
@@ -464,6 +473,7 @@ export default function SyntheticTester({
               : (failure as Error).message,
       });
       callbacks.current.onCompile?.(null);
+      callbacks.current.onTrace?.(null);
     }
   }
 
@@ -477,6 +487,7 @@ export default function SyntheticTester({
     () => () => {
       generation.current++;
       callbacks.current.onCompile?.(null);
+      callbacks.current.onTrace?.(null);
     },
     [],
   );
@@ -763,6 +774,19 @@ export default function SyntheticTester({
             </div>
           ) : completed ? (
             <>
+              {Object.keys(routeCounts(results, String(transform.type)))
+                .length > 0 && (
+                <p className="sample-route-summary">
+                  {Object.entries(
+                    routeCounts(results, String(transform.type)),
+                  ).map(([port, count]) => (
+                    <span className="sample-port" key={port}>
+                      <ArrowRight size={11} aria-hidden="true" />
+                      {portLabel(port)} <strong>{count}</strong>
+                    </span>
+                  ))}
+                </p>
+              )}
               {completed.held.map((item) => (
                 <p key={item.id} className="sample-held">
                   {item.count === 1
