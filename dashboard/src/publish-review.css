@@ -103,11 +103,20 @@
 .publish-review-changes ul {
   display: grid;
   gap: 6px;
-  max-height: min(40vh, 360px);
   margin: 0;
   padding: 0;
-  overflow: auto;
   list-style: none;
+}
+/* Only the outer list scrolls; a folded group opens inside it. */
+.publish-review-changes > ul {
+  max-height: min(40vh, 360px);
+  overflow: auto;
+}
+.publish-group > summary {
+  cursor: pointer;
+}
+.publish-group > ul {
+  margin: 6px 0 2px 14px;
 }
 .publish-change-row {
   display: flex;

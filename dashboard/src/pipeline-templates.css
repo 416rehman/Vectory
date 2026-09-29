@@ -26,8 +26,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 8px;
-  max-height: 280px;
-  overflow: auto;
 }
 .pipeline-start-import {
   display: flex;
