@@ -74,7 +74,7 @@ const check: PipelineCheck = {
       message: "unhandled error",
       fix: {
         label: "Treat errors as no match",
-        replacement: "(.status >= 500) ?? false",
+        replacement: "((.status >= 500) ?? false)",
         scope: "span",
       },
     },
@@ -532,5 +532,77 @@ describe("pipeline problems", () => {
         new APIError("INVALID_INPUT", "Bad draft", 400, true),
       ),
     ).toBe("Couldn't check with Vector: Bad draft");
+  });
+
+  it("keeps a compound condition's logic when a span fix is applied", () => {
+    expect(
+      applyFix(".status >= 400 && .status < 500", {
+        line: 1,
+        column: 1,
+        length: 14,
+        fix: {
+          label: "Treat errors as no match",
+          replacement: "((.status >= 400) ?? false)",
+          scope: "span",
+        },
+      }),
+    ).toBe("((.status >= 400) ?? false) && .status < 500");
+  });
+
+  it("shows an event type mismatch as a problem on the consumer's inputs", () => {
+    const problems = checkProblems(
+      {
+        valid: false,
+        vector_validated: false,
+        static_checked: false,
+        errors: ["`r.a` emits logs but `dd` accepts metrics."],
+        warnings: [],
+        diagnostics: [
+          {
+            severity: "error",
+            section: "sinks",
+            component: "dd",
+            field: "inputs",
+            code: "type_mismatch",
+            message: "`r.a` emits logs but `dd` accepts metrics.",
+            hint: "Connect a step that produces the event type this component accepts.",
+          },
+        ],
+      },
+      { sinks: { dd: { type: "datadog_metrics", inputs: ["r.a"] } } },
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      severity: "error",
+      component: "dd",
+      field: "inputs",
+      code: "type_mismatch",
+    });
+  });
+
+  it("treats an incomplete check as not checked", () => {
+    const incomplete: PipelineCheck = {
+      valid: false,
+      vector_validated: false,
+      static_checked: false,
+      errors: [],
+      warnings: [],
+      diagnostics: [
+        {
+          severity: "error",
+          code: "validator_incomplete",
+          message: "Vector did not finish checking this pipeline.",
+        },
+      ],
+    };
+    expect(checkProblems(incomplete, {})).toEqual([]);
+    expect(
+      checkStatus({
+        checking: false,
+        check: incomplete,
+        stale: false,
+        errors: 0,
+      }),
+    ).toBe("unavailable");
   });
 });

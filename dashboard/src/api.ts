@@ -1643,6 +1643,16 @@ export const PipelineSummarySchema = z.object({
     })
     .nullable(),
   assigned_devices: z.number().int().nonnegative().optional(),
+  // Additive: devices grouped by the version of this pipeline they last verified.
+  running_versions: z
+    .array(
+      z.object({
+        id: z.string(),
+        number: z.number().int().positive(),
+        devices: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
 });
 export const PipelineLibraryPageSchema = z.object({
   items: z.array(PipelineSummarySchema).max(50),

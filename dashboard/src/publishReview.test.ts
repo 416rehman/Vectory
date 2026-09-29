@@ -84,7 +84,7 @@ describe("publish review", () => {
     const draft = structuredClone(published) as any;
     draft.transforms.parse.source =
       '. = parse_nginx_log!(.message, "combined")\n.env = "staging"';
-    draft.transforms.by_status.route.errors = "(.status >= 500) ?? false";
+    draft.transforms.by_status.route.errors = "((.status >= 500) ?? false)";
     draft.sinks.loki.endpoint = "http://b";
     draft.sinks.loki.inputs = ["parse"];
     draft.sinks.archive = { type: "aws_s3", inputs: ["parse"], bucket: "x" };
@@ -103,7 +103,7 @@ describe("publish review", () => {
       path: "route.errors",
       label: "Route errors",
       before: ".status >= 500",
-      after: "(.status >= 500) ?? false",
+      after: "((.status >= 500) ?? false)",
     });
     expect(byId.loki).toMatchObject({ options: ["endpoint"], rewired: true });
     expect(byId.archive).toMatchObject({ change: "added", type: "aws_s3" });
