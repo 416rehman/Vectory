@@ -217,6 +217,9 @@ async fn lanes_follow_release_order_and_failures_group_by_reason() {
         row["diagnostic"],
         "data_dir \"/var/lib/vector/\" does not exist"
     );
+    // The step that failed comes from the attempt, not from the last
+    // recorded apply state, so a skipped heartbeat never blames "download".
+    assert_eq!(row["failure_stage"], "validation");
     assert!(row["timeline"].as_array().unwrap().is_empty());
     for private in [
         "_attempt",
@@ -560,4 +563,95 @@ async fn a_retry_resends_the_same_device_artifact_under_the_new_generation() {
     .await
     .unwrap();
     assert_eq!(previous.as_deref(), Some(first.as_str()));
+}
+
+#[tokio::test]
+async fn a_duplicated_pipeline_prefills_the_values_its_original_runs() {
+    let f = fixture(3).await;
+    let variables =
+        json!([{"name":"metrics_address","path":"/sinks/metrics/address","type":"string"}]);
+    let original = db::id();
+    let copy = db::id();
+    let copy_version = db::id();
+    let unrelated = db::id();
+    let unrelated_version = db::id();
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let artifact = "{\"data_dir\":\"/var/lib/vectory-page/original\"}\n";
+    db::insert(&mut tx,"version",&json!({"id":original,"configuration_id":f.pipeline,"number":2,"artifact":artifact,"sha256":db::hash(artifact),"size":artifact.len(),"variables":variables,"created_at":db::now()})).await.unwrap();
+    for (id, name, source) in [
+        (&copy, "Web access logs (copy)", Some(&f.pipeline)),
+        (&unrelated, "Unrelated", None),
+    ] {
+        db::insert(
+            &mut tx,
+            "configuration",
+            &json!({"id":id,"name":name,"created_at":db::now()}),
+        )
+        .await
+        .unwrap();
+        let mut revision = json!({"id":db::id(),"configuration_id":id,"revision":1,"message":"Duplicated saved pipeline","created_at":db::now()});
+        if let Some(source) = source {
+            revision["source"] = json!({"kind":"draft","id":source,"revision":3});
+        } else {
+            revision["message"] = json!("Created pipeline");
+        }
+        db::insert(&mut tx, "revision", &revision).await.unwrap();
+    }
+    for (id, pipeline) in [(&copy_version, &copy), (&unrelated_version, &unrelated)] {
+        let artifact = format!("{{\"data_dir\":\"/var/lib/vectory-page/{id}\"}}\n");
+        db::insert(&mut tx,"version",&json!({"id":id,"configuration_id":pipeline,"number":1,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"variables":variables,"created_at":db::now()})).await.unwrap();
+    }
+    let mut deployment = request(&f.devices[..2], &original, 100, false);
+    let deployment_id = db::id();
+    deployment["id"] = json!(deployment_id);
+    deployment["status"] = json!("completed");
+    deployment["variable_bindings"] = json!({"defaults":{},"devices":{f.devices[0].clone():{"metrics_address":"127.0.0.1:9101"},f.devices[1].clone():{"metrics_address":"127.0.0.1:9102"}}});
+    db::insert(&mut tx, "deployment", &deployment)
+        .await
+        .unwrap();
+    for device in &f.devices[..2] {
+        sqlx::query("INSERT INTO deployment_targets(deployment_id,device_id,state,generation) VALUES(?,?,'verified_applied',1)")
+            .bind(&deployment_id)
+            .bind(device)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let (status, body) = post(
+        &f,
+        "/api/v1/deployments/binding-suggestions",
+        json!({"version_id":copy_version,"device_ids":f.devices}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["devices"][&f.devices[0]],
+        json!({"metrics_address":"127.0.0.1:9101"})
+    );
+    assert_eq!(
+        body["devices"][&f.devices[1]],
+        json!({"metrics_address":"127.0.0.1:9102"})
+    );
+    assert!(body["devices"].get(&f.devices[2]).is_none());
+    assert_eq!(
+        body["sources"][&f.devices[0]]["deployment_id"],
+        deployment_id
+    );
+    assert_eq!(body["sources"][&f.devices[0]]["version_number"], 2);
+    assert_eq!(
+        body["sources"][&f.devices[0]]["configuration_name"],
+        "Web access logs"
+    );
+
+    // A pipeline that wasn't duplicated from it never borrows its values.
+    let (status, body) = post(
+        &f,
+        "/api/v1/deployments/binding-suggestions",
+        json!({"version_id":unrelated_version,"device_ids":f.devices}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["devices"], json!({}));
 }

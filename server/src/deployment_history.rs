@@ -488,6 +488,21 @@ fn diagnostic(attempt: &Value, generation: &Value) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.chars().take(500).collect())
 }
+/// The apply step that failed for this exact candidate ("validation",
+/// "reload", …), so the rollout names the same step as the device page.
+fn failure_stage(attempt: &Value, generation: &Value) -> Option<String> {
+    if !attempt.is_object() || attempt["generation"] != *generation {
+        return None;
+    }
+    attempt["error"]["stage"]
+        .as_str()
+        .filter(|stage| {
+            !stage.is_empty()
+                && stage.len() <= 32
+                && stage.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        })
+        .map(str::to_owned)
+}
 // Private join columns become public, bounded fields; nothing else leaves.
 fn finish_target(item: &mut Value) {
     let object = item.as_object_mut().unwrap();
@@ -503,6 +518,12 @@ fn finish_target(item: &mut Value) {
     object.insert(
         "diagnostic".into(),
         json!(diagnostic(&terminal, &generation).or_else(|| diagnostic(&attempt, &generation))),
+    );
+    object.insert(
+        "failure_stage".into(),
+        json!(
+            failure_stage(&terminal, &generation).or_else(|| failure_stage(&attempt, &generation))
+        ),
     );
     object.insert(
         "check_in_seconds".into(),
@@ -797,8 +818,9 @@ pub async fn rollout(
 }
 
 /// Values each device last received for a new version's variables: from the
-/// most recent released deployment of the same pipeline that bound them, when
-/// the name and type still match. A rollback in between (which restores exact
+/// most recent released deployment of the same pipeline that bound them (or,
+/// for values still missing, of the pipeline it was duplicated from), when the
+/// name and type still match. A rollback in between (which restores exact
 /// artifacts and binds nothing) doesn't lose them. Variables are nonsecret by
 /// contract; operators see them in review.
 pub async fn binding_suggestions(
@@ -860,47 +882,77 @@ pub async fn binding_suggestions(
         "boolean" => value.is_boolean(),
         _ => value.as_str().is_some_and(|text| text.len() <= 4096),
     };
-    for chunk in devices.chunks(500) {
-        let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(
-            "SELECT t.device_id AS device,d.id AS deployment,json_extract(d.data,'$.variable_bindings') AS bindings,\
-             CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number \
-             FROM deployment_targets t JOIN devices dev ON dev.id=t.device_id AND dev.revoked=0 \
-             JOIN records d ON d.kind='deployment' AND d.id=t.deployment_id \
-             JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') \
-             WHERE t.generation>0 AND json_type(d.data,'$.variable_bindings')='object' AND json_extract(v.data,'$.configuration_id')=",
-        );
-        query.push_bind(pipeline);
-        query.push(" AND t.device_id IN (");
-        let mut separated = query.separated(",");
-        for id in chunk {
-            separated.push_bind(id);
+    // The requested pipeline first, then the pipelines it was duplicated from
+    // (nearest first), so "duplicate, then deploy" starts from the values the
+    // devices run now. Unrelated pipelines never contribute.
+    let mut lineage = vec![pipeline.to_owned()];
+    while lineage.len() < 5 {
+        let parent: Option<String> = sqlx::query_scalar(
+            "SELECT json_extract(data,'$.source.id') FROM records WHERE kind='revision' AND json_extract(data,'$.configuration_id')=? AND json_extract(data,'$.message')='Duplicated saved pipeline' AND json_extract(data,'$.source.kind')='draft' AND json_type(data,'$.source.id')='text' ORDER BY CAST(json_extract(data,'$.revision') AS INTEGER) LIMIT 1",
+        )
+        .bind(lineage.last().unwrap())
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+        match parent {
+            Some(parent) if !lineage.contains(&parent) => lineage.push(parent),
+            _ => break,
         }
-        separated.push_unseparated(") ORDER BY d.created_at DESC,d.id");
-        for row in query.build().fetch_all(&mut *tx).await? {
-            let device: String = row.get("device");
-            let bindings = db::parse(&row.get::<String, _>("bindings"))?;
-            let found = values
-                .entry(device.clone())
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            let mut added = false;
-            for (name, kind) in &declared {
-                if found.get(name).is_some() {
-                    continue;
-                }
-                let value = bindings["devices"][&device]
-                    .get(name)
-                    .or_else(|| bindings["defaults"].get(name));
-                if let Some(value) = value.filter(|value| typed(kind, value)) {
-                    found[name] = value.clone();
-                    added = true;
-                }
+    }
+    for source_pipeline in &lineage {
+        let wanted: Vec<&String> = devices
+            .iter()
+            .filter(|device| {
+                values
+                    .get(*device)
+                    .and_then(Value::as_object)
+                    .is_none_or(|found| found.len() < declared.len())
+            })
+            .collect();
+        for chunk in wanted.chunks(500) {
+            let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "SELECT t.device_id AS device,d.id AS deployment,json_extract(d.data,'$.variable_bindings') AS bindings,\
+                 CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number,\
+                 CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END AS name \
+                 FROM deployment_targets t JOIN devices dev ON dev.id=t.device_id AND dev.revoked=0 \
+                 JOIN records d ON d.kind='deployment' AND d.id=t.deployment_id \
+                 JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') \
+                 LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id') \
+                 WHERE t.generation>0 AND json_type(d.data,'$.variable_bindings')='object' AND json_extract(v.data,'$.configuration_id')=",
+            );
+            query.push_bind(source_pipeline);
+            query.push(" AND t.device_id IN (");
+            let mut separated = query.separated(",");
+            for id in chunk {
+                separated.push_bind(*id);
             }
-            // The newest deployment that supplied a value is the source.
-            if added && !sources.contains_key(&device) {
-                sources.insert(
-                    device,
-                    json!({"deployment_id":row.get::<String, _>("deployment"),"version_number":row.get::<Option<i64>, _>("number")}),
-                );
+            separated.push_unseparated(") ORDER BY d.created_at DESC,d.id");
+            for row in query.build().fetch_all(&mut *tx).await? {
+                let device: String = row.get("device");
+                let bindings = db::parse(&row.get::<String, _>("bindings"))?;
+                let found = values
+                    .entry(device.clone())
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                let mut added = false;
+                for (name, kind) in &declared {
+                    if found.get(name).is_some() {
+                        continue;
+                    }
+                    let value = bindings["devices"][&device]
+                        .get(name)
+                        .or_else(|| bindings["defaults"].get(name));
+                    if let Some(value) = value.filter(|value| typed(kind, value)) {
+                        found[name] = value.clone();
+                        added = true;
+                    }
+                }
+                // The newest deployment that supplied a value is the source.
+                if added && !sources.contains_key(&device) {
+                    sources.insert(
+                        device,
+                        json!({"deployment_id":row.get::<String, _>("deployment"),"version_number":row.get::<Option<i64>, _>("number"),"configuration_id":source_pipeline,"configuration_name":row.get::<Option<String>, _>("name")}),
+                    );
+                }
             }
         }
     }
