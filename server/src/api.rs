@@ -119,6 +119,10 @@ pub fn router(s: State) -> Router {
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
         .route(
+            "/api/v1/deployments/binding-suggestions",
+            post(crate::deployment_history::binding_suggestions),
+        )
+        .route(
             "/api/v1/deployments/requests",
             get(crate::deployment_requests::history),
         )
@@ -157,6 +161,10 @@ pub fn router(s: State) -> Router {
         .route(
             "/api/v1/deployments/{id}/targets",
             get(crate::deployment_history::targets),
+        )
+        .route(
+            "/api/v1/deployments/{id}/rollout",
+            get(crate::deployment_history::rollout),
         )
         .route("/api/v1/vrl/test", post(synthetic_vrl))
         .route("/api/v1/configurations/test", post(pipeline_tests))
@@ -213,6 +221,10 @@ pub fn router(s: State) -> Router {
             get(crate::group_requests::history),
         )
         .route(
+            "/api/v1/groups/membership-preview",
+            post(crate::group_requests::membership_preview),
+        )
+        .route(
             "/api/v1/groups/requests/{id}",
             get(crate::group_requests::lookup),
         )
@@ -239,6 +251,10 @@ pub fn router(s: State) -> Router {
         .route(
             "/api/v1/policies/requests",
             get(crate::policy_requests::history),
+        )
+        .route(
+            "/api/v1/policies/{id}",
+            get(crate::policy_requests::detail).put(crate::policy_requests::edit),
         )
         .route(
             "/api/v1/policies/requests/{id}",
@@ -626,7 +642,7 @@ pub async fn list(
             let deployments = db::records(&mut conn, "deployment").await?;
             let issues_open = crate::issues::open_count(&mut conn).await?;
             let audit = recent_activity(&mut conn).await?;
-            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
+            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked"|"awaiting_first_check_in")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
         }
         _ => return Err(ApiError::missing()),
     };
@@ -1110,6 +1126,15 @@ pub async fn action(
                     .bind(&id)
                     .fetch_one(&mut *tx)
                     .await?;
+            // A device-specific artifact is stored per generation; the retry
+            // resends the exact same one under the new generation.
+            let version_id = parsed_version.hyphenated().to_string();
+            if let Some(artifact) =
+                crate::variables::current(&mut tx, &id, current_generation, &version_id).await?
+            {
+                crate::variables::snapshot(&mut tx, &id, generation, &version_id, &artifact)
+                    .await?;
+            }
             if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
                 let changed=sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?.rows_affected()>0;
                 let mut d = db::record(&mut tx, "deployment", &assignment).await?;

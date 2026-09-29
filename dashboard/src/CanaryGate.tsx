@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Clock3, Pause, ShieldCheck } from "lucide-react";
 import type { DeploymentSummary } from "./api";
-import { when } from "./api";
 import { HelpLink } from "./DocLink";
+import { exactTime } from "./deploymentStatus";
+import { NextAdmission } from "./DeploymentRollout";
 import { RefreshButton } from "./ui";
 import {
   gateReasons,
@@ -18,10 +19,15 @@ export default function CanaryGate({
   deployment,
   readError,
   onRefresh,
+  clockOffset = 0,
+  lastWave = false,
 }: {
   deployment: DeploymentSummary;
   readError: boolean;
   onRefresh(): Promise<void>;
+  /** Server minus browser clock, from the latest read. */
+  clockOffset?: number;
+  lastWave?: boolean;
 }) {
   const [refreshing, setRefreshing] = useState(false);
   if (!hasCanaryGate(deployment)) return null;
@@ -48,7 +54,7 @@ export default function CanaryGate({
       <header>
         <div className="canary-gate-heading">
           <Icon size={18} aria-hidden="true" />
-          <h3>Canary gate</h3>
+          <h2>Canary gate</h2>
         </div>
         <div className="canary-gate-actions">
           <RefreshButton
@@ -126,22 +132,35 @@ export default function CanaryGate({
               currently verified. Review their gate messages below.
             </p>
           ) : null}
-          <dl className="canary-gate-timing">
-            <div>
-              <dt>Observation period</dt>
-              <dd>{observationDuration(gate.observation_seconds)}</dd>
-            </div>
-            {gate.observation_started_at && (
-              <div>
-                <dt>Started</dt>
-                <dd>{when(gate.observation_started_at)}</dd>
-              </div>
+          <div className="canary-gate-footer">
+            {gate.state === "observing" && gate.observation_started_at && (
+              <NextAdmission
+                due={new Date(
+                  Date.parse(gate.observation_started_at) +
+                    gate.observation_seconds * 1000,
+                ).toISOString()}
+                totalSeconds={gate.observation_seconds}
+                clockOffset={clockOffset}
+                last={lastWave}
+              />
             )}
-            <div>
-              <dt>Checked</dt>
-              <dd>{when(gate.evaluated_at)}</dd>
-            </div>
-          </dl>
+            <dl className="canary-gate-timing">
+              <div>
+                <dt>Observation period</dt>
+                <dd>{observationDuration(gate.observation_seconds)}</dd>
+              </div>
+              {gate.observation_started_at && (
+                <div>
+                  <dt>Started</dt>
+                  <dd>{exactTime(gate.observation_started_at)}</dd>
+                </div>
+              )}
+              <div>
+                <dt>Checked</dt>
+                <dd>{exactTime(gate.evaluated_at)}</dd>
+              </div>
+            </dl>
+          </div>
         </>
       )}
     </section>

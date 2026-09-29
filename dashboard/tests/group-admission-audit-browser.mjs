@@ -239,6 +239,20 @@ async function start(f, options = {}) {
 
     if (method === "GET" && path === "/devices")
       return route.fulfill({ json: f.devices });
+    // The group overview lists assignments; member edits preview their effects.
+    if (method === "POST" && path === "/groups/membership-preview") {
+      const body = request.postDataJSON();
+      return route.fulfill({
+        json: {
+          group_id: body.group_id,
+          revision: body.revision,
+          stale: false,
+          ready: true,
+          blockers: [],
+          devices: [],
+        },
+      });
+    }
     if (method === "GET" && path === "/groups")
       return route.fulfill({ json: [...f.groups.values()] });
     if (method === "GET" && path.startsWith("/groups/")) {
@@ -348,6 +362,9 @@ async function edit(page) {
     .getByRole("button", { name: /Synthetic production group/ })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  await page
+    .getByRole("tab", { name: /^(Edit members|Members)$/ })
+    .click();
 }
 const save = (page) =>
   page.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -484,12 +501,15 @@ try {
         ).toBeVisible();
         const popupUrl = new URL(popup.url());
         expect(popupUrl.hash).toBe("#/deployments?status=active&page=1");
-        expect(
-          f.requests.filter((r) => r.path === "/deployments/history"),
-        ).toHaveLength(1);
-        expect(
-          f.requests.find((r) => r.path === "/deployments/history").query,
-        ).toMatchObject({ status: "active", page: "1", page_size: "12" });
+        const listReads = f.requests.filter(
+          (r) => r.path === "/deployments/history" && !r.query.group_id,
+        );
+        expect(listReads).toHaveLength(1);
+        expect(listReads[0].query).toMatchObject({
+          status: "active",
+          page: "1",
+          page_size: "12",
+        });
         await popup.close();
         await expect(
           page.getByRole("textbox", { name: "Description (optional)" }),

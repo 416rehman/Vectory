@@ -12,22 +12,20 @@ export const gateReasons = [
 export type GateReason = (typeof gateReasons)[number];
 export const gateReasonLabels: Record<GateReason, string> = {
   superseded: "Another assignment is effective",
-  stale: "Waiting for a fresh heartbeat",
+  stale: "Waiting for a check-in",
   paused: "Configuration sync is paused",
-  unverified: "Current application is not verified",
+  unverified: "Waiting for the device to confirm",
   unavailable: "Device is unavailable",
 };
 export const gateReasonHelp: Record<GateReason, string> = {
   superseded:
-    "Review the device’s current assignment and priority before changing this rollout.",
+    "Another assignment now wins on this device. Review its assignment and priority.",
   stale:
-    "Check the device connection. A previous success cannot replace a fresh report.",
-  paused:
-    "Review the device’s local and remote pause settings before continuing.",
+    "The device hasn't checked in recently. An earlier success doesn't count.",
+  paused: "Sync is paused on this device, locally or by its agent settings.",
   unverified:
-    "Open the device to review the current version, agent settings and reported issues.",
-  unavailable:
-    "Review the original device identity and this deployment’s target membership.",
+    "Devices confirm on their next check-in. The rollout waits until they do.",
+  unavailable: "The device was revoked or replaced.",
 };
 export const CanaryGateSchema = z
   .object({

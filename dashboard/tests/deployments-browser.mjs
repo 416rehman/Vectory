@@ -182,7 +182,7 @@ await context.route("**/api/v1/**", async (route) => {
     return reply(result);
   }
   const match = path.match(
-    /^\/deployments\/([^/]+)\/(summary|targets|pause|resume|cancel|rollback-preview|rollback|unassign-preview|unassign|refresh-preview|refresh)$/,
+    /^\/deployments\/([^/]+)\/(summary|rollout|targets|pause|resume|cancel|rollback-preview|rollback|unassign-preview|unassign|refresh-preview|refresh)$/,
   );
   if (match) {
     const [, id, action] = match;
@@ -212,6 +212,17 @@ await context.route("**/api/v1/**", async (route) => {
       }
       return reply(result);
     }
+    if (action === "rollout" && method === "GET")
+      return reply({
+        deployment_id: id,
+        status: item.status,
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (action === "rollback-preview" && method === "GET")
       return reply({
         source_deployment_id: rollbackSourceId,
@@ -358,7 +369,7 @@ await context.route("**/api/v1/**", async (route) => {
   );
 });
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 async function mount(props = {}, count = props.scheduled ? 2 : 12) {
   await page.evaluate((props) => window.renderDeployments(props), props);
   await expect(page.locator(".deployment-table tbody tr")).toHaveCount(count);
@@ -378,7 +389,7 @@ async function open(index) {
 }
 async function closeDetails() {
   await details()
-    .getByRole("button", { name: "Close dialog", exact: true })
+    .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
 }
@@ -409,7 +420,7 @@ try {
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
       await page
-        .getByRole("radio", { name: "Needs attention", exact: true })
+        .getByRole("radio", { name: "Failed", exact: true })
         .click();
       await expect(page.locator(".pagination")).toContainText("1 / 1");
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(9);
@@ -423,10 +434,10 @@ try {
       await mount();
       await open(4);
       await expect(details()).toContainText(
-        "Retrying a device does not restart this rollout or release its unreleased devices.",
+        /Retrying a device sends the same version again\. It doesn.t restart the rollout or release waiting devices\./,
       );
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toHaveCount(0);
       await expect(
         details()
@@ -481,7 +492,7 @@ try {
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
       await page
-        .getByRole("radio", { name: "Needs attention", exact: true })
+        .getByRole("radio", { name: "Failed", exact: true })
         .click();
       await expect.poll(() => requests.at(-1).query.status).toBe("failed");
       await expect(
@@ -570,11 +581,9 @@ try {
       ).toContainText("Not released");
       await expect(
         rows.filter({ hasText: "Unreleased synthetic device" }),
-      ).toContainText(
-        "This deployment stopped before this device was released.",
-      );
+      ).toContainText("The rollout stopped before this device was released.");
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toHaveCount(0);
       await closeDetails();
       records[0] = { ...blocked, status: "active" };
@@ -582,7 +591,7 @@ try {
       await open(0);
       await expect(
         rows.filter({ hasText: "Unreleased synthetic device" }),
-      ).toContainText("Waiting");
+      ).toContainText("Queued");
       await closeDetails();
       targetOverrides.clear();
       records = saved;
@@ -728,7 +737,7 @@ try {
       );
       const before = requests.filter((r) => r.method === "POST").length;
       await details()
-        .getByRole("button", { name: "Pause rollout", exact: true })
+        .getByRole("button", { name: "Pause", exact: true })
         .click();
       let modal = page.getByRole("dialog", {
         name: "Pause rollout",
@@ -746,7 +755,7 @@ try {
       await page.keyboard.press("Escape");
       await expect(modal).toBeVisible();
       await expect(
-        details().getByRole("button", { name: "Resume rollout", exact: true }),
+        details().getByRole("button", { name: "Resume", exact: true }),
       ).toBeVisible();
       postDelay = 0;
       await expect(
@@ -759,14 +768,14 @@ try {
         details().getByLabel("Search deployment devices", { exact: true }),
       ).toHaveValue("1000");
       await details()
-        .getByRole("button", { name: "Resume rollout", exact: true })
+        .getByRole("button", { name: "Resume", exact: true })
         .click();
       await page
         .getByRole("dialog", { name: "Resume rollout", exact: true })
         .getByRole("button", { name: "Resume rollout", exact: true })
         .click();
       await expect(
-        details().getByRole("button", { name: "Pause rollout", exact: true }),
+        details().getByRole("button", { name: "Pause", exact: true }),
       ).toBeVisible();
       await details()
         .getByRole("button", { name: "Roll back", exact: true })
@@ -817,10 +826,7 @@ try {
       await expect(receipt).toHaveCount(0);
       await expect(details()).toBeVisible();
       await details()
-        .getByText("Remove this assignment", { exact: true })
-        .click();
-      await details()
-        .getByRole("button", { name: "Review assignment removal", exact: true })
+        .getByRole("button", { name: "Remove assignment", exact: true })
         .click();
       const removal = page.getByRole("dialog", {
         name: "Remove assignment",
@@ -860,10 +866,10 @@ try {
         details().locator(".deployment-targets tbody tr"),
       ).toHaveCount(12);
       await expect(
-        details().getByRole("button", { name: "Pause rollout", exact: true }),
+        details().getByRole("button", { name: "Pause", exact: true }),
       ).toHaveCount(0);
       await expect(
-        details().getByText("Remove this assignment", { exact: true }),
+        details().getByRole("button", { name: "Remove assignment", exact: true }),
       ).toHaveCount(0);
       for (const theme of ["light", "dark"]) {
         await page.evaluate((theme) => {
@@ -908,13 +914,10 @@ try {
           );
         expect(audit.violations.map((v) => v.id)).toEqual([]);
       }
-      await page.keyboard.press("Escape");
-      await expect(details()).toHaveCount(0);
+      await closeDetails();
+      // Returning from the page puts focus back on the row that opened it.
       await expect(
-        page.getByRole("button", {
-          name: "View details for Synthetic deployment 003",
-          exact: true,
-        }),
+        page.locator('[data-deployment-link="d-003"]'),
       ).toBeFocused();
     },
   );
@@ -924,6 +927,8 @@ try {
   for (const file of [
     "dashboard/tests/deployments-browser.mjs",
     "dashboard/src/Deployments.tsx",
+    "dashboard/src/DeploymentRollout.tsx",
+    "dashboard/src/deploymentStatus.ts",
     "dashboard/src/DeploymentRecovery.tsx",
     "dashboard/src/deploymentRequests.ts",
     "dashboard/src/deploymentReceipt.ts",

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   RollbackPreviewSchema,
   assertReviewedRollbackReceipt,
+  locallyConfigured,
+  nothingToRollBackTo,
   type RollbackPreview,
   type RollbackReviewContext,
 } from "./rollbackReview";
@@ -18,7 +20,13 @@ const preview = (): RollbackPreview => ({
   previous_configuration_id: id(4),
   previous_configuration_name: "Prior pipeline",
   priority: 101,
-  eligible_devices: [{ device_id: id(5), device_name: "Live device", artifact_sha256: "a".repeat(64) }],
+  eligible_devices: [
+    {
+      device_id: id(5),
+      device_name: "Live device",
+      artifact_sha256: "a".repeat(64),
+    },
+  ],
   excluded_devices: [
     { device_id: id(6), device_name: "Retired identity", reason: "revoked" },
   ],
@@ -120,5 +128,38 @@ describe("reviewed rollback scope", () => {
       expect(() => assertReviewedRollbackReceipt(review, id(1), wrong)).toThrow(
         /reviewed rollback/,
       );
+  });
+});
+
+describe("rollback of a first deployment", () => {
+  const first = (): RollbackPreview => ({
+    ...preview(),
+    previous_version_id: null,
+    previous_version_number: null,
+    previous_configuration_id: null,
+    previous_configuration_name: null,
+    eligible_devices: [
+      { device_id: id(5), device_name: "edge-01", artifact_sha256: null },
+    ],
+    blockers: [
+      {
+        code: "PRIOR_VERSION_UNKNOWN",
+        reason: "These devices ran their local config before this deployment.",
+      },
+    ],
+    ready: false,
+  });
+  it("accepts a blocked review with no earlier artifact instead of a contract error", () => {
+    const parsed = RollbackPreviewSchema.parse(first());
+    expect(nothingToRollBackTo(parsed)).toBe(true);
+    expect(locallyConfigured(parsed).map((d) => d.device_name)).toEqual([
+      "edge-01",
+    ]);
+  });
+  it("never accepts a ready review with an unknown artifact", () => {
+    expect(
+      RollbackPreviewSchema.safeParse({ ...first(), blockers: [], ready: true })
+        .success,
+    ).toBe(false);
   });
 });

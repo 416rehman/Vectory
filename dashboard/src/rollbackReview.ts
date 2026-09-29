@@ -5,7 +5,16 @@ const name = z.string().refine((s) => [...s].length <= 240);
 const device = z
   .object({ device_id: uuid, device_name: name.nullable() })
   .strict();
-const eligibleDevice = device.extend({ artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+// A device that ran its local config before this deployment has no earlier
+// managed artifact: the server reports null and blocks the review.
+const eligibleDevice = device
+  .extend({
+    artifact_sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+  })
+  .strict();
 export const rollbackToken = z.string().regex(/^[a-f0-9]{64}$/);
 export const RollbackPreviewSchema = z
   .object({
@@ -60,7 +69,8 @@ export const RollbackPreviewSchema = z
       v.ready !==
       (v.blockers.length === 0 &&
         v.eligible_devices.length > 0 &&
-        v.previous_version_id !== null)
+        v.previous_version_id !== null &&
+        v.eligible_devices.every((d) => d.artifact_sha256 !== null))
     )
       ctx.addIssue({
         code: "custom",
@@ -68,6 +78,18 @@ export const RollbackPreviewSchema = z
       });
   });
 export type RollbackPreview = z.infer<typeof RollbackPreviewSchema>;
+/** No included device has an earlier managed version to return to. */
+export function nothingToRollBackTo(preview: RollbackPreview) {
+  return preview.blockers.some(
+    (blocker) => blocker.code === "PRIOR_VERSION_UNKNOWN",
+  );
+}
+/** Devices that ran their local config before this deployment. */
+export function locallyConfigured(preview: RollbackPreview) {
+  return preview.eligible_devices.filter(
+    (device) => device.artifact_sha256 === null,
+  );
+}
 export const RollbackReviewContextSchema = z
   .object({
     version_id: uuid,
