@@ -99,6 +99,11 @@ const NAME: &str = "COALESCE(NULLIF(CASE WHEN json_type(d.data,'$.name')='text' 
 const STATUS_LABEL: &str = "CASE WHEN json_type(d.data,'$.rolled_back_by')='text' THEN 'Rolled back' WHEN json_extract(d.data,'$.status')='unassigned' AND json_type(d.data,'$.replaced_by')='array' THEN 'Replaced' ELSE CASE json_extract(d.data,'$.status') WHEN 'active' THEN 'In progress' WHEN 'completed' THEN 'Complete' WHEN 'failed' THEN 'Failed' WHEN 'unassigned' THEN 'Removed' WHEN 'missed' THEN 'Schedule missed' ELSE json_extract(d.data,'$.status') END END";
 const ROLLED_BACK: &str = "json_type(d.data,'$.rolled_back_by')='text'";
 const VERIFIED: &str = "(SELECT count(*) FROM deployment_targets st WHERE st.deployment_id=d.id AND st.state='verified_applied')";
+/// Devices of deployment `d` that applied its version but aren't delivering
+/// it: `verified_applied` targets whose device has an open data-plane issue
+/// measured on that version. The rollout lanes count the same devices as
+/// failed (`degraded`); `state_counts` keeps their recorded state.
+pub(crate) const DEGRADED: &str = "(SELECT count(*) FROM deployment_targets dt JOIN devices dv ON dv.id=dt.device_id WHERE dt.deployment_id=d.id AND dt.state='verified_applied' AND json_extract(dv.data,'$.data_plane.version_id')=json_extract(d.data,'$.version_id') AND json_type(dv.data,'$.data_plane.issues[0]')='object')";
 
 fn direction(value: Option<&str>, default: &'static str) -> Result<&'static str> {
     match value.unwrap_or(default) {
@@ -209,7 +214,7 @@ fn projection(q: &mut QueryBuilder<'_, Sqlite>, order: &str) {
         'rollout',json_object('kind',json_extract(d.data,'$.rollout.kind'),'canary_size',json_extract(d.data,'$.rollout.canary_size'),'batch_size',json_extract(d.data,'$.rollout.batch_size'),'observation_seconds',json_extract(d.data,'$.rollout.observation_seconds'),'failure_threshold',json_extract(d.data,'$.rollout.failure_threshold')),\
         'target_count',COALESCE((SELECT sum(n) FROM counts WHERE deployment_id=d.id),0),\
         'verified_count',COALESCE((SELECT n FROM counts WHERE deployment_id=d.id AND state='verified_applied'),0),\
-        'state_counts',json((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id)),\
+        'state_counts',json((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id)),'degraded',").push(DEGRADED).push(",\
         'created_by_name',(SELECT substr(u.name,1,120) FROM users u WHERE u.id=COALESCE(json_extract(d.data,'$.created_by'),(SELECT json_extract(a.data,'$.actor') FROM records a WHERE a.kind='audit' AND json_extract(a.data,'$.target')=d.id AND json_extract(a.data,'$.action') IN ('deployment.create','deployment.schedule') LIMIT 1))),\
         'policy_id',CASE WHEN json_type(d.data,'$.policy_id')='text' THEN json_extract(d.data,'$.policy_id') END,\
         'policy_name',(SELECT substr(json_extract(sp.data,'$.name'),1,120) FROM records sp WHERE sp.kind='policy' AND sp.id=json_extract(d.data,'$.policy_id')),\
@@ -998,6 +1003,19 @@ mod tests {
                 "{detail}"
             );
             assert!(!detail.contains("SCAN t"), "{detail}");
+            // Not delivering: this deployment's applied targets, then each
+            // device by its key; never the whole fleet.
+            assert!(
+                detail.contains(
+                    "SEARCH dt USING INDEX deployment_targets_state (deployment_id=? AND state=?)"
+                ),
+                "{detail}"
+            );
+            assert!(
+                detail.contains("SEARCH dv USING INDEX sqlite_autoindex_devices_1 (id=?)"),
+                "{detail}"
+            );
+            assert!(!detail.contains("SCAN dv"), "{detail}");
             assert!(
                 detail
                     .contains("SEARCH v USING INDEX sqlite_autoindex_records_1 (kind=? AND id=?)"),
