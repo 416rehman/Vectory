@@ -31,6 +31,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import resource
 import shutil
 import signal
 import socket
@@ -125,6 +126,15 @@ def wait_ready(api, process, seconds=120):
             pass
         time.sleep(0.2)
     raise RuntimeError('server did not become ready')
+
+
+def capped(megabytes):
+    """A child's address-space limit, so an unbounded allocation fails in that
+    process instead of pushing the whole host into swapless thrashing."""
+    def apply():
+        limit = megabytes * 2**20
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    return apply
 
 
 def stop(process):
@@ -329,6 +339,8 @@ def main():
     parser.add_argument('--http-port', type=int, default=8390)
     parser.add_argument('--agent-port', type=int, default=8391)
     parser.add_argument('--build-profile', default='release')
+    parser.add_argument('--server-memory-mb', type=int, default=4096, help='address-space limit for the server')
+    parser.add_argument('--driver-memory-mb', type=int, default=4096, help='address-space limit for the load generator')
     parser.add_argument('--keep', action='store_true')
     args = parser.parse_args()
     phases = [{'name': n, 'at': float(a), 'interval': float(i)} for n, a, i in (p.split(':') for p in args.phases.split(','))]
@@ -359,7 +371,8 @@ def main():
                        'memory_bytes': int(next(l for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemTotal')).split()[1]) * 1024,
                        'loadavg_before': Path('/proc/loadavg').read_text().split()[:3], 'python': platform.python_version()},
               'parameters': {'devices': args.devices, 'phases': phases, 'duration_seconds': args.duration, 'deploy_at_seconds': args.deploy_at,
-                             'enroll_per_minute': args.enroll_per_minute, 'components_per_sample': args.components}}
+                             'enroll_per_minute': args.enroll_per_minute, 'components_per_sample': args.components,
+                             'server_memory_limit_mb': args.server_memory_mb, 'driver_memory_limit_mb': args.driver_memory_mb}}
     try:
         commit = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
         dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--', 'server'], capture_output=True, text=True).stdout.strip()
@@ -368,7 +381,7 @@ def main():
         pass
     # First start: migrations, keys and the administrator; then seed offline.
     account = {'email': 'capacity@example.test', 'password': os.urandom(16).hex()}
-    process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
+    process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log, preexec_fn=capped(args.server_memory_mb))
     try:
         wait_ready(api, process)
         status, body = api.call('POST', '/api/v1/bootstrap', {'bootstrap_secret': (out / 'bootstrap').read_text(), 'name': 'Capacity', **account})
@@ -381,7 +394,7 @@ def main():
     started = time.perf_counter()
     devices, signing_key = seed(out, args.devices, vector_version)
     result['seed_seconds'] = round(time.perf_counter() - started, 3)
-    process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
+    process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log, preexec_fn=capped(args.server_memory_mb))
     monitor = Monitor(process.pid, state)
     progress = None
     try:
@@ -404,7 +417,8 @@ def main():
                            'start': 30, 'stop': max(31, args.duration - 30)} if args.enroll_per_minute > 0 else None}
         protected(out / 'plan.json', json.dumps(plan).encode())
         monitor.start()
-        child = subprocess.Popen([str(driver), '--plan', str(out / 'plan.json'), '--out', str(out / 'driver.json')], stdout=subprocess.PIPE, stderr=(out / 'driver.log').open('wb'), text=True)
+        child = subprocess.Popen([str(driver), '--plan', str(out / 'plan.json'), '--out', str(out / 'driver.json')], stdout=subprocess.PIPE, stderr=(out / 'driver.log').open('wb'), text=True,
+                                 env={**os.environ, 'GOMEMLIMIT': f'{args.driver_memory_mb // 2}MiB'}, preexec_fn=capped(args.driver_memory_mb))
         monitor.driver_pid = child.pid
         first = json.loads(child.stdout.readline())
         traffic = first['traffic_started_unix_ms'] / 1000
@@ -433,7 +447,10 @@ def main():
     report = json.loads((out / 'driver.json').read_text())
     server_log = (out / 'server.log').read_text(errors='replace')
     writer = writer_lines(server_log)
-    result['database'] = analyze_database(state / 'vectory.db')
+    try:
+        result['database'] = analyze_database(state / 'vectory.db')
+    except sqlite3.Error as error:
+        result['database'] = {'error': str(error)}
     result['server_log'] = {'database_errors': server_log.count('database operation failed'), 'database_locked': server_log.count('database is locked'),
                             'error_lines': sum(1 for l in server_log.splitlines() if ' ERROR ' in l), 'warn_lines': sum(1 for l in server_log.splitlines() if ' WARN ' in l)}
     # Relative times: seconds since the driver started traffic.
@@ -452,6 +469,7 @@ def main():
         phase_rows.append({'phase': p['name'], 'interval_seconds': p['interval'], 'settled_window': [start, end], 'heartbeats_per_second': beats.get('success_per_second'),
                            'latency_successful_ms': beats.get('latency_successful_ms'), 'requests': beats.get('requests'), 'success': beats.get('success'), 'errors': beats.get('errors'),
                            'server_cpus_mean': mean('server_cpus'), 'driver_cpus_mean': mean('driver_cpus'), 'host_busy_cpus_mean': mean('host_busy_cpus'),
+                           'server_rss_max_bytes': max((s.get('server_rss_bytes') or 0 for s in window), default=None),
                            'loadavg_1m_mean': mean('loadavg_1m'), 'wal_bytes_max': max((s['wal_bytes'] for s in window), default=None),
                            'writer': [{k: w[k] for k in ('t_end', 'writes', 'busy_percent', 'wait_mean_ms', 'wait_max_ms', 'held_max_ms', 'wal_bytes')} for w in lines]})
     result['phases'] = phase_rows
