@@ -93,10 +93,7 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
                 if text.contains("SECRET[") {
                     reasons.insert("native secret references".into());
                 }
-                if DEVICE_VRL_FUNCTIONS
-                    .iter()
-                    .any(|function| text.contains(function))
-                {
+                if calls_device_function(text) {
                     reasons.insert("VRL access to device resources".into());
                 }
             }
@@ -579,6 +576,10 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
                 && !component["search_dirs"].is_null()
             {
                 Some("loads Lua modules from each device".to_owned())
+            } else if calls_file_function(component) {
+                // Compiling these reads the file, and the worker's answer would
+                // describe the worker's files, not the device's.
+                Some("reads a file on each device".to_owned())
             } else {
                 None
             };
@@ -1120,17 +1121,24 @@ pub fn testable_transform(transform: &Value) -> std::result::Result<&str, &'stat
 }
 
 /// VRL functions that reach outside the event. A device refuses them in
-/// restricted mode, and a pipeline that calls one needs full mode.
+/// restricted mode, and a pipeline that calls one needs full mode. The agent
+/// (`externalVRL`) and the dashboard (`deviceVrlFunctions`) list the same
+/// names; `tests/security/test_vrl_function_lists.py` fails when they drift.
+/// `parse_etld(psl:)` and `parse_groks(alias_sources:)` also read files in
+/// newer VRL; the pinned Vector 0.58 binary rejects those arguments.
 pub const DEVICE_VRL_FUNCTIONS: &[&str] = &[
     "get_env_var",
     "get_secret",
     "set_secret",
     "remove_secret",
-    "get_enrichment_table",
-    "find_enrichment_table",
+    "get_enrichment_table_record",
+    "find_enrichment_table_records",
     "dns_lookup",
     "reverse_dns",
     "http_request",
+    "validate_json_schema",
+    "parse_proto",
+    "encode_proto",
 ];
 
 /// The device functions that send network requests. Samples, unit tests and the
@@ -1139,27 +1147,57 @@ pub const DEVICE_VRL_FUNCTIONS: &[&str] = &[
 /// the answer); a device runs these for real.
 pub const NETWORK_VRL_FUNCTIONS: &[&str] = &["http_request", "dns_lookup", "reverse_dns"];
 
-/// The network functions called anywhere in the strings of a JSON document: a
-/// `name(` or `name!(` that is not part of a longer identifier or a field path.
-pub fn network_vrl_calls(value: &Value) -> BTreeSet<&'static str> {
-    fn calls(text: &str, name: &str) -> bool {
-        text.match_indices(name).any(|(start, _)| {
-            let before = text[..start].chars().next_back();
-            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
-                return false;
-            }
-            let rest = text[start + name.len()..].trim_start();
-            rest.strip_prefix('!')
-                .unwrap_or(rest)
-                .trim_start()
-                .starts_with('(')
-        })
+/// The device functions that read a file (a JSON schema or a protobuf
+/// descriptor). The worker never runs them either: the error text quotes the
+/// file's own values, and a missing file answers "does this path exist".
+pub const FILE_VRL_FUNCTIONS: &[&str] = &["validate_json_schema", "parse_proto", "encode_proto"];
+
+/// Whether `text` calls the VRL function `name`: `name(` or `name!(` that is
+/// not the end of a longer identifier or a field path. VRL allows no space
+/// between a name and its parenthesis; this tolerates one, so it never misses
+/// a call. A metric named `http_requests_total` or an event value
+/// `"http_request"` is not a call.
+pub fn calls_function(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+            return false;
+        }
+        let rest = text[start + name.len()..].trim_start();
+        rest.strip_prefix('!')
+            .unwrap_or(rest)
+            .trim_start()
+            .starts_with('(')
+    })
+}
+
+/// Whether `text` calls any VRL function that reaches outside the event.
+pub fn calls_device_function(text: &str) -> bool {
+    DEVICE_VRL_FUNCTIONS
+        .iter()
+        .any(|function| calls_function(text, function))
+}
+
+/// Whether any string in `value` calls a function that reads a file.
+fn calls_file_function(value: &Value) -> bool {
+    match value {
+        Value::String(text) => FILE_VRL_FUNCTIONS
+            .iter()
+            .any(|name| calls_function(text, name)),
+        Value::Array(items) => items.iter().any(calls_file_function),
+        Value::Object(fields) => fields.values().any(calls_file_function),
+        _ => false,
     }
+}
+
+/// The worker-refused functions called anywhere in the strings of a JSON
+/// document: the network functions and the file-reading ones.
+pub fn unrunnable_vrl_calls(value: &Value) -> BTreeSet<&'static str> {
     fn walk(value: &Value, found: &mut BTreeSet<&'static str>) {
         match value {
             Value::String(text) => {
-                for name in NETWORK_VRL_FUNCTIONS {
-                    if calls(text, name) {
+                for name in NETWORK_VRL_FUNCTIONS.iter().chain(FILE_VRL_FUNCTIONS) {
+                    if calls_function(text, name) {
                         found.insert(*name);
                     }
                 }
@@ -1175,15 +1213,27 @@ pub fn network_vrl_calls(value: &Value) -> BTreeSet<&'static str> {
 }
 
 /// The diagnostic for a program the worker will not execute because it sends
-/// network requests. `error` when nothing can run, `warning` when only tests
-/// are skipped.
-pub fn network_call_diagnostic(
+/// network requests or reads files. `error` when nothing can run, `warning`
+/// when only tests are skipped.
+pub fn unrunnable_call_diagnostic(
     found: &BTreeSet<&'static str>,
     severity: &'static str,
 ) -> Diagnostic {
     let names = found.iter().copied().collect::<Vec<_>>().join(", ");
+    let network = found
+        .iter()
+        .any(|name| NETWORK_VRL_FUNCTIONS.contains(name));
+    let files = found.iter().any(|name| FILE_VRL_FUNCTIONS.contains(name));
+    let (does, never) = match (network, files) {
+        (true, true) => (
+            "sends network requests and reads files",
+            "The server never sends requests or reads device files",
+        ),
+        (false, true) => ("reads files", "The server never reads device files"),
+        _ => ("sends network requests", "The server never sends requests"),
+    };
     let mut diagnostic = Diagnostic::error(format!(
-        "This program calls {names}, which sends network requests. The server never sends requests from samples or tests."
+        "This program calls {names}, which {does}. {never} from samples or tests."
     ));
     diagnostic.severity = severity;
     diagnostic.code = Some("vrl_function_unavailable".into());
@@ -2305,7 +2355,7 @@ pub fn validate(config: &Value) -> Value {
 mod tests {
     #[test]
     fn network_calls_are_found_by_call_syntax_only() {
-        let call = |text: &str| network_vrl_calls(&json!({"source": text}));
+        let call = |text: &str| unrunnable_vrl_calls(&json!({"source": text}));
         assert_eq!(
             call("resp, err = http_request(\"http://example.test\")"),
             BTreeSet::from(["http_request"])
@@ -2336,13 +2386,93 @@ mod tests {
         // Calls are found wherever a program sits in the document.
         let nested =
             json!({"tests":[{"outputs":[{"conditions":[{"source":"http_request(\"u\")"}]}]}]});
-        assert_eq!(network_vrl_calls(&nested), BTreeSet::from(["http_request"]));
+        assert_eq!(
+            unrunnable_vrl_calls(&nested),
+            BTreeSet::from(["http_request"])
+        );
         // Every network function is also a device function.
         assert!(
             NETWORK_VRL_FUNCTIONS
                 .iter()
                 .all(|name| DEVICE_VRL_FUNCTIONS.contains(name))
         );
+    }
+
+    #[test]
+    fn a_name_inside_data_is_not_a_device_function_call() {
+        // Ordinary pipelines that only mention a function's name: the canonical
+        // Prometheus metric, an event value, a string, a step called http_requests.
+        for config in [
+            json!({"transforms":{"m":{"type":"log_to_metric","inputs":["a"],"metrics":[{"type":"counter","field":"message","name":"http_requests_total"}]}}}),
+            json!({"transforms":{"f":{"type":"filter","inputs":["a"],"condition":".event == \"http_request\""}}}),
+            json!({"transforms":{"r":{"type":"remap","inputs":["a"],"source":".kind = \"http_request_log\""}}}),
+            json!({"transforms":{"http_requests":{"type":"remap","inputs":["a"],"source":"."}},"sinks":{"out":{"type":"blackhole","inputs":["http_requests"]}}}),
+            json!({"transforms":{"r":{"type":"remap","inputs":["a"],"source":".parse_proto = 1\n.get_env_var = 2"}}}),
+        ] {
+            assert!(device_context_reasons(&config).is_empty(), "{config}");
+        }
+        for source in [
+            ".x = http_request!(\"u\")",
+            ".x = http_request! (\"u\")",
+            ".x, err = dns_lookup(.host)",
+            "get_env_var!(\"HOME\")",
+            "get_enrichment_table_record!(\"t\", {})",
+            "find_enrichment_table_records!(\"t\", {})",
+            "validate_json_schema!(.message, \"/schema.json\")",
+            "parse_proto!(.message, \"/d.desc\", \"x.Y\")",
+            "encode_proto!(.message, \"/d.desc\", \"x.Y\")",
+        ] {
+            let config =
+                json!({"transforms":{"r":{"type":"remap","inputs":["a"],"source":source}}});
+            assert_eq!(
+                device_context_reasons(&config),
+                vec!["VRL access to device resources".to_owned()],
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_worker_never_runs_a_program_that_reads_a_file() {
+        let call = |text: &str| unrunnable_vrl_calls(&json!({"source": text}));
+        assert_eq!(
+            call("validate_json_schema!(.m, \"/etc/passwd\")"),
+            BTreeSet::from(["validate_json_schema"])
+        );
+        assert_eq!(
+            call("parse_proto!(.m, \"/d\", \"x\")\nencode_proto!(.m, \"/d\", \"x\")"),
+            BTreeSet::from(["parse_proto", "encode_proto"])
+        );
+        let message = |names: &[&'static str]| {
+            unrunnable_call_diagnostic(&names.iter().copied().collect(), "error").message
+        };
+        assert_eq!(
+            message(&["parse_proto"]),
+            "This program calls parse_proto, which reads files. The server never reads device files from samples or tests."
+        );
+        assert_eq!(
+            message(&["http_request", "parse_proto"]),
+            "This program calls http_request, parse_proto, which sends network requests and reads files. The server never sends requests or reads device files from samples or tests."
+        );
+        assert!(
+            FILE_VRL_FUNCTIONS
+                .iter()
+                .all(|name| DEVICE_VRL_FUNCTIONS.contains(name))
+        );
+        // The static check stands in for a step that reads a device file rather
+        // than compiling it in the worker.
+        let config = json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"check": {"type": "remap", "inputs": ["in"],
+                "source": "validate_json_schema!(.message, \"/etc/passwd\")"}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["check"]}},
+        });
+        let candidate = static_candidate(&config, |_, _| true);
+        assert_eq!(
+            candidate.stubbed.get("check").map(String::as_str),
+            Some("reads a file on each device")
+        );
+        assert!(!candidate.config.to_string().contains("/etc/passwd"));
     }
 
     use super::*;

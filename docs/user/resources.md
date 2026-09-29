@@ -157,7 +157,7 @@ You should see **Pipeline tests passed**. Change `"edge"` to `"wrong"` and run a
 
 The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
 
-The server never sends network requests from samples or tests. A program that calls `http_request`, `dns_lookup` or `reverse_dns` isn't run there, and the tester says so. A device in full mode runs it for real.
+The server never sends network requests or reads device files from samples or tests. A program that calls `http_request`, `dns_lookup`, `reverse_dns`, `validate_json_schema`, `parse_proto` or `encode_proto` isn't run there, and the tester says so. A device in full mode runs it for real.
 
 To run the tests yourself, export the configuration as JSON and run the pinned Vector with the device's service account:
 

@@ -294,11 +294,11 @@ async fn pipeline_tests(
     if !config.is_object() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let network = validation::network_vrl_calls(config);
+    let network = validation::unrunnable_vrl_calls(config);
     if !network.is_empty() && config["tests"].as_array().is_some_and(|t| !t.is_empty()) {
         return Ok(protocol(json!({
             "tests_run": false, "tests": [],
-            "diagnostics": [validation::network_call_diagnostic(&network, "warning").to_json()],
+            "diagnostics": [validation::unrunnable_call_diagnostic(&network, "warning").to_json()],
             "placeholders": [],
         })));
     }
@@ -417,11 +417,11 @@ async fn transform_test(
             "diagnostics": [Diagnostic::error(message).to_json()],
         })));
     }
-    let network = validation::network_vrl_calls(transform);
+    let network = validation::unrunnable_vrl_calls(transform);
     if !network.is_empty() {
         return Ok(protocol(json!({
             "compiled": false, "results": [], "placeholders": [],
-            "diagnostics": [validation::network_call_diagnostic(&network, "error").to_json()],
+            "diagnostics": [validation::unrunnable_call_diagnostic(&network, "error").to_json()],
         })));
     }
     let mut placeholders = BTreeSet::new();

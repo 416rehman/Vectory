@@ -112,7 +112,7 @@ del(.temporary_debug_field)
 
 The VRL editor highlights the program, completes function names and marks problems on the line Vector reports. Choose **Expand** for a wide editor. Under the program, add sample events (one JSON object per line) and choose **Run**: the server's sandboxed Vector runs the step on each sample and shows what comes out, or why an event was dropped. Samples stay in your browser, and a new sample starts from a realistic event for the source, such as a syslog line. **Auto-run** repeats the run when you pause typing. For a step that isn't first in the pipeline, **Run through upstream steps** sends the samples through the steps before it, so a `route` or `filter` sees the fields they added; turn it off to test the step alone. A `route` also shows how many samples each output received. **Save as test** turns a result into a [pipeline test](resources.md#test-transformations) that keeps it working. Nothing here reads live device events.
 
-A remap that reads its program from a **File** reads it on the device. That file isn't uploaded or frozen into the version, and it needs full mode.
+A remap that reads its program from a **File** reads it on the device. That file isn't uploaded or frozen into the version, and it needs full mode. A restricted device refuses it; paste the program into **Source** instead.
 
 ## Event templates
 

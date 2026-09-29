@@ -36,9 +36,26 @@ var supported = map[string]map[string]bool{
 var environmentVariable = regexp.MustCompile(`\$[A-Za-z_]`)
 
 // externalVRL lists VRL functions that reach outside the event: the
-// environment, secrets, DNS, enrichment tables and HTTP. Restricted mode
-// denies them because they bypass the host's allowances.
-var externalVRL = []string{"get_env_var", "get_secret", "set_secret", "remove_secret", "dns_lookup", "reverse_dns", "http_request", "get_enrichment_table", "find_enrichment_table"}
+// environment, secrets, enrichment tables, DNS, HTTP and files (a JSON schema
+// or a protobuf descriptor). Restricted mode denies them because they bypass
+// the host's allowances. The server's DEVICE_VRL_FUNCTIONS and the dashboard's
+// deviceVrlFunctions list the same names; tests/security/test_vrl_function_lists.py
+// fails when they drift. parse_etld(psl:) and parse_groks(alias_sources:) also
+// read files in newer VRL; the pinned Vector 0.58 binary rejects those arguments.
+var externalVRL = []string{"get_env_var", "get_secret", "set_secret", "remove_secret", "get_enrichment_table_record", "find_enrichment_table_records", "dns_lookup", "reverse_dns", "http_request", "validate_json_schema", "parse_proto", "encode_proto"}
+
+// externalCalls matches a call of each external function: `name(` or
+// `name!(` that is not the end of a longer identifier or a field path. A metric
+// named http_requests_total, an event value "http_request" or a step called
+// http_requests is data, not a call. VRL allows no space between a name and
+// its parenthesis; the pattern tolerates whitespace, so it never misses one.
+var externalCalls = func() []*regexp.Regexp {
+	calls := make([]*regexp.Regexp, len(externalVRL))
+	for i, name := range externalVRL {
+		calls[i] = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.])` + regexp.QuoteMeta(name) + `\s*(?:!\s*)?\(`)
+	}
+	return calls
+}()
 
 // PolicyRefusal says exactly what restricted mode refused: the component,
 // the resource (destination host:port, listener, path) and the allowance
@@ -94,6 +111,9 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	case e.Allowance == "allowed_listen_addresses" && e.Resource != "":
 		d.Message = subject + " listens on " + e.Resource + ", which this host hasn't approved."
 		d.Hint = grant(e.Suggested)
+	case e.Allowance == "allowed_file_roots" && e.Resource != "" && e.Suggested == "":
+		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
+		d.Hint = "Choose the directory that holds these files and add it to allowed_file_roots on the host (vectory install --capability-policy FILE), or deploy to a full-mode device."
 	case e.Allowance == "allowed_file_roots" && e.Resource != "":
 		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
 		d.Hint = grant(e.Suggested)
@@ -107,6 +127,9 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 		d.Message = subject + " needs an explicit listen address in restricted mode."
 	case e.Code == "FILE_ACCESS_DENIED" && e.Resource != "":
 		d.Message = subject + " uses " + e.Resource + ", which must be an absolute path without symbolic links in restricted mode."
+	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && (e.Field == "file" || e.Field == "files" || e.Field == "source_files"):
+		d.Message = subject + ` loads its program from a file on this device, which restricted mode doesn't allow.`
+		d.Hint = `Paste the program into "source", or deploy to a full-mode device.`
 	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && e.Field != "":
 		d.Message = subject + ` sets "` + e.Field + `", which restricted mode doesn't allow.`
 		d.Hint = "Remove it, or deploy to a full-mode device."
@@ -267,7 +290,18 @@ func (p CapabilityPolicy) component(section, typ string, c map[string]any) *Poli
 	if !supported[section][typ] {
 		return refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: unsupported "+section+" component")
 	}
-	return p.walk(c, "")
+	// remap.file loads a VRL program from any path on the device; Vector
+	// compiles it and quotes it in errors, so it is neither checked against the
+	// file roots nor scanned for external functions. `files` is refused by walk.
+	if _, ok := c["file"]; ok && typ == "remap" {
+		r := refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: executable, provider, or external code setting")
+		r.Field = "file"
+		return r
+	}
+	// A `path` names a file only for a Unix socket. For http_server and loki it
+	// is the URL path, which needs no file allowance.
+	mode, _ := c["mode"].(string)
+	return p.walkIn(c, "", typ == "syslog" && mode == "unix")
 }
 
 // checkTests accepts Vector unit tests in restricted mode. Tests run only in
@@ -309,17 +343,23 @@ func checkTests(v any) *PolicyRefusal {
 	return find(tests)
 }
 
+// externalFunction names the first external VRL function a program calls.
 func externalFunction(program string) string {
-	lower := strings.ToLower(program)
-	for _, f := range externalVRL {
-		if strings.Contains(lower, f) {
-			return f
+	for i, call := range externalCalls {
+		if call.MatchString(program) {
+			return externalVRL[i]
 		}
 	}
 	return ""
 }
 
 func (p CapabilityPolicy) walk(v any, key string) *PolicyRefusal {
+	return p.walkIn(v, key, false)
+}
+
+// walkIn checks a component's settings; pathIsFile says whether a `path`
+// setting names a file (a Unix socket) rather than a URL path.
+func (p CapabilityPolicy) walkIn(v any, key string, pathIsFile bool) *PolicyRefusal {
 	switch x := v.(type) {
 	case map[string]any:
 		for _, k := range sortedKeys(x) {
@@ -337,13 +377,13 @@ func (p CapabilityPolicy) walk(v any, key string) *PolicyRefusal {
 					return r
 				}
 			}
-			if e := p.walk(value, lower); e != nil {
+			if e := p.walkIn(value, lower, pathIsFile); e != nil {
 				return e
 			}
 		}
 	case []any:
 		for _, value := range x {
-			if e := p.walk(value, key); e != nil {
+			if e := p.walkIn(value, key, pathIsFile); e != nil {
 				return e
 			}
 		}
@@ -369,7 +409,7 @@ func (p CapabilityPolicy) walk(v any, key string) *PolicyRefusal {
 			r.Field, r.Resource, r.Allowance, r.Suggested = key, x, "allowed_listen_addresses", x
 			return r
 		}
-		if key == "include" || key == "exclude" || key == "path" || strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_path") || strings.HasSuffix(key, "_dir") {
+		if key == "include" || key == "exclude" || (key == "path" && pathIsFile) || strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_path") || strings.HasSuffix(key, "_dir") {
 			if e := p.file(x); e != nil {
 				e.Field = key
 				return e
@@ -452,10 +492,15 @@ func (p CapabilityPolicy) file(s string) *PolicyRefusal {
 		return nil
 	}
 	r := denied("capability denied: file root is not locally allowed")
-	// Suggest the directory itself (or the static part of a pattern).
+	// Suggest the directory itself (or the static part of a pattern), but never
+	// the filesystem root or a top-level directory: following that advice would
+	// hand every file the service account can read to restricted publishers.
 	suggested := static
 	if static == clean && !strings.HasSuffix(s, string(filepath.Separator)) {
 		suggested = filepath.Dir(clean)
+	}
+	if strings.Count(filepath.ToSlash(suggested), "/") < 2 {
+		suggested = ""
 	}
 	r.Allowance, r.Suggested = "allowed_file_roots", suggested
 	return r

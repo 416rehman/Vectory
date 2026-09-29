@@ -360,6 +360,8 @@ fn requires_full_mode(config: &Value) -> bool {
                 };
                 if !allowed.contains(&(section.to_owned(), typ.to_owned()))
                     || (typ == "console" && component["target"] != "stderr")
+                    // `remap.file` loads a VRL program from the device's disk.
+                    || (typ == "remap" && !component["file"].is_null())
                 {
                     return true;
                 }
@@ -411,10 +413,7 @@ fn requires_full_mode(config: &Value) -> bool {
     // VRL functions that reach outside the event (the agent refuses them in
     // restricted mode too).
     fn external_vrl(value: &str) -> bool {
-        let lowered = value.to_ascii_lowercase();
-        crate::validation::DEVICE_VRL_FUNCTIONS
-            .iter()
-            .any(|function| lowered.contains(function))
+        crate::validation::calls_device_function(value)
     }
     fn test_vrl(value: &Value) -> bool {
         match value {
@@ -2394,4 +2393,74 @@ pub(crate) async fn rollback_blockers(
         out.push(json!({"code":"ASSIGNMENT_PRECEDENCE","reason":"An equal-priority configuration assignment also selects an included identity. Delivery ownership would depend on assignment identity; review current assignments before continuing."}));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_full_mode;
+    use serde_json::json;
+
+    fn remap(source: &str) -> serde_json::Value {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"t": {"type": "remap", "inputs": ["in"], "source": source}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["t"]}},
+        })
+    }
+
+    #[test]
+    fn a_name_inside_data_does_not_ask_for_full_mode() {
+        // The canonical Prometheus metric, an event value and a step called
+        // http_requests are data, not calls to the VRL function.
+        assert!(!requires_full_mode(&remap(
+            ".kind = \"http_request_log\"\n.name = \"http_requests_total\""
+        )));
+        let mut renamed = remap(".x = 1");
+        renamed["transforms"]["http_requests"] = renamed["transforms"]["t"].clone();
+        renamed["sinks"]["out"]["inputs"] = json!(["http_requests"]);
+        assert!(!requires_full_mode(&renamed));
+        let mut metric = remap(".x = 1");
+        metric["transforms"]["m"] = json!({"type": "log_to_metric", "inputs": ["t"],
+            "metrics": [{"type": "counter", "field": "message", "name": "http_requests_total"}]});
+        assert!(!requires_full_mode(&metric));
+        // Tests are data as well; only their VRL matters.
+        let mut tested = remap(".x = 1");
+        tested["tests"] = json!([{"name": "t", "inputs": [{"insert_at": "t", "type": "log",
+            "log_fields": {"kind": "http_request", "path": "/etc/hosts"}}],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": ".x == 1"}]}]}]);
+        assert!(!requires_full_mode(&tested));
+    }
+
+    #[test]
+    fn calls_that_reach_the_device_ask_for_full_mode() {
+        for source in [
+            "http_request!(\"https://example.test\")",
+            "http_request! (\"https://example.test\")",
+            "get_env_var!(\"HOME\")",
+            "validate_json_schema!(.message, \"/schema.json\")",
+            "parse_proto!(.message, \"/descriptor.desc\", \"a.B\")",
+            "encode_proto!(.message, \"/descriptor.desc\", \"a.B\")",
+            "get_enrichment_table_record!(\"hosts\", {\"name\": .host})",
+            "find_enrichment_table_records!(\"hosts\", {\"name\": .host})",
+        ] {
+            assert!(requires_full_mode(&remap(source)), "{source}");
+        }
+        let mut tested = remap(".x = 1");
+        tested["tests"] = json!([{"name": "t", "inputs": [],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "http_request!(\"u\")"}]}]}]);
+        assert!(requires_full_mode(&tested));
+    }
+
+    #[test]
+    fn a_remap_program_loaded_from_a_file_asks_for_full_mode() {
+        let mut config = remap(".x = 1");
+        config["transforms"]["t"] =
+            json!({"type": "remap", "inputs": ["in"], "file": "/etc/vector/program.vrl"});
+        assert!(requires_full_mode(&config));
+        // A tag or label that happens to be called `file` is only a name.
+        let mut metric = remap(".x = 1");
+        metric["transforms"]["m"] = json!({"type": "log_to_metric", "inputs": ["t"],
+            "metrics": [{"type": "counter", "field": "message", "name": "lines", "tags": {"file": "app"}}]});
+        assert!(!requires_full_mode(&metric));
+    }
 }

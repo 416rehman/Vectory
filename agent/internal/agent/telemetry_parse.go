@@ -126,6 +126,35 @@ func parseMetricObservationWithNamespace(data []byte, namespace string, internal
 	return parseMetricObservationFor(data, namespace, internal, nil)
 }
 
+// conflictedComponents finds the IDs a scrape holds under two types when the
+// configuration does not say which is current. They are measured nowhere, in
+// the device totals and the rows alike, so a scrape never mixes the two.
+func conflictedComponents(data []byte, prefix string, types map[string]string) map[string]bool {
+	conflicted := map[string]bool{}
+	seen := map[string]string{}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 4096), 32768)
+	for lines := 0; scanner.Scan() && lines < 10000; lines++ {
+		m := metricLine.FindStringSubmatch(scanner.Text())
+		if m == nil || !metricFamilies[strings.TrimPrefix(m[1], prefix)] {
+			continue
+		}
+		l, ok := componentLabels(m[2])
+		if !ok || l.id == "" || l.typ == "" {
+			continue
+		}
+		if want, known := types[l.id]; known && l.typ != want {
+			continue
+		}
+		if first, ok := seen[l.id]; !ok {
+			seen[l.id] = l.typ
+		} else if first != l.typ {
+			conflicted[l.id] = true
+		}
+	}
+	return conflicted
+}
+
 // parseMetricObservationFor reads one scrape. types maps component IDs to the
 // type the running configuration declares. Vector keeps the series of a
 // component whose type a reload changed until they expire, so a scrape can
@@ -137,7 +166,7 @@ func parseMetricObservationFor(data []byte, namespace string, internal map[strin
 	prefix := namespace + "_"
 	o := metricObservation{ComponentEvents: map[string]float64{}, Counters: counterSet{}}
 	components := map[string]*componentMetrics{}
-	conflicted := map[string]bool{}
+	conflicted := conflictedComponents(data, prefix, types)
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 4096), 32768)
 	lines, series := 0, 0
@@ -231,18 +260,6 @@ func parseMetricObservationFor(data []byte, namespace string, internal map[strin
 			}
 			c = &componentMetrics{telemetry: ComponentTelemetry{ID: l.id, Type: l.typ, Kind: l.kind}, outputs: map[string]bool{}}
 			components[l.id] = c
-		} else if c.telemetry.Type != "" && l.typ != "" && c.telemetry.Type != l.typ {
-			// Two types for one ID and no configuration to say which is
-			// current: measure neither rather than reject the whole scrape.
-			conflicted[l.id] = true
-			delete(components, l.id)
-			delete(o.ComponentEvents, l.id)
-			for key := range o.Counters {
-				if strings.HasPrefix(key, "c:"+l.id+":") {
-					delete(o.Counters, key)
-				}
-			}
-			continue
 		}
 		if c.telemetry.Kind == "" {
 			c.telemetry.Kind = l.kind
