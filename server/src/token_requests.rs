@@ -195,7 +195,11 @@ async fn token(db: &mut SqliteConnection, id: &str) -> Result<Option<Value>> {
     raw.map(|raw| {
         let v=db::parse(&raw)?;
         // Do not leak future recovery-token extensions or arbitrary stored fields.
-        Ok(json!({"id":id,"name":v["name"],"expires_at":v["expires_at"],"uses":v["uses"],"max_uses":v["max_uses"],"name_prefix":v["name_prefix"],"revoked":v["revoked"],"created_at":v["created_at"]}))
+        let mut record = json!({"id":id,"name":v["name"],"expires_at":v["expires_at"],"uses":v["uses"],"max_uses":v["max_uses"],"name_prefix":v["name_prefix"],"revoked":v["revoked"],"created_at":v["created_at"]});
+        if v["device_name"].is_string() {
+            record["device_name"] = v["device_name"].clone();
+        }
+        Ok(record)
     }).transpose()
 }
 async fn status(db: &mut SqliteConnection, key: &str, e: &Entry) -> Result<Value> {
@@ -263,7 +267,35 @@ pub async fn create(db: &mut SqliteConnection, request: &Value, actor: &str) -> 
             "name_prefix must use lowercase letters, digits or hyphens",
         ));
     }
-    let record = json!({"id":db::id(),"name":db::string(&payload,"name",120)?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
+    // A token made for one typed device name (Add device) enrolls only that
+    // name, normalized the way enrollment normalizes it. Optional: servers
+    // before it ignored the field, and the receipt says whether it applied.
+    if !payload["device_name"].is_null() && !payload["device_name"].is_string() {
+        return Err(ApiError::invalid("device_name must be a string or null"));
+    }
+    let device_name = payload["device_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !device_name.is_empty()
+        && (device_name.len() > 100
+            || !device_name.as_bytes()[0].is_ascii_alphanumeric()
+            || !device_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)))
+    {
+        return Err(ApiError::invalid(
+            "device_name must be a device name: up to 100 letters, digits, dots, hyphens or underscores, starting with a letter or digit",
+        ));
+    }
+    if !device_name.is_empty() && !device_name.starts_with(prefix) {
+        return Err(ApiError::invalid("device_name must start with name_prefix"));
+    }
+    let mut record = json!({"id":db::id(),"name":db::string(&payload,"name",120)?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
+    if !device_name.is_empty() {
+        record["device_name"] = json!(device_name);
+    }
     let secret = auth::random_secret();
     sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
         .bind(api::text(&record, "id"))
