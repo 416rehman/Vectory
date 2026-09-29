@@ -64,6 +64,24 @@ data_dir "/var/lib/vector/" does not exist
 - If the pipeline sets **Data directory** in its general settings, create that folder on every device and give the agent's service account write access. On restricted devices, also allow it as a file root.
 - If the pipeline leaves it empty, the agent gives Vector its own private data directory. Update the agent if you still see this message.
 
+## A listener on a port below 1024 doesn't start
+
+On Linux, ports below 1024 need a privilege the agent's service account doesn't have. A source that listens on one, such as syslog on 514, fails with `PRIVILEGED_PORT`:
+
+```text
+Vector can't listen on 0.0.0.0:514: ports below 1024 need a privilege the service account lacks.
+```
+
+- **Use a higher port.** Listen on 1514, for example, and point your senders there.
+- **Or allow it on this host.** Run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`. Only this service gets the privilege.
+
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  ```
+
+On a restricted device, the address must also be in the host's allowed listeners. macOS and Windows have no privileged ports.
+
 ## Validation says deferred or unavailable
 
 - **Deferred:** part of the check needs the device, such as a local file, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
