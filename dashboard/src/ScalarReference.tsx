@@ -12,11 +12,62 @@ import TabLabel from "./TabLabel";
 import "./help-link.css";
 import "./scalar-reference.css";
 
+/**
+ * A sidebar-length name from a contract summary: its first clause, capped at
+ * a line. The full summary stays at the top of the operation's description.
+ */
+function shortSummary(summary: string) {
+  let text = summary
+    .split(/;\s|\.\s|:\s|\s—\s|\s\(/)[0]
+    .trim()
+    .replace(/\.$/, "");
+  if (text.length > 56) {
+    const cut = text.slice(0, 56);
+    text = `${cut.slice(0, cut.lastIndexOf(" ")).replace(/[,\s]+$/, "")}…`;
+  }
+  return text ? text[0].toUpperCase() + text.slice(1) : summary;
+}
+type Operation = { summary?: string; description?: string };
+function readableOperations<T extends Record<string, unknown>>(methods: T): T {
+  return Object.fromEntries(
+    Object.entries(methods).map(([method, value]) => {
+      const operation = value as Operation;
+      if (!operation || typeof operation !== "object" || !operation.summary)
+        return [method, value];
+      const short = shortSummary(operation.summary);
+      return [
+        method,
+        short === operation.summary
+          ? operation
+          : {
+              ...operation,
+              summary: short,
+              description: [operation.summary, operation.description]
+                .filter(Boolean)
+                .join("\n\n"),
+            },
+      ];
+    }),
+  ) as T;
+}
+
+/** The dashboard theme choice: saved light or dark, else the system's. */
+function prefersDark() {
+  let saved: string | null = null;
+  try {
+    saved = window.localStorage.getItem("vectory-theme");
+  } catch {
+    // Storage can be unavailable; follow the system.
+  }
+  if (saved === "dark" || saved === "light") return saved === "dark";
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+
 function documentFor(agent: boolean) {
   const paths = Object.fromEntries(
-    Object.entries(spec.paths).filter(([path]) =>
-      path.startsWith(agent ? "/agent/v1/" : "/api/v1/"),
-    ),
+    Object.entries(spec.paths)
+      .filter(([path]) => path.startsWith(agent ? "/agent/v1/" : "/api/v1/"))
+      .map(([path, methods]) => [path, readableOperations(methods)]),
   );
   const used = new Set(
     Object.values(paths).flatMap((methods) =>
@@ -66,6 +117,21 @@ function documentFor(agent: boolean) {
 
 function Reference() {
   const [agent, setAgent] = useState(false);
+  const [dark, setDark] = useState(prefersDark);
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  }, [dark]);
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const changed = () => setDark(prefersDark());
+    media?.addEventListener("change", changed);
+    window.addEventListener("storage", changed);
+    return () => {
+      media?.removeEventListener("change", changed);
+      window.removeEventListener("storage", changed);
+    };
+  }, []);
   useEffect(() => {
     // Scalar 0.9.74's icon-only code copy controls and the cookie-name editor in
     // its authentication panel lack accessible names, and that editor's
@@ -104,6 +170,8 @@ function Reference() {
       hideClientButton: true,
       hideTestRequestButton: agent,
       hideDarkModeToggle: true,
+      // Follow the dashboard's theme; Vectory's own tokens style both modes.
+      forceDarkModeState: dark ? "dark" : "light",
       withDefaultFonts: false,
       persistAuth: false,
       telemetry: false,
@@ -114,7 +182,7 @@ function Reference() {
       customFetch: scalarFetch,
       proxyUrl: "",
     }),
-    [agent],
+    [agent, dark],
   );
   return (
     <>
@@ -163,7 +231,7 @@ function Reference() {
           : "Test requests use your signed-in account and can change this instance. Session cookies and CSRF stay on this origin."}
       </p>
       <ApiReferenceReact
-        key={agent ? "agent" : "dashboard"}
+        key={`${agent ? "agent" : "dashboard"}:${dark ? "dark" : "light"}`}
         configuration={configuration}
       />
     </>
