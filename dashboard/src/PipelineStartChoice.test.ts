@@ -13,15 +13,15 @@ describe("pasted Vector configurations", () => {
     );
   });
 
-  it("reads a valid pipeline and says where a broken one fails", () => {
-    const good = readStartText(
+  it("reads a valid pipeline and says where a broken one fails", async () => {
+    const good = await readStartText(
       "Pasted YAML",
       "sources:\n  demo:\n    type: demo_logs\n    format: json\nsinks:\n  out:\n    type: console\n    inputs: [demo]\n    encoding:\n      codec: json\n",
       "yaml",
     );
     expect(good.error).toBeUndefined();
     expect(good.summary).toMatch(/^2 steps/);
-    const bad = readStartText(
+    const bad = await readStartText(
       "Pasted YAML",
       "sources:\n  demo:\n    type: demo_logs\n   format: json\n",
       "yaml",

@@ -119,7 +119,6 @@ export const applyStates = {
     "Configuration changes wait until sync resumes.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type ApplyState = keyof typeof applyStates;
 
 /**
  * The apply pipeline as completed steps, for the device page's progress and
@@ -138,7 +137,7 @@ export const applyStepLabels = {
 export const deviceStatuses = {
   verified: applyStates.verified_applied,
   degraded: entry(
-    "Degraded",
+    "Not delivering",
     "warning",
     "alert",
     "Applied, but not delivering. An open delivery issue says why.",
@@ -185,7 +184,6 @@ export const deviceStatuses = {
     "Assignments with equal priority request different versions.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type DeviceStatus = keyof typeof deviceStatuses;
 
 export const connectionStates = {
   online: entry("Online", "success", "online", "Checked in recently."),
@@ -269,7 +267,6 @@ export const deploymentStatuses = {
     "A newer deployment took over its devices.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type DeploymentStatus = keyof typeof deploymentStatuses;
 
 /** Per-device progress inside one deployment. */
 export const targetStates = {
@@ -315,7 +312,6 @@ export const targetStates = {
   ),
   revoked: deviceStatuses.revoked,
 } satisfies Record<string, StatusEntry>;
-export type TargetState = keyof typeof targetStates;
 
 export const issueDispositions = {
   open: entry("Open", "warning", "alert", "Reported and not yet resolved."),
@@ -393,7 +389,6 @@ export const auditOutcomes = {
   incompatible: targetStates.incompatible,
   paused: applyStates.paused,
 } satisfies Record<string, StatusEntry>;
-export type AuditOutcome = keyof typeof auditOutcomes;
 
 export const gateStates = {
   waiting: entry(
@@ -544,7 +539,7 @@ export function dataPlaneIssues(device: DeviceStatusInput): DataPlaneIssue[] {
 /**
  * The state to show for a device. A dashboard pause reads "Pause requested"
  * until the agent acknowledges it; a host-local pause is always in effect. An
- * applied device that isn't delivering reads "Degraded".
+ * applied device that isn't delivering reads "Not delivering".
  */
 export function deviceDisplayStatus(device: DeviceStatusInput): string {
   if (dataPlaneIssues(device).length) return "degraded";

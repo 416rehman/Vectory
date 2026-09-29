@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ChevronRight,
-  Copy,
   Download,
   ExternalLink,
   ScrollText,
@@ -1326,10 +1325,8 @@ function ExportAudit({
   ].filter(Boolean);
   useEffect(() => {
     active.current = true;
-    const timer = setInterval(() => setNow(performance.now()), 1000);
     return () => {
       active.current = false;
-      clearInterval(timer);
     };
   }, []);
   const lifetime = file
@@ -1340,6 +1337,13 @@ function ExportAudit({
     (!Number.isFinite(lifetime) ||
       lifetime <= 0 ||
       now - receivedAt.current >= lifetime);
+  // The expiry clock runs only while a prepared file can still be downloaded.
+  const counting = !!file && !expired;
+  useEffect(() => {
+    if (!counting) return;
+    const timer = setInterval(() => setNow(performance.now()), 1000);
+    return () => clearInterval(timer);
+  }, [counting]);
   // Accept only the backend's exact same-origin download resource, never an arbitrary URL.
   const downloadPath = file ? exportDownloadPath(file) : null;
   async function prepare() {

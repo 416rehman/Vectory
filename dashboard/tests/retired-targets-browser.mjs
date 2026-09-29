@@ -421,7 +421,7 @@ try {
       try {
         const { page } = app;
         await open(page);
-        await expect(dialog(page)).toContainText("1 of 1 device verified");
+        await expect(dialog(page)).toContainText("1 of 1 device applied");
         await expect(dialog(page)).toContainText(
           "1 earlier device is no longer targeted and stays in history.",
         );
@@ -502,7 +502,7 @@ try {
         await expect(
           dialog(page).locator(".deployment-membership-note"),
         ).toHaveCount(0);
-        await expect(dialog(page)).toContainText("0 of 1 device verified");
+        await expect(dialog(page)).toContainText("0 of 1 device applied");
         await noWrites(f);
       } finally {
         await app.close();
@@ -570,7 +570,7 @@ try {
         await expect(dialog(page)).toContainText(
           "No devices match these filters.",
         );
-        await expect(dialog(page)).toContainText("1 of 1 device verified");
+        await expect(dialog(page)).toContainText("1 of 1 device applied");
         await expect(dialog(page)).toContainText(
           "13 earlier devices are no longer targeted",
         );

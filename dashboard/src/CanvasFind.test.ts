@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSteps } from "./CanvasFind";
+import { findStatus, findSteps } from "./CanvasFind";
 
 const node = (
   id: string,
@@ -42,6 +42,19 @@ describe("find a step", () => {
       "parse_errors",
     ]);
     expect(findSteps(nodes, "zzz")).toEqual([]);
+  });
+
+  it("returns every match and says when the list shows only some", () => {
+    const many = Array.from({ length: 12 }, (_, index) =>
+      node(`source_${String(index).padStart(2, "0")}`, "file", "sources"),
+    );
+    expect(findSteps(many, "source")).toHaveLength(12);
+    expect(findStatus("source", 12)).toBe(
+      "Showing 8 of 12 steps. Keep typing to narrow the list.",
+    );
+    expect(findStatus("source_1", 3)).toBe("");
+    expect(findStatus("  zzz ", 0)).toBe("No step matches “zzz”.");
+    expect(findStatus("", 0)).toBe("This pipeline has no steps yet.");
   });
 
   it("names each result with the shared label", () => {

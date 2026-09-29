@@ -33,6 +33,20 @@
 .issue-summary > strong {
   font-size: 14px;
 }
+/* The code the Issue column sorts by, beside the title it explains. */
+.issue-summary > .issue-code {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 .issue-summary p {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -82,6 +96,13 @@
 }
 .issue-page .control-row-title:hover {
   text-decoration: underline;
+}
+.issue-page .data-list-meta a {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
 }
 .issue-actions {
   display: flex;

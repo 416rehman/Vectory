@@ -490,6 +490,8 @@ details[open] > summary {
 }
 .page-context > .live-status {
   flex: none;
+  /* Right-aligned with or without a breadcrumb beside it. */
+  margin-left: auto;
 }
 .page-heading {
   display: flex;

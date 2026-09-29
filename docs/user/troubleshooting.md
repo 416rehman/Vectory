@@ -123,7 +123,7 @@ Removing or cancelling a deployment never stops Vector. See [Deploy and roll bac
 
 ## A pipeline applies but delivers nothing
 
-The device reads **Degraded**: the version applied and Vector runs it, but its metrics show events aren't getting through. The device page names the component, the reason and the fix, and the issue appears in **Needs you** and [**Activity → Issues**](/#/issues).
+The device reads **Not delivering**: the version applied and Vector runs it, but its metrics show events aren't getting through. The device page names the component, the reason and the fix, and the issue appears in **Needs you** and [**Activity → Issues**](/#/issues).
 
 | Issue | What Vectory measured | Likely cause |
 | --- | --- | --- |

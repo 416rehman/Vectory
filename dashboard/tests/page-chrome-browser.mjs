@@ -115,7 +115,11 @@ try {
       expect(
         await page.locator(".sr-only[aria-live]").evaluateAll((nodes) =>
           nodes
-            .filter((node) => !node.hasAttribute("role"))
+            .filter(
+              (node) =>
+                !node.hasAttribute("role") &&
+                !node.hasAttribute("data-route-announcer"),
+            )
             .map((node) => node.getAttribute("aria-live"))
             .sort(),
         ),
@@ -207,6 +211,85 @@ try {
     await context.close();
   }
   results.push("Dialogs return focus to the button that opened them");
+  {
+    // The palette's Create pipeline runs on the Pipelines page after the
+    // route change, when nothing there has focus yet. Closing the dialog
+    // still hands focus to the page's Create button, not to the document.
+    const { context, page } = await open();
+    await page.goto(`${origin}#/overview`);
+    await expect(page.locator("main h1")).toHaveText("Overview");
+    await page.keyboard.press("ControlOrMeta+k");
+    const palette = page.getByRole("dialog", {
+      name: "Search Vectory",
+      exact: true,
+    });
+    await palette
+      .getByRole("combobox", { name: "Search Vectory", exact: true })
+      .fill("Create pipeline");
+    await palette
+      .getByRole("option", { name: "Create pipeline", exact: true })
+      .click();
+    await expect(page).toHaveURL(/#\/configurations$/);
+    const dialog = page.getByRole("dialog", {
+      name: "Create pipeline",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true }),
+    ).toBeFocused();
+    await context.close();
+  }
+  results.push(
+    "A create command run from another page returns focus to the page's Create button",
+  );
+  {
+    // A section tab lives inside the page, so the page it opens replaces it.
+    // Focus goes to the new page's title instead of falling to the document,
+    // and the next Tab continues inside the page, not at the skip link.
+    const { context, page } = await open();
+    await page.goto(`${origin}#/devices`);
+    await expect(page.locator("main h1")).toHaveText("Devices");
+    const tab = page
+      .getByRole("navigation", { name: "Device sections" })
+      .getByRole("link", { name: "Groups", exact: true });
+    let reached = false;
+    for (let press = 0; press < 40 && !reached; press++) {
+      await page.keyboard.press("Tab");
+      reached = await tab.evaluate((node) => node === document.activeElement);
+    }
+    expect(reached, "Tab reaches the Groups tab").toBe(true);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/#\/groups$/);
+    const title = page.getByRole("heading", { level: 1, name: "Groups" });
+    await expect(title).toBeFocused();
+    await page.keyboard.press("Tab");
+    expect(
+      await page.evaluate(
+        () =>
+          !!document.activeElement?.closest("#main-content") &&
+          document.activeElement !== document.body,
+      ),
+      "the Tab after arriving stays inside the page",
+    ).toBe(true);
+    // The sidebar keeps its own focus and the new page is announced instead.
+    const overview = page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("link", { name: "Overview", exact: true });
+    await overview.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(overview).toBeFocused();
+    await expect(page.locator("[data-route-announcer]")).toHaveText("Overview");
+    await context.close();
+  }
+  results.push(
+    "Navigating inside a page focuses the new title; the sidebar keeps focus and the page is announced",
+  );
   {
     // A very long name wraps in the header of the dialog it opens and never
     // pushes the close button off a phone or widens the page.

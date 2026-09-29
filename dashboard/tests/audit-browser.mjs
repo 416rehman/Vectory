@@ -6,8 +6,14 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -23,7 +29,7 @@ const server = await createServer({
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5201,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -77,7 +83,7 @@ const results = [],
   requests = [],
   unexpected = [],
   accessibility = [];
-const origin = "http://127.0.0.1:5201";
+const origin = `http://127.0.0.1:${port}`;
 const id = (number) =>
   `abcdefab-1234-4000-8000-${String(number).padStart(12, "0")}`;
 const user = {
@@ -436,7 +442,9 @@ try {
           f.page.getByRole("button", { name: "Export results" }),
         ).toBeDisabled();
         f.state.failHistory = false;
-        await f.page.getByRole("button", { name: "Retry", exact: true }).click();
+        await f.page
+          .getByRole("button", { name: "Retry", exact: true })
+          .click();
         await expect(f.page.locator(".audit-table tbody tr")).toHaveCount(12);
         f.state.heldSearch = "Alpha";
         await f.page

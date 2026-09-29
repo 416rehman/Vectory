@@ -341,7 +341,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Fleet.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:${JSON.stringify(user)},navigate:path=>{window.location.hash='/'+path}})));`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Overview.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:${JSON.stringify(user)},navigate:path=>{window.location.hash='/'+path}})));`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {
@@ -403,6 +403,13 @@ async function open(options = {}) {
     if (req.method() === "GET" && path === "/releases")
       return route.fulfill({ json: state.releases });
     if (req.method() === "GET" && path === "/deployments/history") {
+      if (state.historyFails)
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: { code: "UNAVAILABLE", message: "Synthetic history outage" },
+          },
+        });
       const items = state.history[url.searchParams.get("status")] || [];
       return route.fulfill({
         json: { items, total: items.length, page: 1, page_size: 5 },
@@ -727,6 +734,28 @@ try {
       await expect(page.locator(".needs-you")).not.toContainText(
         "Nothing is failing",
       );
+      await context.close();
+    },
+  );
+  await check(
+    "A failed stopped-rollout check is never an all-clear, and Retry recovers",
+    async () => {
+      const { context, page } = await open({
+        overview: overview({ attention: [] }),
+        historyFails: true,
+      });
+      const card = page.locator(".needs-you");
+      const row = card.locator('[data-stopped-check="failed"]');
+      await expect(row).toContainText("Couldn’t check stopped rollouts.");
+      await expect(row).toContainText(
+        "Rollouts that stopped in the last day may be missing here.",
+      );
+      await expect(card).not.toContainText("Nothing needs you right now");
+      await expect(card).not.toContainText("Nothing is failing");
+      state.historyFails = false;
+      await row.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(row).toHaveCount(0);
+      await expect(card).toContainText("Nothing needs you right now");
       await context.close();
     },
   );

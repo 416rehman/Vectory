@@ -37,7 +37,8 @@ const blockedSegments = new Set([
 const safeSegment = (part: string) =>
   !blockedSegments.has(part.toLowerCase()) &&
   !/password|secret|credential/i.test(part);
-const encode = (part: string) => part.replaceAll("~", "~0").replaceAll("/", "~1");
+const encode = (part: string) =>
+  part.replaceAll("~", "~0").replaceAll("/", "~1");
 
 /** Only existing, typed scalar leaves can be overridden at deployment. */
 export function variableFields(config: Config): VariableField[] {
@@ -75,7 +76,9 @@ export function variableErrors(
   config: Config,
   declarations: VariableDeclaration[],
 ): string[] {
-  const fields = new Map(variableFields(config).map((field) => [field.path, field]));
+  const fields = new Map(
+    variableFields(config).map((field) => [field.path, field]),
+  );
   const names = new Set<string>();
   const paths = new Set<string>();
   const errors: string[] = [];
@@ -83,20 +86,30 @@ export function variableErrors(
     errors.push("A pipeline can declare at most 64 device-specific variables.");
   for (const declaration of declarations) {
     if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(declaration.name))
-      errors.push(`Variable ${declaration.name || "(unnamed)"} needs a letter-led name using letters, numbers, or underscores.`);
+      errors.push(
+        `Variable ${declaration.name || "(unnamed)"} needs a letter-led name using letters, numbers, or underscores.`,
+      );
     if (names.has(declaration.name))
       errors.push(`Variable name ${declaration.name} is used more than once.`);
     names.add(declaration.name);
     if (paths.has(declaration.path))
-      errors.push(`Field ${declaration.path} is assigned to more than one variable.`);
+      errors.push(
+        `Field ${declaration.path} is assigned to more than one variable.`,
+      );
     paths.add(declaration.path);
     if (new TextEncoder().encode(declaration.path).length > 512)
-      errors.push(`Variable ${declaration.name} has a field path longer than 512 bytes.`);
+      errors.push(
+        `Variable ${declaration.name} has a field path longer than 512 bytes.`,
+      );
     const field = fields.get(declaration.path);
     if (!field)
-      errors.push(`Variable ${declaration.name} no longer points to an eligible field (${declaration.path}).`);
+      errors.push(
+        `Variable ${declaration.name} no longer points to an eligible field (${declaration.path}).`,
+      );
     else if (field.type !== declaration.type)
-      errors.push(`Variable ${declaration.name} expects ${declaration.type}, but ${field.label} is now ${field.type}.`);
+      errors.push(
+        `Variable ${declaration.name} expects ${declaration.type}, but ${field.label} is now ${field.type}.`,
+      );
   }
   return errors;
 }

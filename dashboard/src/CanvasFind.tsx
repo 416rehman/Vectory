@@ -15,6 +15,9 @@ type FindNode = {
   };
 };
 
+/** How many matches the list shows; the status line says when there are more. */
+const SHOWN = 8;
+
 /** Steps whose ID, name or Vector type contains the query, best first. */
 export function findSteps(nodes: readonly FindNode[], query: string) {
   const needle = query.trim().toLowerCase();
@@ -38,9 +41,19 @@ export function findSteps(nodes: readonly FindNode[], query: string) {
               : -1;
     return score < 0 ? [] : [{ id: node.id, title, type, score }];
   });
-  return scored
-    .sort((a, b) => a.score - b.score || a.id.localeCompare(b.id))
-    .slice(0, 8);
+  return scored.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
+}
+
+/** The status line under the list: more matches than shown, or none. */
+export function findStatus(query: string, total: number) {
+  const needle = query.trim();
+  if (!total)
+    return needle
+      ? `No step matches “${needle}”.`
+      : "This pipeline has no steps yet.";
+  return total > SHOWN
+    ? `Showing ${SHOWN} of ${total} steps. Keep typing to narrow the list.`
+    : "";
 }
 
 /** Ctrl/⌘ F on the canvas: jump to a step by ID, name or type. */
@@ -56,7 +69,8 @@ export default function CanvasFind({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
-  const results = useMemo(() => findSteps(nodes, query), [nodes, query]);
+  const matches = useMemo(() => findSteps(nodes, query), [nodes, query]);
+  const results = matches.slice(0, SHOWN);
   const current = Math.min(active, Math.max(0, results.length - 1));
   return (
     <div className="canvas-find" role="search">
@@ -67,7 +81,7 @@ export default function CanvasFind({
           role="combobox"
           aria-label="Find a step"
           aria-expanded={results.length > 0}
-          aria-controls={listId}
+          aria-controls={results.length ? listId : undefined}
           aria-activedescendant={
             results[current] ? `${listId}-${current}` : undefined
           }
@@ -101,27 +115,27 @@ export default function CanvasFind({
           <X size={14} aria-hidden="true" />
         </button>
       </div>
-      <ul id={listId} role="listbox" aria-label="Matching steps">
-        {results.map((result, index) => (
-          <li
-            key={result.id}
-            id={`${listId}-${index}`}
-            role="option"
-            aria-selected={index === current}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onFind(result.id)}
-            onMouseEnter={() => setActive(index)}
-          >
-            <code>{result.id}</code>
-            <span>{result.title}</span>
-          </li>
-        ))}
-        {!results.length && (
-          <li className="canvas-find-empty" role="presentation">
-            No step matches “{query}”.
-          </li>
-        )}
-      </ul>
+      {results.length > 0 && (
+        <ul id={listId} role="listbox" aria-label="Matching steps">
+          {results.map((result, index) => (
+            <li
+              key={result.id}
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={index === current}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onFind(result.id)}
+              onMouseEnter={() => setActive(index)}
+            >
+              <code>{result.id}</code>
+              <span>{result.title}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="canvas-find-status" role="status">
+        {findStatus(query, matches.length)}
+      </p>
     </div>
   );
 }

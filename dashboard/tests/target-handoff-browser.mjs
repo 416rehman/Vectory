@@ -439,9 +439,7 @@ async function preview({ both = true, scheduled = false } = {}) {
       .check();
   if (scheduled) {
     await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
-    await page
-      .getByLabel("Start at", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -550,7 +548,11 @@ try {
                   winner: rollback,
                   replaces: rollback,
                 },
-                { device_id: id(2), resource: "configuration", outcome: "requested" },
+                {
+                  device_id: id(2),
+                  resource: "configuration",
+                  outcome: "requested",
+                },
               ],
             }
           : {
@@ -570,7 +572,11 @@ try {
                   outcome: "conflict",
                   winner: rollback,
                 },
-                { device_id: id(2), resource: "configuration", outcome: "requested" },
+                {
+                  device_id: id(2),
+                  resource: "configuration",
+                  outcome: "requested",
+                },
               ],
               suggested_replaces: entries,
               suggested_priority: 101,
@@ -760,9 +766,14 @@ try {
       await preview();
       state.failCreate = true;
       await sendPolicy();
-      const recovery = page.getByRole("dialog", { name: "Confirm deployment", exact: true });
+      const recovery = page.getByRole("dialog", {
+        name: "Confirm deployment",
+        exact: true,
+      });
       await expect(recovery).toBeVisible();
-      await expect(recovery).toContainText("No completed request was found yet");
+      await expect(recovery).toContainText(
+        "No completed request was found yet",
+      );
       await expect(
         page.getByRole("link", { name: "View deployment", exact: true }),
       ).toHaveCount(0);
@@ -770,7 +781,9 @@ try {
       expect(await page.evaluate(() => window.notices.length)).toBe(0);
       state.failCreate = false;
       state.holdCreate = true;
-      await recovery.getByRole("button", { name: "Retry same request", exact: true }).click();
+      await recovery
+        .getByRole("button", { name: "Retry same request", exact: true })
+        .click();
       await expect.poll(() => state.holds.length).toBe(1);
       await page.keyboard.press("Escape");
       expect(await page.evaluate(() => window.fixtureClosed)).toBe(false);
@@ -902,7 +915,9 @@ try {
       state.holdCreate = true;
       // Synthetic alpha's own assignment (priority 200) outranks this one.
       await page
-        .getByRole("checkbox", { name: /^Synthetic alpha keeps .*\(priority 200\)/ })
+        .getByRole("checkbox", {
+          name: /^Synthetic alpha keeps .*\(priority 200\)/,
+        })
         .check();
       await expect(page.locator(".target-left-behind")).toContainText(
         "Only the other device changes.",

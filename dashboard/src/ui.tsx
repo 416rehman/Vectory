@@ -63,6 +63,7 @@ import {
   type StatusTone,
 } from "./status";
 import { exactLocal, relativeTime } from "./time";
+import { isSingleKey, useSingleKeyShortcuts } from "./shortcutPreference";
 
 export const DEFAULT_POLL_INTERVAL = 15000;
 const visible = () =>
@@ -72,6 +73,8 @@ const visible = () =>
  * Bounded, cancellable reads that poll while the tab is visible.
  * Background polls never supersede an in-flight read; an explicit refresh does.
  * A failed refresh keeps the last loaded data with an error.
+ * `interval: 0` reads once (static data); changing the interval only
+ * reschedules the next poll.
  */
 export function useResource<T>(
   path: string | null,
@@ -180,40 +183,49 @@ export function useResource<T>(
   useEffect(() => {
     mounted.current = true;
     ++requestId.current;
-    setState((previous) => ({
-      path,
-      data: previous.path === path ? previous.data : initialValue.current,
-      loading: !!path,
-      error: "",
-      errorStatus: null,
-      updatedAt: previous.path === path ? previous.updatedAt : null,
-    }));
+    setState((previous) => {
+      // A refresh of data already on screen is not a first load: keep the
+      // data, its error and `loading: false` until the new read settles.
+      const same = previous.path === path;
+      const loaded = same && previous.updatedAt !== null;
+      return {
+        path,
+        data: same ? previous.data : initialValue.current,
+        loading: !!path && !loaded,
+        error: loaded ? previous.error : "",
+        errorStatus: loaded ? previous.errorStatus : null,
+        updatedAt: same ? previous.updatedAt : null,
+      };
+    });
     void load();
-    // Hidden tabs stop polling; returning to the tab refreshes stale data.
-    const timer = path
-      ? setInterval(() => {
-          if (visible()) void load(true);
-        }, interval)
-      : undefined;
-    const returned = () => {
-      if (visible() && Date.now() - lastSuccess.current > interval / 2)
-        void load(true);
-    };
     const renewed = () => {
       if (isSessionValid()) void load();
     };
-    document.addEventListener("visibilitychange", returned);
     window.addEventListener("vectory:session-changed", renewed);
     return () => {
       mounted.current = false;
       ++requestId.current;
       activeRequest.current?.controller.abort();
       activeRequest.current = null;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", returned);
       window.removeEventListener("vectory:session-changed", renewed);
     };
-  }, [path, refresh, load, interval]);
+  }, [path, refresh, load]);
+  useEffect(() => {
+    if (!path || !(interval > 0)) return;
+    // Hidden tabs stop polling; returning to the tab refreshes stale data.
+    const timer = setInterval(() => {
+      if (visible()) void load(true);
+    }, interval);
+    const returned = () => {
+      if (visible() && Date.now() - lastSuccess.current > interval / 2)
+        void load(true);
+    };
+    document.addEventListener("visibilitychange", returned);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", returned);
+    };
+  }, [path, load, interval]);
   // Hide old-resource data during the render before the new path's effect runs.
   const shown =
     state.path === path
@@ -456,6 +468,52 @@ export function CopyButton({
   );
 }
 
+/**
+ * When the clipboard refuses a copy that has no button of its own (the
+ * canvas copies steps from its toolbar or a shortcut), the text waits here,
+ * selected, for the person to copy it themselves.
+ */
+export function CopyFallbackDialog({
+  text,
+  label,
+  subject,
+  onClose,
+}: {
+  text: string;
+  /** Names the text field, e.g. "Vector YAML for 2 steps". */
+  label: string;
+  /** What the text is, as the sentence's subject: "The YAML". */
+  subject: string;
+  onClose: () => void;
+}) {
+  const keys = isMacPlatform() ? "⌘C" : "Ctrl+C";
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Couldn’t copy"
+      description={`This browser blocks clipboard access on this address. ${subject} is selected below. Press ${keys} to copy it.`}
+      className="copy-fallback"
+    >
+      <div className="modal-body">
+        <textarea
+          className="copy-fallback-text"
+          readOnly
+          spellCheck={false}
+          value={text}
+          rows={Math.min(14, Math.max(4, text.split("\n").length))}
+          aria-label={label}
+          data-autofocus
+          onFocus={(event) => event.currentTarget.select()}
+        />
+      </div>
+      <div className="modal-footer">
+        <Button onClick={onClose}>Done</Button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ---------- Keyboard hints ---------- */
 
 export function isMacPlatform() {
@@ -524,6 +582,10 @@ export function Tooltip({
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
+  // A single-key hint is only true while single-key shortcuts are on.
+  const [singleKeys] = useSingleKeyShortcuts();
+  const keys =
+    shortcut && (singleKeys || !isSingleKey(shortcut)) ? shortcut : undefined;
   const [position, setPosition] = useState<{
     top: number;
     left: number;
@@ -626,8 +688,8 @@ export function Tooltip({
             : props["aria-describedby"],
         "aria-keyshortcuts":
           props["aria-keyshortcuts"] ??
-          (shortcut
-            ? shortcut
+          (keys
+            ? keys
                 .join("+")
                 .replace(/^mod/i, isMacPlatform() ? "Meta" : "Control")
             : undefined),
@@ -669,7 +731,7 @@ export function Tooltip({
             }}
           >
             <span>{content}</span>
-            {shortcut && <Kbd keys={shortcut} />}
+            {keys && <Kbd keys={keys} />}
           </div>,
           document.body,
         )}
@@ -735,20 +797,24 @@ export function StatusBadge({
   const shownTone = tone ?? status?.tone ?? "neutral";
   const shownIcon = icon ?? status?.icon ?? toneIcons[shownTone];
   const Icon = statusIcons[shownIcon];
-  const title = description ?? status?.description;
-  return (
+  const about = description ?? status?.description;
+  // What the state means: a screen reader reads it as the badge's
+  // description, a pointer sees it as a tooltip (a native title reached
+  // neither keyboard nor assistive-technology users reliably).
+  const badge = (
     <span
       className={`status-badge ${className}`.trim()}
       data-tone={shownTone}
       data-appearance={appearance}
       data-state={value || undefined}
       data-icon={shownIcon}
-      title={title || undefined}
+      aria-description={about || undefined}
     >
       <Icon size={13} strokeWidth={2.2} aria-hidden="true" />
       <span>{label ?? status?.label}</span>
     </span>
   );
+  return about ? <Tooltip content={about}>{badge}</Tooltip> : badge;
 }
 
 /* ---------- Page chrome ---------- */
@@ -801,7 +867,7 @@ export function PageHeader({
   titleAside?: ReactNode;
   /** The title is not known yet: show a placeholder bar (the text stays for screen readers). */
   loadingTitle?: boolean;
-  /** Makes the title focusable for focus moves after navigation. */
+  /** The title element; it is always focusable for moves after navigation. */
   headingRef?: React.Ref<HTMLHeadingElement>;
   /** The browser tab title's leading part, when it differs from the title. */
   documentTitle?: string;
@@ -833,8 +899,8 @@ export function PageHeader({
   return (
     <>
       <div className="page-context">
-        <nav aria-label="Breadcrumb">
-          {crumbs.length > 0 && (
+        {crumbs.length > 0 && (
+          <nav aria-label="Breadcrumb">
             <ol className="page-breadcrumb">
               {crumbs.map((crumb, index) => (
                 <li key={`${index}:${crumb.label}`}>
@@ -867,18 +933,14 @@ export function PageHeader({
                 </li>
               ))}
             </ol>
-          )}
-        </nav>
+          </nav>
+        )}
         {live && <LiveStatus {...live} />}
       </div>
       <header className="page-heading">
         <div>
           <div className="page-title-row">
-            <h1
-              ref={headingRef}
-              tabIndex={headingRef ? -1 : undefined}
-              className={headingRef ? "page-title-focus" : undefined}
-            >
+            <h1 ref={headingRef} tabIndex={-1} className="page-title-focus">
               {loadingTitle ? (
                 <>
                   <span className="sr-only">{title}</span>
@@ -1425,12 +1487,14 @@ export function Modal({
       opener.current = active;
   }
   openRef.current = open;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode runs this cleanup and then the effect again on a live
+    // dialog; only a cleanup with no rerun is a real unmount.
+    unmounted.current = false;
+    return () => {
       unmounted.current = true;
-    },
-    [],
-  );
+    };
+  }, []);
   function restoreFocus() {
     // A development remount of the focus scope is not a real close.
     if (openRef.current && !unmounted.current && content.current?.isConnected)
@@ -1568,6 +1632,8 @@ export function SearchBox({
   shortcut?: boolean;
   inputRef?: React.Ref<HTMLInputElement>;
 }) {
+  const [singleKeys] = useSingleKeyShortcuts();
+  const hint = shortcut && singleKeys;
   return (
     <div className="search-field">
       <Search size={15} aria-hidden="true" />
@@ -1578,7 +1644,7 @@ export function SearchBox({
         value={value}
         maxLength={maxLength}
         data-page-search={shortcut ? "" : undefined}
-        aria-keyshortcuts={shortcut ? "/" : undefined}
+        aria-keyshortcuts={hint ? "/" : undefined}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape" && value) {
@@ -1594,7 +1660,7 @@ export function SearchBox({
           label="Clear search"
           onClick={() => onChange("")}
         />
-      ) : shortcut ? (
+      ) : hint ? (
         <Kbd keys="/" className="search-field-kbd" />
       ) : null}
     </div>

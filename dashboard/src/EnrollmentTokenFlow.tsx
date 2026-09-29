@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Copy, KeyRound } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import { z } from "zod";
 import {
   api,
@@ -15,7 +15,7 @@ import {
   type Token,
   type User,
 } from "./api";
-import { Button, ErrorBox, Modal } from "./ui";
+import { Button, CopyButton, ErrorBox, Modal } from "./ui";
 import {
   TokenCreateResultSchema,
   TokenRecordSchema,
@@ -55,7 +55,8 @@ export type EnrollmentTokenFlowHandle = {
     options?: { inline?: boolean },
   ): Promise<Token | null>;
   openRevoke(token: Token): void;
-  copySecret(): Promise<void>;
+  /** The token for a copy action; throws once this page may not show it. */
+  secret(): string;
   /** The token did its job: drop the in-page copy and its reminder. */
   finish(): void;
   /** Drop the in-page copy; the saved request stays to be checked. */
@@ -508,7 +509,7 @@ export default forwardRef<
       setRevoking(unconfirmedRevoke || token);
       setRevokeState(unconfirmedRevoke ? "unknown" : "review");
     },
-    copySecret,
+    secret,
     finish: acknowledge,
     discard() {
       if (!allowed()) return;
@@ -613,19 +614,9 @@ export default forwardRef<
       setError((failure as Error).message);
     }
   }
-  async function copySecret() {
-    if (!allowed() || !ready) return;
-    const epoch = getSessionEpoch();
-    try {
-      await navigator.clipboard.writeText(ready.token);
-      if (allowed() && epoch === getSessionEpoch())
-        callbacks.current.notify("Token copied.", { tone: "success" });
-    } catch {
-      if (allowed() && epoch === getSessionEpoch())
-        setError(
-          "Select and copy the token manually; clipboard access is unavailable.",
-        );
-    }
+  function secret() {
+    if (!allowed() || !ready) throw Error("The token is no longer shown here.");
+    return ready.token;
   }
   async function revoke(checkOnly = false) {
     if (!revoking) return;
@@ -966,13 +957,11 @@ export default forwardRef<
           {error && <ErrorBox message={error} />}
           <div className="control-command">
             <code>{visible ? ready?.token : ""}</code>
-            <Button
-              variant="secondary compact"
-              icon={Copy}
-              onClick={() => void copySecret()}
-            >
-              Copy token
-            </Button>
+            <CopyButton
+              text={secret}
+              label="Copy token"
+              failedMessage="Copy isn't available here. Select the token to copy it."
+            />
           </div>
           <p className="control-muted">
             Closing this dialog keeps the token available in this page.

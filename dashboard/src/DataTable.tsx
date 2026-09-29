@@ -89,6 +89,8 @@ export type MobileCard = {
   status?: ReactNode;
   meta?: ReactNode[];
   leading?: ReactNode;
+  /** The row's own buttons, under its details. */
+  actions?: ReactNode;
 };
 const interactiveSelector =
   "a, button, input, select, textarea, label, summary, [role='button'], [role='menuitem'], [role='checkbox'], [data-row-ignore]";
@@ -495,6 +497,9 @@ export function DataTable<T>({
                           <span key={metaIndex}>{item}</span>
                         ))}
                       </div>
+                    )}
+                    {card.actions && (
+                      <div className="data-list-actions">{card.actions}</div>
                     )}
                   </div>
                   {card.status && (

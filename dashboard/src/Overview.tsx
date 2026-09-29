@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   ChartNoAxesCombined,
@@ -18,7 +18,7 @@ import {
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
-import { api, APIError, type Audit, type Device, type User } from "./api";
+import type { Audit, Device, User } from "./api";
 import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
@@ -66,7 +66,12 @@ import {
 } from "./activityModel";
 import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
-import { StoppedRolloutItem, useStoppedRollouts } from "./StoppedRollouts";
+import {
+  StoppedRolloutItem,
+  StoppedRolloutsCheckFailed,
+  useStoppedRollouts,
+  type StoppedRollouts,
+} from "./StoppedRollouts";
 import {
   dismissStoppedRollout,
   readDismissed,
@@ -215,42 +220,28 @@ function parseSummary(value: unknown): TelemetrySummary | null {
 }
 // Probe once per session: servers without the endpoint answer 404.
 let summaryUnavailable = false;
+/**
+ * The fleet summary, polled like every other read: a slow response finishes
+ * instead of being replaced by the next tick. A failed refresh keeps the last
+ * summary (its newest-sample time says how old it is).
+ */
 function useTelemetrySummary(enabled: boolean, interval: number) {
-  const [summary, setSummary] = useState<TelemetrySummary | null>(null);
-  useEffect(() => {
-    if (!enabled || summaryUnavailable) return;
-    let stopped = false;
-    let controller: AbortController | null = null;
-    const load = async () => {
-      if (stopped || document.visibilityState === "hidden") return;
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        const value = await api<unknown>("/telemetry/summary?range=1h", {
-          signal: controller.signal,
-        });
-        if (!stopped) setSummary(parseSummary(value));
-      } catch (error) {
-        if (
-          error instanceof APIError &&
-          (error.status === 404 || error.status === 405)
-        ) {
-          summaryUnavailable = true;
-          clearInterval(timer);
-          if (!stopped) setSummary(null);
-        }
-        // Other failures keep the last summary; device samples still show.
-      }
-    };
-    void load();
-    const timer = setInterval(load, interval);
-    return () => {
-      stopped = true;
-      controller?.abort();
-      clearInterval(timer);
-    };
-  }, [enabled, interval]);
-  return summaryUnavailable ? null : summary;
+  const [missing, setMissing] = useState(summaryUnavailable);
+  const { data, errorStatus } = useResource<unknown>(
+    enabled && !missing ? "/telemetry/summary?range=1h" : null,
+    null,
+    0,
+    { interval },
+  );
+  const absent = errorStatus === 404 || errorStatus === 405;
+  if (absent && !missing) {
+    summaryUnavailable = true;
+    setMissing(true);
+  }
+  return useMemo(
+    () => (missing || absent ? null : parseSummary(data)),
+    [data, missing, absent],
+  );
 }
 
 /* ---------- Page ---------- */
@@ -262,16 +253,19 @@ export function Overview({
   navigate: Navigate;
   user: User;
 }) {
-  const [interval, setPollInterval] = useState(15000);
+  // Follow an active rollout closely; otherwise refresh at the normal pace.
+  // The pace comes from the last overview read, so it is known before this
+  // render's read is scheduled.
+  const [rollingOut, setRollingOut] = useState(false);
+  const interval = rollingOut ? 5000 : 15000;
   const overview = useResource<OverviewData | null>("/overview", null, 0, {
     interval,
   });
   const data = overview.data;
-  const rollingOut = !!data?.rollouts?.some(
+  const active = !!data?.rollouts?.some(
     (rollout) => rollout.status === "active",
   );
-  // Follow an active rollout closely; otherwise refresh at the normal pace.
-  useEffect(() => setPollInterval(rollingOut ? 5000 : 15000), [rollingOut]);
+  if (active !== rollingOut) setRollingOut(active);
   const devices = data?.devices ?? [];
   const live = devices.filter((device) => device.status !== "revoked");
   const noDevices = !!data && live.length === 0;
@@ -348,7 +342,7 @@ export function Overview({
               releasesLoading={noDevices && releases.loading}
             />
           )}
-          <KpiTiles data={data} live={live} stopped={stopped.length} />
+          <KpiTiles data={data} live={live} stopped={stopped.items.length} />
           <div className="overview-grid">
             <div className="overview-column">
               <FleetHealth live={live} />
@@ -963,7 +957,7 @@ function NeedsYou({
   live: Device[];
   user: User;
   now: number;
-  stopped: StoppedRollout[];
+  stopped: StoppedRollouts;
 }) {
   const groups = data.attention || [];
   // Dismissed stopped rollouts, for whoever is signed in.
@@ -973,15 +967,15 @@ function NeedsYou({
   }));
   const dismissed =
     remembered.user === user.id ? remembered.keys : readDismissed(user.id);
-  const rows = needsYouRows(groups, stopped, dismissed);
+  const rows = needsYouRows(groups, stopped.items, dismissed);
   const affected = groups
     .filter((group) => group.severity !== "neutral")
     .reduce((sum, group) => sum + group.count, 0);
-  const stoppedCount = stopped.filter(
+  const stoppedCount = stopped.items.filter(
     (rollout) => !dismissed.has(rollout.key),
   ).length;
   // A stopped rollout is listed below, so never say "Nothing is failing"
-  // above it.
+  // above it, nor after the check for them failed.
   const summary = [
     affected
       ? `${countLabel(affected, "device")} ${affected === 1 ? "needs" : "need"} attention`
@@ -996,7 +990,7 @@ function NeedsYou({
       title="Needs you"
       subtitle={
         summary ||
-        (groups.length
+        (groups.length && !stopped.error
           ? quietSummary(deliveryUnmeasured(live, now))
           : undefined)
       }
@@ -1007,8 +1001,9 @@ function NeedsYou({
         ) : undefined
       }
     >
-      {rows.length ? (
+      {rows.length || stopped.error ? (
         <ul className="overview-attention-list">
+          <StoppedRolloutsCheckFailed stopped={stopped} />
           {rows.map((row) =>
             row.kind === "rollout" ? (
               <StoppedRolloutItem
@@ -1037,6 +1032,19 @@ function NeedsYou({
             ),
           )}
         </ul>
+      ) : stopped.loading ? (
+        // Not an all-clear until the stopped-rollout check has answered.
+        <div
+          className="overview-all-clear"
+          role="status"
+          aria-label="Checking for stopped rollouts"
+        >
+          <Skeleton width={36} height={36} radius={999} />
+          <div className="overview-all-clear-pending">
+            <Skeleton width={180} height={14} />
+            <Skeleton width={260} height={12} />
+          </div>
+        </div>
       ) : (
         <div className="overview-all-clear">
           <span className="overview-all-clear-icon" aria-hidden="true">

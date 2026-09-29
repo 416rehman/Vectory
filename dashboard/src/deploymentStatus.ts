@@ -1,4 +1,5 @@
 import type { DeploymentSummary, DeploymentTarget } from "./api";
+import { countLabel } from "./countLabel";
 import {
   applyStates,
   applyStepLabels,
@@ -164,10 +165,11 @@ function display(state: string) {
 }
 
 /**
- * "2 of 3 verified": how many of the devices a rollout currently follows
- * verified it. One wording for the list, the group view and cards.
+ * "2 of 3 applied": how many of the devices a rollout currently follows
+ * applied it (the agent verified Vector runs it). One wording for the list,
+ * the group view, cards and the rollout page.
  */
-export function verifiedText(
+export function appliedText(
   d: Pick<
     DeploymentSummary,
     "target_count" | "verified_count" | "state_counts" | "rolled_back_by"
@@ -176,7 +178,7 @@ export function verifiedText(
   const current = d.target_count - (d.state_counts.removed || 0);
   if (!current && d.target_count) return "No devices follow this now";
   if (!current) return "No devices";
-  return `${d.verified_count} of ${current} verified${d.rolled_back_by ? ", then rolled back" : ""}`;
+  return `${d.verified_count} of ${current} applied${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 
 /** Whether a rollout can still release devices (and is worth polling fast). */
@@ -292,9 +294,6 @@ export function withDegraded(
   };
 }
 
-function plural(count: number, one: string, many = `${one}s`) {
-  return `${count} ${count === 1 ? one : many}`;
-}
 /** A rough duration from seconds: "about 12 min". Not time.ts duration (ms). */
 export function approxDuration(seconds: number) {
   if (seconds < 90) return "about 1 min";
@@ -357,12 +356,12 @@ export function releasePlan(options: {
   const batchText = !batches.length
     ? ""
     : sizes.size === 1
-      ? ` → ${plural(batches.length, "batch", "batches")} of ${batches[0]}`
-      : ` → ${plural(batches.length, "batch", "batches")} of up to ${Math.max(...batches)}`;
+      ? ` → ${countLabel(batches.length, "batch", "batches")} of ${batches[0]}`
+      : ` → ${countLabel(batches.length, "batch", "batches")} of up to ${Math.max(...batches)}`;
   return {
     waves,
     seconds,
-    sentence: `${plural(canary, "canary device")}${batchText} · ${approxDuration(seconds)} ${cadence}`,
+    sentence: `${countLabel(canary, "canary device")}${batchText} · ${approxDuration(seconds)} ${cadence}`,
   };
 }
 

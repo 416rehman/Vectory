@@ -730,9 +730,7 @@ async function preview({ both = true, scheduled = false } = {}) {
       .check();
   if (scheduled) {
     await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
-    await page
-      .getByLabel("Start at", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })
@@ -797,7 +795,8 @@ async function reloadApp() {
 async function leaveDetails() {
   await expect(details()).toBeVisible();
   await details()
-    .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
   await expect(page).toHaveURL(/#\/deployments\?page=1$/);
@@ -1406,9 +1405,9 @@ try {
       }
       await load({ storageBlocked: true });
       await chooseRollBack();
-      await expect(page.getByRole("dialog", { name: "Review saved deployment reminder" })).toContainText(
-        "Browser storage is unavailable",
-      );
+      await expect(
+        page.getByRole("dialog", { name: "Review saved deployment reminder" }),
+      ).toContainText("Browser storage is unavailable");
       expect(state.rollbacks).toHaveLength(0);
     },
   );

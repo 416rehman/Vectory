@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   BookOpen,
@@ -17,6 +17,7 @@ import { helpHref } from "./DocLink";
 import SignOutDialog from "./SignOutDialog";
 import { Kbd } from "./ui";
 import { roles } from "./roles";
+import { useSingleKeyShortcuts } from "./shortcutPreference";
 import "./account-menu.css";
 
 type Appearance = "light" | "dark" | "auto";
@@ -57,6 +58,8 @@ export default function AccountMenu({
   currentPage,
 }: AccountMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const shortcutsId = useId();
+  const [singleKeys, setSingleKeys] = useSingleKeyShortcuts();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [signOutReview, setSignOutReview] = useState(false);
   const initials = (user.name.trim() || user.email)
@@ -177,6 +180,23 @@ export default function AccountMenu({
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
+            <DropdownMenu.CheckboxItem
+              className="account-menu-toggle"
+              checked={singleKeys}
+              onCheckedChange={(checked) => setSingleKeys(checked === true)}
+              onSelect={(event) => event.preventDefault()}
+              aria-labelledby={`${shortcutsId}-label`}
+              aria-describedby={`${shortcutsId}-hint`}
+            >
+              <span className="account-menu-toggle-copy">
+                <span id={`${shortcutsId}-label`}>Single-key shortcuts</span>
+                <small id={`${shortcutsId}-hint`}>
+                  R, /, ?, [ and G then a letter. Turn off if you use speech
+                  input.
+                </small>
+              </span>
+              <span className="account-menu-switch" aria-hidden="true" />
+            </DropdownMenu.CheckboxItem>
             <DropdownMenu.Separator className="account-menu-separator" />
             <DropdownMenu.Item
               className="account-menu-item"
@@ -211,7 +231,7 @@ export default function AccountMenu({
               >
                 <Keyboard size={16} aria-hidden="true" />
                 <span>Keyboard shortcuts</span>
-                <Kbd keys="?" />
+                {singleKeys && <Kbd keys="?" />}
               </DropdownMenu.Item>
             )}
             <DropdownMenu.Item asChild className="account-menu-item">

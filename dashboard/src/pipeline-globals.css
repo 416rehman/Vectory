@@ -86,22 +86,3 @@
     padding: 20px;
   }
 }
-.global-specific
-  > .pipeline-schema-fields
-  > .pipeline-schema-field
-  > .pipeline-schema-object {
-  border-left: 0;
-  padding-left: 0;
-}
-.global-specific
-  > .pipeline-schema-fields
-  > .pipeline-schema-field
-  > .pipeline-schema-object
-  > h4,
-.global-specific
-  > .pipeline-schema-fields
-  > .pipeline-schema-field
-  > .pipeline-schema-object
-  > p {
-  display: none;
-}

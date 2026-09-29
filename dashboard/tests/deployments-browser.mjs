@@ -7,8 +7,14 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const repository = resolve(dashboard, "..");
 const output = resolve(
   repository,
@@ -17,12 +23,10 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:deployments-fixture";
-const port = Number(process.env.VECTORY_DEPLOYMENTS_COMPONENT_PORT) || 5197;
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   cacheDir: resolve(output, "vite-cache"),
-  // A worker running beside others binds its own port.
   server: { host: "127.0.0.1", port, strictPort: true, proxy: {} },
   plugins: [
     {
@@ -329,15 +333,33 @@ await context.route("**/api/v1/**", async (route) => {
           ready: true,
           review_token: "e".repeat(64),
           blockers: [],
-          devices: [{
-            device_id: "00000000-0000-4000-8000-000000000200",
-            device_name: "Synthetic affected device",
-            effect: "unmanaged",
-            before: { assignment_id: id, assignment_name: item.name, version_id: item.version_id, configuration_name: "Synthetic logs", version_number: 3, generation: 1, policy: null },
-            after: { assignment_id: null, assignment_name: null, version_id: null, configuration_name: null, version_number: null, generation: 2, policy: null },
-            pending_assignment_id: null,
-            pending_assignment_name: null,
-          }],
+          devices: [
+            {
+              device_id: "00000000-0000-4000-8000-000000000200",
+              device_name: "Synthetic affected device",
+              effect: "unmanaged",
+              before: {
+                assignment_id: id,
+                assignment_name: item.name,
+                version_id: item.version_id,
+                configuration_name: "Synthetic logs",
+                version_number: 3,
+                generation: 1,
+                policy: null,
+              },
+              after: {
+                assignment_id: null,
+                assignment_name: null,
+                version_id: null,
+                configuration_name: null,
+                version_number: null,
+                generation: 2,
+                policy: null,
+              },
+              pending_assignment_id: null,
+              pending_assignment_name: null,
+            },
+          ],
         });
       if (action === "refresh-preview")
         return reply({
@@ -365,15 +387,26 @@ await context.route("**/api/v1/**", async (route) => {
         return reply({
           ...item,
           status: "scheduled",
-          selector: { device_ids: body.expected_device_ids, group_ids: [], exclude_ids: [] },
-          targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0, error: null })),
+          selector: {
+            device_ids: body.expected_device_ids,
+            group_ids: [],
+            exclude_ids: [],
+          },
+          targets: body.expected_device_ids.map((device_id) => ({
+            device_id,
+            state: "pending",
+            generation: 0,
+            error: null,
+          })),
         });
       }
       if (action === "pause") item.status = "paused";
       if (action === "resume") item.status = "active";
       if (action === "cancel") item.status = "cancelled";
       if (action === "unassign") {
-        expect(route.request().postDataJSON()).toEqual({ review_token: "e".repeat(64) });
+        expect(route.request().postDataJSON()).toEqual({
+          review_token: "e".repeat(64),
+        });
         item.status = "unassigned";
       }
       return reply({ ...item, targets: targets(id) });
@@ -412,7 +445,8 @@ async function open(index) {
 }
 async function closeDetails() {
   await details()
-    .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
 }
@@ -442,9 +476,7 @@ try {
       await page
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
-      await page
-        .getByRole("radio", { name: "Failed", exact: true })
-        .click();
+      await page.getByRole("radio", { name: "Failed", exact: true }).click();
       // One page of results needs no pager.
       await expect(page.locator(".pagination")).toHaveCount(0);
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(9);
@@ -515,9 +547,7 @@ try {
       await page
         .getByRole("button", { name: "Filter Status", exact: true })
         .click();
-      await page
-        .getByRole("radio", { name: "Failed", exact: true })
-        .click();
+      await page.getByRole("radio", { name: "Failed", exact: true }).click();
       await expect.poll(() => requests.at(-1).query.status).toBe("failed");
       await expect(
         page.getByRole("button", {
@@ -659,7 +689,9 @@ try {
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(3);
       const saved = records;
       records = records.slice(0, 48);
-      await page.getByRole("button", { name: "Refresh now", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
       await expect(page.locator(".pagination")).toContainText("4 / 4");
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(12);
       records = saved;
@@ -899,7 +931,10 @@ try {
         details().getByRole("button", { name: "Pause", exact: true }),
       ).toHaveCount(0);
       await expect(
-        details().getByRole("button", { name: "Remove assignment", exact: true }),
+        details().getByRole("button", {
+          name: "Remove assignment",
+          exact: true,
+        }),
       ).toHaveCount(0);
       for (const theme of ["light", "dark"]) {
         await page.evaluate((theme) => {

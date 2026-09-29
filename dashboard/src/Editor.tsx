@@ -95,8 +95,17 @@ import {
   type Component,
   type Kind,
 } from "./catalog";
-import { Button, IconButton, ErrorBox, Field, Modal, Spinner } from "./ui";
-import TargetDialog from "./TargetDialog";
+import {
+  Button,
+  CopyButton,
+  CopyFallbackDialog,
+  IconButton,
+  ErrorBox,
+  Field,
+  Modal,
+  Spinner,
+} from "./ui";
+import TargetDialog from "./LazyTargetDialog";
 
 import PipelineSettings from "./PipelineSettings";
 import { secretNamesOf } from "./secretFields";
@@ -243,6 +252,7 @@ import ConnectionStylePicker, {
 } from "./ConnectionStylePicker";
 import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
+import { refusal, type Notify } from "./toast";
 
 const edgeTypes = { pipeline: PipelineEdge };
 // React Flow (MIT) permits hiding its attribution badge; the brief asks for it.
@@ -437,7 +447,7 @@ export default function Editor({
   initialDeviceId?: string;
   destination?: PipelineDestination;
   user: User;
-  notify: (m: string) => void;
+  notify: Notify;
   navigate: (p: string) => void;
 }) {
   const [connectionStyle, setConnectionStyle] = useConnectionStyle();
@@ -467,6 +477,10 @@ export default function Editor({
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
     [live, setLive] = useState(readLiveSetting),
     [findOpen, setFindOpen] = useState(false),
+    [copyFallback, setCopyFallback] = useState<{
+      text: string;
+      what: string;
+    } | null>(null),
     [trace, setTrace] = useState<{
       id: string;
       counts: Record<string, number>;
@@ -1062,9 +1076,15 @@ export default function Editor({
         return;
       }
       try {
-        const data = await api<PipelineTelemetry>(
-          `/configurations/${id}/telemetry`,
-          { signal: controller.signal },
+        // A hung read times out and reports, instead of stopping live rates.
+        const data = await withRequestDeadline(
+          (signal) =>
+            api<PipelineTelemetry>(
+              `/configurations/${encodeURIComponent(id)}/telemetry`,
+              { signal },
+            ),
+          30000,
+          controller.signal,
         );
         if (alive) setTelemetry({ data, error: "" });
       } catch (failure) {
@@ -1124,6 +1144,7 @@ export default function Editor({
       if (blockedDestination.current !== destinationKey)
         notify(
           "Close the current dialog to continue to the linked pipeline view.",
+          refusal,
         );
       blockedDestination.current = destinationKey;
       return;
@@ -1306,6 +1327,7 @@ export default function Editor({
       if (dirty && !unresolved && !unapplied && keepEditsForLater()) {
         notify(
           "Unsaved changes are kept in this browser. Open this pipeline again to restore them.",
+          { tone: "info" },
         );
         return;
       }
@@ -1397,7 +1419,7 @@ export default function Editor({
             latest.current.dirty = false;
           }
           setSaveStatus(stillSame ? "All changes saved" : "Unsaved changes");
-          if (explicit) notify("Draft revision saved.");
+          if (explicit) notify("Draft revision saved.", { tone: "success" });
           return updated;
         } catch (e) {
           const rejected = e instanceof APIError && e.serverRejection;
@@ -1696,7 +1718,7 @@ export default function Editor({
       pickerPlacement.current = null;
       setSelected(result.id);
       focusFirstControl();
-      notify(item.label + " added.");
+      notify(item.label + " added.", { tone: "success" });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1750,7 +1772,7 @@ export default function Editor({
       const next = connectConnection(config, connection);
       replace(next, toGraph(next, { nodes, edges }));
     } catch (e) {
-      notify((e as Error).message);
+      notify((e as Error).message, refusal);
     }
   }
 
@@ -1762,10 +1784,12 @@ export default function Editor({
       if (gesture) gesture.applied = true;
       if (!sameConfiguration(config, next)) {
         replace(next, toGraph(next, { nodes, edges }));
-        notify("Connection moved. Undo restores its previous endpoints.");
+        notify("Connection moved. Undo restores its previous endpoints.", {
+          tone: "success",
+        });
       }
     } catch (failure) {
-      notify((failure as Error).message);
+      notify((failure as Error).message, refusal);
     }
   };
 
@@ -2090,11 +2114,19 @@ export default function Editor({
     const ids = selectionIds();
     if (!ids.length) return false;
     const text = stepsText(copySteps(config, ids));
-    if (clipboard) clipboard.setData("text/plain", text);
-    else void navigator.clipboard?.writeText(text).catch(() => {});
-    notify(
-      `Copied ${ids.length === 1 ? `${ids[0]}` : `${ids.length} steps`} as Vector YAML.`,
-    );
+    const what = ids.length === 1 ? ids[0] : `${ids.length} steps`;
+    const copied = () =>
+      notify(`Copied ${what} as Vector YAML.`, { tone: "success" });
+    // The copy event carries its own clipboard; the toolbar has to ask, and
+    // says "Copied" only once the browser agreed.
+    if (clipboard) {
+      clipboard.setData("text/plain", text);
+      copied();
+    } else if (!navigator.clipboard) setCopyFallback({ text, what });
+    else
+      navigator.clipboard
+        .writeText(text)
+        .then(copied, () => setCopyFallback({ text, what }));
     return true;
   }
   /** Add steps from Vector configuration text, placed in free space. */
@@ -2140,9 +2172,10 @@ export default function Editor({
         pasted.ids.size === 1
           ? `Pasted ${[...pasted.ids.values()][0]}.`
           : `Pasted ${pasted.ids.size} steps.`,
+        { tone: "success" },
       );
     } catch (failure) {
-      notify((failure as Error).message);
+      notify((failure as Error).message, refusal);
     }
   }
   function duplicateSelection() {
@@ -2226,9 +2259,10 @@ export default function Editor({
       );
       notify(
         `${removed.length === 1 ? "Connection" : "Connections"} disconnected. Undo restores ${removed.length === 1 ? "it" : "them"}.`,
+        { tone: "success" },
       );
     } catch (failure) {
-      notify((failure as Error).message);
+      notify((failure as Error).message, refusal);
     }
   }
   function stringify(value: Config, f = format) {
@@ -2269,19 +2303,11 @@ export default function Editor({
       setCode(formatted);
       importedCodeDirty.current = formatted !== stringify(config);
       setError("");
-      notify(`${format.toUpperCase()} formatted.`);
+      notify(`${format.toUpperCase()} formatted.`, { tone: "success" });
     } catch (failure) {
-      notify(`Cannot format: ${(failure as Error).message}`);
-    }
-  }
-  async function copyCode() {
-    try {
-      await navigator.clipboard.writeText(code);
-      notify("Code copied.");
-    } catch {
-      notify(
-        "Clipboard access is unavailable. Select the code and copy it with Ctrl/Cmd+C.",
-      );
+      notify(`Cannot format: ${(failure as Error).message}`, {
+        tone: "error",
+      });
     }
   }
   function changeView(next: string) {
@@ -2302,12 +2328,14 @@ export default function Editor({
         editable
           ? "Close the current dialog before importing a pipeline."
           : "This pipeline is read-only.",
+        refusal,
       );
       return;
     }
     if (hasUnappliedImportFields()) {
       notify(
         "Apply or discard pending code and field changes before importing a pipeline.",
+        refusal,
       );
       return;
     }
@@ -2335,11 +2363,12 @@ export default function Editor({
       ) {
         notify(
           "The draft changed while the file was being read. Drop the file again to review it.",
+          refusal,
         );
         return;
       }
       if (sameConfiguration(current.config, parsed)) {
-        notify("This file already matches the pipeline.");
+        notify("This file already matches the pipeline.", { tone: "info" });
         return;
       }
       const candidate = {
@@ -2353,7 +2382,9 @@ export default function Editor({
       else setImportCandidate(candidate);
     } catch (failure) {
       if (generation === importGeneration.current)
-        notify(`Import failed: ${sourceErrorMessage(text, failure)}`);
+        notify(`Import failed: ${sourceErrorMessage(text, failure)}`, {
+          tone: "error",
+        });
     }
   }
   function applyImportedPipeline(candidate: ConfigurationImport) {
@@ -2366,6 +2397,7 @@ export default function Editor({
       setImportCandidate(null);
       notify(
         "The draft changed. Drop the file again to review the updated differences.",
+        refusal,
       );
       return;
     }
@@ -2377,7 +2409,9 @@ export default function Editor({
     setFormat(candidate.format);
     setCode(stringifyConfiguration(candidate.config, candidate.format));
     importedCodeDirty.current = false;
-    notify(`Imported ${candidate.name}. You can undo this change.`);
+    notify(`Imported ${candidate.name}. You can undo this change.`, {
+      tone: "success",
+    });
     requestAnimationFrame(
       () => void flow.current?.fitView({ padding: 0.2, duration: 240 }),
     );
@@ -2814,7 +2848,9 @@ export default function Editor({
       recovery.variables,
     );
     setRecovery(null);
-    notify("Unsaved changes restored. Save to keep them.");
+    notify("Unsaved changes restored. Save to keep them.", {
+      tone: "success",
+    });
   }
   function discardRecovery() {
     clearRecoveryDraft(user.id, id);
@@ -2830,7 +2866,9 @@ export default function Editor({
   function addMonitoring() {
     const next = withMonitoring(config);
     if (!next) {
-      notify("This pipeline already exports Vector's internal metrics.");
+      notify("This pipeline already exports Vector's internal metrics.", {
+        tone: "info",
+      });
       return;
     }
     replace(next);
@@ -2839,6 +2877,7 @@ export default function Editor({
     )?.[1] as Config | undefined;
     notify(
       `Added monitoring: Vector's internal metrics on ${added?.address} for Prometheus on the device.`,
+      { tone: "success" },
     );
   }
   function openHistory() {
@@ -2928,7 +2967,7 @@ export default function Editor({
       setCodeAnalysis(null);
       setError("");
       acceptSavedSnapshot(saved, initialGraph(saved.config, saved.graph));
-      notify("Unsaved changes discarded.");
+      notify("Unsaved changes discarded.", { tone: "success" });
     } finally {
       discardGate.current = false;
       setDiscardOpen(false);
@@ -3006,6 +3045,7 @@ export default function Editor({
       setSaveStatus("All changes saved");
       notify(
         `Restored as draft revision ${restored.revision}. Published versions and devices are unchanged.`,
+        { tone: "success" },
       );
       return true;
     } finally {
@@ -3313,6 +3353,7 @@ export default function Editor({
     if (fixed === null || fixed === text) {
       notify(
         "The program changed since this check. Check again to refresh fixes.",
+        refusal,
       );
       return;
     }
@@ -3323,7 +3364,7 @@ export default function Editor({
         [problem.component!]: withVrlValue(current, problem.field!, fixed),
       },
     });
-    notify(`Applied: ${problem.fix!.label}.`);
+    notify(`Applied: ${problem.fix!.label}.`, { tone: "success" });
   }
   function saveSampleTests(tests: Config[]) {
     if (!editable || !tests.length) return;
@@ -3335,6 +3376,7 @@ export default function Editor({
       tests.length === 1
         ? `Added pipeline test “${tests[0].name}”. Save to keep it.`
         : `Added ${tests.length} pipeline tests. Save to keep them.`,
+      { tone: "success" },
     );
   }
   function renameRoute(before: string, after: string) {
@@ -4123,7 +4165,7 @@ export default function Editor({
           setDraggingFile(false);
           if (event.dataTransfer.files.length !== 1) {
             importGeneration.current++;
-            notify("Drop one YAML, JSON, or TOML file at a time.");
+            notify("Drop one YAML, JSON, or TOML file at a time.", refusal);
             return;
           }
           void importFile(event.dataTransfer.files[0]);
@@ -5232,10 +5274,12 @@ export default function Editor({
                     Format code
                   </Button>
                 )}
-                <Button variant="ghost compact" onClick={() => void copyCode()}>
-                  <Copy size={15} aria-hidden="true" />
-                  Copy code
-                </Button>
+                <CopyButton
+                  text={() => code}
+                  label="Copy code"
+                  variant="ghost compact"
+                  failedMessage="Copy isn't available here. Select the code and copy it."
+                />
               </div>
             </div>
             <ConfigurationCodeEditor
@@ -5327,7 +5371,9 @@ export default function Editor({
                       replace(parse(code));
                       importedCodeDirty.current = false;
                       setError("");
-                      notify("Code changes applied to the draft.");
+                      notify("Code changes applied to the draft.", {
+                        tone: "success",
+                      });
                     } catch (e) {
                       setError((e as Error).message);
                     }
@@ -5717,7 +5763,7 @@ export default function Editor({
             const action = pipelineAction.action;
             setPipelineAction(null);
             if (action === "duplicate") {
-              notify("Pipeline duplicated.");
+              notify("Pipeline duplicated.", { tone: "success" });
               navigate(pipelineRoute(result.id, initialDeviceId));
             } else {
               acceptSavedSnapshot(result);
@@ -5725,6 +5771,7 @@ export default function Editor({
                 action === "archive"
                   ? "Pipeline archived. Running deployments are unchanged."
                   : "Pipeline unarchived.",
+                { tone: "success" },
               );
             }
           }}
@@ -5738,7 +5785,15 @@ export default function Editor({
           onClose={() => setDeployVersion(null)}
           version={deployVersion}
           initialDeviceIds={initialDeviceId ? [initialDeviceId] : []}
-          onDone={notify}
+          onDone={(message) => notify(message, { tone: "success" })}
+        />
+      )}
+      {copyFallback && (
+        <CopyFallbackDialog
+          text={copyFallback.text}
+          label={`Vector YAML for ${copyFallback.what}`}
+          subject="The YAML"
+          onClose={() => setCopyFallback(null)}
         />
       )}
       {detailsOpen && (

@@ -19,6 +19,16 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
 - A Help center bundled with the server, searchable offline, with every page available as Markdown and an `llms.txt` index.
 
+### Dashboard
+
+- **Faster first paint.** The sign-in page ships 25% less script, the pipeline list 54% less, and pages that are not open (the editor, the deploy dialog, notifications) load when you open them.
+- **Copy buttons tell the truth.** **Copy YAML**, install commands and tokens say **Copied** only when the browser accepted the copy; when it refuses, a dialog shows the text to select.
+- **Failures read as sentences.** A server that does not answer reads "Vectory didn't answer. It may be restarting, or the network is down." (and, for a change, says it isn't known whether it was saved), never a raw browser error such as "Failed to fetch". A check that failed is never shown as an all-clear.
+- **Filters live in the address.** Issues filters and a rollout's device filter survive a reload, Back and a shared link.
+- **Keyboard and screen readers.** Focus moves to the new page's heading on navigation and a polite announcer names the page. Single-key shortcuts can be turned off in the account menu.
+- **One vocabulary.** "Applied" and "Not delivering" everywhere a device state is named; every status badge says what it means in plain words.
+- Pipelines and Issues share one list pattern, with cards on a phone.
+
 ### Fixed during development
 
 Agents built before these fixes behave differently. Rebuild agents from this revision.

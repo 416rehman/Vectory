@@ -20,8 +20,10 @@ function share(count: number, total: number) {
 }
 /**
  * Stacked state bar. Segments sit on one baseline with a 2px surface gap; the
- * legend carries counts so identity never depends on color, and every segment
- * shows its label and count on hover or keyboard focus.
+ * legend carries counts so identity never depends on color. Segments are not
+ * focusable: a pointer sees a segment's label and count on hover, while
+ * keyboard and screen-reader users get every count from the legend and the
+ * bar's image label.
  */
 export function ProgressBar({
   counts,
@@ -187,7 +189,7 @@ export function StageLanes({
               <span>
                 {verified} of {lane.size}
               </span>{" "}
-              verified
+              applied
             </p>
             <ul
               className="rollout-dots"
@@ -234,7 +236,7 @@ export function StageLanes({
                 />
               ) : lane.verified_at ? (
                 <span>
-                  <CircleCheck size={13} aria-hidden="true" /> Verified{" "}
+                  <CircleCheck size={13} aria-hidden="true" /> Applied{" "}
                   {exactTime(lane.verified_at)}
                 </span>
               ) : lane.released_at ? (

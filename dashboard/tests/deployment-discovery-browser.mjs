@@ -636,9 +636,7 @@ async function preview({ both = true, scheduled = false } = {}) {
       .check();
   if (scheduled) {
     await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
-    await page
-      .getByLabel("Start at", { exact: true })
-      .fill("2030-01-01T12:30");
+    await page.getByLabel("Start at", { exact: true }).fill("2030-01-01T12:30");
   }
   await page
     .getByRole("button", { name: "Review deployment", exact: true })

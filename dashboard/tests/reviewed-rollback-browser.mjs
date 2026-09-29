@@ -154,8 +154,16 @@ const preview = (changes = {}) => ({
   previous_configuration_name: "Synthetic logs",
   priority: 101,
   eligible_devices: [
-    { device_id: id(1), device_name: "Synthetic live alpha", artifact_sha256: "a".repeat(64) },
-    { device_id: id(3), device_name: "Synthetic offline beta", artifact_sha256: "b".repeat(64) },
+    {
+      device_id: id(1),
+      device_name: "Synthetic live alpha",
+      artifact_sha256: "a".repeat(64),
+    },
+    {
+      device_id: id(3),
+      device_name: "Synthetic offline beta",
+      artifact_sha256: "b".repeat(64),
+    },
   ],
   excluded_devices: [
     {
@@ -614,7 +622,10 @@ try {
   await check(
     "A live canary rolls back in one reviewed step naming who returns and who keeps what; a blocked one offers Cancel rollout, then review rollback",
     async () => {
-      const edge = { configuration_name: "Edge syslog processing", version_number: 1 };
+      const edge = {
+        configuration_name: "Edge syslog processing",
+        version_number: 1,
+      };
       const canary = (changes = {}) =>
         deployment(100, {
           rollback_idempotency: true,
@@ -679,7 +690,10 @@ try {
           f.summary.id,
         );
         await page
-          .getByRole("link", { name: "Synthetic reviewed rollback", exact: true })
+          .getByRole("link", {
+            name: "Synthetic reviewed rollback",
+            exact: true,
+          })
           .click();
         await expect(review(page)).toBeVisible();
         expect(f.rollbacks).toEqual([]);
@@ -769,7 +783,10 @@ try {
             () => document.documentElement.scrollWidth <= innerWidth,
           ),
         ).toBe(true);
-        const file = resolve(output, "reviewed-rollback-cancel-first-390-dark.png");
+        const file = resolve(
+          output,
+          "reviewed-rollback-cancel-first-390-dark.png",
+        );
         await page.screenshot({ path: file });
         screenshots.push(file);
         expect(f.rollbacks).toEqual([]);
@@ -865,7 +882,8 @@ try {
         await recovery(page)
           .getByRole("button", { name: "Dismiss reminder", exact: true })
           .click();
-        await page.getByRole("dialog", { name: "Dismiss this reminder?" })
+        await page
+          .getByRole("dialog", { name: "Dismiss this reminder?" })
           .getByRole("button", { name: /checked history$/ })
           .click();
         expect(await operations(page)).toEqual([]);
@@ -936,7 +954,11 @@ try {
             ...f.preview,
             review_token: "c".repeat(64),
             eligible_devices: [
-              { device_id: id(4), device_name: "Changed scope", artifact_sha256: "a".repeat(64) },
+              {
+                device_id: id(4),
+                device_name: "Changed scope",
+                artifact_sha256: "a".repeat(64),
+              },
             ],
           };
           f.lookupMode = "normal";
@@ -977,7 +999,8 @@ try {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await dialog(page)
-          .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" })
+          .getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         f.role = "viewer";
         await page.reload();

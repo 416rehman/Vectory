@@ -1,4 +1,3 @@
-import { relativeTime } from "./time";
 import { z } from "zod";
 import type { DataPlaneSummary } from "./status";
 import {
@@ -171,6 +170,22 @@ export function setCSRF(value: string) {
     }
   }
 }
+/**
+ * A browser network failure ("Failed to fetch", "Load failed", "NetworkError
+ * when attempting to fetch resource.") in words people can act on. It is never
+ * a server rejection: a change sent before the connection failed may or may
+ * not have been saved. An abort keeps its own reason.
+ */
+function networkFailure(failure: unknown, method: string, signal: AbortSignal) {
+  if (!(failure instanceof TypeError) || signal.aborted) return failure;
+  return new APIError(
+    "NETWORK_UNAVAILABLE",
+    method === "GET"
+      ? "Vectory didn't answer. It may be restarting, or the network is down."
+      : "Vectory didn't answer, so it isn't known whether this change was saved. It may be restarting, or the network is down.",
+    0,
+  );
+}
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -205,17 +220,22 @@ export async function api<T = unknown>(
   options.signal?.addEventListener("abort", parentAborted, { once: true });
   if (!publicRoute) sessionInterruptions.add(interrupt);
   async function execute(): Promise<T> {
-    const response = await fetch(`/api/v1${path}`, {
-      credentials: "same-origin",
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
-        ...options.headers,
-      },
-    });
-    const text = await response.text();
+    let response: Response, text: string;
+    try {
+      response = await fetch(`/api/v1${path}`, {
+        credentials: "same-origin",
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(sentCSRF ? { "X-CSRF-Token": sentCSRF } : {}),
+          ...options.headers,
+        },
+      });
+      text = await response.text();
+    } catch (failure) {
+      throw networkFailure(failure, method, controller.signal);
+    }
     if (!publicRoute && (!sessionValid || sentEpoch !== sessionEpoch))
       throw sessionFailure();
     const events = EVENT_PAYLOAD_ROUTES.includes(route);
@@ -2114,16 +2134,20 @@ export function when(value?: string | null) {
         minute: "2-digit",
       });
 }
-/** @deprecated Use relativeTime from time.ts; kept for its remaining callers. */
-export function ago(value?: string | null) {
-  const text = relativeTime(value, Date.now(), "never connected");
-  return text[0].toUpperCase() + text.slice(1);
-}
+/**
+ * Save `content` as a file. The link is attached while it is clicked and the
+ * blob URL outlives the click: some browsers cancel a download whose URL is
+ * revoked, or whose link is detached, before the save starts. This starts a
+ * save; it cannot know whether the file was kept.
+ */
 export function download(name: string, content: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.hidden = true;
+  document.body.append(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
