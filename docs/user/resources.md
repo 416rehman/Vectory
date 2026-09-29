@@ -9,34 +9,49 @@ Give pipelines credentials, lookup data and tests, from [**Actions → Pipeline 
 | Event template | `{{ hostname }}` | Vector, from each event | Fields that document template support. |
 | Environment variable | `${API_TOKEN}` | Vector, from its service environment | Full-mode devices whose service environment you manage. |
 | Native secret | `SECRET[local_credentials.api_token]` | A Vector secret backend on the device | Credential fields on full-mode devices. |
-| Vectory local binding | `vectory-secret:API_TOKEN` | The agent, from a local file you approve | Auth fields of `http`, `loki` and `elasticsearch` sinks, in either mode. |
+| Device secret | `vectory-secret:API_TOKEN` | The agent, from a local file you bind | Every credential field, in restricted and full mode. |
 
 These aren't interchangeable. A path in the dashboard doesn't upload a file, and a variable in your shell isn't in a service's environment. The Vectory server never reads your devices' secret files.
 
 ## Keep credentials on the device
 
-A local binding puts a credential into a sink's auth field without it ever leaving the device. Use it in `auth.user`, `auth.password` or `auth.token` of an `http`, `loki` or `elasticsearch` sink:
+A device secret keeps a credential out of the pipeline. The pipeline stores only a name, such as `vectory-secret:DD_API_KEY`, and each device fills in the value from a private file of its own. The value never reaches the Vectory server, its database, the dashboard or the audit log.
+
+It works in every field Vector marks as a credential, in any component: API keys, passwords, tokens, AWS secret keys and TLS key passphrases, plus the user names of basic authentication.
+
+### Reference a secret in the pipeline
+
+In the component inspector, a credential field asks for a secret name, never the value. Type a name such as `DD_API_KEY`, or choose the one it suggests. The pipeline stores the reference:
 
 ```json
 {
-  "auth": {
-    "strategy": "bearer",
-    "token": "vectory-secret:API_TOKEN"
+  "sinks": {
+    "datadog": {
+      "type": "datadog_logs",
+      "inputs": ["app_logs"],
+      "default_api_key": "vectory-secret:DD_API_KEY"
+    }
   }
 }
 ```
 
+Vectory refuses plain text in a credential field. Saving or publishing it fails with the field's name and the fix: use a device secret, then bind it on each device with `vectory configure-secrets`. Versions you already published are never rewritten.
+
+The publish review lists every device secret a version reads, and marks names that are new since the published version.
+
+### Bind it on each device
+
 On each device that runs the pipeline:
 
 <!-- steps -->
-1. Put the credential in a private file that the agent's service account can read, for example `/etc/vectory/secrets/api-token.txt`.
-2. Create a bindings file that maps names to file paths (not values):
+1. Put the credential in a private file that the agent's service account can read, for example `/etc/vectory/secrets/DD_API_KEY`.
+2. Create a bindings file that maps each name the device needs to its file path (not the value):
 
    ```json
-   { "API_TOKEN": "/etc/vectory/secrets/api-token.txt" }
+   { "DD_API_KEY": "/etc/vectory/secrets/DD_API_KEY" }
    ```
 
-3. With the agent stopped, register it, then start the agent:
+3. With the agent stopped, register the bindings, then start the agent:
 
    ```sh
    sudo vectory service-stop
@@ -46,14 +61,39 @@ On each device that runs the pipeline:
 
 4. Deploy the pipeline and wait for **Applied**.
 
-On Windows, double each backslash in the bindings file: `"C:\\ProgramData\\Vectory\\secrets\\api-token.txt"`.
+On Windows, double each backslash in the bindings file, as in `"C:\\ProgramData\\Vectory\\secrets\\DD_API_KEY"`, and run the commands in an administrator PowerShell:
 
-The rules:
+```powershell
+vectory service-stop
+vectory configure-secrets --secret-files C:\ProgramData\Vectory\secret-bindings.json
+vectory service-start
+```
 
+A credential field's **How to bind it on a device** shows these steps with your names filled in.
+
+### Check which devices have it
+
+The device page's **Device secrets** card lists the names its version reads and, for each, **Bound** or **Not bound**. The agent reports names only, at each check-in: never values or file paths.
+
+A device with a name **Not bound** can't apply that version, and keeps running what it runs now. Bind the name and start the agent: its next check-in applies the version. An agent too old to report names shows **Not reported**, and its apply status says whether each secret resolved.
+
+### What restricted and full mode allow
+
+| Reference | Restricted mode | Full mode |
+| --- | --- | --- |
+| `vectory-secret:NAME` | Every credential field | Every credential field |
+| `SECRET[backend.key]` | Not available | Credential fields, from a secret backend you configure |
+| `${VAR}` or `$VAR` | Not available | Values from the Vector service's environment |
+
+On a restricted device, a device secret is the only way to keep a credential out of the pipeline.
+
+### The rules
+
+- The reference must be the whole value of a credential field. A reference anywhere else, such as a URL, an endpoint, a header, a path, a command or a VRL program, is refused on the server and again on the device. So a pipeline can't copy a secret into another setting or an event.
+- A credential goes only to the destination its step sends to. On a restricted device, that destination must be in the device's allowances.
 - The bindings file replaces all bindings. List every name you still need; `{}` removes them all. Up to 64 names.
 - Names start with a letter and use up to 64 letters, digits, `_`, `.` or `-`.
 - Each secret file must be a regular, private file (no links), owned by the agent's account or an administrator, valid UTF-8, and at most 16 KiB. One trailing newline is removed.
-- The reference must be the whole field value. `prefix-vectory-secret:API_TOKEN`, a reference inside a URL and a reference in VRL are refused.
 - In full mode, a value containing `${` or similar interpolation markers is refused, so it is inserted exactly as written.
 
 > [!WARNING]

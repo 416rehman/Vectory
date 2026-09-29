@@ -5,6 +5,7 @@ import {
   Percent,
   Send,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
 import {
@@ -14,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { Config } from "./api";
@@ -35,6 +37,12 @@ import { SchemaFieldHelp } from "./SchemaFieldChrome";
 import VrlField from "./VrlField";
 import ProblemText from "./ProblemText";
 import { VrlFieldContext, type VrlFieldServices } from "./vrlFieldContext";
+import {
+  SecretNamesContext,
+  SecretScopeContext,
+  type SecretScope,
+} from "./secretFieldContext";
+import { secretReferences } from "./secretFields";
 import {
   checkProblems,
   type Problem,
@@ -304,6 +312,44 @@ export type SettingsFocus = {
   nonce: number;
 };
 
+/** A step's own issue without its `id: ` or `id.field: ` prefix. */
+function withoutStep(issue: string, id: string) {
+  if (issue.startsWith(`${id}: `)) return issue.slice(id.length + 2);
+  const colon = issue.indexOf(": ");
+  return colon > id.length + 1 &&
+    issue.startsWith(`${id}.`) &&
+    !/\s/.test(issue.slice(id.length + 1, colon))
+    ? issue.slice(colon + 2)
+    : issue;
+}
+
+/**
+ * What every field of one step shares: VRL services, the step itself (for
+ * credential fields that can take a device secret) and the pipeline's secret
+ * names (for reuse).
+ */
+function StepContexts({
+  services,
+  scope,
+  secretNames,
+  children,
+}: {
+  services: VrlFieldServices;
+  scope: SecretScope;
+  secretNames: readonly string[];
+  children: ReactNode;
+}) {
+  return (
+    <VrlFieldContext.Provider value={services}>
+      <SecretScopeContext.Provider value={scope}>
+        <SecretNamesContext.Provider value={secretNames}>
+          {children}
+        </SecretNamesContext.Provider>
+      </SecretScopeContext.Provider>
+    </VrlFieldContext.Provider>
+  );
+}
+
 /** The heading over Vector's findings for one step: problems, or notes. */
 function summaryHeading(findings: readonly Problem[]) {
   const errors = findings.filter((item) => item.severity === "error").length;
@@ -338,6 +384,7 @@ export default function PipelineSettings({
   upstream,
   inputPatterns = [],
   onTrace,
+  secretNames,
 }: {
   id: string;
   kind: Kind;
@@ -365,6 +412,8 @@ export default function PipelineSettings({
   inputPatterns?: readonly PatternInput[];
   /** Samples per route output from the last sample run, for the canvas. */
   onTrace?: (counts: Record<string, number> | null) => void;
+  /** Device secret names the whole pipeline uses, offered for reuse. */
+  secretNames?: readonly string[];
 }) {
   const definition = catalog.find(
     (c) => c.kind === kind && c.type === component.type,
@@ -570,6 +619,25 @@ export default function PipelineSettings({
       existingTests,
     ],
   );
+  const secretScope = useMemo(
+    () => ({ kind, type: String(component.type ?? ""), id }),
+    [kind, component.type, id],
+  );
+  // The device secrets this step reads, named once above its fields.
+  const secrets = useMemo(
+    () => [
+      ...new Set(
+        secretReferences({ [kind]: { [id]: component } }).map(
+          (use) => use.name,
+        ),
+      ),
+    ],
+    [kind, id, component],
+  );
+  const knownSecrets = useMemo(
+    () => [...new Set([...(secretNames || []), ...secrets])].sort(),
+    [secretNames, secrets],
+  );
   // Vector's findings outside VRL programs. Findings for a shown option also
   // appear under that option.
   const summary = problems.filter(
@@ -577,7 +645,11 @@ export default function PipelineSettings({
       problem.origin === "vector" && !(problem.field && vrlPath(problem.field)),
   );
   return (
-    <VrlFieldContext.Provider value={services}>
+    <StepContexts
+      services={services}
+      scope={secretScope}
+      secretNames={knownSecrets}
+    >
       <FieldProblemsContext.Provider value={optionProblems}>
         <div className="pipeline-settings" ref={root}>
           {!!definition?.platforms?.length && (
@@ -627,12 +699,38 @@ export default function PipelineSettings({
               </SchemaFieldHelp>
             </div>
           )}
+          {secrets.length > 0 && (
+            <div className="pipeline-secret-note">
+              <ShieldCheck size={15} aria-hidden="true" />
+              <p>
+                <strong>Credentials stay on each device.</strong> This step
+                reads{" "}
+                {secrets.map((name, index) => (
+                  <span key={name}>
+                    {index > 0 &&
+                      (index === secrets.length - 1 ? " and " : ", ")}
+                    <code>{name}</code>
+                  </span>
+                ))}{" "}
+                from {secrets.length === 1 ? "a file" : "files"} bound on each
+                device.{" "}
+                <DocLink
+                  topic="resources"
+                  section="keep-credentials-on-the-device"
+                >
+                  Device secrets
+                </DocLink>
+              </p>
+            </div>
+          )}
           {issues.length > 0 && (
             <div className="pipeline-field-errors" role="status">
               <strong>Finish this step</strong>
               <ul>
                 {issues.map((issue) => (
-                  <li key={issue}>{issue.replace(`${id}: `, "")}</li>
+                  <li key={issue}>
+                    <ProblemText text={withoutStep(issue, id)} />
+                  </li>
                 ))}
               </ul>
             </div>
@@ -823,6 +921,6 @@ export default function PipelineSettings({
           </Modal>
         </div>
       </FieldProblemsContext.Provider>
-    </VrlFieldContext.Provider>
+    </StepContexts>
   );
 }

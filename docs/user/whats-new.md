@@ -8,6 +8,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - **Readable agent CLI.** `vectory setup`, `--help` for every command, a human-readable `status`, `doctor` checks that test the connection to your server, and `vectory logs`.
 - **Real reasons for failures.** Issues and device pages show Vector's own message, with secrets removed. Vector gets a data directory automatically when a pipeline doesn't set one.
 - **Shipping is the default.** Deploying a new version of a pipeline replaces the older one on those devices. Each deployment has a live rollout page.
+- **Device secrets in every credential field.** API keys, passwords and tokens stay on each device as `vectory-secret:NAME`, with the binding command one click away and each device's bound names on its page. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
 - **Faster pipeline building.** A template gallery, one-click **Add monitoring**, a VRL editor with autocomplete and sample tests, and a publish review that shows exactly what changed.
 - **A calmer, faster workspace.** A command palette (**Ctrl K** / **⌘ K**) and a first-run checklist on the Overview.
 - **Smoother accounts.** A guided first run, invite links, and a way back in when an administrator is locked out.
