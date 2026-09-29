@@ -235,6 +235,10 @@ type Settings struct {
 	// VectorVersion is what the adopted binary reported at adoption. The
 	// binary's SHA-256 is pinned, so it can't change without re-adoption.
 	VectorVersion string `json:"vector_version,omitempty"`
+	// NoWake: never hold a wait open between check-ins, for networks that cut
+	// idle connections (setup or install --no-wake). The agent then learns of
+	// changes at its next check-in, as older agents do.
+	NoWake bool `json:"no_wake,omitempty"`
 }
 
 // adoptedVectorVersion is the adopted binary's version, or the release this

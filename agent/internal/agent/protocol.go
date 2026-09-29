@@ -117,16 +117,8 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 		return nil, classifyTransport(target, proxy, wrote.Load(), e)
 	}
 	defer res.Body.Close()
-	c.RetryAfter = 0
+	c.RetryAfter = retryAfter(res)
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
-		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusServiceUnavailable {
-			value := res.Header.Get("Retry-After")
-			if seconds, err := strconv.Atoi(value); err == nil {
-				c.RetryAfter = time.Duration(min(max(seconds, 0), 3600)) * time.Second
-			} else if at, err := http.ParseTime(value); err == nil {
-				c.RetryAfter = min(max(time.Until(at), 0), time.Hour)
-			}
-		}
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		target, _ := url.Parse(c.Base)
 		return nil, classifyStatus(target, path, res.StatusCode, c.RetryAfter, body)
@@ -139,6 +131,22 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 		return nil, errors.New("response exceeds limit")
 	}
 	return b, nil
+}
+
+// retryAfter is the server's Retry-After on a 429 or 503 answer, in seconds
+// or as a date, at most an hour; zero for any other answer.
+func retryAfter(res *http.Response) time.Duration {
+	if res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+	value := res.Header.Get("Retry-After")
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(min(max(seconds, 0), 3600)) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return min(max(time.Until(at), 0), time.Hour)
+	}
+	return 0
 }
 func EnsureKey(dir string) ([]byte, string, error) {
 	return ensureKeyFile(filepath.Join(dir, "private-key.pem"))

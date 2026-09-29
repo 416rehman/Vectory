@@ -27,7 +27,7 @@ func init() {
 			examples: []string{"sudo vectory doctor", "sudo vectory doctor --json"},
 			define:   defineDoctor},
 		{name: "run", group: "Run the agent", summary: "Run in the foreground (Ctrl-C stops it and its Vector)",
-			usage:    "run [--state-dir PATH] [--json]",
+			usage:    "run [--state-dir PATH] [--no-wake] [--json]",
 			about:    "Keeps checking in and applying configuration until stopped. Exits 78 when the agent isn't installed or enrolled, so service managers don't restart it in a loop.",
 			examples: []string{"sudo vectory run", "sudo vectory run --state-dir /srv/vectory/agent"},
 			define:   defineRun("run")},
@@ -135,11 +135,18 @@ func defineDoctor(c *cli) func() int {
 	}
 }
 
+// noWakeHelp describes --no-wake on setup, run and install.
+const noWakeHelp = "Check in on schedule only: don't keep a connection open to hear about changes at once (for networks that cut idle connections)"
+
 func defineRun(name string) func(c *cli) func() int {
 	return func(c *cli) func() int {
 		c.StateDir()
 		c.JSON("Log one JSON object per line")
 		once := c.HiddenBool("once", "one reconciliation, then stop the owned Vector (tests only)")
+		noWake := new(bool)
+		if name == "run" {
+			noWake = c.Bool("no-wake", noWakeHelp)
+		}
 		return func() int {
 			dir := *c.state
 			if err := agent.CheckInstalled(dir); err != nil {
@@ -166,9 +173,12 @@ func defineRun(name string) func(c *cli) func() int {
 			ctx, stop := interruptible()
 			defer stop()
 			var err error
-			if name == "service" {
+			switch {
+			case name == "service":
 				err = service(ctx, dir, report)
-			} else {
+			case *noWake && !*once:
+				err = agent.RunWithoutWake(ctx, dir, report)
+			default:
 				err = agent.Run(ctx, dir, *once, report)
 			}
 			if err != nil {
@@ -238,6 +248,7 @@ func defineInstall(c *cli) func() int {
 	secretFiles := c.String("secret-files", "", "PATH", "JSON map of vectory-secret names to private files")
 	dataDir := c.String("vector-data-dir", "", "PATH", "Data directory for pipelines that don't set data_dir; empty restores the automatic choice")
 	graceful := c.Int("graceful-shutdown-seconds", 0, "SECONDS", "Seconds Vector may drain on stop or restart, 5-300 (default 60)")
+	noWake := c.Bool("no-wake", noWakeHelp+"; =false turns wake-ups back on")
 	c.JSON("Print one JSON document")
 	return func() int {
 		if err := metricsOptionUsage(c.fs, *clearMetrics, false); err != nil {
@@ -290,6 +301,8 @@ func defineInstall(c *cli) func() int {
 				opts.VectorDataDir = dataDir
 			case "graceful-shutdown-seconds":
 				opts.GracefulShutdownSeconds = graceful
+			case "no-wake":
+				opts.NoWake = noWake
 			}
 		})
 		if err == nil {

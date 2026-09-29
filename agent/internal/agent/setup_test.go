@@ -50,13 +50,31 @@ type setupServer struct {
 	features   []string
 	mu         sync.Mutex
 	beats      []map[string]any
+	beatTimes  []time.Time
 	enrollment map[string]any
+	// waits counts /agent/v1/wait requests; wait answers them (see
+	// wake_test.go), or they get 404 as from a server without the route.
+	waits atomic.Int32
+	wait  http.HandlerFunc
 }
 
 func (s *setupServer) sent() []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]map[string]any(nil), s.beats...)
+}
+
+// beatsAt are the arrival times of the heartbeats so far.
+func (s *setupServer) beatsAt() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.beatTimes...)
+}
+
+func (s *setupServer) setWait(handler http.HandlerFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wait = handler
 }
 
 func newSetupServer(t *testing.T) *setupServer {
@@ -86,6 +104,7 @@ func newSetupServer(t *testing.T) *setupServer {
 			_ = json.NewDecoder(r.Body).Decode(&raw)
 			s.mu.Lock()
 			s.beats = append(s.beats, raw)
+			s.beatTimes = append(s.beatTimes, time.Now())
 			s.mu.Unlock()
 			nonce, _ := raw["nonce"].(string)
 			now := time.Now().UTC().Truncate(time.Second)
@@ -106,6 +125,19 @@ func newSetupServer(t *testing.T) *setupServer {
 			csr, _ := x509.ParseCertificateRequest(block.Bytes)
 			expiry := time.Now().Add(time.Hour).Truncate(time.Second)
 			_ = json.NewEncoder(w).Encode(Credentials{DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", CertificatePEM: ca.issue(t, csr.PublicKey, "5e7a9c2d-0000-4000-8000-000000000001", false, expiry), CAPEM: ca.pem, SigningPublicKey: base64.StdEncoding.EncodeToString(pub), CertificateExpiresAt: expiry})
+		case "/agent/v1/wait":
+			s.waits.Add(1)
+			s.mu.Lock()
+			wait := s.wait
+			s.mu.Unlock()
+			switch {
+			case r.TLS == nil || len(r.TLS.PeerCertificates) == 0:
+				http.Error(w, `{"error":{"code":"UNAUTHENTICATED","message":"Authentication required"}}`, http.StatusUnauthorized)
+			case wait == nil:
+				http.NotFound(w, r)
+			default:
+				wait(w, r)
+			}
 		default:
 			http.NotFound(w, r)
 		}
