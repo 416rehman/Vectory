@@ -343,6 +343,7 @@ fn requires_full_mode(config: &Value) -> bool {
         "acknowledgements",
         "healthchecks",
         "timezone",
+        "tests",
     ];
     if config.as_object().is_some_and(|fields| {
         fields
@@ -402,22 +403,47 @@ fn requires_full_mode(config: &Value) -> bool {
                     || value.contains("{{")
                     || value.contains("%{")
                     || value.contains("SECRET[")
-                    || [
-                        "get_env_var",
-                        "get_secret",
-                        "set_secret",
-                        "remove_secret",
-                        "dns_lookup",
-                        "get_enrichment_table",
-                        "find_enrichment_table",
-                    ]
-                    .iter()
-                    .any(|function| value.to_ascii_lowercase().contains(function))
+                    || external_vrl(value)
             }
             _ => false,
         }
     }
-    native_feature(config)
+    // VRL functions that reach outside the event (the agent refuses them in
+    // restricted mode too).
+    fn external_vrl(value: &str) -> bool {
+        [
+            "get_env_var",
+            "get_secret",
+            "set_secret",
+            "remove_secret",
+            "dns_lookup",
+            "reverse_dns",
+            "http_request",
+            "get_enrichment_table",
+            "find_enrichment_table",
+        ]
+        .iter()
+        .any(|function| value.to_ascii_lowercase().contains(function))
+    }
+    fn test_vrl(value: &Value) -> bool {
+        match value {
+            Value::Object(fields) => fields.values().any(test_vrl),
+            Value::Array(items) => items.iter().any(test_vrl),
+            Value::String(value) => external_vrl(value),
+            _ => false,
+        }
+    }
+    // Unit tests run only in `vector test` during validation: their sample
+    // events are data, not resources, so only their VRL needs full mode.
+    config.as_object().is_some_and(|fields| {
+        fields.iter().any(|(key, value)| {
+            if key == "tests" {
+                test_vrl(value)
+            } else {
+                native_feature(value)
+            }
+        })
+    })
 }
 
 fn compatibility_problems(

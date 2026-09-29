@@ -315,7 +315,11 @@ async fn fixture() -> (
         ),
         (
             RESTRICTED_VERSION,
-            json!({"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}),
+            // Unit tests add no capability: restricted devices accept them,
+            // sample data included.
+            json!({"sources":{"in":{"type":"demo_logs"}},"transforms":{"t":{"type":"remap","inputs":["in"],"source":".x = 1"}},"sinks":{"out":{"type":"blackhole","inputs":["t"]}},
+                "tests":[{"name":"sets x","inputs":[{"insert_at":"t","type":"log","log_fields":{"message":"GET https://example.com/$HOME"}}],
+                    "outputs":[{"extract_from":"t","conditions":[{"type":"vrl","source":"assert_eq!(.x, 1)"}]}]}]}),
         ),
     ] {
         let artifact = format!("{}\n", serde_json::to_string_pretty(&config).unwrap());
