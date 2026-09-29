@@ -145,6 +145,7 @@ The CA key alone can't impersonate a device: every request also needs a certific
 ## Monitor the instance
 
 - **Disk:** watch free space and the database's growth.
+- **Database load:** with `RUST_LOG=vectory_server=info,vectory_server::sqlite=debug`, the server logs once a minute how busy its single database writer was (`busy_percent`) and how long writes waited. A share that stays high means check-ins are queuing for the writer. See [Server settings](server-config.md#server-settings).
 - **Backups:** track the age of your last good backup.
 - **Logs:** `docker compose logs --tail 100 server proxy validator`.
 - **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30). The audit log is kept separately and never pruned.
