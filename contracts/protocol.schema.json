@@ -4849,63 +4849,6 @@
             }
           ]
         },
-        "desired_version": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "number": {
-                  "anyOf": [
-                    {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 9007199254740991
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "configuration_id": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "configuration_name": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "maxLength": 240
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "id",
-                "number",
-                "configuration_id",
-                "configuration_name"
-              ],
-              "additionalProperties": true
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "created_at": {
           "type": "string",
           "format": "date-time"
@@ -4963,6 +4906,63 @@
           "minimum": 10,
           "maximum": 3600,
           "description": "Current check-in interval; until the agent acknowledges a policy change, the longer of the old and new interval."
+        },
+        "desired_version": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "number",
+                "configuration_id",
+                "configuration_name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "running_version": {
           "anyOf": [
