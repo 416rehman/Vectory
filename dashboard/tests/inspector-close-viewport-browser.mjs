@@ -137,6 +137,7 @@ async function load({
   await context.addInitScript((collapsed) => {
     localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
     localStorage.setItem("vectory-theme", "light");
+    localStorage.setItem("vectory.editor.auto-check", "off");
   }, collapsed);
   await context.route("**/*", async (route) => {
     const request = route.request(),

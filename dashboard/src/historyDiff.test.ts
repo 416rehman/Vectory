@@ -133,13 +133,28 @@ describe("Git-style configuration value line differences", () => {
     });
   });
 
-  it("keeps multiline strings quoted and losslessly distinguishes real and escaped newlines", () => {
+  it("compares programs line by line, keeping escaped and trailing newlines distinct", () => {
     const before = '.a = 1\n.b = "x"\n',
       after = '.a = 1\\n.b = "x"\n';
     const lines = changed(before, after);
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(reconstructed(lines, "before"))).toBe(before);
-    expect(JSON.parse(reconstructed(lines, "after"))).toBe(after);
+    expect(lines.map((line) => [line.kind, line.text])).toEqual([
+      ["removed", ".a = 1"],
+      ["removed", '.b = "x"'],
+      ["added", '.a = 1\\n.b = "x"'],
+      ["context", ""],
+    ]);
+    expect(reconstructed(lines, "before")).toBe(before);
+    expect(reconstructed(lines, "after")).toBe(after);
+    const edited = changed(".a = 1\n.b = 2", ".a = 1\n.b = 3\n.c = 4");
+    expect(edited.filter((line) => line.kind !== "context")).toEqual([
+      expect.objectContaining({ kind: "removed", text: ".b = 2" }),
+      expect.objectContaining({ kind: "added", text: ".b = 3" }),
+      expect.objectContaining({ kind: "added", text: ".c = 4" }),
+    ]);
+    expect(changed(".a = 1\n", ".a = 1").map((line) => line.kind)).toEqual([
+      "context",
+      "removed",
+    ]);
   });
 
   it("falls back to complete replacement for large values instead of truncating their data", () => {

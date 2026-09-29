@@ -171,6 +171,7 @@ async function start(f = state(), options = {}) {
     ({ theme, seed, failStorage }) => {
       localStorage.setItem("vectory-theme", theme);
       localStorage.setItem("vectory-sidebar-collapsed", "true");
+      localStorage.setItem("vectory.editor.auto-check", "off");
       for (const [key, value] of Object.entries(seed || {}))
         localStorage.setItem(key, value);
       window.fixture = {
@@ -264,6 +265,8 @@ async function start(f = state(), options = {}) {
       if (path === "/settings")
         return reply({ instance_name: "Synthetic publication fixture" });
       if (path === "/mfa") return reply({ enabled: false });
+      // The publish review shows where versions are assigned; no devices here.
+      if (path === "/devices") return reply([]);
       if (path === `/configurations/${f.document.id}`) return reply(f.document);
       if (path === `/configurations/${f.document.id}/history`) {
         const page = Number(url.searchParams.get("page") || 1),
@@ -382,6 +385,24 @@ async function start(f = state(), options = {}) {
         updated_at: created,
       });
       return reply(f.document);
+    }
+    // After a validation rejection the editor re-checks the draft to show
+    // Vector's findings; this synthetic draft itself is valid.
+    if (
+      method === "POST" &&
+      path === `/configurations/${f.document.id}/validate`
+    ) {
+      f.validations = (f.validations || 0) + 1;
+      return reply({
+        valid: true,
+        vector_validated: true,
+        static_checked: true,
+        deferred: false,
+        diagnostics: [],
+        errors: [],
+        warnings: [],
+        vector_version: "0.58.0",
+      });
     }
     if (
       method === "POST" &&
@@ -539,7 +560,9 @@ async function clean(f) {
       (r) =>
         r.method !== "GET" &&
         !r.path.endsWith("/publish") &&
-        !r.path.endsWith("/draft"),
+        !r.path.endsWith("/draft") &&
+        // Read-only re-check after a validation rejection.
+        !r.path.endsWith("/validate"),
     ),
   ).toEqual([]);
 }
@@ -747,22 +770,22 @@ try {
       const boot = await start(state({ holdBootHistory: true }));
       try {
         await expect.poll(() => boot.f.bootHolds.length).toBe(1);
-        await publish(boot.page);
-        await expect(reviewDialog(boot.page)).toHaveCount(0);
+        // Until the published version is known, publishing waits.
         await expect(
           boot.page.getByRole("button", {
-            name: "Choose devices",
+            name: "Checking version",
             exact: true,
           }),
-        ).toBeVisible();
+        ).toBeDisabled();
         for (const done of boot.f.bootHolds.splice(0)) done();
         await expect.poll(() => boot.f.bootResponses).toBe(1);
-        await boot.page.evaluate(
-          () =>
-            new Promise((done) =>
-              requestAnimationFrame(() => requestAnimationFrame(done)),
-            ),
-        );
+        await publish(boot.page);
+        await expect(reviewDialog(boot.page)).toHaveCount(0);
+        // The next step offers deployment; the toolbar now matches the version.
+        await boot.page
+          .getByRole("dialog", { name: /^Version \d+ published$/ })
+          .getByRole("button", { name: "Done", exact: true })
+          .click();
         await expect(
           boot.page.getByRole("button", {
             name: "Choose devices",
@@ -1038,41 +1061,35 @@ try {
     },
   );
   await run(
-    "Validation/stale rejection requires explicit review and dismissal before new intent; held publication cannot silently retry after a deadline",
+    "Validation/stale rejections are definitive once no version exists under the key: the review keeps the reason and a fresh intent follows; held publication cannot silently retry after a deadline",
     async () => {
       for (const publishMode of ["invalid", "stale"]) {
         const s = await start(state({ publishMode }));
         try {
           await publish(s.page);
-          await expect(reviewDialog(s.page).getByRole("alert")).toBeVisible();
-          await uncertain(s.page);
-          expect(Object.keys(await storage(s.page))).toHaveLength(1);
+          const alert = reviewDialog(s.page).getByRole("alert");
+          await expect(alert).toContainText(
+            publishMode === "invalid"
+              ? "Vector rejected this version. Nothing was published."
+              : "The draft changed while you reviewed it. Nothing was published.",
+          );
+          // The server confirmed that no version exists under the request key
+          // before the saved reminder was cleared.
+          await expect
+            .poll(() => s.f.lookups.at(-1)?.requestId)
+            .toBe(s.f.posts[0].body.request_id);
+          expect(s.f.lookups).toHaveLength(2);
+          expect(Object.keys(await storage(s.page))).toHaveLength(0);
+          await expect(
+            reviewDialog(s.page).getByText("Publish result needs confirmation"),
+          ).toHaveCount(0);
           expect(s.f.versions).toHaveLength(0);
           expect(s.f.posts).toHaveLength(1);
           const first = s.f.posts[0].body.request_id;
-          await closePublish(s.page);
-          await openRecovery(s.page);
-          await expect(
-            s.page.getByRole("button", {
-              name: "Retry same request",
-              exact: true,
-            }),
-          ).toBeEnabled();
-          await s.page
-            .getByRole("button", { name: "Dismiss reminder", exact: true })
-            .click();
-          await expect(s.page.getByRole("dialog")).toContainText(
-            "does not cancel publication or delete a version",
-          );
-          await s.page
-            .getByRole("button", { name: "Dismiss reminder", exact: true })
-            .click();
-          await expect(s.page.getByRole("dialog")).toHaveCount(0);
           s.f.publishMode = "normal";
-          await publish(
-            s.page,
-            "Synthetic explicitly reviewed replacement intent",
-          );
+          await reviewDialog(s.page)
+            .getByRole("button", { name: "Publish version", exact: true })
+            .click();
           await expect(reviewDialog(s.page)).toHaveCount(0);
           expect(s.f.posts[1].body.request_id).not.toBe(first);
           expect(s.f.posts[1].body.revision).toBe(1);

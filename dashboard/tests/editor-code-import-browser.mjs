@@ -124,6 +124,7 @@ async function load({
     ({ theme }) => {
       localStorage.setItem("vectory-sidebar-collapsed", "true");
       localStorage.setItem("vectory-theme", theme);
+      localStorage.setItem("vectory.editor.auto-check", "off");
       window.__copiedCode = [];
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
