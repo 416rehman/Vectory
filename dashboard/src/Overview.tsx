@@ -1393,7 +1393,7 @@ function MetricsHowTo({
     disabled &&
       `${countLabel(disabled, "device")} ${disabled === 1 ? "has" : "have"} metrics turned off in Agent settings.`,
     withoutEndpoint &&
-      `${countLabel(withoutEndpoint, "device")} ${withoutEndpoint === 1 ? "runs a pipeline" : "run pipelines"} without a metrics exporter.`,
+      `${countLabel(withoutEndpoint, "device")} ${withoutEndpoint === 1 ? "has" : "have"} no metrics exporter to read.`,
   ].filter(Boolean) as string[];
   return (
     <div className="overview-throughput-howto">
