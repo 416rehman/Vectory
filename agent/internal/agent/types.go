@@ -133,6 +133,9 @@ type Heartbeat struct {
 	// VectorLogSummary is nil for servers without the feature; an empty list
 	// tells a supporting server there is nothing to report.
 	VectorLogSummary *[]LogSummary `json:"vector_log_summary,omitempty"`
+	// SecretNames are the names bound with configure-secrets (never files or
+	// values), for servers with the secret_names feature.
+	SecretNames *[]string `json:"secret_names,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated

@@ -11,6 +11,7 @@ const (
 	featureHostRuntime = "host_runtime"
 	featureLogSummary  = "vector_log_summary"
 	featureTelemetryV2 = "telemetry_v2"
+	featureSecretNames = "secret_names"
 )
 
 func (e *Engine) serverSupports(feature string) bool {
@@ -18,9 +19,14 @@ func (e *Engine) serverSupports(feature string) bool {
 }
 
 // addHeartbeatFeatures adds host runtime, Vector log summaries, rich
-// telemetry and diagnostics where the server accepts them. It never mutates
-// persisted state: the heartbeat holds clones.
+// telemetry, diagnostics and bound secret names where the server accepts
+// them. It never mutates persisted state: the heartbeat holds clones.
 func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSource, metricsAddress string) {
+	if e.serverSupports(featureSecretNames) {
+		// Names only, at most 64: never a file path or a value.
+		names := boundSecretNames(e.Settings.SecretFiles)
+		h.SecretNames = &names
+	}
 	if !e.serverSupports(featureDiagnostics) {
 		if h.Error != nil {
 			h.Error.Diagnostics = nil
