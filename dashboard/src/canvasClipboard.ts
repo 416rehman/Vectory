@@ -1,5 +1,5 @@
 import type { Config } from "./api";
-import { isInputPattern, type Kind } from "./catalog";
+import type { Kind } from "./catalog";
 import { stringifyConfiguration } from "./configurationFormats";
 import { guessConfigurationFormat, parseSource } from "./configurationSource";
 
@@ -9,9 +9,9 @@ const record = (value: unknown): value is Config =>
 const reference = (input: string) => input.split(".")[0];
 
 /**
- * The selected steps as a standalone Vector configuration. Inputs from
- * steps outside the selection are left out, so the text is valid on its own
- * and pastes into any pipeline.
+ * The selected steps as Vector configuration, each with its inputs as they
+ * are. Pasting into the same pipeline keeps a step reading from the same
+ * upstream steps; pasting elsewhere drops inputs that don't exist there.
  */
 export function copySteps(config: Config, ids: Iterable<string>): Config {
   const chosen = new Set(ids);
@@ -19,15 +19,7 @@ export function copySteps(config: Config, ids: Iterable<string>): Config {
   for (const section of SECTIONS)
     for (const [id, component] of Object.entries(config[section] || {})) {
       if (!chosen.has(id) || !record(component)) continue;
-      const value = structuredClone(component);
-      if (Array.isArray(value.inputs))
-        value.inputs = value.inputs.filter(
-          (input: unknown) =>
-            typeof input === "string" &&
-            !isInputPattern(input) &&
-            chosen.has(reference(input)),
-        );
-      (copy[section] ??= {})[id] = value;
+      (copy[section] ??= {})[id] = structuredClone(component);
     }
   return copy;
 }
