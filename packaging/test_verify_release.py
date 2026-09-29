@@ -103,7 +103,7 @@ class ArchiveVerification(unittest.TestCase):
         (self.root / "catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
         members = {**self.members}
         members["vectory"] = members.pop("vectory.exe")
-        members["packaging/launchd/com.vectory.agent.plist"] = members.pop("packaging/windows/install-service.ps1")
+        members["packaging/launchd/io.vectory.agent.plist"] = members.pop("packaging/windows/install-service.ps1")
         if attack == "link":
             del members["LICENSE"]
         with tarfile.open(self.root / (item["name"] + ".tar.gz"), "w:gz") as out:

@@ -40,12 +40,15 @@ type setupServer struct {
 	enrolls    atomic.Int32
 	heartbeats atomic.Int32
 	revoked    atomic.Bool
+	// hold keeps heartbeats unanswered until release is closed.
+	hold    atomic.Bool
+	release chan struct{}
 }
 
 func newSetupServer(t *testing.T) *setupServer {
 	ca := makeCA(t)
 	pub, signingKey, _ := ed25519.GenerateKey(rand.Reader)
-	s := &setupServer{pin: Fingerprint(certificateSHA256(ca.cert))}
+	s := &setupServer{pin: Fingerprint(certificateSHA256(ca.cert)), release: make(chan struct{})}
 	server := chainServer(t, ca, nil, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/agent/v1/install.sh":
@@ -58,6 +61,13 @@ func newSetupServer(t *testing.T) *setupServer {
 			_ = json.NewEncoder(w).Encode(map[string]string{"device_id": r.TLS.PeerCertificates[0].Subject.CommonName, "name": "setup-edge"})
 		case "/agent/v1/heartbeat":
 			s.heartbeats.Add(1)
+			if s.hold.Load() {
+				select {
+				case <-s.release:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			var beat Heartbeat
 			_ = json.NewDecoder(r.Body).Decode(&beat)
 			now := time.Now().UTC().Truncate(time.Second)
@@ -220,6 +230,47 @@ func TestSetupRefusesToRebindAPossiblyDeliveredEnrollment(t *testing.T) {
 	}
 	if pending, _ := ReadPendingEnrollment(dir); pending == nil || pending.Name != "renamed-edge" {
 		t.Fatal("pending record not rebound", pending)
+	}
+}
+
+// Ctrl-C during the check-in stops setup with an explanation, and a check-in
+// cut short by stopping is not recorded as an outage.
+func TestSetupInterruptedDuringTheCheckInIsNotAnOutage(t *testing.T) {
+	server := newSetupServer(t)
+	defer close(server.release)
+	server.hold.Store(true)
+	options, dir, _ := setupFixture(t)
+	options.Server, options.CASHA256, options.VectorBinary = server.url, server.pin, fakeVector(t, VectorVersion)
+	options.Token = func() (string, error) { return "synthetic-setup-token", nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		result SetupResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := Setup(ctx, options)
+		done <- outcome{result, err}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); server.heartbeats.Load() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("setup never checked in")
+		}
+	}
+	cancel()
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("setup didn't stop after the interruption")
+	}
+	last := got.result.Steps[len(got.result.Steps)-1]
+	if got.err == nil || got.result.OK || last.Status != "warn" || last.Label != "Check-in" || last.Detail != "Interrupted before the first check-in." {
+		t.Fatalf("err %v, steps %+v", got.err, got.result.Steps)
+	}
+	if state, err := LoadState(dir); err != nil || state.CheckInFailure != nil || state.LastHeartbeat != nil {
+		t.Fatalf("an interrupted check-in was recorded: %+v %v", state.CheckInFailure, err)
 	}
 }
 

@@ -25,12 +25,13 @@ func main() {
 
 // Exit codes: 0 success, 1 the operation or a preflight check failed, 2 the
 // command line was invalid, 78 the agent isn't installed or enrolled (so a
-// service manager doesn't restart-loop it).
+// service manager doesn't restart-loop it), 130 setup was interrupted.
 const (
-	exitOK       = 0
-	exitFailed   = 1
-	exitUsage    = 2
-	exitNotReady = 78
+	exitOK          = 0
+	exitFailed      = 1
+	exitUsage       = 2
+	exitNotReady    = 78
+	exitInterrupted = 130
 )
 
 func run(args []string) int { return runWith(args, os.Stdout, os.Stderr) }
@@ -152,19 +153,6 @@ func flagError(err error) string {
 		return "-" + strings.TrimPrefix(message, "flag needs an argument: ") + " needs a value"
 	}
 	return message
-}
-
-// Kept for tests and command implementations: parse helpers that report
-// trailing operands the same way for every command.
-func parseFlagsOnly(fs *flag.FlagSet, args []string, command string) bool {
-	if fs.Parse(args) != nil {
-		return false
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintf(os.Stderr, "vectory: %s accepts flags only; unexpected positional arguments\n", command)
-		return false
-	}
-	return true
 }
 
 func flagSupplied(fs *flag.FlagSet, name string) bool {
