@@ -7,7 +7,7 @@ What Vectory guarantees, who has to trust whom, and where the limits are. Read t
 - **Devices only connect out.** The agent opens every connection, over TLS 1.3. Nothing on a device listens for Vectory, and there is no option to skip certificate checks.
 - **Devices prove who they are.** Each device has its own key and certificate. Every request after enrollment uses mutual TLS, and a revoked device is refused at once.
 - **Devices only run what they can verify.** A configuration is an immutable, published version. It arrives in a manifest signed for that one device, and the agent refuses anything older than what it has already accepted.
-- **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them.
+- **The host decides what a pipeline may touch.** Restricted mode, files, destinations and listeners are local choices. The server can't widen them. The one exception is a loopback-only exporter of Vector's own metrics, described under [Restricted and full mode](#restricted-and-full-mode).
 - **Credentials stay on the host.** Pipelines reference secrets by name. The values live in local files the server never sees.
 - **Your events stay yours.** Events flow from Vector to your destinations. Vectory receives only status and the bounded metrics you enable.
 - **Every change is authorized and recorded.** The server checks each permission itself and writes an audit event for every change.
