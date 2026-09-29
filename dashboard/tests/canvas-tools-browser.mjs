@@ -485,7 +485,17 @@ try {
   await check(
     "a new step lands in free space, fed by the selection, and the picker explains what cannot connect",
     async () => {
-      await load();
+      // The new filter opens its inspector, which runs the default samples.
+      await load({
+        vrl: (body) => {
+          const { samples } = JSON.parse(body);
+          const results = samples.map(
+            (event, index) =>
+              `{"sample":${index},"outcome":"emitted","outputs":[{"port":"","event":${JSON.stringify(event)},"timestamps":[]}]}`,
+          );
+          return `{"valid":true,"compiled":true,"output":null,"errors":[],"results":[${results.join(",")}]}`;
+        },
+      });
       await node("sample").click();
       await button("Add component").click();
       await expect(picker()).toBeVisible();

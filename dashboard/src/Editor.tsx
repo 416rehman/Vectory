@@ -158,6 +158,7 @@ import {
   detectConfigurationFormat,
   isEmptyPipeline,
   MAX_CONFIGURATION_BYTES,
+  sourceErrorMessage,
   sourceOffset,
 } from "./configurationSource";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
@@ -2309,12 +2310,12 @@ export default function Editor({
       );
       return;
     }
+    let text = "";
     try {
       const fileFormat = detectConfigurationFormat(file.name);
       if (file.size > MAX_CONFIGURATION_BYTES)
         throw Error("Configuration files must be 1 MiB or smaller.");
       const bytes = await file.arrayBuffer();
-      let text: string;
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {
@@ -2351,7 +2352,7 @@ export default function Editor({
       else setImportCandidate(candidate);
     } catch (failure) {
       if (generation === importGeneration.current)
-        notify(`Import failed: ${(failure as Error).message}`);
+        notify(`Import failed: ${sourceErrorMessage(text, failure)}`);
     }
   }
   function applyImportedPipeline(candidate: ConfigurationImport) {

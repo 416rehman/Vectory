@@ -4,10 +4,10 @@ import type { Config } from "./api";
 import { Button } from "./ui";
 import {
   assertValidPipelineSource,
-  ConfigurationSourceError,
   detectConfigurationFormat,
   guessConfigurationFormat,
   MAX_CONFIGURATION_BYTES,
+  sourceErrorMessage,
   type ConfigurationFormat,
 } from "./configurationSource";
 import { pipelineTemplates } from "./pipelineTemplates";
@@ -24,21 +24,6 @@ const count = (config: Config) =>
   ["sources", "transforms", "sinks"]
     .map((section) => Object.keys(config[section] || {}).length)
     .reduce((total, value) => total + value, 0);
-
-/** "Line 4:3: message" for the first problem, so a parse error is findable. */
-export function sourceErrorMessage(text: string, error: unknown) {
-  const first =
-    error instanceof ConfigurationSourceError ? error.diagnostics[0] : null;
-  const message = first?.message || (error as Error)?.message || "";
-  if (!message) return "This configuration could not be read.";
-  if (!first || (first.from === 0 && !text.trim())) return message;
-  const before = text.slice(0, first.from).split("\n");
-  const line = before.length,
-    column = before.at(-1)!.length + 1;
-  return /^Line \d+/i.test(message)
-    ? message
-    : `Line ${line}:${column}: ${message.replace(/ at line \d+, column \d+:?$/, "")}`;
-}
 
 /** Check configuration text for a new pipeline. */
 export function readStartText(
