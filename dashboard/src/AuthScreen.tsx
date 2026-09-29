@@ -1156,7 +1156,7 @@ export default function AuthScreen({
                 This server reads it from the file set by{" "}
                 <code>VECTORY_BOOTSTRAP_SECRET_FILE</code>. {command.where}
               </p>
-              <CopyLine value={command.command} label="Command" wrap />
+              <CopyLine value={command.command} label="Command" />
             </>
           ) : hint?.source === "environment" ? (
             <p>

@@ -134,6 +134,9 @@ jobs:
         run: node tests/sidebar-browser.mjs
         env:
           VECTORY_SIDEBAR_OUTPUT: artifacts/sidebar-navigation
+      - name: Check the command palette, shortcuts and search results
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node tests/command-palette-browser.mjs
       - name: Check Overview actions and typed activity destinations
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/overview-browser.mjs

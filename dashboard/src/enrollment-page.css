@@ -129,8 +129,9 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px;
   line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-all;
+  /* Keep each command line whole; long lines scroll instead of breaking a flag or path. */
+  white-space: pre;
+  overflow-x: auto;
 }
 .enroll-command pre code {
   padding: 0;
