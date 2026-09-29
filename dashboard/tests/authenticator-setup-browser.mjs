@@ -273,7 +273,8 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(8000);
   page.on("pageerror", (error) => errors.push(safe(error.message)));
-  await page.goto(`${origin}/__authenticator-setup#/users`);
+  // A cold dev-server transform can exceed the action timeout on a busy host.
+  await page.goto(`${origin}/__authenticator-setup#/users`, { timeout: 60000 });
   await expect(
     page.getByRole("heading", { name: "People & security", exact: true }),
   ).toBeVisible();
