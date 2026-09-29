@@ -735,7 +735,8 @@ try {
         await expect(checkSelection()).toBeVisible();
         await closeReview();
         await details()
-          .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" })
+          .getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         await page
           .getByRole("button", {
@@ -889,7 +890,7 @@ try {
               }),
             ),
           );
-          await expect(page.locator(".session-ended")).toContainText(
+          await expect(page.locator(".session-renewal")).toContainText(
             "Your session ended",
           );
           await expect(confirm()).toHaveCount(0);

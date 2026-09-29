@@ -710,7 +710,8 @@ async function load({
         return reply({ id: "not-a-uuid" });
       return reply(response);
     }
-    unexpected.push(`${method} ${path}`);
+    // The editor checks its draft on its own; that read-only POST is not a mutation.
+    if (!path.endsWith("/validate")) unexpected.push(`${method} ${path}`);
     return reply(
       {
         error: {
@@ -833,7 +834,8 @@ async function reloadApp() {
 async function leaveDetails() {
   await expect(details()).toBeVisible();
   await details()
-    .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
   await expect(page).toHaveURL(/#\/deployments\?page=1$/);

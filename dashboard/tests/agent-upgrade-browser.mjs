@@ -454,6 +454,9 @@ try {
     "A stalled catalog has a deadline and does not request a download",
     async () => {
       await load({ holdReleases: true });
+      // Pages load on demand behind a 30 s guard of their own; let this one
+      // finish before every 30 s timer is shortened.
+      await deviceVisible();
       await page.evaluate(() => {
         const original = window.setTimeout.bind(window);
         window.setTimeout = (fn, delay, ...args) =>
