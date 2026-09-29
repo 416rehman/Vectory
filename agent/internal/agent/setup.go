@@ -53,6 +53,8 @@ type SetupOptions struct {
 	Progress func(SetupStep)
 	// CheckIn bounds the wait for the first check-in after starting the service.
 	CheckIn time.Duration
+	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
+	NoWake *bool
 }
 
 // SetupDevice identifies the enrolled device.
@@ -725,7 +727,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 
 	if !installed {
-		install := InstallOptions{Adopt: true, VectorBinary: &vector.Path, ManagedConfig: &managed, CapabilityPolicy: policy}
+		install := InstallOptions{Adopt: true, VectorBinary: &vector.Path, ManagedConfig: &managed, CapabilityPolicy: policy, NoWake: options.NoWake}
 		if mode == "full" {
 			full := true
 			install.FullVectorConfig = &full
@@ -743,6 +745,11 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 			}
 		} else {
 			r.add("install", "ok", "Install", "already installed", "")
+		}
+		if options.NoWake != nil {
+			if err := InstallWithOptions(ctx, dir, InstallOptions{NoWake: options.NoWake}); err != nil {
+				r.add("install", "warn", "Install", "Wake-ups weren't changed: "+sentence(err.Error()), "Stop the agent, then run the command again.")
+			}
 		}
 	}
 
