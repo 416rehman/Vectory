@@ -61,6 +61,7 @@ import {
   RefreshCw,
   ChevronDown,
   MessageSquareText,
+  Activity,
 } from "lucide-react";
 import {
   api,
@@ -174,6 +175,12 @@ import {
 import { vrlValue, withVrlValue } from "./PipelineSettings";
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
+import {
+  pipelineTemplates,
+  withMonitoring,
+  type PipelineTemplate,
+} from "./pipelineTemplates";
+import "./pipeline-templates.css";
 import {
   clearRecoveryDraft,
   readRecoveryDraft,
@@ -463,6 +470,11 @@ export default function Editor({
     [saveNote, setSaveNote] = useState<string | null>(null),
     // Unsaved edits found in this browser, until restored or discarded.
     [recovery, setRecovery] = useState<RecoveryDraft | null>(null),
+    // What an applied template still needs, until dismissed.
+    [templateNeeds, setTemplateNeeds] = useState<{
+      title: string;
+      needs: string[];
+    } | null>(null),
     // Why the server definitively refused the last publish attempt.
     [publishRejection, setPublishRejection] = useState<{
       code: string;
@@ -2363,6 +2375,27 @@ export default function Editor({
     clearRecoveryDraft(user.id, id);
     setRecovery(null);
   }
+  function applyTemplate(template: PipelineTemplate) {
+    if (!editable || !isEmptyPipeline(config)) return;
+    replace(structuredClone(template.config));
+    setTemplateNeeds({ title: template.title, needs: template.needs });
+  }
+  // Vector's own metrics, exported for local scraping, without touching
+  // existing steps or their names.
+  function addMonitoring() {
+    const next = withMonitoring(config);
+    if (!next) {
+      notify("This pipeline already exports Vector's internal metrics.");
+      return;
+    }
+    replace(next);
+    const added = Object.entries(next.sinks).find(
+      ([sinkId]) => !Object.hasOwn(config.sinks || {}, sinkId),
+    )?.[1] as Config | undefined;
+    notify(
+      `Added monitoring: Vector's internal metrics on ${added?.address} for Prometheus on the device.`,
+    );
+  }
   function openHistory() {
     if (toolsRef.current) toolsRef.current.open = false;
     setHistoryVersion(null);
@@ -3592,6 +3625,12 @@ export default function Editor({
                     <History size={16} aria-hidden="true" />
                     Version history
                   </button>
+                  {editable && (
+                    <button onClick={() => tool(addMonitoring)}>
+                      <Activity size={16} aria-hidden="true" />
+                      Add monitoring
+                    </button>
+                  )}
                   {can(user, "operate") && (
                     <button
                       onClick={() => {
@@ -3843,6 +3882,21 @@ export default function Editor({
             </div>
           </div>
         </div>
+        {templateNeeds && editable && (
+          <div className="editor-recovery" role="status">
+            <FileText size={16} aria-hidden="true" />
+            <p>
+              <strong>{templateNeeds.title} is ready to adjust.</strong>{" "}
+              You&apos;ll need: {templateNeeds.needs.join(" ")}
+            </p>
+            <Button
+              variant="ghost compact"
+              onClick={() => setTemplateNeeds(null)}
+            >
+              Dismiss
+            </Button>
+          </div>
+        )}
         {recovery && editable && (
           <div className="editor-recovery" role="status">
             <History size={16} aria-hidden="true" />
@@ -4304,12 +4358,43 @@ export default function Editor({
                         transformations and destinations.
                       </p>
                       {editable && (
-                        <Button
-                          icon={Plus}
-                          onClick={() => openPicker("sources")}
-                        >
-                          Choose a source
-                        </Button>
+                        <>
+                          <div className="editor-canvas-empty-actions">
+                            <Button
+                              icon={Plus}
+                              onClick={() => openPicker("sources")}
+                            >
+                              Choose a source
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              icon={Upload}
+                              onClick={() =>
+                                tool(() => fileRef.current?.click())
+                              }
+                            >
+                              Import Vector config
+                            </Button>
+                          </div>
+                          <div className="canvas-templates">
+                            <p className="pipeline-start-heading">
+                              Or start from a template
+                            </p>
+                            <div className="canvas-templates-grid">
+                              {pipelineTemplates.map((template) => (
+                                <button
+                                  key={template.id}
+                                  type="button"
+                                  className="canvas-template"
+                                  onClick={() => applyTemplate(template)}
+                                >
+                                  <strong>{template.title}</strong>
+                                  <small>{template.summary}</small>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </>
                       )}
                     </div>
                   </div>
