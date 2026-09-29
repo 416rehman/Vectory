@@ -39,7 +39,7 @@ Each device runs in one mode, chosen on the host when the agent is installed.
 
 Within those components, restricted mode also:
 
-- allows only the file roots, `host:port` destinations and listener addresses listed in the device's [allowance file](installation.md#configure-restricted-allowances);
+- allows only the file roots, `host:port` destinations and listener addresses listed in the device's [allowance file](installation.md#configure-restricted-allowances). One listener is exempt: the monitoring exporter, a `prometheus_exporter` on a loopback IP literal whose inputs are all `internal_metrics` sources (what **Add monitoring** adds). It exposes only Vector's own metrics, to this host. Only one such exporter per pipeline is exempt;
 - requires explicit destinations and listeners, so a component can't fall back to a default address;
 - refuses environment variables (`$NAME`, `${NAME}`), `{{ }}` templates and other substitutions anywhere in the pipeline;
 - refuses secret providers, enrichment tables, external VRL files and any setting that runs a program;

@@ -41,7 +41,7 @@ A deployment's reminder confirms that the server saved it. Devices still have to
 
 | You were | What to do |
 | --- | --- |
-| Creating an enrollment token | In **Add device**, open **Token requests → Check request**. If the token didn't reach you, choose **Cancel request** (or **Revoke token and cancel**) and wait for **Request cancelled** before you create another. |
+| Creating an enrollment token | Only a creation whose reply never arrived holds up **Add device**: it reads "We couldn't confirm whether a token was created at *time*". Open **Token requests → Check request**. If the token didn't reach you, choose **Cancel request** (or **Revoke token and cancel**) and wait for **Request cancelled** before you create another. A command the page showed never holds anything up: when you come back, a token that was used, revoked or expired is forgotten (the timeline says what it enrolled), and an unused one joins "wasn't used · **Revoke it**". |
 | Authorizing device recovery | On the device page, open **Device recovery → Check request**. Cancel it the same way before you authorize again. Once the host has used the token, cancelling can't undo the new identity. |
 | Revoking a device | Under **Device access**, choose **Check revocation**. Revoke again only if the check shows the device is still active. |
 | Retrying a device, pausing a rollout or removing an assignment | Choose **Check status** (or **Check current status**). Controls stay unavailable until a fresh check succeeds. |
