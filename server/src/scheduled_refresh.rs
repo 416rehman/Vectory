@@ -210,22 +210,22 @@ async fn selection(db: &mut SqliteConnection, v: &Value) -> Result<BTreeSet<Stri
     Ok(selected)
 }
 async fn device(db: &mut SqliteConnection, id: &str) -> Result<Value> {
-    let row=sqlx::query("SELECT substr(name,1,240) AS name,revoked,CASE WHEN json_type(data,'$.last_seen')='text' THEN substr(json_extract(data,'$.last_seen'),1,64) END AS last_seen,CASE WHEN json_type(data,'$.apply_state')='text' THEN substr(json_extract(data,'$.apply_state'),1,64) END AS apply_state,COALESCE(json_extract(data,'$.local_paused'),0) AS local_paused,COALESCE(json_extract(policy,'$.sync_paused'),0) AS sync_paused,COALESCE(json_extract(policy,'$.heartbeat_seconds'),60) AS heartbeat_seconds FROM devices WHERE id=?").bind(id).fetch_optional(&mut *db).await?;
+    let row=sqlx::query("SELECT substr(name,1,240) AS name,revoked,CASE WHEN json_type(data,'$.last_seen')='text' THEN substr(json_extract(data,'$.last_seen'),1,64) END AS last_seen,CASE WHEN json_type(data,'$.apply_state')='text' THEN substr(json_extract(data,'$.apply_state'),1,64) END AS apply_state,COALESCE(json_extract(data,'$.local_paused'),0) AS local_paused,COALESCE(json_extract(policy,'$.sync_paused'),0) AS sync_paused,policy,policy_generation,json_object('policy_generation',json_extract(data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(data,'$.heartbeat_floor_seconds')) AS acknowledgement FROM devices WHERE id=?").bind(id).fetch_optional(&mut *db).await?;
     let Some(row) = row else {
         return Ok(json!({"id":id,"name":null,"status":"missing"}));
     };
     let state: Option<String> = row.get("apply_state");
     let at: Option<String> = row.get("last_seen");
-    let heartbeat: i64 = row.get("heartbeat_seconds");
-    let online = at
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-        .is_some_and(|at| {
-            chrono::Utc::now().signed_duration_since(at).num_seconds()
-                <= heartbeat.clamp(10, 3600) * 3
-        });
+    let interval = rollout::check_in_seconds(
+        &db::parse(row.get("policy"))?,
+        &db::parse(row.get("acknowledgement"))?,
+        row.get("policy_generation"),
+    );
     let status = if row.get::<bool, _>("revoked") {
         "revoked"
-    } else if !online {
+    } else if at.is_none() {
+        "awaiting_first_check_in"
+    } else if !rollout::checked_in_recently(at.as_deref(), interval) {
         "offline"
     } else if row.get::<bool, _>("local_paused") || row.get::<bool, _>("sync_paused") {
         "paused"
