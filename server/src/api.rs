@@ -163,7 +163,8 @@ pub fn router(s: State) -> Router {
         )
         .route(
             "/api/v1/deployments/{id}/targets",
-            get(crate::deployment_history::targets),
+            get(crate::deployment_history::targets)
+                .layer(middleware::from_fn_with_state(s.clone(), target_wake)),
         )
         .route(
             "/api/v1/deployments/{id}/rollout",
@@ -333,7 +334,44 @@ pub fn router(s: State) -> Router {
         .layer(middleware::from_fn(reject_oversized))
         .layer(middleware::from_fn(security_headers))
         .layer(middleware::from_fn_with_state(s.clone(), fleet_changes))
+        // Once a request has finished, agents whose desired state it changed
+        // are told to check in (see wake.rs).
+        .layer(middleware::from_fn_with_state(
+            s.clone(),
+            crate::wake::middleware,
+        ))
         .with_state(s)
+}
+/// Target rows add the read-only `wake:{listening}` of their device (see
+/// wake.rs), so the rollout says "usually a few seconds" only for an agent
+/// that holds a wait right now.
+async fn target_wake(AppState(s): AppState<State>, request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    if !s.wake.enabled() || response.status() != StatusCode::OK {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 16 * 1024 * 1024).await else {
+        return ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL",
+            "Target page could not be read",
+        )
+        .into_response();
+    };
+    let Ok(mut page) = serde_json::from_slice::<Value>(&bytes) else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    for item in page["items"].as_array_mut().into_iter().flatten() {
+        if let Some(wake) = item["device_id"]
+            .as_str()
+            .and_then(|id| s.wake.projection(id))
+        {
+            item["wake"] = wake;
+        }
+    }
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(page.to_string()))
 }
 /// Any request that can change something ends the shared fleet projection,
 /// once it has answered: the next read, the caller's included, sees it.
@@ -538,6 +576,9 @@ pub async fn detail(
                 .ok_or_else(ApiError::missing)?;
             if groups {
                 device["groups"] = crate::fleet::device_groups(&mut conn, &id).await?;
+            }
+            if let Some(wake) = s.wake.projection(&id) {
+                device["wake"] = wake;
             }
             device
         }
@@ -997,6 +1038,7 @@ pub async fn action(
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
+            crate::wake::stage(&id);
             let generation: i64 =
                 sqlx::query_scalar("SELECT desired_generation FROM devices WHERE id=?")
                     .bind(&id)

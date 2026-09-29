@@ -396,6 +396,24 @@ export const applyStepTable: {
     state: "verified_applied",
   },
 ];
+
+/**
+ * When a released device picks its version up. An agent that holds a wait
+ * open (`wake.listening`, from the server's registry at read time) hears
+ * about it within seconds; any other checks in on its interval. Neither
+ * claims delivery: the steps after Released come only from the agent.
+ */
+export function pickupText(device: {
+  wake?: { listening: boolean } | null;
+  check_in_seconds?: number | null;
+}) {
+  if (device.wake?.listening)
+    return "Waiting for the agent (connected, usually a few seconds).";
+  return device.check_in_seconds
+    ? `Applies on its next check-in (within ${device.check_in_seconds} s).`
+    : "Applies on its next check-in.";
+}
+
 export type TimelineStep = {
   key: (typeof applyStepTable)[number]["key"];
   label: string;

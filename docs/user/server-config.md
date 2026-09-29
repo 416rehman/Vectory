@@ -38,6 +38,7 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 | `VECTORY_COOKIE_SECURE` | `true` | Marks the session cookie `Secure`. `false` is allowed only with `VECTORY_DEVELOPMENT=true`. |
 | `VECTORY_TRUST_PROXY_HEADERS` | `false` | Take the client address from the last `X-Forwarded-For` hop, for sign-in limits and the audit log. Turn it on only when the HTTP listener is reachable solely through a proxy you control. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Most agent connections accepted at once, from 64 to 65,536. A resource limit, not a supported fleet size. |
+| `VECTORY_AGENT_WAKE_LIMIT` | `20000` | Most agents that can wait for changes at once, from 0 to 100,000. A waiting agent gets a deployment within seconds instead of at its next check-in; beyond the limit, agents check in on schedule. Each waiting agent keeps its one connection open, which counts toward `VECTORY_MAX_AGENT_CONNECTIONS`. `0` turns wake-ups off. |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Days of device metrics history to keep, from 1 to 30. The audit log is kept separately and never pruned. |
 | `VECTORY_PREVIOUS_DEVICE_CA` | None | PEM file (up to 64 KiB) with a previous device CA, so devices can still renew while you move to a replacement device CA. |
 | `VECTORY_DEVELOPMENT` | `false` | Local development only. Allows running without TLS, the validator or secure cookies, and then requires loopback listeners. |

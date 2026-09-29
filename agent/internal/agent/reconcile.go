@@ -715,11 +715,19 @@ func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message st
 type runOptions struct {
 	once           bool
 	serviceManager string
+	// noWake: check in on the schedule only, never holding a wait open.
+	noWake bool
 }
 
 // Run runs the agent: continuously, or for one complete check-in.
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
 	return runWith(ctx, dir, runOptions{once: once}, report)
+}
+
+// RunWithoutWake runs the agent continuously, checking in on its schedule
+// only: it never holds a wait open (vectory run --no-wake).
+func RunWithoutWake(ctx context.Context, dir string, report func(string)) error {
+	return runWith(ctx, dir, runOptions{noWake: true}, report)
 }
 
 // RunWindowsService runs the agent as the Windows service.
@@ -839,7 +847,9 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		if delay < e.Client.RetryAfter {
 			delay = e.Client.RetryAfter
 		}
-		if !supervisor.wait(ctx, e, delay, report) {
+		// Where the server offers it, a change reaches this agent within
+		// seconds instead of at the next check-in (see wake.go).
+		if !supervisor.wait(ctx, e, delay, report, e.wakeAllowed(options.noWake, failures)) {
 			return nil
 		}
 	}
@@ -883,8 +893,9 @@ type appliedOutcome struct {
 }
 
 // followUpDelay brings an apply's outcome to the dashboard within seconds
-// instead of a full check-in interval.
-const followUpDelay = 2 * time.Second
+// instead of a full check-in interval. Activation already watched Vector stay
+// up; one second is the spacing wake-ups keep too.
+const followUpDelay = time.Second
 
 // followUp reports whether this poll finished an apply the last heartbeat
 // didn't report. The follow-up heartbeat reports it, so the next poll sees

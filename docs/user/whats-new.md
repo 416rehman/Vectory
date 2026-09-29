@@ -8,6 +8,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - **Readable agent CLI.** `vectory setup`, `--help` for every command, a human-readable `status`, `doctor` checks that test the connection to your server, and `vectory logs`.
 - **Real reasons for failures.** Issues and device pages show Vector's own message, with secrets removed. Vector gets a data directory automatically when a pipeline doesn't set one.
 - **Alerts where you work.** Slack, webhook and email notifications for new issues, failed rollouts and offline devices, with quiet hours and a delivery log. See [Alerts and notifications](notifications.md).
+- **Deployments in seconds.** A connected device picks up a new version within seconds instead of at its next check-in. The agent still opens every connection itself. See [Turn off wake-ups](agents.md#turn-off-wake-ups) for networks that cut idle connections.
 - **Shipping is the default.** Deploying a new version of a pipeline replaces the older one on those devices. Each deployment has a live rollout page.
 - **Device secrets in every credential field.** API keys, passwords and tokens stay on each device as `vectory-secret:NAME`, with the binding command one click away and each device's bound names on its page. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
 - **Faster pipeline building.** A template gallery, one-click **Add monitoring**, a VRL editor with autocomplete and sample tests, and a publish review that shows exactly what changed.

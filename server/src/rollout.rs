@@ -1844,6 +1844,8 @@ pub async fn guard_membership_additions(
 // bindings retain their historical target states. Retained generation and
 // timestamps are evidence, never authority for admission while state=removed.
 pub async fn retire_persistent_targets(db: &mut SqliteConnection, device: &str) -> Result<()> {
+    // Revocation and identity recovery run this: a parked wait answers.
+    crate::wake::stage(device);
     sqlx::query("UPDATE deployment_targets SET state='removed' WHERE device_id=? AND state<>'removed' AND deployment_id IN (SELECT id FROM records WHERE kind='deployment' AND json_extract(data,'$.target_mode')='persistent' AND json_extract(data,'$.status') IN ('active','paused','completed'))")
         .bind(device).execute(db).await?;
     Ok(())
@@ -1960,6 +1962,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                 if old_id.as_deref() == Some(text(w, "id")) {
                     continue;
                 }
+                crate::wake::stage(&device);
                 crate::canary_gate::invalidate_resource(db, &device, resource == "configuration")
                     .await?;
                 if resource == "configuration" {
@@ -2076,6 +2079,7 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
                     sqlx::query("UPDATE deployment_targets SET generation=? WHERE deployment_id=? AND device_id=?").bind(generation.max(1)).bind(text(w,"id")).bind(&device).execute(&mut *db).await?;
                 }
             } else if old_id.is_some() {
+                crate::wake::stage(&device);
                 crate::canary_gate::invalidate_resource(db, &device, resource == "configuration")
                     .await?;
                 if resource == "configuration" {

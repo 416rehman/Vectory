@@ -28,6 +28,8 @@ type InstallOptions struct {
 	// Host runtime settings; an empty data directory restores the automatic choice.
 	VectorDataDir           *string
 	GracefulShutdownSeconds *int
+	// NoWake turns wake-ups off (true) or back on (false); nil keeps them.
+	NoWake *bool
 }
 
 func ReadInstallPolicy(path string) (*CapabilityPolicy, error) {
@@ -152,6 +154,9 @@ func (options InstallOptions) compose(current Settings) Settings {
 	}
 	if options.GracefulShutdownSeconds != nil {
 		current.GracefulShutdownSeconds = *options.GracefulShutdownSeconds
+	}
+	if options.NoWake != nil {
+		current.NoWake = *options.NoWake
 	}
 	return current
 }

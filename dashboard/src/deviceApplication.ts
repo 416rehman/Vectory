@@ -107,7 +107,7 @@ export function deviceApplicationExplanation(
   if (!attempt && device.reported_generation < device.desired_generation) {
     if (["failed", "rolled_back"].includes(device.apply_state))
       return "The agent reported a problem without identifying an attempt for this assignment. Review device activity before retrying.";
-    return "Waiting for the agent to report an attempt for this assignment. Its last verified configuration is tracked separately.";
+    return "Waiting for the agent to report an attempt for this assignment. Its last applied configuration is tracked separately.";
   }
   return "The agent has not yet confirmed this assignment as active.";
 }

@@ -917,8 +917,14 @@ async fn lists_leave_out_what_only_the_device_page_shows() {
         );
         assert_eq!(row["data_plane"]["issue_count"], open);
     }
-    // Otherwise a list row is the device page's row, field for field.
-    assert_eq!(listed, vectory_server::rollout::list_row(full.clone()));
+    // Otherwise a list row is the device page's row, field for field, except
+    // the page's live wake-up projection, which only the device page reads.
+    let mut page = full.clone();
+    assert_eq!(
+        page.as_object_mut().unwrap().remove("wake"),
+        Some(json!({"listening": false}))
+    );
+    assert_eq!(listed, vectory_server::rollout::list_row(page));
     let (full_bytes, list_bytes) = (full.to_string().len(), listed.to_string().len());
     eprintln!(
         "device with 10 components: full row {full_bytes} bytes, list row {list_bytes} bytes"

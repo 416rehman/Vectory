@@ -237,6 +237,14 @@ func (h *harness) enroll(token, name, request, csr string) (int, map[string]any)
 	n, v, _ := h.req(h.tls, h.https, "POST", "/agent/v1/enroll", map[string]any{"protocol_version": 1, "request_id": request, "token": token, "name": name, "csr_pem": csr, "os": "windows", "arch": "amd64", "agent_version": "security-test", "vector_version": "0.58.0"}, "", "")
 	return n, v
 }
+func containsValue(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 func (h *harness) client(v map[string]any, key []byte) *http.Client {
 	pair, e := tls.X509KeyPair([]byte(v["certificate_pem"].(string)), key)
 	if e != nil {
@@ -400,6 +408,9 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		if m["device_id"] != device["device_id"] || m["nonce"] != nonce || m["desired"] != nil {
 			t.Fatalf("wrong manifest binding/default desired: %#v", m)
 		}
+		if features, _ := m["features"].([]any); !containsValue(features, "wake") {
+			t.Fatalf("manifest does not offer wake-ups: %#v", m["features"])
+		}
 		payload[0] ^= 1
 		if ed25519.Verify(pub, payload, sig) {
 			t.Fatal("tampered manifest accepted")
@@ -506,6 +517,80 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatal("request identity overrode mTLS principal")
 		}
 	})
+	t.Run("wake-up-hint-is-authenticated-and-carries-no-state", func(t *testing.T) {
+		n, v, _ := h.req(h.tls, h.https, "GET", "/agent/v1/wait?generation=0&policy_generation=0", nil, "", "")
+		expect(t, n, 401, v)
+		for _, query := range []string{"generation=0", "generation=0&policy_generation=0&device_id=admin", "generation=-1&policy_generation=0"} {
+			n, v, _ = h.req(client, h.https, "GET", "/agent/v1/wait?"+query, nil, "", "")
+			expect(t, n, 400, v)
+		}
+		manifest := func() map[string]any {
+			n, envelope, _ := h.req(client, h.https, "POST", "/agent/v1/heartbeat", beat, "", "")
+			okay(t, n, envelope)
+			payload, _ := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+			var m map[string]any
+			if err := json.Unmarshal(payload, &m); err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}
+		current := manifest()
+		generation, policy := int(current["generation"].(float64)), int(current["policy_generation"].(float64))
+		if generation < 1 {
+			t.Fatalf("expected a released deployment: %#v", current)
+		}
+		// Generations the agent is behind on answer at once, with no state.
+		n, v, _ = h.req(client, h.https, "GET", fmt.Sprintf("/agent/v1/wait?generation=%d&policy_generation=%d", generation-1, policy), nil, "", "")
+		okay(t, n, v)
+		if len(v) != 1 || v["changed"] != true {
+			t.Fatalf("stale wait: %#v", v)
+		}
+		type answer struct {
+			status int
+			body   string
+			at     time.Time
+			err    error
+		}
+		answers := make(chan answer, 1)
+		go func() {
+			res, err := client.Get(fmt.Sprintf("%s/agent/v1/wait?generation=%d&policy_generation=%d", h.https, generation, policy))
+			if err != nil {
+				answers <- answer{err: err}
+				return
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(res.Body, 4096))
+			answers <- answer{res.StatusCode, string(body), time.Now(), err}
+		}()
+		select {
+		case a := <-answers:
+			t.Fatalf("a wait at current generations answered before any change: %+v", a)
+		case <-time.After(700 * time.Millisecond):
+		}
+		config := map[string]any{"sources": map[string]any{"test": map[string]any{"type": "demo_logs", "format": "json", "interval": 2}}, "sinks": map[string]any{"discard": map[string]any{"type": "blackhole", "inputs": []string{"test"}}}}
+		n, created, _ := h.api("POST", "/configurations", map[string]any{"name": "isolated wake-up fixture", "description": "test only", "graph": map[string]any{"nodes": []any{}, "edges": []any{}}, "config": config})
+		okay(t, n, created)
+		n, version, _ := h.api("POST", "/configurations/"+created["id"].(string)+"/publish", map[string]any{"revision": created["revision"], "message": "wake-up test"})
+		okay(t, n, version)
+		n, v, _ = h.api("POST", "/deployments", map[string]any{"version_id": version["id"], "priority": 2, "target_mode": "snapshot", "selector": map[string]any{"device_ids": []string{device["device_id"].(string)}, "group_ids": []string{}, "exclude_ids": []string{}}, "rollout": map[string]any{"kind": "all", "canary_size": 1, "batch_size": 10, "observation_seconds": 0, "failure_threshold": 0}})
+		okay(t, n, v)
+		deployed := time.Now()
+		select {
+		case a := <-answers:
+			if a.err != nil || a.status != 200 || a.body != `{"changed":true}` {
+				t.Fatalf("parked wait: %+v", a)
+			}
+			if late := a.at.Sub(deployed); late > 2*time.Second {
+				t.Fatalf("the parked wait answered %v after the deployment", late)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the deployment never answered the parked wait")
+		}
+		// The change itself arrives only through the signed manifest.
+		if next := manifest(); int(next["generation"].(float64)) <= generation || next["desired"].(map[string]any)["version_id"] != version["id"] {
+			t.Fatalf("manifest after the wake-up: %#v", next)
+		}
+	})
 	t.Run("revoked-pooled-connection-rejected", func(t *testing.T) {
 		n, v, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/revoke", map[string]any{})
 		okay(t, n, v)
@@ -524,6 +609,8 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatal("test did not exercise a pooled connection")
 		}
 		expect(t, response.StatusCode, 401, nil)
+		n, rejected, _ := h.req(client, h.https, "GET", "/agent/v1/wait?generation=0&policy_generation=0", nil, "", "")
+		expect(t, n, 401, rejected)
 	})
 	t.Run("authorized-device-recovery-is-new-unmanaged-identity", func(t *testing.T) {
 		n, recovery, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/recover", map[string]any{})

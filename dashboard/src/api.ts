@@ -661,7 +661,14 @@ export type Device = {
   vector_running?: boolean;
   /** `GET /devices/{id}?include=groups` only: its groups by name, at most 100. */
   groups?: DeviceGroups;
+  /** `GET /devices/{id}` from servers offering wake-ups. */
+  wake?: WakeProjection;
 };
+/**
+ * Whether the device's agent holds a wait right now, so a change reaches it
+ * within seconds. What the server knows at that instant; never delivery.
+ */
+export type WakeProjection = { listening: boolean };
 export type VersionLabel = {
   id: string;
   number: number | null;
@@ -1081,6 +1088,8 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   failure_stage?: string | null;
   check_in_seconds?: number | null;
   timeline?: { state: string; at: string }[];
+  /** Target pages from servers offering wake-ups (see WakeProjection). */
+  wake?: WakeProjection | null;
   /** Verified, but an open data-plane issue says it isn't delivering. */
   delivery?: {
     code: string;
