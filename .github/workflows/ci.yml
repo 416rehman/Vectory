@@ -52,6 +52,20 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         run: node ../tests/variable-contract.mjs
+      # tests/contracts.mjs needs a live instance with data, so it runs in the
+      # end-to-end job after the workflow.
+      - name: Check the generated OpenAPI and protocol schemas are current
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: |
+          node contracts/generate.mjs
+          if [ -n "$(git status --porcelain -- contracts)" ]; then
+            git status --short -- contracts
+            git --no-pager diff --stat -- contracts
+            echo "::error::contracts/ is not what contracts/generate.mjs produces. Run node contracts/generate.mjs and commit the result."
+            exit 1
+          fi
       - name: Check generated Vector catalog, VRL reference and device-secret tables are current
         timeout-minutes: 10
         if: ${{ !cancelled() }}
