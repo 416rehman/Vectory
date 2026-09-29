@@ -1,4 +1,12 @@
+/** Changes hide sign-ins; security shows only sign-in, account and key events. */
+export type AuditScope = "changes" | "security" | "all";
+export const auditScopes: { value: AuditScope; label: string }[] = [
+  { value: "changes", label: "Changes" },
+  { value: "security", label: "Security" },
+  { value: "all", label: "All events" },
+];
 export type AuditQuery = {
+  scope: AuditScope;
   search: string;
   action: string;
   family: string;
@@ -14,6 +22,7 @@ export type AuditQuery = {
 };
 
 export const defaultAuditQuery: AuditQuery = {
+  scope: "changes",
   search: "",
   action: "",
   family: "",
@@ -142,6 +151,8 @@ export function normalizeAuditQuery(
   value: Partial<AuditQuery> = {},
 ): AuditQuery {
   const next = { ...defaultAuditQuery, ...value };
+  if (!auditScopes.some((scope) => scope.value === next.scope))
+    next.scope = "changes";
   next.search = Array.from(next.search.trim()).slice(0, 200).join("");
   if (next.action) next.family = "";
   if (!Number.isSafeInteger(next.page) || next.page < 1) next.page = 1;
@@ -152,12 +163,24 @@ export function normalizeAuditQuery(
   return next;
 }
 
+/** An explicit event filter shows matching events of any kind. */
+export function effectiveAuditScope(query: AuditQuery): AuditScope {
+  return query.action || query.family ? "all" : query.scope;
+}
+
 export function auditFilterParams(
   query: AuditQuery,
   dates: "timestamp" | "day" = "timestamp",
 ) {
   const value = normalizeAuditQuery(query);
   const params = new URLSearchParams();
+  if (dates === "day") {
+    // Page URLs keep the viewer's choice; the default stays implicit.
+    if (value.scope !== "changes") params.set("scope", value.scope);
+  } else {
+    const scope = effectiveAuditScope(value);
+    if (scope !== "all") params.set("scope", scope);
+  }
   for (const key of [
     "search",
     "action",
@@ -209,12 +232,13 @@ export function readAuditQuery(search: string): AuditQuery | undefined {
     "target_id",
   ] as const;
   if (
-    ![...keys, "page", "device", "sort", "direction"].some((key) =>
+    ![...keys, "page", "device", "sort", "direction", "scope"].some((key) =>
       params.has(key),
     )
   )
     return undefined;
   const value: Partial<AuditQuery> = {};
+  value.scope = (params.get("scope") as AuditScope) || "changes";
   for (const key of keys)
     value[key] = Array.from(params.get(key) || "")
       .slice(0, key === "search" ? 200 : key === "target_id" ? 256 : 128)
@@ -247,6 +271,15 @@ export function auditRoute(id: string | null, query: AuditQuery) {
   }
   const normalizedId = id && isAuditId(id) ? id.toLowerCase() : id;
   return `audit${normalizedId ? `/${encodeURIComponent(normalizedId)}` : ""}?${params}`;
+}
+
+/** Scope wording for prepared exports, which record it with the filters. */
+export function auditScopeSummary(scope?: string | null) {
+  return scope === "changes"
+    ? "Sign-in events excluded"
+    : scope === "security"
+      ? "Security events only"
+      : "";
 }
 
 export function auditFilterSummary(query: AuditQuery) {
@@ -296,4 +329,65 @@ export function auditDateError(from: string, to: string) {
   if (from && to && from > to)
     return "The end date must be on or after the start date.";
   return "";
+}
+
+export type AuditChange = { label: string; before?: string; after: string };
+const changePairs: [before: string, after: string, label: string][] = [
+  ["previous_state", "state", "State"],
+  ["previous_generation", "generation", "Configuration generation"],
+  [
+    "previous_policy_generation",
+    "policy_generation",
+    "Agent settings generation",
+  ],
+  ["previous_secret_revision", "secret_revision", "Local secret revision"],
+  ["previous_device_id", "replacement_device_id", "Device identity"],
+  ["old_device_id", "new_device_id", "Device identity"],
+  ["previous_signing_key_id", "signing_key_id", "Signing key"],
+];
+const changeValues: [key: string, label: string][] = [
+  ["version_number", "Version"],
+  ["configuration_revision", "Pipeline revision"],
+  ["source_revision", "Source revision"],
+  ["issue_revision", "Issue revision"],
+  ["retry_generation", "Retry generation"],
+  ["browser_sessions", "Browser sessions ended"],
+  ["password_reset_codes", "Password reset codes revoked"],
+  ["enrollment_tokens_to_revoke", "Enrollment tokens revoked"],
+  ["mfa_recovery_codes", "Recovery codes"],
+];
+const scalar = (value: unknown) =>
+  ["string", "number", "boolean"].includes(typeof value)
+    ? String(value)
+    : undefined;
+/**
+ * Before/after pairs and recorded values an audit event carries, if any.
+ * Group revisions are listed with the event's identities instead.
+ */
+export function auditChanges(
+  details: Record<string, unknown> | null | undefined,
+) {
+  const changes: AuditChange[] = [];
+  if (!details) return changes;
+  const state = (value: string, key: string) =>
+    key.endsWith("state") ? auditOutcomeLabel(value) : value;
+  for (const [beforeKey, afterKey, label] of changePairs) {
+    const after = scalar(details[afterKey]);
+    if (after === undefined) continue;
+    const before = scalar(details[beforeKey]);
+    changes.push({
+      label,
+      before: before === undefined ? undefined : state(before, beforeKey),
+      after: state(after, afterKey),
+    });
+  }
+  for (const [key, label] of changeValues) {
+    const value = scalar(details[key]);
+    if (value !== undefined)
+      changes.push({
+        label,
+        after: key === "version_number" ? `v${value}` : value,
+      });
+  }
+  return changes;
 }

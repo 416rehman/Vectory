@@ -431,7 +431,10 @@ try {
     );
   }
   function pageEnvelope(value, expectedKeys) {
-    assert.deepEqual(Object.keys(value).sort(), [
+    // DeploymentHistoryPage may advertise actor-scoped request discovery.
+    const { request_history, ...envelope } = value;
+    assert([undefined, true].includes(request_history));
+    assert.deepEqual(Object.keys(envelope).sort(), [
       "items",
       "page",
       "page_size",

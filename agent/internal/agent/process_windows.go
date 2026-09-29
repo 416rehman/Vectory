@@ -27,3 +27,6 @@ func supervisorGuard() (func(), error) {
 }
 func childPlatformOptions(cmd *exec.Cmd) {}
 func stopChild(cmd *exec.Cmd)            { _ = cmd.Process.Kill() } // Windows forced termination is explicit; no lossless claim.
+
+// Vector on Windows has no SIGHUP reload; the agent always restarts there.
+func reloadChild(*exec.Cmd) {}

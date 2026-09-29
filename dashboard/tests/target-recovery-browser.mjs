@@ -348,6 +348,17 @@ async function load({
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       if (path === `/deployments/${id(40)}/summary`)
         return reply({
           id: id(40),
@@ -577,9 +588,9 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
     await page
-      .getByLabel("Schedule (optional)", { exact: true })
+      .getByLabel("Start at", { exact: true })
       .fill("2030-01-01T12:30");
   }
   await page
@@ -1377,8 +1388,8 @@ try {
       const beta = table().locator("tbody tr").filter({ hasText: "Synthetic beta" });
       await expect(alpha).toContainText("Blocked: Full Vector mode required; Vector version incompatible");
       await expect(beta).toContainText("Blocked: Vector version incompatible");
-      await expect(alpha).toContainText("No current priority conflict");
-      await expect(beta).toContainText("No current priority conflict");
+      await expect(alpha).toContainText("No pipeline assigned");
+      await expect(beta).toContainText("No pipeline assigned");
       await expect(
         dialog().getByRole("link", { name: "View active canary" }),
       ).toHaveCount(0);

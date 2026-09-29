@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,12 +15,25 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 {
-			os.Exit(2)
-		}
-		os.Exit(VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(VectorHostMain(os.Args[2:]))
 	}
+	hermeticTestEnvironment()
 	os.Exit(m.Run())
+}
+
+// hermeticTestEnvironment makes t.TempDir() return canonical paths (on macOS
+// the temporary directory lives under the /var -> /private/var symlink, which
+// strict path checks rightly refuse) and keeps proxy settings of the machine
+// running the tests out of network classification tests.
+func hermeticTestEnvironment() {
+	if runtime.GOOS != "windows" {
+		if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+			_ = os.Setenv("TMPDIR", dir)
+		}
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		_ = os.Unsetenv(name)
+	}
 }
 func signed(t *testing.T, m Manifest, key ed25519.PrivateKey) Envelope {
 	t.Helper()
@@ -175,17 +189,19 @@ func TestScrubbedEnvironment(t *testing.T) {
 	}
 }
 func TestStartupAckCannotBeForgedByOtherTargets(t *testing.T) {
-	w := &startupWriter{ack: make(chan struct{})}
-	_, _ = w.Write([]byte(`{"target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-		t.Fatal("wrong target accepted")
-	default:
+	w := newVectorLog("")
+	for _, forged := range []string{
+		`{"level":"INFO","target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}`,
+		`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.57.0"}`,
+		`{"host":"x","message":"Vector has started.","target":"vector","version":"0.58.0"}`,
+	} {
+		_, _ = w.Write([]byte(forged + "\n"))
 	}
-	_, _ = w.Write([]byte(`{"target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-	default:
+	if w.signals.started != 0 {
+		t.Fatal("forged or incomplete ack accepted")
+	}
+	_, _ = w.Write([]byte(`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
+	if w.signals.started != 1 {
 		t.Fatal("real ack not accepted")
 	}
 }

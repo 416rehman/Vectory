@@ -555,9 +555,15 @@ try {
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth),
         ).toBeLessThanOrEqual(width + 1);
-        await expect(
-          page.locator(".history-diff-scroll").first(),
-        ).toHaveAttribute("tabindex", "0");
+        // Tables take a tab stop only when they scroll sideways.
+        const diffScroll = page.locator(".history-diff-scroll").first();
+        if (
+          await diffScroll.evaluate(
+            (node) => node.scrollWidth > node.clientWidth + 1,
+          )
+        )
+          await expect(diffScroll).toHaveAttribute("tabindex", "0");
+        else await expect(diffScroll).not.toHaveAttribute("tabindex", "0");
         const axe = await new AxeBuilder({ page })
           .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
           .analyze();

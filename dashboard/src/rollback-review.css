@@ -118,3 +118,50 @@
   color: var(--muted);
   font-size: 12px;
 }
+.rollback-nothing {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 14px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-hover);
+}
+.rollback-nothing strong {
+  font-size: 15px;
+}
+.rollback-nothing p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.rollback-shared-digest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollback-shared-digest code {
+  font-size: 11px;
+}
+.rollback-local {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollback-nothing .rollback-nothing-devices {
+  color: var(--ink);
+  font-weight: 500;
+}
+.rollback-device-digest,
+.rollback-device-id {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollback-device-id code {
+  font-size: 10.5px;
+}

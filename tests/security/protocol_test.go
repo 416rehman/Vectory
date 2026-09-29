@@ -194,6 +194,25 @@ func (h *harness) req(client *http.Client, base, method, path string, v any, coo
 	json.Unmarshal(raw, &result)
 	return res.StatusCode, result, res.Header
 }
+func (h *harness) oversized(client *http.Client, url string, v any) (int, map[string]any, http.Header) {
+	h.t.Helper()
+	b, _ := json.Marshal(v)
+	r, e := http.NewRequest("POST", url, bytes.NewReader(b))
+	if e != nil {
+		h.t.Fatal(e)
+	}
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Expect", "100-continue")
+	res, e := client.Do(r)
+	if e != nil {
+		h.t.Fatal(e)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 64*1024))
+	var result map[string]any
+	json.Unmarshal(raw, &result)
+	return res.StatusCode, result, res.Header
+}
 func (h *harness) api(method, path string, v any) (int, map[string]any, http.Header) {
 	return h.req(h.plain, h.http, method, "/api/v1"+path, v, h.cookie, h.csrf)
 }
@@ -398,9 +417,22 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 	})
 	t.Run("oversized-browser-and-agent-bodies-rejected", func(t *testing.T) {
 		body := map[string]any{"oversized": strings.Repeat("x", 5*1024*1024)}
-		n, rejected, _ := h.req(h.plain, h.http, "POST", "/api/v1/login", body, "", "")
+		// The server rejects from Content-Length and closes without reading the
+		// body, so a client streaming 5 MiB can race into a broken pipe. Ask for
+		// 100-continue: the 413 arrives before any body bytes are sent.
+		continued := func(c *http.Client) *http.Client {
+			var transport *http.Transport
+			if base, ok := c.Transport.(*http.Transport); ok {
+				transport = base.Clone()
+			} else {
+				transport = http.DefaultTransport.(*http.Transport).Clone()
+			}
+			transport.ExpectContinueTimeout = 5 * time.Second
+			return &http.Client{Timeout: c.Timeout, Transport: transport}
+		}
+		n, rejected, _ := h.oversized(continued(h.plain), h.http+"/api/v1/login", body)
 		expect(t, n, 413, rejected)
-		n, rejected, _ = h.req(client, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+		n, rejected, _ = h.oversized(continued(client), h.https+"/agent/v1/heartbeat", body)
 		expect(t, n, 413, rejected)
 	})
 	t.Run("exhausted-and-revoked-token-rejected", func(t *testing.T) {
@@ -557,8 +589,12 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		}
 		n, denied, _ := h.req(h.plain, h.http, "GET", "/api/v1/session", nil, olderCookie, "")
 		expect(t, n, 401, denied)
-		n, denied, _ = login(nil)
-		expect(t, n, 401, denied)
+		// Password-only sign-in now yields a staged MFA challenge, never a session.
+		n, challenged, challengeHeaders := login(nil)
+		okay(t, n, challenged)
+		if challenged["mfa_required"] != true || challenged["csrf_token"] != nil || challengeHeaders.Get("Set-Cookie") != "" {
+			t.Fatalf("password-only sign-in must return only an MFA challenge: %#v", challenged)
+		}
 		n, denied, _ = login(map[string]any{"totp_code": confirmation})
 		expect(t, n, 401, denied)
 		current := totpCode(t, secret, time.Now())
@@ -571,8 +607,13 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		recoveryCookie := strings.Split(recoveryHeaders.Get("Set-Cookie"), ";")[0]
 		n, denied, _ = login(map[string]any{"recovery_code": codes[0]})
 		expect(t, n, 401, denied)
+		// A wrong re-authentication password is 403 WRONG_PASSWORD, not 401:
+		// the session stays valid and must not look ended to the client.
 		n, denied, _ = h.req(h.plain, h.http, "POST", "/api/v1/mfa/disable", map[string]any{"password": "incorrect", "recovery_code": codes[1]}, cookie, csrf)
-		expect(t, n, 401, denied)
+		expect(t, n, 403, denied)
+		if denied["error"].(map[string]any)["code"] != "WRONG_PASSWORD" {
+			t.Fatalf("wrong password must be reported as WRONG_PASSWORD: %#v", denied)
+		}
 		n, disabled, _ := h.req(h.plain, h.http, "POST", "/api/v1/mfa/disable", map[string]any{"password": password, "recovery_code": codes[1]}, cookie, csrf)
 		okay(t, n, disabled)
 		n, denied, _ = h.req(h.plain, h.http, "GET", "/api/v1/session", nil, recoveryCookie, "")

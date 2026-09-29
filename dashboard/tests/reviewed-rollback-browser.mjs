@@ -361,6 +361,17 @@ async function start(
       });
     if (path === "/deployments/history")
       return respond({ items: [f.summary], total: 1, page: 1, page_size: 12 });
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${id(200)}/summary`)
       return respond(
         deployment(200, {
@@ -444,11 +455,11 @@ async function open(page) {
     .getByRole("link", { name: "Synthetic reviewed rollback", exact: true })
     .click();
   await expect(
-    page.getByRole("dialog", { name: "Deployment details" }),
+    page.getByRole("region", { name: "Deployment details", exact: true }),
   ).toBeVisible();
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details" });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const table = (page) =>
   dialog(page).getByRole("table", { name: "Device results" });
 async function noWrites(f) {
@@ -524,7 +535,7 @@ try {
         await ready(page);
         await expect(review(page)).toContainText("Synthetic logs · Version 2");
         await expect(review(page)).toContainText(
-          "stops further releases from the original rollout",
+          "Stops further releases here",
         );
         await expect(review(page)).toContainText(
           "Offline devices remain included.",
@@ -535,9 +546,12 @@ try {
         await expect(
           review(page).getByRole("list", { name: "Included devices" }),
         ).toContainText(id(3));
+        // The row shows a short digest; the exact one is on the element.
         await expect(
-          review(page).getByRole("list", { name: "Included devices" }),
-        ).toContainText("Prior artifact SHA-256: " + "a".repeat(64));
+          review(page)
+            .getByRole("list", { name: "Included devices" })
+            .locator(`code[data-digest="${"a".repeat(64)}"]`),
+        ).toHaveAttribute("title", "a".repeat(64));
         await review(page)
           .getByRole("button", { name: "Excluded (2)", exact: true })
           .click();
@@ -745,7 +759,7 @@ try {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await dialog(page)
-          .getByRole("button", { name: "Close dialog", exact: true })
+          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
           .click();
         f.role = "viewer";
         await page.reload();

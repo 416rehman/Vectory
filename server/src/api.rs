@@ -75,6 +75,23 @@ pub fn router(s: State) -> Router {
             "/api/v1/password-reset",
             post(crate::accounts::redeem_reset),
         )
+        .route("/api/v1/account/sessions", get(auth::sessions))
+        .route(
+            "/api/v1/account/sessions/{id}/revoke",
+            post(auth::revoke_session),
+        )
+        .route(
+            "/api/v1/users/{id}/two-factor-reset",
+            post(crate::mfa::admin_reset),
+        )
+        .route(
+            "/api/v1/invite/preview",
+            post(crate::accounts::preview_invite),
+        )
+        .route(
+            "/api/v1/invite/accept",
+            post(crate::accounts::accept_invite),
+        )
         .route("/api/v1/openapi.json", get(openapi))
         .route("/api/v1/audit/history", get(crate::audit::history))
         .route(
@@ -91,6 +108,7 @@ pub fn router(s: State) -> Router {
         )
         .route("/api/v1/audit/{id}", get(crate::audit::detail))
         .route("/api/v1/issues/history", get(crate::issues::history))
+        .route("/api/v1/issues/groups", get(crate::issues::groups))
         .route("/api/v1/issues/{id}", get(crate::issues::detail))
         .route(
             "/api/v1/issues/{id}/acknowledge",
@@ -100,6 +118,10 @@ pub fn router(s: State) -> Router {
         .route("/api/v1/mfa", get(crate::mfa::status))
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
+        .route(
+            "/api/v1/deployments/binding-suggestions",
+            post(crate::deployment_history::binding_suggestions),
+        )
         .route(
             "/api/v1/deployments/requests",
             get(crate::deployment_requests::history),
@@ -140,6 +162,10 @@ pub fn router(s: State) -> Router {
             "/api/v1/deployments/{id}/targets",
             get(crate::deployment_history::targets),
         )
+        .route(
+            "/api/v1/deployments/{id}/rollout",
+            get(crate::deployment_history::rollout),
+        )
         .route("/api/v1/vrl/test", post(validation::synthetic_vrl))
         .route(
             "/api/v1/configurations/test",
@@ -157,7 +183,22 @@ pub fn router(s: State) -> Router {
             "/api/v1/configurations/{id}/revisions/{revision_id}",
             get(crate::pipelines::revision_detail),
         )
-        .route("/api/v1/devices/{id}/telemetry", get(telemetry_history))
+        .route(
+            "/api/v1/devices/{id}/telemetry",
+            get(crate::telemetry::device_history),
+        )
+        .route(
+            "/api/v1/telemetry/summary",
+            get(crate::telemetry::fleet_summary),
+        )
+        .route(
+            "/api/v1/versions/{id}/telemetry",
+            get(crate::telemetry::version_telemetry),
+        )
+        .route(
+            "/api/v1/configurations/{id}/telemetry",
+            get(crate::telemetry::configuration_telemetry),
+        )
         .route(
             "/api/v1/devices/{id}/revoke",
             post(crate::device_revocation::post),
@@ -181,6 +222,10 @@ pub fn router(s: State) -> Router {
         .route(
             "/api/v1/groups/requests",
             get(crate::group_requests::history),
+        )
+        .route(
+            "/api/v1/groups/membership-preview",
+            post(crate::group_requests::membership_preview),
         )
         .route(
             "/api/v1/groups/requests/{id}",
@@ -211,6 +256,10 @@ pub fn router(s: State) -> Router {
             get(crate::policy_requests::history),
         )
         .route(
+            "/api/v1/policies/{id}",
+            get(crate::policy_requests::detail).put(crate::policy_requests::edit),
+        )
+        .route(
             "/api/v1/policies/requests/{id}",
             get(crate::policy_requests::lookup),
         )
@@ -226,6 +275,16 @@ pub fn router(s: State) -> Router {
             "/api/v1/tokens/requests/{id}/cancel",
             post(crate::token_requests::cancel),
         )
+        .route("/api/v1/releases", get(crate::install::list_releases))
+        .route(
+            "/api/v1/releases/{name}",
+            get(crate::install::download_release),
+        )
+        .route("/api/v1/agent-install", get(crate::install::details))
+        .route(
+            "/api/v1/agent-install/activity",
+            get(crate::install::activity),
+        )
         .route("/api/v1/{collection}", get(list).post(create))
         .route("/api/v1/{collection}/{id}", get(detail).put(edit_group))
         .route(
@@ -235,42 +294,36 @@ pub fn router(s: State) -> Router {
         .route("/api/{*path}", any(|| async { ApiError::missing() }))
         .route("/agent/{*path}", any(|| async { ApiError::missing() }))
         .fallback_service(spa)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn(reject_oversized))
         .layer(middleware::from_fn(security_headers))
         .with_state(s)
+}
+/// Largest accepted request body for the dashboard/API and agent listeners.
+pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
+/// Refuse a declared oversized body before reading any of it. `DefaultBodyLimit`
+/// still bounds chunked bodies, but only once a handler starts reading.
+pub async fn reject_oversized(request: Request, next: Next) -> Response {
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > MAX_REQUEST_BODY as u64) {
+        return ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+            "Request body is larger than 1 MiB",
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 async fn help_redirect(uri: Uri) -> Redirect {
     let location = uri
         .query()
         .map_or_else(|| "/help/".to_string(), |query| format!("/help/?{query}"));
     Redirect::permanent(&location)
-}
-async fn telemetry_history(
-    AppState(s): AppState<State>,
-    h: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &[], false).await?;
-    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE id=?")
-        .bind(&id)
-        .fetch_one(&s.pool)
-        .await?;
-    if exists == 0 {
-        return Err(ApiError::missing());
-    }
-    let rows = sqlx::query(
-        "SELECT bucket,data FROM telemetry WHERE device_id=? ORDER BY bucket DESC LIMIT 120",
-    )
-    .bind(&id)
-    .fetch_all(&s.pool)
-    .await?;
-    let mut samples = Vec::new();
-    for row in rows.into_iter().rev() {
-        let mut sample = db::parse(row.get("data"))?;
-        sample["bucket"] = json!(row.get::<i64, _>("bucket"));
-        samples.push(sample);
-    }
-    Ok(Json(json!({"device_id":id,"samples":samples})))
 }
 async fn openapi(AppState(s): AppState<State>, h: HeaderMap) -> Result<Response> {
     auth::authorize(&s, &h, &[], false).await?;
@@ -373,7 +426,11 @@ pub async fn list(
     .await?;
     let mut conn = s.pool.acquire().await?;
     let out = match collection.as_str() {
-        "devices" => json!(rollout::devices(&mut conn).await?),
+        "devices" => {
+            let mut devices = rollout::devices(&mut conn).await?;
+            crate::overview::annotate_versions(&mut conn, &mut devices).await?;
+            json!(devices)
+        }
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
         "groups" => json!(crate::groups::list(&mut conn).await?),
@@ -390,7 +447,6 @@ pub async fn list(
                     .collect::<Result<Vec<_>>>()?
             )
         }
-        "releases" => json!(releases(&s).await?),
         "settings" => {
             json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name})
         }
@@ -403,7 +459,10 @@ pub async fn list(
             let deployments = db::records(&mut conn, "deployment").await?;
             let issues_open = crate::issues::open_count(&mut conn).await?;
             let audit = recent_activity(&mut conn).await?;
-            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
+            let mut overview = json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked"|"awaiting_first_check_in")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"recent_activity":audit});
+            crate::overview::extend(&mut conn, &devices, &mut overview).await?;
+            overview["devices"] = json!(devices);
+            overview
         }
         _ => return Err(ApiError::missing()),
     };
@@ -426,31 +485,6 @@ pub async fn detail(
         "groups" => crate::groups::normalized(db::record(&mut conn, "group", &id).await?)?,
         "versions" => db::record(&mut conn, "version", &id).await?,
         "deployments" => rollout::deployment(&mut conn, &id).await?,
-        "releases" => {
-            let catalog = releases(&s).await?;
-            let metadata = catalog
-                .iter()
-                .find(|r| r["name"] == id)
-                .ok_or_else(ApiError::missing)?;
-            let bytes = tokio::fs::read(s.settings.releases_dir.join(&id))
-                .await
-                .map_err(|_| ApiError::missing())?;
-            // Hash the exact bytes being served; the listing cache is only an index.
-            if db::hash(&bytes) != text(metadata, "sha256") {
-                return Err(ApiError::conflict("Release integrity check failed"));
-            }
-            let mut response = bytes.into_response();
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            response.headers_mut().insert(
-                header::CONTENT_DISPOSITION,
-                HeaderValue::from_str(&format!("attachment; filename=\"{id}\""))
-                    .map_err(|_| ApiError::invalid("Invalid filename"))?,
-            );
-            return Ok(response);
-        }
         _ => return Err(ApiError::missing()),
     };
     Ok(Json(out).into_response())
@@ -912,6 +946,15 @@ pub async fn action(
                     .bind(&id)
                     .fetch_one(&mut *tx)
                     .await?;
+            // A device-specific artifact is stored per generation; the retry
+            // resends the exact same one under the new generation.
+            let version_id = parsed_version.hyphenated().to_string();
+            if let Some(artifact) =
+                crate::variables::current(&mut tx, &id, current_generation, &version_id).await?
+            {
+                crate::variables::snapshot(&mut tx, &id, generation, &version_id, &artifact)
+                    .await?;
+            }
             if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
                 let changed=sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?.rows_affected()>0;
                 let mut d = db::record(&mut tx, "deployment", &assignment).await?;
@@ -968,89 +1011,6 @@ pub async fn deployment_preview(
     let mut tx = s.pool.begin().await?;
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     Ok(Json(rollout::preview(&mut tx, &v).await?))
-}
-async fn releases(s: &State) -> Result<Vec<Value>> {
-    let bytes = match tokio::fs::read(s.settings.releases_dir.join("catalog.json")).await {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(_) => return Err(ApiError::invalid("Release catalog unavailable")),
-    };
-    if bytes.len() > 1024 * 1024 {
-        return Err(ApiError::invalid("Release catalog is too large"));
-    }
-    let entries: Vec<Value> = serde_json::from_slice(&bytes)
-        .map_err(|_| ApiError::invalid("Release catalog is invalid"))?;
-    let mut out = Vec::new();
-    for mut e in entries.into_iter().take(100) {
-        let name = text(&e, "name");
-        if name.is_empty()
-            || name.starts_with('.')
-            || name.len() > 150
-            || !name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        {
-            continue;
-        }
-        let path = s.settings.releases_dir.join(name);
-        let meta = match tokio::fs::symlink_metadata(&path).await {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.is_file()
-            || meta.len() > 128 * 1024 * 1024
-            || e["size"].as_u64() != Some(meta.len())
-        {
-            continue;
-        }
-        if release_digest(s, &path, name, &meta).await.as_deref() != Some(text(&e, "sha256")) {
-            continue;
-        }
-        e["url"] = json!(format!("/api/v1/releases/{name}"));
-        e["signed"] = json!(false);
-        out.push(e)
-    }
-    Ok(out)
-}
-/// SHA-256 of a release file, recomputed only when its length or modification
-/// time changes, so listing the catalog does not reread every binary.
-async fn release_digest(
-    s: &State,
-    path: &std::path::Path,
-    name: &str,
-    meta: &std::fs::Metadata,
-) -> Option<String> {
-    let key = (meta.len(), meta.modified().ok()?);
-    if let Some((len, modified, sha)) = s.release_hashes.lock().ok()?.get(name)
-        && (*len, *modified) == key
-    {
-        return Some(sha.clone());
-    }
-    let path = path.to_owned();
-    let sha = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
-        let mut file = std::fs::File::open(&path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 1 << 16];
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-        Ok(hex::encode(hasher.finalize()))
-    })
-    .await
-    .ok()?
-    .ok()?;
-    let mut cache = s.release_hashes.lock().ok()?;
-    if cache.len() >= 256 {
-        cache.clear();
-    }
-    cache.insert(name.to_owned(), (key.0, key.1, sha.clone()));
-    Some(sha)
 }
 async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(

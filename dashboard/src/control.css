@@ -173,30 +173,6 @@
   font-size: 13px;
   font-weight: 550;
 }
-.enroll-path-summary-error {
-  margin-left: 8px;
-  color: #9b2721;
-  font-weight: 600;
-}
-.enroll-wizard .field > input[aria-invalid="true"] {
-  border-color: #9b2721;
-}
-.enroll-wizard .field > input[aria-invalid="true"] + small {
-  color: #9b2721;
-}
-.enroll-path-warning {
-  margin: 8px 0 18px;
-  color: #9b2721;
-  font-size: 13px;
-}
-[data-theme="dark"] .enroll-path-summary-error,
-[data-theme="dark"] .enroll-wizard .field > input[aria-invalid="true"] + small,
-[data-theme="dark"] .enroll-path-warning {
-  color: #ffc6c2;
-}
-[data-theme="dark"] .enroll-wizard .field > input[aria-invalid="true"] {
-  border-color: #ffc6c2;
-}
 .control-disclosure-content {
   padding-top: 18px;
 }
@@ -549,143 +525,6 @@
 .target-receipt > p {
   margin-top: 18px;
 }
-.enroll-layout {
-  max-width: 820px;
-  margin: 0 auto;
-}
-.enroll-wizard {
-  padding: 28px;
-}
-.enroll-wizard h2 {
-  margin: 0 0 8px;
-  font-size: 21px;
-  letter-spacing: -0.3px;
-}
-.enroll-platforms {
-  border: 0;
-  padding: 0;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin: 23px 0;
-}
-.enroll-platform {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 550;
-}
-.enroll-platform:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.enroll-platform input {
-  accent-color: var(--accent);
-}
-.enroll-download {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 18px 0;
-}
-.enroll-download strong,
-.enroll-download small {
-  display: block;
-}
-.enroll-download small {
-  color: var(--muted);
-  margin-top: 5px;
-}
-.enroll-footer {
-  margin-top: 28px;
-  padding-top: 22px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.enroll-command-step {
-  margin-top: 23px;
-}
-.enroll-command-step h3 {
-  font-size: 14px;
-  margin: 0 0 8px;
-}
-.enroll-command-step p {
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.enroll-run-modes {
-  min-width: 0;
-  margin: 14px 0;
-  padding: 0;
-  border: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.enroll-run-modes legend {
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-.enroll-run-mode {
-  min-width: 0;
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-}
-.enroll-run-mode:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.enroll-run-mode input {
-  margin: 3px 0 0;
-  accent-color: var(--accent);
-}
-.enroll-run-mode strong,
-.enroll-run-mode small {
-  display: block;
-}
-.enroll-run-mode strong {
-  font-size: 13px;
-}
-.enroll-run-mode small {
-  margin-top: 3px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-.enroll-proof {
-  padding: 26px 0;
-}
-.enroll-proof h3 {
-  font-size: 21px;
-  margin: 0 0 10px;
-}
-.enroll-token-management {
-  margin-top: 28px;
-}
-.enroll-token-management > summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
-}
-.enroll-token-management > div {
-  margin-top: 18px;
-}
 .control-security-account {
   display: flex;
   justify-content: space-between;
@@ -930,22 +769,9 @@
   .control-steps li {
     font-size: 12px;
   }
-  .enroll-wizard,
   .control-card {
     padding: 20px;
   }
-  .enroll-platforms {
-    gap: 7px;
-  }
-  .enroll-platform {
-    padding: 12px 7px;
-    gap: 5px;
-    font-size: 12px;
-  }
-  .enroll-run-modes {
-    grid-template-columns: 1fr;
-  }
-  .enroll-download,
   .control-security-account,
   .control-section-head {
     align-items: flex-start;

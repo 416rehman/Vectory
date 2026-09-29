@@ -33,7 +33,13 @@ func bindingCommand(t *testing.T, args []string) (int, string) {
 func bindingCLIState(t *testing.T) (string, string, map[string][]byte) {
 	t.Helper()
 	dir := t.TempDir()
-	secret := filepath.Join(t.TempDir(), "private-synthetic-secret")
+	// Canonical path: Windows CI uses an 8.3 short TEMP that private-file
+	// checks treat as an alias.
+	private, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(private, "private-synthetic-secret")
 	if err := agent.AtomicWrite(secret, []byte("private-content-never-echo")); err != nil {
 		t.Fatal(err)
 	}

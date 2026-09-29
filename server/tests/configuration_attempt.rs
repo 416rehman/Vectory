@@ -119,7 +119,7 @@ async fn failed_new_candidate_counts_without_replacing_last_verified_identity() 
     );
     assert_eq!(
         target(&s, &candidate).await["error"],
-        "VALIDATION_FAILED (validation)"
+        "Vector rejected the configuration. Vector refused this version during validation on the device."
     );
     emit("failed_target", &target(&s, &candidate).await);
     rollout::tick(&s).await.unwrap();
@@ -302,7 +302,7 @@ async fn known_failure_survives_irrelevant_and_late_progress_then_exact_success(
         assert_eq!(target(&s, &candidate).await["state"], "failed");
         assert_eq!(
             target(&s, &candidate).await["error"],
-            "VALIDATION_FAILED (validation)"
+            "Vector rejected the configuration. Vector refused this version during validation on the device."
         );
         assert_eq!(shown(&s).await["apply_state"], "failed");
     }
@@ -540,23 +540,86 @@ async fn legacy_success_marker_is_not_required_to_halt_unverified_workload() {
 #[tokio::test]
 async fn stale_attempt_error_never_binds_issue_to_current_desired_version() {
     let (_temp, s, _) = fixture().await;
-    let mut v = verified(2, true);
-    let mut old = attempt(1, "failed");
-    old["version_id"] = json!(A);
-    old["sha256"] = json!(db::hash(artifact(A)));
-    v["configuration_attempt"] = old;
-    v["apply_state"] = json!("failed");
-    v["error"] =
+    let stale = |error: Value| {
+        let mut v = verified(2, true);
+        let mut old = attempt(1, "failed");
+        old["version_id"] = json!(A);
+        old["sha256"] = json!(db::hash(artifact(A)));
+        v["configuration_attempt"] = old;
+        v["apply_state"] = json!("failed");
+        v["error"] = error;
+        v
+    };
+    // The old attempt's own failure, repeated, is not a new issue.
+    let echo =
         json!({"code":"VALIDATION_FAILED","stage":"validation","message":"private old attempt"});
-    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
-    let issues: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue'")
-        .fetch_all(&s.pool)
+    assert_eq!(beat(&s, stale(echo)).await.0, StatusCode::OK);
+    assert!(issue_records(&s).await.is_empty());
+    // A different workload failure is recorded, but never against the
+    // desired version the device has not reached.
+    let workload =
+        json!({"code":"PROCESS_EXITED","stage":"observation","message":"private workload failure"});
+    assert_eq!(beat(&s, stale(workload)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0]["code"], "PROCESS_EXITED");
+    assert!(issues[0]["desired_version_id"].is_null());
+    assert!(!issues[0].to_string().contains("private"));
+}
+
+#[tokio::test]
+async fn retry_echo_of_the_previous_attempt_is_not_a_new_issue() {
+    let (_temp, s, _candidate) = fixture().await;
+    // The device still runs version A, verified before candidate B.
+    let running =
+        json!({"generation":1,"version_id":A,"sha256":db::hash(artifact(A)),"secret_revision":0});
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.verified_configuration_attempt',json(?),'$.verified_effective_sha256',?) WHERE id=?")
+        .bind(running.to_string())
+        .bind(db::hash(artifact(A)))
+        .bind(DEVICE)
+        .execute(&s.pool)
         .await
         .unwrap();
+    let failed = |generation: i64| {
+        let mut v = heartbeat("failed", Some(attempt(generation, "failed")));
+        v["error"] = json!({"code":"VALIDATION_FAILED","stage":"validation","message":"private candidate failure"});
+        v
+    };
+    let occurrences = |issue: &Value| {
+        (
+            issue["desired_version_id"].clone(),
+            issue["count"].clone(),
+            issue["reports"].clone(),
+        )
+    };
+    assert_eq!(beat(&s, failed(2)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
     assert_eq!(issues.len(), 1);
-    let issue: Value = serde_json::from_str(&issues[0]).unwrap();
-    assert!(issue["desired_version_id"].is_null());
-    assert!(!issues[0].contains("private old attempt"));
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(1), json!(1)));
+    let api = session(&s).await;
+    let (status, retried, _) = dashboard(
+        &s,
+        "POST",
+        &format!("/api/v1/devices/{DEVICE}/retry"),
+        json!({"expected_version_id":B,"expected_generation":2}),
+        &api.0,
+        &api.1,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    // Until the retry reaches it, the agent repeats its previous attempt:
+    // neither the running version A nor candidate B failed again.
+    assert_eq!(beat(&s, failed(2)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(1), json!(1)));
+    assert_eq!(shown(&s).await["apply_state"], "desired");
+    // The retried attempt fails again: a second occurrence of the same issue.
+    assert_eq!(beat(&s, failed(3)).await.0, StatusCode::OK);
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(occurrences(&issues[0]), (json!(B), json!(2), json!(2)));
+    assert_eq!(shown(&s).await["apply_state"], "failed");
 }
 #[tokio::test]
 async fn durable_failure_latch_survives_restart_and_pause_preserves_own_outcome() {
@@ -581,7 +644,7 @@ async fn durable_failure_latch_survives_restart_and_pause_preserves_own_outcome(
         assert_eq!(target(&s, &candidate).await["state"], "rolled_back");
         assert_eq!(
             target(&s, &candidate).await["error"],
-            "VALIDATION_FAILED (validation)"
+            "Vector rejected the configuration. Vector refused this version during validation on the device."
         );
     }
     rollout::tick(&s).await.unwrap();
@@ -631,7 +694,7 @@ async fn early_secret_failure_with_omitted_zero_revision_is_exact_and_useful() {
     assert_eq!(target(&s, &candidate).await["state"], "failed");
     assert_eq!(
         target(&s, &candidate).await["error"],
-        "SECRET_RESOLUTION_FAILED (materialization)"
+        "A local secret couldn't be read. A vectory-secret reference has no readable local file on the device."
     );
     let d = shown(&s).await;
     assert_eq!(d["secret_revision"], 0);
@@ -679,10 +742,385 @@ async fn target_errors_are_allowlisted_and_progress_clears_obsolete_messages() {
         );
         assert_eq!(
             target(&s, &candidate).await["error"],
-            "APPLY_FAILED (apply)"
+            "The device couldn't apply the configuration. The device reported a failure while applying this version."
         );
         assert!(!target(&s, &candidate).await.to_string().contains("private"));
     }
     assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
     assert!(target(&s, &candidate).await["error"].is_null());
+}
+
+fn manifest(envelope: &Value) -> Value {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(envelope["payload"].as_str().unwrap())
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+async fn deployment(s: &State, candidate: &Value) -> Value {
+    let mut c = s.pool.acquire().await.unwrap();
+    db::record(&mut c, "deployment", candidate["id"].as_str().unwrap())
+        .await
+        .unwrap()
+}
+async fn verified_at(s: &State, candidate: &Value) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT verified_at FROM deployment_targets WHERE deployment_id=? AND device_id=?",
+    )
+    .bind(candidate["id"].as_str().unwrap())
+    .bind(DEVICE)
+    .fetch_one(&s.pool)
+    .await
+    .unwrap()
+}
+async fn session(s: &State) -> (String, String) {
+    let (status, session, cookie) = dashboard(
+        s,
+        "POST",
+        "/api/v1/bootstrap",
+        json!({"bootstrap_secret":"synthetic-attempt-bootstrap","email":"operator@example.test","name":"Synthetic","password":"synthetic-long-password"}),
+        "",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    (cookie, session["csrf_token"].as_str().unwrap().to_owned())
+}
+async fn read_api(s: &State, path: &str, session: &(String, String)) -> (StatusCode, Value) {
+    let (status, body, _) = dashboard(s, "GET", path, Value::Null, &session.0, &session.1).await;
+    (status, body)
+}
+fn data_dir_diagnostic() -> Value {
+    json!({"severity":"error","code":"DATA_DIR_MISSING","field":"data_dir","message":"The data directory \"/srv/missing\" does not exist on this device.","hint":"Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device."})
+}
+
+#[tokio::test]
+async fn local_and_remote_pause_keep_the_verified_generation_and_target() {
+    let (_temp, s, candidate) = fixture().await;
+    assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
+    let at = verified_at(&s, &candidate).await;
+    assert!(at.is_some());
+    rollout::tick(&s).await.unwrap();
+    assert!(deployment(&s, &candidate).await["observation_started_at"].is_string());
+
+    // The agent reports "paused" while its verified workload keeps running.
+    let mut paused = verified(2, true);
+    paused["apply_state"] = json!("paused");
+    paused["local_paused"] = json!(true);
+    assert_eq!(beat(&s, paused).await.0, StatusCode::OK);
+    let d = shown(&s).await;
+    assert_eq!(d["apply_state"], "verified_applied");
+    assert_eq!(d["reported_apply_state"], "paused");
+    assert_eq!(d["configuration_attempt"]["state"], "verified_applied");
+    assert_eq!(d["status"], "paused");
+    let t = target(&s, &candidate).await;
+    assert_eq!(t["state"], "verified_applied");
+    assert!(t["error"].is_null());
+    assert_eq!(verified_at(&s, &candidate).await, at);
+    // The canary holds (reason "paused") without failing or releasing a wave.
+    assert!(deployment(&s, &candidate).await["observation_started_at"].is_null());
+    rollout::tick(&s).await.unwrap();
+    let d = deployment(&s, &candidate).await;
+    assert_eq!(d["status"], "active");
+    assert!(d["observation_started_at"].is_null());
+    let mut c = s.pool.acquire().await.unwrap();
+    let other = rollout::targets(&mut c, candidate["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t["device_id"] == OTHER)
+        .unwrap();
+    assert_eq!(other["generation"], 0);
+    drop(c);
+
+    // Resuming needs no re-apply: the same verified generation is proof again.
+    assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
+    rollout::tick(&s).await.unwrap();
+    assert!(deployment(&s, &candidate).await["observation_started_at"].is_string());
+    assert_eq!(verified_at(&s, &candidate).await, at);
+
+    // An acknowledged remote pause behaves the same.
+    sqlx::query("UPDATE devices SET policy=json_set(policy,'$.sync_paused',json('true')),policy_generation=policy_generation+1 WHERE id=?")
+        .bind(DEVICE)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let policy_generation: i64 =
+        sqlx::query_scalar("SELECT policy_generation FROM devices WHERE id=?")
+            .bind(DEVICE)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    let mut remote = verified(2, true);
+    remote["apply_state"] = json!("paused");
+    remote["remote_pause_acknowledged"] = json!(true);
+    remote["policy_generation"] = json!(policy_generation);
+    assert_eq!(beat(&s, remote.clone()).await.0, StatusCode::OK);
+    let d = shown(&s).await;
+    assert_eq!(d["apply_state"], "verified_applied");
+    assert_eq!(d["pause_acknowledged"], true);
+    assert_eq!(d["configuration_attempt"]["state"], "verified_applied");
+    let t = target(&s, &candidate).await;
+    assert_eq!(t["state"], "verified_applied");
+    assert_eq!(verified_at(&s, &candidate).await, at);
+
+    // Only a changed digest degrades a paused device.
+    remote["actual_sha256"] = json!(db::hash("changed on the host"));
+    assert_eq!(beat(&s, remote).await.0, StatusCode::OK);
+    assert_eq!(
+        target(&s, &candidate).await["state"],
+        "verification_unknown"
+    );
+    assert_ne!(shown(&s).await["apply_state"], "verified_applied");
+}
+
+#[tokio::test]
+async fn diagnostics_explain_the_failure_on_device_issue_and_target() {
+    let (_temp, s, candidate) = fixture().await;
+    let mut a = attempt(2, "failed");
+    a["error"]["diagnostics"] = json!([
+        data_dir_diagnostic(),
+        {"severity":"warning","code":"OUTPUT_UNUSED","component_id":"in","component_kind":"source","message":"Nothing reads the output of in."}
+    ]);
+    let (status, envelope) = beat(&s, heartbeat("failed", Some(a.clone()))).await;
+    assert_eq!(status, StatusCode::OK, "{envelope}");
+    let features = manifest(&envelope)["features"].clone();
+    for feature in [
+        "diagnostics",
+        "host_runtime",
+        "vector_log_summary",
+        "telemetry_v2",
+    ] {
+        assert!(
+            features.as_array().unwrap().contains(&json!(feature)),
+            "{features}"
+        );
+    }
+    let reason = "The data directory \"/srv/missing\" does not exist on this device.";
+    let fix = "Remove data_dir from the pipeline to use the device's own data directory, or create this directory on the device.";
+    assert_eq!(
+        target(&s, &candidate).await["error"],
+        format!("Vector rejected the configuration. {reason} {fix}")
+    );
+    let d = shown(&s).await;
+    let error = &d["configuration_attempt"]["error"];
+    assert_eq!(error["code"], "VALIDATION_FAILED");
+    assert_eq!(error["message"], reason);
+    assert_eq!(error["diagnostics"][0], data_dir_diagnostic());
+    assert_eq!(error["diagnostics"][1]["severity"], "warning");
+    assert!(!d.to_string().contains("synthetic private diagnostic"));
+    emit("diagnosed_failure", &d);
+
+    // A repeated report of the same attempt is a report, not an occurrence.
+    assert_eq!(
+        beat(&s, heartbeat("failed", Some(a))).await.0,
+        StatusCode::OK
+    );
+    let api = session(&s).await;
+    let (status, page) = read_api(&s, "/api/v1/issues/history", &api).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 1);
+    let issue = &page["items"][0];
+    assert_eq!(issue["title"], "Vector rejected the configuration");
+    assert_eq!(issue["message"], reason);
+    assert_eq!(issue["diagnostics"][0]["hint"], fix);
+    assert_eq!(issue["desired_version_id"], B);
+    assert_eq!(issue["version_number"], 2);
+    assert_eq!(
+        issue["configuration_id"],
+        "00000000-0000-4000-8000-000000000100"
+    );
+    assert_eq!(issue["deployment_id"], candidate["id"]);
+    assert_eq!(issue["count"], 1);
+    assert_eq!(issue["reports"], 2);
+    // Titles are searchable; stored free text is not.
+    for (query, total) in [("rejected", 1), ("synthetic%20private", 0)] {
+        let (_, page) = read_api(&s, &format!("/api/v1/issues/history?search={query}"), &api).await;
+        assert_eq!(page["total"], total, "{query}");
+    }
+    let (status, groups) = read_api(&s, "/api/v1/issues/groups", &api).await;
+    assert_eq!(status, StatusCode::OK, "{groups}");
+    assert_eq!(groups["total"], 1);
+    let group = &groups["items"][0];
+    assert_eq!(group["code"], "VALIDATION_FAILED");
+    assert_eq!(group["title"], "Vector rejected the configuration");
+    assert_eq!(group["message"], reason);
+    assert_eq!(group["version_id"], B);
+    assert_eq!(group["version_number"], 2);
+    assert_eq!(group["device_count"], 1);
+    assert_eq!(group["attempts"], 1);
+    assert_eq!(group["reports"], 2);
+    assert_eq!(group["deployment_ids"], json!([candidate["id"]]));
+    assert_eq!(group["devices"][0]["device_id"], DEVICE);
+    emit("issue_group", &groups);
+    for query in ["state=hidden", "unknown=1", "page=0", "page_size=51"] {
+        let (status, _) = read_api(&s, &format!("/api/v1/issues/groups?{query}"), &api).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn diagnostics_host_runtime_and_log_summaries_are_bounded_and_atomic() {
+    let (_temp, s, _candidate) = fixture().await;
+    let failed = |diagnostics: Value| {
+        let mut a = attempt(2, "failed");
+        a["error"]["diagnostics"] = diagnostics;
+        heartbeat("failed", Some(a))
+    };
+    let with = |key: &str, value: Value| {
+        let mut d = data_dir_diagnostic();
+        if value.is_null() {
+            d.as_object_mut().unwrap().remove(key);
+        } else {
+            d[key] = value;
+        }
+        failed(json!([d]))
+    };
+    let summary = json!({"fingerprint":"0123456789abcdef","level":"error","component_id":"out","component_kind":"sink","component_type":"http","message":"Request failed: the destination refused the connection.","count":3,"first_seen":"2026-09-29T00:00:00Z","last_seen":"2026-09-29T00:01:00Z"});
+    let logs = |item: Value| {
+        let mut v = verified(2, true);
+        v["vector_log_summary"] = item;
+        v
+    };
+    let runtime = |value: Value| {
+        let mut v = verified(2, true);
+        v["host_runtime"] = value;
+        v
+    };
+    let mut top_level = heartbeat("failed", None);
+    top_level["error"] = json!({"code":"PROCESS_EXITED","stage":"startup","message":"x","diagnostics":[{"severity":"error","code":"X","message":"x","raw":"private"}]});
+    let mut upper = summary.clone();
+    upper["fingerprint"] = json!("0123456789ABCDEF");
+    let mut missing_count = summary.clone();
+    missing_count.as_object_mut().unwrap().remove("count");
+    let mut info = summary.clone();
+    info["level"] = json!("info");
+    let mut extra = summary.clone();
+    extra["raw"] = json!("private");
+    for body in [
+        failed(json!(vec![data_dir_diagnostic(); 11])),
+        failed(json!({"severity":"error"})),
+        with("message", json!("é".repeat(300))),
+        with("hint", json!("é".repeat(200))),
+        with("raw", json!("private")),
+        with("message", Value::Null),
+        with("code", json!("data_dir_missing")),
+        with("severity", json!("fatal")),
+        with("message", json!("line\nbreak")),
+        with("line", json!(0)),
+        with("component_id", json!("has space")),
+        top_level,
+        runtime(json!({"data_dir":"/var/lib/vector","unknown":true})),
+        runtime(json!({"data_dir_source":"somewhere"})),
+        runtime(json!({"graceful_shutdown_seconds":0})),
+        runtime(json!({"metrics_address":"http://127.0.0.1:9598/metrics"})),
+        runtime(json!("host")),
+        logs(json!(vec![summary.clone(); 21])),
+        logs(json!([upper])),
+        logs(json!([missing_count])),
+        logs(json!([info])),
+        logs(json!([extra])),
+        logs(json!({"items":[]})),
+    ] {
+        let before = snapshot(&s).await;
+        let (status, error) = beat(&s, body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {error}");
+        assert!(!error.to_string().contains("private"));
+        assert_eq!(snapshot(&s).await, before);
+    }
+
+    let host = json!({"data_dir":"/var/lib/vectory/vector-data","data_dir_source":"agent_default","graceful_shutdown_seconds":60,"metrics_source":"discovered","metrics_address":"127.0.0.1:9598","activation":"reload"});
+    let mut v = verified(2, true);
+    v["host_runtime"] = host.clone();
+    v["vector_log_summary"] = json!([summary]);
+    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
+    let d = shown(&s).await;
+    assert_eq!(d["host_runtime"], host);
+    assert_eq!(d["vector_log_summary"]["items"], json!([summary]));
+    assert!(d["vector_log_summary"]["reported_at"].is_string());
+    emit("host_runtime_device", &d);
+    // An agent with nothing to report sends an empty list; an older agent
+    // sends neither field, which clears what it no longer reports.
+    let mut v = verified(2, true);
+    v["vector_log_summary"] = json!([]);
+    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
+    assert_eq!(shown(&s).await["vector_log_summary"]["items"], json!([]));
+    assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
+    let d = shown(&s).await;
+    assert!(d.get("host_runtime").is_none());
+    assert!(d.get("vector_log_summary").is_none());
+}
+
+async fn issue_records(s: &State) -> Vec<Value> {
+    sqlx::query_scalar::<_, String>("SELECT data FROM records WHERE kind='issue'")
+        .fetch_all(&s.pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| serde_json::from_str::<Value>(&row).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn unassignment_resolves_issues_without_inventing_failures() {
+    let (_temp, s, _candidate) = fixture().await;
+    assert_eq!(
+        beat(&s, heartbeat("failed", Some(attempt(2, "failed"))))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(issue_records(&s).await.len(), 1);
+    // Remove the assignment exactly as rollout resolution does.
+    sqlx::query("UPDATE devices SET desired_version_id=NULL,desired_generation=desired_generation+1,assignment_id=NULL,data=json_remove(data,'$.desired_artifact_sha256') WHERE id=?")
+        .bind(DEVICE)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    // Reports still in flight describe the old workload and candidate.
+    for body in [
+        heartbeat("verified_applied", None),
+        heartbeat("failed", Some(attempt(2, "failed"))),
+        heartbeat("unmanaged", None),
+    ] {
+        assert_eq!(beat(&s, body).await.0, StatusCode::OK);
+        let issues = issue_records(&s).await;
+        assert_eq!(issues.len(), 1, "no new issue for an unassigned device");
+        assert_eq!(issues[0]["resolved"], true);
+        assert_eq!(issues[0]["resolved_reason"], "unassigned");
+        assert_eq!(shown(&s).await["apply_state"], "unmanaged");
+    }
+}
+
+#[tokio::test]
+async fn issues_are_keyed_by_version_and_grouped_newest_first() {
+    let (_temp, s, _candidate) = fixture().await;
+    assert_eq!(
+        beat(&s, heartbeat("failed", Some(attempt(2, "failed"))))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    // The device is later asked to run version A, which fails the same way.
+    sqlx::query("UPDATE devices SET desired_version_id=?,desired_generation=3,data=json_remove(data,'$.desired_artifact_sha256') WHERE id=?")
+        .bind(A)
+        .bind(DEVICE)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let mut a = attempt(3, "failed");
+    a["version_id"] = json!(A);
+    a["sha256"] = json!(db::hash(artifact(A)));
+    assert_eq!(
+        beat(&s, heartbeat("failed", Some(a))).await.0,
+        StatusCode::OK
+    );
+    let issues = issue_records(&s).await;
+    assert_eq!(issues.len(), 2);
+    let api = session(&s).await;
+    let (_, groups) = read_api(&s, "/api/v1/issues/groups", &api).await;
+    assert_eq!(groups["total"], 2);
+    assert_eq!(groups["items"][0]["version_id"], A);
+    assert_eq!(groups["items"][0]["version_number"], 1);
+    assert_eq!(groups["items"][1]["version_id"], B);
 }

@@ -365,6 +365,17 @@ async function load({
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       if (/^\/deployments\/[^/]+\/summary$/.test(path))
         return reply({
           id: path.split("/")[2],
@@ -614,9 +625,9 @@ async function preview({ both = true, scheduled = false } = {}) {
       .getByRole("checkbox", { name: "Select Synthetic beta", exact: true })
       .check();
   if (scheduled) {
-    await page.getByText("Advanced options", { exact: true }).click();
+    await page.getByRole("radio", { name: "Scheduled", exact: true }).check();
     await page
-      .getByLabel("Schedule (optional)", { exact: true })
+      .getByLabel("Start at", { exact: true })
       .fill("2030-01-01T12:30");
   }
   await page
@@ -1074,7 +1085,7 @@ try {
         new RegExp(`#/deployments/${id(2002)}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
       expect(state.creates).toHaveLength(0);
       expect(state.rollbacks).toHaveLength(0);

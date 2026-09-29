@@ -1,27 +1,48 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { useImperativeHandle, useRef, useState, type Ref } from "react";
+import { Check, Link2, Plus, Sparkles } from "lucide-react";
 import { z } from "zod";
+import { APIError, UserSchema, api, type Person, type User } from "./api";
+import { normalizeAuthEmail, retryDelay } from "./authRequests";
+import { useAccountAuthority, useLeaveGuard } from "./accountAuthority";
 import {
-  api,
-  getCSRFToken,
-  getCSRFVersion,
-  getSessionEpoch,
-  isSessionValid,
-  UserSchema,
-  withRequestDeadline,
-  type User,
-} from "./api";
-import { isDefinitiveAuthRejection } from "./authRequests";
-import {
-  canUseAccountActionContext,
-  sameAccountActionContext,
-  type AccountActionContext,
-} from "./accountActionSession";
-import { Button, ErrorBox, Field, Modal } from "./ui";
+  AuthField,
+  CopyButton,
+  PasswordField,
+  Unconfirmed,
+} from "./authControls";
+import { NotSent, useKeyedRequest, type KeyedRequest } from "./keyedRequest";
+import { generatePassword, passwordIssue } from "./passwordStrength";
 import RolePicker from "./RolePicker";
+import { firstName, type HeldLink } from "./AdminPasswordResetActions";
+import { Button, Modal, Spinner } from "./ui";
+import "./account.css";
+
+type Draft = {
+  name: string;
+  email: string;
+  role: User["role"];
+  method: "invite" | "password";
+};
+type Created = { user: User; invite?: { code: string; expires_at: string } };
+type Finished = {
+  user: User;
+  method: Draft["method"];
+  /** Created, but the one-time response (and any invite link) was lost. */
+  unseen: boolean;
+};
 
 const ReceiptSchema = z
-  .object({ request_id: z.uuid(), user: UserSchema })
+  .object({
+    request_id: z.uuid(),
+    user: UserSchema,
+    invite: z
+      .object({
+        code: z.string().regex(/^[a-f0-9]{64}$/),
+        expires_at: z.string(),
+      })
+      .strict()
+      .optional(),
+  })
   .strict();
 const StatusSchema = z.discriminatedUnion("status", [
   z.object({ request_id: z.uuid(), status: z.literal("not_found") }).strict(),
@@ -34,597 +55,590 @@ const StatusSchema = z.discriminatedUnion("status", [
     })
     .strict(),
 ]);
-type Status = z.infer<typeof StatusSchema>;
-type Context = AccountActionContext & { role: User["role"] };
-type Review = {
-  context: Context;
-  requestId: string;
-  email: string;
-  name: string;
-  role: User["role"];
-  phase: "sending" | "unknown" | "changed";
-  status: Status | null;
-  error: string;
-};
-type Wait = { review: Review; controller: AbortController };
 
+export type AddPersonHandle = { open: () => void };
+
+const emptyDraft: Draft = {
+  name: "",
+  email: "",
+  role: "viewer",
+  method: "invite",
+};
+
+/**
+ * Add a person: an invite link by default (they choose their own password),
+ * or a password set now. Creation is a keyed request: the password is sent
+ * once, a lost response is read back by its exact ID, and a second attempt
+ * waits for a confirmed cancellation.
+ */
 export default function AddPersonActions({
+  ref,
   user,
   notify,
   onCreated,
-  onObserved,
-  onReviewNeeded,
+  onInvite,
+  onNewLink,
+  onLocate,
 }: {
+  ref?: Ref<AddPersonHandle>;
   user: User;
   notify: (message: string) => void;
   onCreated: (person: User) => void;
-  onObserved: (person: User) => void;
-  onReviewNeeded: () => void;
+  onInvite: (link: HeldLink) => void;
+  onNewLink: (person: Person) => void;
+  onLocate: (email: string) => void;
 }) {
-  const [formOpen, setFormOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<User["role"]>("viewer");
-  const [formError, setFormError] = useState("");
-  const [review, setReview] = useState<Review | null>(null);
-  const retained = useRef<Review | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const active = useRef<Wait | null>(null);
-  const observation = useRef<AbortController | null>(null);
-  const currentUser = useRef(user);
-  const owner = useRef<Context | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const [finished, setFinished] = useState<Finished | null>(null);
   const opener = useRef<HTMLButtonElement>(null);
-  const reviewAction = useRef<HTMLButtonElement>(null);
-
-  function context(): Context {
-    return {
-      userId: currentUser.current.id,
-      role: currentUser.current.role,
-      enabled: currentUser.current.enabled,
-      csrfToken: getCSRFToken(),
-      csrfVersion: getCSRFVersion(),
-      epoch: getSessionEpoch(),
-      valid: isSessionValid(),
-    };
-  }
-  function sameContext(original: Context) {
-    const now = context();
-    return (
-      original.role === "admin" &&
-      original.role === now.role &&
-      canUseAccountActionContext(original, now)
-    );
-  }
-  function matchesPerson(
-    person: User,
-    expected: Pick<Review, "email" | "name" | "role">,
-  ) {
-    return (
-      person.email === expected.email &&
-      person.name === expected.name &&
-      person.role === expected.role &&
-      person.enabled
-    );
-  }
-  function remember(next: Review | null) {
-    retained.current = next;
-    setReview(next);
-  }
-  function clearPassword() {
+  const authority = useAccountAuthority(user, () => {
     setPassword("");
-  }
-  function stopWaiting(hide = false) {
-    const request = active.current;
-    if (request) {
-      active.current = null;
-      request.controller.abort();
-      remember({ ...request.review, phase: "unknown" });
-      clearPassword();
-    }
-    observation.current?.abort();
-    observation.current = null;
-    setChecking(false);
-    if (hide) setReviewOpen(false);
-  }
-  function authorityChanged() {
-    stopWaiting();
-    clearPassword();
-    setFormOpen(false);
-    setFormError("");
-    if (retained.current)
-      remember({
-        ...retained.current,
-        phase: "changed",
-        status: null,
-        error: "",
-      });
-    setReviewOpen(false);
-  }
-  useLayoutEffect(() => {
-    currentUser.current = user;
-    const now = context();
-    if (
-      owner.current &&
-      (owner.current.role !== now.role ||
-        !sameAccountActionContext(owner.current, now))
-    )
-      authorityChanged();
-    owner.current = now;
-  }, [user]);
-  useEffect(() => {
-    const changed = () => {
-      const now = context();
-      if (
-        owner.current &&
-        (owner.current.role !== now.role ||
-          !sameAccountActionContext(owner.current, now))
-      )
-        authorityChanged();
-      owner.current = now;
-    };
-    window.addEventListener("vectory:session-ended", changed);
-    window.addEventListener("vectory:session-changed", changed);
-    return () => {
-      window.removeEventListener("vectory:session-ended", changed);
-      window.removeEventListener("vectory:session-changed", changed);
-    };
-  }, []);
-  useLayoutEffect(
-    () => () => {
-      active.current?.controller.abort();
-      active.current = null;
-      observation.current?.abort();
-      observation.current = null;
+    creation.authorityChanged();
+    setFinished(null);
+  });
+  const creation = useKeyedRequest<Draft, Created>({
+    authority,
+    async read(request, signal) {
+      const status = await api(
+        `/users/requests/${request.id}`,
+        { signal, headers: { "X-CSRF-Token": request.context.csrfToken } },
+        StatusSchema,
+      );
+      if (status.request_id !== request.id)
+        throw Error("The server described a different request.");
+      return status.status === "created"
+        ? { kind: "done", result: { user: status.user } }
+        : status.status === "cancelled"
+          ? { kind: "retry" }
+          : { kind: "pending" };
     },
-    [],
-  );
-  useEffect(() => {
-    if (!review && !formOpen) return;
-    const leave = (event: Event) => {
+    async cancel(request, signal) {
+      const status = await api(
+        `/users/requests/${request.id}/cancel`,
+        {
+          method: "POST",
+          body: "{}",
+          signal,
+          headers: { "X-CSRF-Token": request.context.csrfToken },
+        },
+        StatusSchema,
+      );
+      if (status.request_id !== request.id || status.status === "not_found")
+        throw Error("The server didn't confirm the cancellation.");
+      return status.status === "created"
+        ? { kind: "done", result: { user: status.user } }
+        : { kind: "retry" };
+    },
+    done(request, result, via) {
+      const person = result.user;
+      const expected = request.target;
+      setPassword("");
+      onCreated(person);
       if (
-        !window.confirm(
-          review
-            ? "Leave this account creation review? The request may still finish, and its result will no longer be available here."
-            : "Leave this account form and discard the entered details?",
-        )
-      )
-        event.preventDefault();
-    };
-    const unload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("vectory:before-navigate", leave);
-    window.addEventListener("beforeunload", unload);
-    return () => {
-      window.removeEventListener("vectory:before-navigate", leave);
-      window.removeEventListener("beforeunload", unload);
-    };
-  }, [review, formOpen]);
-  useEffect(() => {
-    if (reviewOpen && review?.phase === "unknown")
-      reviewAction.current?.focus();
-  }, [reviewOpen, review?.phase]);
+        normalizeAuthEmail(person.email) !== expected.email ||
+        person.name !== expected.name ||
+        person.role !== expected.role
+      ) {
+        notify(
+          `An account for ${person.email} exists, but its details changed. Review it in Workspace access.`,
+        );
+        return;
+      }
+      if (via === "receipt" && result.invite) {
+        onInvite({
+          userId: person.id,
+          name: person.name,
+          email: person.email,
+          code: result.invite.code,
+          purpose: "invite",
+          expiresAt: result.invite.expires_at,
+          owner: request.context,
+          requestId: null,
+          verifiedRevision: person.revision,
+          doubt: "",
+        });
+        return;
+      }
+      setFinished({
+        user: person,
+        method: expected.method,
+        unseen: via === "status",
+      });
+    },
+  });
+  useImperativeHandle(ref, () => ({ open }));
+  const request = creation.request;
+  useLeaveGuard(
+    request && request.phase !== "form"
+      ? "Leave before this account request is resolved? You'll need to check Workspace access later."
+      : creation.open && (draft.name || draft.email || password)
+        ? "Discard this new person?"
+        : null,
+  );
 
   function open() {
-    if (retained.current) {
-      setReviewOpen(true);
-      return;
+    if (user.role !== "admin") return;
+    setFinished(null);
+    if (creation.begin(emptyDraft)) {
+      setDraft(emptyDraft);
+      setPassword("");
+      setRevealed(false);
     }
-    if (currentUser.current.role !== "admin" || !sameContext(context())) return;
-    setName("");
-    setEmail("");
-    clearPassword();
-    setRole("viewer");
-    setFormError("");
-    setFormOpen(true);
   }
-  async function create(event: React.FormEvent) {
+  function change(next: Partial<Draft>) {
+    setDraft((current) => ({ ...current, ...next }));
+    const fields = { ...request?.fields };
+    for (const key of Object.keys(next)) delete fields[key];
+    if (next.method) delete fields.password;
+    delete fields.form;
+    creation.edit({ fields });
+  }
+  async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (active.current || retained.current || !formOpen) return;
-    const original = context();
-    if (original.role !== "admin" || !sameContext(original)) return;
-    const requestId = crypto.randomUUID();
-    const targetEmail = email
-      .trim()
-      .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
-    const targetName = name.trim();
-    if (!targetName) {
-      setFormError("Enter a name for this account.");
+    if (!request || request.phase !== "form") return;
+    const target: Draft = {
+      ...draft,
+      name: draft.name.trim(),
+      email: normalizeAuthEmail(draft.email),
+    };
+    const fields: Record<string, string> = {};
+    if (!target.name) fields.name = "Enter their name.";
+    else if (target.name.length > 100)
+      fields.name = "Use 100 characters or fewer.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target.email))
+      fields.email = "Enter an email address like jane@example.com.";
+    if (target.method === "password") {
+      const weak = passwordIssue(password, [target.email, target.name]);
+      if (weak) fields.password = weak;
+    }
+    if (Object.keys(fields).length) {
+      creation.edit({ fields });
       return;
     }
-    const targetRole = role;
     const secret = password;
-    const next: Review = {
-      context: original,
-      requestId,
-      email: targetEmail,
-      name: targetName,
-      role: targetRole,
-      phase: "sending",
-      status: null,
-      error: "",
-    };
-    const wait = { review: next, controller: new AbortController() };
-    active.current = wait;
-    clearPassword();
-    setFormError("");
-    setFormOpen(false);
-    remember(next);
-    setReviewOpen(true);
-    let sent = false;
-    try {
-      const preflight = await withRequestDeadline(
-        (signal) =>
-          api(
-            `/users/requests/${requestId}`,
-            { signal, headers: { "X-CSRF-Token": original.csrfToken } },
+    // The password is sent once and never kept for a replay.
+    setPassword("");
+    creation.edit({ target });
+    await creation.send(
+      async (attempt, signal) => {
+        const headers = { "X-CSRF-Token": attempt.context.csrfToken };
+        try {
+          const preflight = await api(
+            `/users/requests/${attempt.id}`,
+            { signal, headers },
             StatusSchema,
-          ),
-        30000,
-        wait.controller.signal,
-      );
-      if (active.current !== wait || !sameContext(original)) return;
-      if (
-        preflight.request_id !== requestId ||
-        preflight.status !== "not_found"
-      )
-        throw Error("The server did not confirm this new account request ID.");
-      sent = true;
-      const receipt = await withRequestDeadline(
-        (signal) =>
-          api(
-            "/users",
-            {
-              method: "POST",
-              body: JSON.stringify({
-                request_id: requestId,
-                name: targetName,
-                email: targetEmail,
-                password: secret,
-                role: targetRole,
-              }),
-              headers: { "X-CSRF-Token": original.csrfToken },
-              signal,
-            },
-            ReceiptSchema,
-          ),
-        30000,
-        wait.controller.signal,
-      );
-      if (active.current !== wait || !sameContext(original)) return;
-      if (
-        receipt.request_id !== requestId ||
-        !matchesPerson(receipt.user, next)
-      )
-        throw Error("The account receipt did not match this request.");
-      active.current = null;
-      remember(null);
-      setReviewOpen(false);
-      onCreated(receipt.user);
-      notify("Workspace user created.");
-    } catch (failure) {
-      if (active.current !== wait) return;
-      active.current = null;
-      if (!sameContext(original)) {
-        authorityChanged();
-        return;
-      }
-      if (!sent) {
-        remember(null);
-        setReviewOpen(false);
-        setFormError(
-          "Account creation was not sent. The server did not confirm support for safe account requests. " +
-            (failure as Error).message,
+          );
+          if (
+            preflight.request_id !== attempt.id ||
+            preflight.status !== "not_found"
+          )
+            throw Error();
+        } catch {
+          throw new NotSent(
+            "We couldn't reach Vectory, so nothing was sent. Try again.",
+          );
+        }
+        const receipt = await api(
+          "/users",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              request_id: attempt.id,
+              name: target.name,
+              email: target.email,
+              role: target.role,
+              ...(target.method === "invite"
+                ? { invite: true }
+                : { password: secret }),
+            }),
+            signal,
+            headers,
+          },
+          ReceiptSchema,
         );
-        setFormOpen(true);
-      } else if (
-        isDefinitiveAuthRejection(failure) &&
-        (failure as { status: number }).status !== 409
-      ) {
-        remember(null);
-        setReviewOpen(false);
-        setFormError((failure as Error).message);
-        setFormOpen(true);
-      } else {
-        remember({
-          ...next,
-          phase: "unknown",
-          error: isDefinitiveAuthRejection(failure)
-            ? (failure as Error).message
-            : "The result was not confirmed. Check this exact request before starting another account.",
-        });
-      }
+        if (
+          receipt.request_id !== attempt.id ||
+          (target.method === "invite") !== !!receipt.invite
+        )
+          throw Error("The account receipt didn't match this request.");
+        return { user: receipt.user, invite: receipt.invite };
+      },
+      (failure) => {
+        const error = failure instanceof APIError ? failure : null;
+        const wait = retryDelay(failure);
+        if (error?.code === "EMAIL_TAKEN")
+          return { email: `Someone already uses ${target.email}.` };
+        if (error?.code === "EMAIL_INVALID") return { email: error.message };
+        if (error?.code === "NAME_INVALID") return { name: error.message };
+        if (error?.code === "PASSWORD_TOO_WEAK")
+          return {
+            password: `${error.message} Enter a password again.`,
+          };
+        return {
+          form: wait
+            ? `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`
+            : (failure as Error).message,
+        };
+      },
+    );
+  }
+  function close() {
+    setPassword("");
+    if (finished) {
+      setFinished(null);
+      return;
     }
+    creation.close();
   }
 
-  async function observe(cancel: boolean) {
-    const previous = retained.current;
-    if (
-      !previous ||
-      previous.phase !== "unknown" ||
-      active.current ||
-      observation.current ||
-      (cancel &&
-        (previous.status?.status === "created" ||
-          previous.status?.status === "cancelled"))
-    )
-      return;
-    if (!sameContext(previous.context)) {
-      authorityChanged();
-      return;
-    }
-    const controller = new AbortController();
-    observation.current = controller;
-    setChecking(true);
-    remember({ ...previous, error: "" });
-    try {
-      const result = await withRequestDeadline(
-        (signal) =>
-          api(
-            `/users/requests/${previous.requestId}${cancel ? "/cancel" : ""}`,
-            {
-              ...(cancel ? { method: "POST", body: "{}" } : {}),
-              signal,
-              headers: { "X-CSRF-Token": previous.context.csrfToken },
-            },
-            StatusSchema,
-          ),
-        30000,
-        controller.signal,
-      );
-      if (observation.current !== controller || !retained.current) return;
-      if (!sameContext(previous.context)) {
-        authorityChanged();
-        return;
-      }
-      if (result.request_id !== previous.requestId)
-        throw Error("The account request status did not match this request.");
-      const changedDetails =
-        result.status === "created" && !matchesPerson(result.user, previous);
-      remember({
-        ...retained.current,
-        status: result,
-        error: changedDetails
-          ? "The account currently returned for this request has different details. Review Workspace access before taking another action; this page has not selected that account."
-          : "",
-      });
-      if (result.status === "created" && !changedDetails)
-        onObserved(result.user);
-      if (changedDetails) onReviewNeeded();
-    } catch (failure) {
-      if (observation.current !== controller || !retained.current) return;
-      remember({
-        ...retained.current,
-        status: null,
-        error: (failure as Error).message,
-      });
-    } finally {
-      if (observation.current === controller) {
-        observation.current = null;
-        setChecking(false);
-      }
-    }
-  }
-  function closeReview() {
-    stopWaiting(true);
-  }
-  function finishReview() {
-    const previous = retained.current;
-    if (
-      !previous ||
-      previous.phase === "sending" ||
-      !previous.status ||
-      previous.status.status === "not_found" ||
-      checking
-    )
-      return;
-    remember(null);
-    setReviewOpen(false);
-  }
-  function restoreReview() {
-    const previous = retained.current;
-    const now = context();
-    if (
-      !previous ||
-      previous.phase !== "changed" ||
-      previous.context.userId !== now.userId ||
-      now.role !== "admin" ||
-      !canUseAccountActionContext(now, now)
-    )
-      return;
-    remember({
-      ...previous,
-      context: now,
-      phase: "unknown",
-      status: null,
-      error: "",
-    });
-  }
+  const name = firstName(finished?.user.name || draft.name.trim());
+  const origin = `${location.origin}${location.pathname}`;
+  const instructions = finished
+    ? `Sign in to Vectory at ${origin} as ${finished.user.email}. I'll send your password separately.`
+    : "";
+  const phase = request?.phase;
 
   return (
     <>
       {user.role === "admin" && (
         <Button ref={opener} icon={Plus} onClick={open}>
-          {review ? "Review account creation" : "Add person"}
+          Add person
         </Button>
       )}
       <Modal
-        open={formOpen}
-        onClose={() => {
-          setFormOpen(false);
-          clearPassword();
-        }}
-        title="Add a workspace user"
-        description="There is no public signup. Administrators create local accounts."
-        returnFocusRef={opener}
-      >
-        <form onSubmit={(event) => void create(event)}>
-          <div className="modal-body">
-            {formError && <ErrorBox message={formError} />}
-            <Field label="Full name">
-              <input
-                required
-                maxLength={100}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </Field>
-            <Field label="Email">
-              <input
-                required
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </Field>
-            <Field
-              label="Initial password"
-              hint="At least 12 characters. Share through a protected channel."
-            >
-              <input
-                required
-                minLength={12}
-                type="password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </Field>
-            <RolePicker value={role} onChange={setRole} />
-          </div>
-          <div className="modal-footer">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setFormOpen(false);
-                clearPassword();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="submit">Create user</Button>
-          </div>
-        </form>
-      </Modal>
-      <Modal
-        open={reviewOpen && !!review}
-        onClose={closeReview}
+        open={creation.open || !!finished}
         title={
-          review?.phase === "sending"
-            ? "Waiting for account creation"
-            : review?.phase === "changed"
-              ? "Your access changed"
-              : "Account creation not confirmed"
+          finished
+            ? finished.unseen && finished.method === "invite"
+              ? `${finished.user.name}'s account is ready`
+              : `${finished.user.name} can sign in now`
+            : phase === "changed"
+              ? "Your sign-in changed"
+              : "Add a person"
         }
-        description="Review this exact creation request before another attempt."
+        description={
+          finished
+            ? finished.user.email
+            : phase === "form" || phase === "sending"
+              ? "Everyone gets their own sign-in. There's no public sign-up."
+              : request?.target.email
+        }
+        onClose={close}
         returnFocusRef={opener}
+        className="add-person-dialog"
       >
-        <div className="modal-body">
-          {review?.error && <ErrorBox message={review.error} />}
-          {review?.phase === "sending" ? (
-            <p role="status">
-              Waiting for the server. You can stop waiting; the account may
-              still be created.
-            </p>
-          ) : review?.phase === "changed" ? (
-            <p>
-              Your sign-in or role changed. This request may have completed.
-              Sign in with administrator access to review workspace accounts.
-            </p>
-          ) : (
-            review && (
-              <>
+        {finished ? (
+          <>
+            <div className="modal-body link-result">
+              {finished.unseen && finished.method === "invite" ? (
                 <p>
-                  The response did not confirm creation of {review.email}. The
-                  request ID is kept in this page so you can check or cancel
-                  that exact attempt. Your submitted password is not retained.
+                  We couldn't show the invite link. Create a new one to send to{" "}
+                  {name}.
                 </p>
+              ) : finished.unseen ? (
                 <p>
-                  <code className="account-request-id">{review.requestId}</code>
+                  {name} signs in with the password you chose. If you no longer
+                  have it, create a reset link instead.
                 </p>
-                {review.status?.status === "created" &&
-                  matchesPerson(review.status.user, review) && (
-                    <p role="status">
-                      This request created {review.status.user.name} (
-                      {review.status.user.email}). Find the account under
-                      Workspace access. If the initial password is unknown,
-                      issue a password reset code.
-                    </p>
-                  )}
-                {review.status?.status === "created" &&
-                  !matchesPerson(review.status.user, review) && (
-                    <p role="status">
-                      The server reports that this request created an account,
-                      but its current details differ from the original entry.
-                      Review Workspace access before creating another person.
-                    </p>
-                  )}
-                {review.status?.status === "cancelled" && (
-                  <p role="status">
-                    This request was cancelled. Its ID cannot create an account,
-                    even if the earlier request arrives later.
+              ) : (
+                <>
+                  <p>
+                    Send {name} the sign-in details, then the password through a
+                    separate channel only they can read.
                   </p>
-                )}
-                {review.status?.status === "not_found" && (
-                  <p role="status">
-                    This request has no committed result yet. An earlier send
-                    could still finish. Cancel this request before starting a
-                    separate account creation.
+                  <div className="instructions">
+                    <p>{instructions}</p>
+                    <CopyButton
+                      text={instructions}
+                      label="Copy sign-in instructions"
+                      copiedLabel="Instructions copied"
+                    />
+                  </div>
+                  <p>
+                    {name} can turn on two-factor authentication after signing
+                    in.
                   </p>
-                )}
-              </>
-            )
-          )}
-        </div>
-        <div className="modal-footer">
-          <Button variant="secondary" onClick={closeReview}>
-            {review?.phase === "sending" ? "Stop waiting" : "Back to people"}
-          </Button>
-          {review?.phase === "unknown" && (
-            <Button
-              ref={reviewAction}
-              busy={checking}
-              onClick={() => void observe(false)}
-            >
-              Check request status
-            </Button>
-          )}
-          {review?.phase === "unknown" &&
-            review.status?.status !== "created" &&
-            review.status?.status !== "cancelled" && (
-              <Button
-                variant="secondary"
-                busy={checking}
-                onClick={() => void observe(true)}
-              >
-                Cancel this request
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              {finished.unseen && (
+                <Button
+                  variant="secondary"
+                  icon={Link2}
+                  onClick={() => {
+                    const person = finished.user;
+                    setFinished(null);
+                    onNewLink({
+                      ...person,
+                      status:
+                        finished.method === "invite" ? "invited" : "active",
+                    });
+                  }}
+                >
+                  {finished.method === "invite"
+                    ? "Create invite link"
+                    : "Create reset link"}
+                </Button>
+              )}
+              <Button icon={Check} onClick={() => setFinished(null)}>
+                Done
               </Button>
-            )}
-          {review?.phase === "unknown" &&
-            (review.status?.status === "created" ||
-              review.status?.status === "cancelled") && (
-              <Button onClick={finishReview}>Finish review</Button>
-            )}
-          {review?.phase === "changed" &&
-            review.context.userId === user.id &&
-            user.role === "admin" && (
-              <Button onClick={restoreReview}>Review original request</Button>
-            )}
-          {review?.phase === "changed" && (
-            <Button
-              onClick={() => {
-                remember(null);
-                setReviewOpen(false);
-              }}
-            >
-              Dismiss old review
-            </Button>
-          )}
-        </div>
+            </div>
+          </>
+        ) : (
+          <form onSubmit={(event) => void submit(event)} noValidate>
+            <div className="modal-body">
+              <CreationBody
+                request={request}
+                draft={draft}
+                change={change}
+                password={password}
+                setPassword={setPassword}
+                revealed={revealed}
+                setRevealed={setRevealed}
+                onLocate={(email) => {
+                  creation.forget();
+                  onLocate(email);
+                }}
+              />
+            </div>
+            <div className="modal-footer">
+              <Button variant="secondary" onClick={close}>
+                {phase === "sending"
+                  ? "Stop waiting"
+                  : phase === "form"
+                    ? "Cancel"
+                    : "Not now"}
+              </Button>
+              {phase === "form" || phase === "sending" ? (
+                <Button type="submit" busy={phase === "sending"}>
+                  {draft.method === "invite"
+                    ? "Create invite link"
+                    : "Add person"}
+                </Button>
+              ) : phase === "unconfirmed" ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => void creation.cancelAndRetry()}
+                  >
+                    Cancel it and try again
+                  </Button>
+                  <Button autoFocus onClick={() => void creation.check()}>
+                    Check again
+                  </Button>
+                </>
+              ) : phase === "pending" ? (
+                <Button
+                  autoFocus
+                  onClick={() => void creation.cancelAndRetry()}
+                >
+                  Cancel it and try again
+                </Button>
+              ) : phase === "changed" ? (
+                <Button autoFocus onClick={() => void creation.recheck()}>
+                  Check again
+                </Button>
+              ) : (
+                <Button busy disabled>
+                  Checking
+                </Button>
+              )}
+            </div>
+          </form>
+        )}
       </Modal>
     </>
+  );
+}
+
+function CreationBody({
+  request,
+  draft,
+  change,
+  password,
+  setPassword,
+  revealed,
+  setRevealed,
+  onLocate,
+}: {
+  request: KeyedRequest<Draft> | null;
+  draft: Draft;
+  change: (next: Partial<Draft>) => void;
+  password: string;
+  setPassword: (value: string) => void;
+  revealed: boolean;
+  setRevealed: (value: boolean) => void;
+  onLocate: (email: string) => void;
+}) {
+  if (!request) return null;
+  const who = request.target.name || request.target.email;
+  if (request.phase === "checking" || request.phase === "cancelling")
+    return (
+      <p className="signin-loading" role="status">
+        <Spinner />
+        {request.phase === "checking"
+          ? `Checking whether ${who}'s account was created…`
+          : "Cancelling the earlier request…"}
+      </p>
+    );
+  if (request.phase === "changed")
+    return (
+      <Unconfirmed title="We couldn't confirm the new account">
+        <p>
+          Your sign-in changed while this was in progress. Sign in again as the
+          same administrator, then check again.
+        </p>
+      </Unconfirmed>
+    );
+  if (request.phase === "unconfirmed" || request.phase === "pending")
+    return (
+      <Unconfirmed
+        title={
+          request.phase === "pending"
+            ? `We couldn't confirm ${who}'s account was created`
+            : "We couldn't confirm that"
+        }
+        details={
+          <>
+            Request <code>{request.id}</code>
+          </>
+        }
+      >
+        <p>
+          {request.phase === "pending"
+            ? "It might still go through. Cancel it first, then try again. Your entries stay filled in."
+            : "Check your connection, then check again."}
+        </p>
+      </Unconfirmed>
+    );
+  const first = firstName(draft.name.trim());
+  return (
+    <fieldset disabled={request.phase === "sending"}>
+      {request.notice && (
+        <p className="signin-notice" role="status">
+          {request.notice}
+        </p>
+      )}
+      {request.fields.form && (
+        <p className="signin-alert" role="alert">
+          {request.fields.form}
+        </p>
+      )}
+      <AuthField label="Name" error={request.fields.name}>
+        {({ id, describedBy, invalid }) => (
+          <input
+            id={id}
+            name="person-name"
+            autoComplete="off"
+            data-1p-ignore
+            maxLength={100}
+            autoFocus
+            value={draft.name}
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy}
+            onChange={(event) => change({ name: event.target.value })}
+          />
+        )}
+      </AuthField>
+      <AuthField
+        label="Email"
+        error={request.fields.email}
+        labelAction={
+          request.fields.email?.startsWith("Someone already uses") ? (
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => onLocate(normalizeAuthEmail(draft.email))}
+            >
+              Show in Workspace access
+            </button>
+          ) : undefined
+        }
+      >
+        {({ id, describedBy, invalid }) => (
+          <input
+            id={id}
+            name="person-email"
+            type="email"
+            inputMode="email"
+            autoComplete="off"
+            data-1p-ignore
+            autoCapitalize="none"
+            spellCheck={false}
+            value={draft.email}
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy}
+            onChange={(event) => change({ email: event.target.value })}
+          />
+        )}
+      </AuthField>
+      <RolePicker
+        value={draft.role}
+        onChange={(role) => change({ role })}
+        person={first || undefined}
+      />
+      <fieldset className="choice-group">
+        <legend>How they'll sign in</legend>
+        <label className="choice">
+          <input
+            type="radio"
+            name="sign-in-method"
+            checked={draft.method === "invite"}
+            onChange={() => change({ method: "invite" })}
+          />
+          <span>
+            <strong>Send an invite link</strong>
+            <small>
+              They choose their own password. The link works once, for 24 hours.
+            </small>
+          </span>
+        </label>
+        <label className="choice">
+          <input
+            type="radio"
+            name="sign-in-method"
+            checked={draft.method === "password"}
+            onChange={() => change({ method: "password" })}
+          />
+          <span>
+            <strong>Set a password now</strong>
+            <small>You choose it and share it with them privately.</small>
+          </span>
+        </label>
+      </fieldset>
+      {draft.method === "password" && (
+        <>
+          <PasswordField
+            label={first ? `Password for ${first}` : "Password"}
+            name="person-password"
+            autoComplete="off"
+            value={password}
+            onChange={setPassword}
+            error={request.fields.password}
+            showStrength
+            identity={[draft.email, draft.name]}
+            revealed={revealed}
+            onReveal={setRevealed}
+          />
+          <div className="password-tools">
+            <Button
+              variant="secondary compact"
+              icon={Sparkles}
+              onClick={() => {
+                setPassword(generatePassword());
+                setRevealed(true);
+              }}
+            >
+              Generate
+            </Button>
+            {password && <CopyButton text={password} label="Copy password" />}
+          </div>
+        </>
+      )}
+    </fieldset>
   );
 }

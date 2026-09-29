@@ -1,7 +1,7 @@
 [Unit]
 Description=Vectory outbound configuration agent
-Wants=network-online.target
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -9,13 +9,17 @@ User=vectory
 Group=vectory
 ExecStart=/usr/bin/vectory run --state-dir /var/lib/vectory-agent
 Restart=on-failure
-RestartSec=15s
+RestartSec=5s
+# 78: not installed or not enrolled yet. Run `sudo vectory setup` first.
+RestartPreventExitStatus=78
+KillMode=control-group
+# Longer than Vector's longest graceful drain (--graceful-shutdown-seconds, at most 300).
+TimeoutStopSec=330s
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/vectory-agent /etc/vector/vectory-managed
-KillMode=control-group
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=-/var/lib/vectory-agent -/etc/vectory/managed
 UMask=0077
 
 [Install]

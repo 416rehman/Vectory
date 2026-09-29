@@ -316,6 +316,17 @@ async function load({ width = 899, theme = "light", role = "admin" } = {}) {
           page_size: 12,
           request_history: true,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       if (path === `/deployments/${sourceId}/summary`) {
         s.summaryReads++;
         const value = summary();
@@ -449,7 +460,7 @@ async function load({ width = 899, theme = "light", role = "admin" } = {}) {
   await expect(details()).toBeVisible();
 }
 const details = () =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const review = () =>
   page.getByRole("dialog", { name: "Update scheduled devices", exact: true });
 const confirm = () =>
@@ -469,15 +480,9 @@ async function closeReview() {
   await expect(details()).toBeVisible();
 }
 async function openReview({ ready = true } = {}) {
-  const opener = details().getByRole("button", {
-    name: "Review scheduled devices",
-    exact: true,
-  });
-  if (!(await opener.isVisible()))
-    await details()
-      .getByText("Update scheduled devices", { exact: true })
-      .click();
-  await opener.click();
+  await details()
+    .getByRole("button", { name: "Review scheduled devices", exact: true })
+    .click();
   await expect(review()).toBeVisible();
   if (ready)
     await expect(
@@ -730,7 +735,7 @@ try {
         await expect(checkSelection()).toBeVisible();
         await closeReview();
         await details()
-          .getByRole("button", { name: "Close dialog", exact: true })
+          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
           .click();
         await page
           .getByRole("button", {
@@ -854,7 +859,10 @@ try {
       async () => {
         await load({ role: "viewer" });
         await expect(
-          details().getByText("Update scheduled devices", { exact: true }),
+          details().getByRole("button", {
+            name: "Review scheduled devices",
+            exact: true,
+          }),
         ).toHaveCount(0);
         expect(state.previews).toHaveLength(0);
         for (const stage of ["preview", "commit", "body"]) {

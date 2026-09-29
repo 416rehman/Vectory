@@ -36,9 +36,22 @@ import {
 import "./enrollment-token-flow.css";
 
 export type EnrollmentTokenFlowHandle = {
-  create(input: TokenCreateInput): Promise<Token | null>;
+  /**
+   * Create a token. Inline tokens are handed to `onReady` for the page to show
+   * next to its command instead of opening the save dialog.
+   */
+  create(
+    input: TokenCreateInput,
+    options?: { inline?: boolean },
+  ): Promise<Token | null>;
   openRevoke(token: Token): void;
+  copySecret(): Promise<void>;
+  /** The token did its job: drop the in-page copy and its reminder. */
+  finish(): void;
+  /** Drop the in-page copy; the saved request stays to be checked. */
+  discard(): void;
 };
+export type ReadyToken = { token: string; record: Token };
 type Selection = {
   id: string;
   operation?: TokenRequestOperation;
@@ -53,8 +66,12 @@ export default forwardRef<
     notify(message: string): void;
     onChange(): void;
     onState(busy: boolean, blocked: boolean): void;
+    onReady?(ready: ReadyToken | null): void;
   }
->(function EnrollmentTokenFlow({ user, notify, onChange, onState }, ref) {
+>(function EnrollmentTokenFlow(
+  { user, notify, onChange, onState, onReady },
+  ref,
+) {
   const { operations, errors } = useTokenRequests(user.id);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -67,6 +84,8 @@ export default forwardRef<
     record: Token;
   } | null>(null);
   const [showSecret, setShowSecret] = useState(false);
+  // An inline token is shown by the page beside its command, not in a dialog.
+  const [inline, setInline] = useState(false);
   const [revoking, setRevoking] = useState<Token | null>(null);
   const [unconfirmedRevoke, setUnconfirmedRevoke] = useState<Token | null>(
     null,
@@ -110,8 +129,13 @@ export default forwardRef<
     allowed() &&
     active.current === request &&
     request.epoch === getSessionEpoch();
-  const callbacks = useRef({ notify, onChange, onState });
-  callbacks.current = { notify, onChange, onState };
+  const callbacks = useRef({ notify, onChange, onState, onReady });
+  callbacks.current = { notify, onChange, onState, onReady };
+  useEffect(() => {
+    callbacks.current.onReady?.(
+      ready ? { token: ready.token, record: ready.record } : null,
+    );
+  }, [ready]);
   useEffect(() => {
     mounted.current = true;
     const ended = () => {
@@ -178,7 +202,10 @@ export default forwardRef<
       request.controller.signal,
     );
   }
-  async function create(input: TokenCreateInput): Promise<Token | null> {
+  async function create(
+    input: TokenCreateInput,
+    options: { inline?: boolean } = {},
+  ): Promise<Token | null> {
     const saved = readTokenRequests(user.id);
     if (saved.operations.length || saved.errors.length || ready) {
       setError(
@@ -238,7 +265,13 @@ export default forwardRef<
         return null;
       }
       setReady({ operation, token: result.token, record: result.record });
-      setShowSecret(true);
+      setInline(!!options.inline);
+      if (!options.inline) setShowSecret(true);
+      // In the same update as the caller's, so its command and token appear together.
+      callbacks.current.onReady?.({
+        token: result.token,
+        record: result.record,
+      });
       return result.record;
     } catch (failure) {
       if (current(request)) {
@@ -265,6 +298,14 @@ export default forwardRef<
       setError("");
       setRevoking(unconfirmedRevoke || token);
       setRevokeState(unconfirmedRevoke ? "unknown" : "review");
+    },
+    copySecret,
+    finish: acknowledge,
+    discard() {
+      if (!allowed()) return;
+      setReady(null);
+      setShowSecret(false);
+      setError("");
     },
   }));
   async function inspect(item: Selection) {
@@ -428,21 +469,33 @@ export default forwardRef<
     status?.found && status.state === "cancelled"
       ? "Request cancelled"
       : "Check token request";
+  // The page shows an inline token beside its command; list the rest here.
+  const listed = operations.filter(
+    (operation) => !(inline && ready?.operation.id === operation.id),
+  );
+  const pending =
+    listed.length > 0 ||
+    errors.length > 0 ||
+    (!!ready &&
+      (!inline ||
+        !operations.some((operation) => operation.id === ready.operation.id)));
   return (
     <>
-      {(blocked || error || unconfirmedRevoke) && (
+      {(pending || error || unconfirmedRevoke) && (
         <section
           className="enrollment-token-status"
           aria-label="Enrollment token requests"
         >
           <div className="enrollment-token-status-heading">
             <KeyRound size={17} aria-hidden="true" />
-            <strong>{ready ? "Token ready to save" : "Token requests"}</strong>
+            <strong>
+              {ready && !inline ? "Token ready to save" : "Token requests"}
+            </strong>
           </div>
           {error && !selection && !showSecret && !revoking && (
             <ErrorBox message={error} />
           )}
-          {operations.map((operation) => (
+          {listed.map((operation) => (
             <div className="enrollment-token-request" key={operation.id}>
               <div>
                 <strong>{operation.request.name}</strong>

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download, ExternalLink, X } from "lucide-react";
+import {
+  ArrowRight,
+  Copy,
+  Download,
+  ExternalLink,
+  ScrollText,
+} from "lucide-react";
 import {
   api,
   post,
@@ -11,17 +17,25 @@ import {
 import {
   Button,
   DateCell,
+  EmptyState,
   ErrorBox,
+  FilterChips,
+  InlineError,
   Modal,
   PageHeader,
-  RefreshButton,
+  PageToolbar,
   SearchBox,
+  SegmentedControl,
+  Skeleton,
   Spinner,
+  StatusBadge,
   useResource,
+  type FilterChip,
 } from "./ui";
 import {
   auditActions,
   auditActionLabel,
+  auditChanges,
   auditDateError,
   auditFamilies,
   auditFilterParams,
@@ -31,14 +45,19 @@ import {
   auditOutcomes,
   auditResourceRoute,
   auditRoute,
+  auditScopes,
+  auditScopeSummary,
   defaultAuditQuery,
+  effectiveAuditScope,
   isAuditId,
   normalizeAuditQuery,
   type AuditQuery,
+  type AuditScope,
 } from "./auditModel";
 export type { AuditQuery } from "./auditModel";
+import { exactLocal, exactUtc, shortLocal } from "./time";
 import "./audit.css";
-import { DataTable, type TableColumn } from "./DataTable";
+import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import DocLink from "./DocLink";
 
 const emptyPage: AuditHistoryPage = {
@@ -88,20 +107,13 @@ function ResourceLink({
 }
 
 function Result({ outcome }: { outcome: string }) {
-  const tone = ["success", "verified_applied"].includes(outcome)
-    ? "positive"
-    : [
-          "failure",
-          "failed",
-          "denied",
-          "conflict",
-          "missed",
-          "incompatible",
-        ].includes(outcome)
-      ? "negative"
-      : "neutral";
   return (
-    <span className={`audit-result ${tone}`}>{auditOutcomeLabel(outcome)}</span>
+    <StatusBadge
+      domain="audit"
+      value={outcome}
+      label={auditOutcomeLabel(outcome)}
+      className="audit-result"
+    />
   );
 }
 
@@ -114,13 +126,62 @@ function Loading({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Second-precision local time, with the exact local and UTC time on hover. */
 function EventTime({ value }: { value: string | null }) {
   return value ? (
-    <DateCell value={value} />
+    <time
+      dateTime={value}
+      title={`${exactLocal(value)} · ${exactUtc(value)}`}
+      className="audit-time"
+    >
+      {shortLocal(value)}
+    </time>
   ) : (
     <span className="audit-muted">Time unavailable</span>
   );
 }
+
+const systemActors: Record<string, string> = {
+  scheduler: "Scheduler (automatic)",
+  "local-admin": "Local administrator",
+  anonymous: "Unauthenticated request",
+};
+function actorLabel(item: Pick<AuditSummary, "actor" | "actor_kind">) {
+  return (
+    (item.actor_kind === "system" && systemActors[item.actor]) ||
+    item.actor ||
+    "Unknown actor"
+  );
+}
+const kindLabels: Record<string, string> = {
+  deployment: "Deployment",
+  configuration: "Pipeline",
+  device: "Device",
+  issue: "Issue",
+  group: "Group",
+  policy: "Agent settings",
+  token: "Enrollment token",
+  user: "Person",
+};
+/** A readable target: its name, else its kind and short ID, never a raw compound key. */
+function targetLabel(
+  item: Pick<
+    AuditSummary,
+    "target" | "target_id" | "target_kind" | "target_name"
+  >,
+) {
+  if (item.target_name) return item.target_name;
+  const kind = kindLabels[item.target_kind];
+  if (kind && item.target_id && isAuditId(item.target_id))
+    return `${kind} ${item.target_id.slice(0, 8)}`;
+  return item.target;
+}
+
+const scopeHints: Record<AuditScope, string> = {
+  changes: "Sign-ins are hidden. Account and settings changes still show.",
+  security: "Only sign-ins, account, authenticator and signing-key events.",
+  all: "Every recorded event, including sign-ins.",
+};
 
 export function AuditLog({
   navigate = defaultNavigate,
@@ -148,7 +209,6 @@ export function AuditLog({
   const [filterDraft, setFilterDraft] = useState(query);
   const [localId, setLocalId] = useState<string | null>(null);
   const [exportQuery, setExportQuery] = useState<AuditQuery | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const priorRoute = useRef(routeKey);
   const controlled = selectedAuditId !== undefined;
   const detailId =
@@ -190,10 +250,11 @@ export function AuditLog({
     previousId.current = detailId;
   }, [detailId]);
   const dateError = auditDateError(query.from, query.to);
-  const { data, loading, error, reload } = useResource<AuditHistoryPage>(
+  const events = useResource<AuditHistoryPage>(
     dateError ? null : auditHistoryPath(query),
     emptyPage,
   );
+  const { data, loading, error, reload } = events;
   useEffect(() => {
     if (
       !loading &&
@@ -209,9 +270,11 @@ export function AuditLog({
   }, [loading, error, dateError, query.page, data.total]);
   const summary = auditFilterSummary(query);
   function openDetail(id: string, element: HTMLElement) {
-    opener.current = element;
+    // Return focus to the row's event link, the keyboard path to this dialog.
+    opener.current =
+      element.querySelector<HTMLElement>(".audit-event-title") ?? element;
     if (controlled) {
-      history.replaceState(history.state, "", `#/${auditRoute(null, query)}`);
+      keepListRoute(query);
       navigate(auditRoute(id, query));
     } else setLocalId(id);
   }
@@ -227,20 +290,90 @@ export function AuditLog({
     if (controlled && detailId) navigate(auditRoute(null, next));
     else setLocalId(null);
   }
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await reload();
-    } finally {
-      setRefreshing(false);
-    }
-  }
   const filterError = auditDateError(filterDraft.from, filterDraft.to);
   const filterSelection = query.action
     ? `action:${query.action}`
     : query.family
       ? `family:${query.family}`
       : "";
+  const actorName =
+    data.items.find((item) => item.actor_id === query.actor_id)?.actor ||
+    query.actor_id;
+  const chips: FilterChip[] = [
+    query.search && {
+      id: "search",
+      label: `Search: ${query.search}`,
+      text: `search ${query.search}`,
+      onRemove: () => applyScope({ search: "" }),
+    },
+    (query.action || query.family) && {
+      id: "event",
+      label: query.action
+        ? auditActionLabel(query.action)
+        : `${auditFamilies[query.family] || query.family} events`,
+      text: "event",
+      onRemove: () => applyScope({ action: "", family: "" }),
+    },
+    query.outcome && {
+      id: "outcome",
+      label: `Result: ${auditOutcomeLabel(query.outcome)}`,
+      text: "result",
+      onRemove: () => applyScope({ outcome: "" }),
+    },
+    query.from && {
+      id: "from",
+      label: `From: ${query.from}`,
+      text: "start date",
+      onRemove: () => applyScope({ from: "" }),
+    },
+    query.to && {
+      id: "to",
+      label: `Through: ${query.to}`,
+      text: "end date",
+      onRemove: () => applyScope({ to: "" }),
+    },
+    query.device_id && {
+      id: "device",
+      label: `Device ${query.device_id}`,
+      text: "device",
+      onRemove: () => applyScope({ device_id: "" }),
+    },
+    query.actor_id && {
+      id: "actor",
+      label: `Actor ${actorName}`,
+      text: "actor",
+      onRemove: () => applyScope({ actor_id: "" }),
+    },
+    query.target_id && {
+      id: "target",
+      label: `Target ${query.target_id}`,
+      text: "target",
+      onRemove: () => applyScope({ target_id: "" }),
+    },
+  ].filter(Boolean) as FilterChip[];
+  const eventFilter = !!(query.action || query.family);
+  // The event name is the keyboard path to its details; rows and cards also
+  // open them on click.
+  const eventLink = (item: AuditSummary) => (
+    <a
+      className="audit-event-title"
+      href={`#/${auditRoute(item.id, query)}`}
+      onClick={(event) => {
+        if (
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        openDetail(item.id, event.currentTarget);
+      }}
+    >
+      {auditActionLabel(item.action)}
+    </a>
+  );
   const columns: TableColumn<AuditSummary>[] = [
     {
       id: "action",
@@ -248,7 +381,7 @@ export function AuditLog({
       value: (item) => item.action,
       filter: {
         manual: true,
-        active: !!(query.action || query.family),
+        active: eventFilter,
         onClear: () => applyScope({ action: "", family: "" }),
         content: (
           <div className="audit-column-fields">
@@ -290,47 +423,34 @@ export function AuditLog({
                   )}
               </select>
             </label>
-            <p className="audit-muted">Sorting uses the event type code.</p>
+            <p className="audit-muted">
+              An event filter shows matching events of any kind. Sorting uses
+              the event type code.
+            </p>
           </div>
         ),
       },
       cell: (item) => (
-        <>
-          <a
-            className="audit-event-title"
-            href={`#/${auditRoute(item.id, query)}`}
-            onClick={(event) => {
-              if (
-                event.button !== 0 ||
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              openDetail(item.id, event.currentTarget);
-            }}
-          >
-            {auditActionLabel(item.action)}
-          </a>
+        <span className="audit-event">
+          {eventLink(item)}
           {(item.target_name || item.target) && (
-            <div className="audit-target">
+            <span className="audit-target">
               <ResourceLink
                 kind={item.target_kind}
                 id={item.target_exists === false ? null : item.target_id}
-                name={item.target_name || item.target}
+                name={targetLabel(item)}
                 navigate={navigate}
               />
-            </div>
+            </span>
           )}
-        </>
+        </span>
       ),
     },
     {
       id: "actor",
       header: "By",
       value: (item) => item.actor,
+      width: "20%",
       filter: query.actor_id
         ? {
             manual: true,
@@ -338,29 +458,27 @@ export function AuditLog({
             onClear: () => applyScope({ actor_id: "" }),
             content: (
               <p className="audit-muted" title={query.actor_id}>
-                Showing activity by{" "}
-                <strong>
-                  {data.items.find((item) => item.actor_id === query.actor_id)
-                    ?.actor || query.actor_id}
-                </strong>
-                .
+                Showing activity by <strong>{actorName}</strong>.
               </p>
             ),
           }
         : undefined,
       cell: (item) => (
-        <ResourceLink
-          kind={item.actor_kind}
-          id={item.actor_id}
-          name={item.actor || "Unknown actor"}
-          navigate={navigate}
-        />
+        <span className="audit-actor">
+          <ResourceLink
+            kind={item.actor_kind}
+            id={item.actor_id}
+            name={actorLabel(item)}
+            navigate={navigate}
+          />
+        </span>
       ),
     },
     {
       id: "outcome",
       header: "Result",
       value: (item) => item.outcome,
+      width: 176,
       filter: {
         manual: true,
         value: query.outcome,
@@ -387,6 +505,8 @@ export function AuditLog({
       id: "created_at",
       header: "Time",
       value: (item) => item.created_at,
+      width: 168,
+      defaultDirection: "desc",
       filter: {
         manual: true,
         active: !!(query.from || query.to),
@@ -442,21 +562,8 @@ export function AuditLog({
       },
       cell: (item) => <EventTime value={item.created_at} />,
     },
-    {
-      id: "details",
-      header: <span className="sr-only">Details</span>,
-      label: "Details",
-      cell: (item) => (
-        <Button
-          variant="secondary compact"
-          aria-label={`Details: ${auditActionLabel(item.action)}`}
-          onClick={(event) => openDetail(item.id, event.currentTarget)}
-        >
-          Details
-        </Button>
-      ),
-    },
   ];
+  const filtered = summary.length > 0;
   return (
     <div className="audit-page" ref={container}>
       <PageHeader
@@ -466,6 +573,17 @@ export function AuditLog({
           section: "review-and-export-audit-events",
         }}
         description="Changes, access and device events across your workspace."
+        live={
+          dateError
+            ? undefined
+            : {
+                updatedAt: events.updatedAt,
+                error,
+                loading,
+                refreshing: events.refreshing,
+                onRefresh: () => void reload(),
+              }
+        }
       >
         <Button
           variant="secondary"
@@ -478,131 +596,159 @@ export function AuditLog({
           Export results
         </Button>
       </PageHeader>
-      <div className="audit-toolbar">
-        <SearchBox
-          value={search}
-          onChange={(value) =>
-            setSearch(Array.from(value).slice(0, 200).join(""))
-          }
-          placeholder="Search activity"
+      <PageToolbar
+        search={
+          <SearchBox
+            value={search}
+            onChange={(value) =>
+              setSearch(Array.from(value).slice(0, 200).join(""))
+            }
+            placeholder="Search activity"
+            shortcut
+          />
+        }
+        count={
+          loading && !events.updatedAt
+            ? undefined
+            : `${data.total.toLocaleString()} ${data.total === 1 ? "event" : "events"}`
+        }
+        filters={
+          <FilterChips
+            chips={chips}
+            onClearAll={() =>
+              applyScope({ ...defaultAuditQuery, scope: query.scope })
+            }
+            clearLabel="Clear filters"
+            clearFrom={1}
+          />
+        }
+      >
+        <SegmentedControl
+          label="Event scope"
+          options={auditScopes}
+          value={eventFilter ? "all" : query.scope}
+          onChange={(scope) => applyScope({ scope })}
+          disabled={eventFilter}
+          hint="An event filter is selected, so matching events of any kind are shown."
         />
-        <RefreshButton
-          busy={refreshing}
-          disabled={loading || !!dateError}
-          onClick={refresh}
-        >
-          Refresh
-        </RefreshButton>
-      </div>
-      {(summary.length > 0 || !!dateError) && (
-        <div className="audit-scope">
-          {query.device_id && (
-            <span className="audit-scope-chip">
-              Device {query.device_id}
-              <button
-                aria-label="Remove device filter"
-                onClick={() => applyScope({ device_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
+      </PageToolbar>
+      {!eventFilter && query.scope !== "all" && (
+        <p className="audit-scope-note">
+          {scopeHints[query.scope]}{" "}
+          {query.scope === "changes" ? (
+            <button
+              type="button"
+              className="audit-text-button"
+              onClick={() => applyScope({ scope: "security" })}
+            >
+              Show security events
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="audit-text-button"
+              onClick={() => applyScope({ scope: "changes" })}
+            >
+              Show changes
+            </button>
           )}
-          {query.actor_id && (
-            <span className="audit-scope-chip" title={query.actor_id}>
-              Actor{" "}
-              {data.items.find((item) => item.actor_id === query.actor_id)
-                ?.actor || query.actor_id}
-              <button
-                aria-label="Remove actor filter"
-                onClick={() => applyScope({ actor_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
-          )}
-          {query.target_id && (
-            <span className="audit-scope-chip">
-              Target {query.target_id}
-              <button
-                aria-label="Remove target filter"
-                onClick={() => applyScope({ target_id: "" })}
-              >
-                <X size={14} />
-              </button>
-            </span>
-          )}
-          {summary
-            .filter((value) => !/^(Device|Actor|Target):/.test(value))
-            .map((value) => (
-              <span key={value}>{value}</span>
-            ))}
-          <button
-            className="audit-text-button"
-            onClick={() => applyScope(defaultAuditQuery)}
-          >
-            Clear filters
-          </button>
-        </div>
-      )}
-      {(error || dateError) && (
-        <ErrorBox
-          message={dateError || error}
-          retry={dateError ? undefined : reload}
-        />
-      )}
-      {error && data.items.length > 0 && (
-        <p className="audit-muted">
-          Previously loaded events are shown. Refresh to check for new activity.
         </p>
       )}
-      <DataTable
-        data={dateError ? [] : data.items}
-        columns={columns}
-        rowKey={(item) => item.id}
-        label="Audit events"
-        className="audit-table"
-        loading={loading}
-        manualSorting
-        sort={{ column: query.sort, direction: query.direction }}
-        onSortChange={(sort) =>
-          applyScope({
-            sort: (sort?.column || "created_at") as AuditQuery["sort"],
-            direction: sort?.direction || "desc",
-          })
-        }
-        pagination={{
-          page: query.page,
-          size: 12,
-          total: dateError ? 0 : data.total,
-          onPage: (page) => setQuery((current) => ({ ...current, page })),
-        }}
-        empty={
-          error ? (
-            "Activity could not be loaded."
-          ) : dateError ? (
-            "Choose a valid date range."
-          ) : (
-            <div className="audit-empty">
-              <h2>
-                {summary.length ? "No matching events" : "No activity recorded"}
-              </h2>
-              <p>
-                {summary.length
-                  ? "Change or clear the filters to see more activity."
-                  : "Account changes, enrollments and deployments will appear here."}
-              </p>
-              {summary.length > 0 && (
-                <Button
-                  variant="secondary"
-                  onClick={() => applyScope(defaultAuditQuery)}
-                >
-                  Clear filters
-                </Button>
-              )}
-            </div>
-          )
-        }
-      />
+      {dateError && <ErrorBox message={dateError} />}
+      {error && !dateError && (
+        <InlineError
+          title={
+            data.items.length
+              ? "Couldn't refresh the audit log."
+              : "Couldn't load the audit log."
+          }
+          error={error}
+          updatedAt={events.updatedAt}
+          retry={() => void reload()}
+          retrying={events.refreshing}
+        />
+      )}
+      <TableCard>
+        <DataTable
+          data={dateError ? [] : data.items}
+          columns={columns}
+          rowKey={(item) => item.id}
+          label="Audit events"
+          className="audit-table"
+          loading={loading && !events.updatedAt}
+          skeletonRows={8}
+          manualSorting
+          sort={{ column: query.sort, direction: query.direction }}
+          onSortChange={(sort) =>
+            applyScope({
+              sort: (sort?.column || "created_at") as AuditQuery["sort"],
+              direction: sort?.direction || "desc",
+            })
+          }
+          onRowClick={(item, event) => openDetail(item.id, event.currentTarget)}
+          pagination={{
+            page: query.page,
+            size: 12,
+            total: dateError ? 0 : data.total,
+            onPage: (page) => setQuery((current) => ({ ...current, page })),
+            noun: "events",
+          }}
+          mobileCard={(item) => ({
+            title: eventLink(item),
+            status: <Result outcome={item.outcome} />,
+            meta: [
+              targetLabel(item),
+              actorLabel(item) === targetLabel(item) ? null : actorLabel(item),
+              item.created_at
+                ? shortLocal(item.created_at)
+                : "Time unavailable",
+            ],
+          })}
+          empty={
+            error ? (
+              <EmptyState variant="error" title="Activity could not be loaded">
+                {error}
+              </EmptyState>
+            ) : dateError ? (
+              <EmptyState
+                variant="filtered"
+                title="Choose a valid date range"
+              />
+            ) : filtered ? (
+              <EmptyState
+                variant="filtered"
+                title="No matching events"
+                action={
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      applyScope({ ...defaultAuditQuery, scope: query.scope })
+                    }
+                  >
+                    Clear filters
+                  </Button>
+                }
+              >
+                Change or clear the filters to see more activity.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                variant="quiet"
+                icon={ScrollText}
+                title={
+                  query.scope === "security"
+                    ? "No security events recorded"
+                    : "No activity recorded"
+                }
+              >
+                {query.scope === "security"
+                  ? "Sign-ins, account and authenticator changes will appear here."
+                  : "Pipeline changes, enrollments and deployments will appear here."}
+              </EmptyState>
+            )
+          }
+        />
+      </TableCard>
       {detailId && (
         <AuditInspector
           key={detailId}
@@ -621,6 +767,15 @@ export function AuditLog({
         />
       )}
     </div>
+  );
+}
+
+/** Keep the list route under the dialog so closing returns to this view. */
+function keepListRoute(query: AuditQuery) {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `#/${auditRoute(null, query)}`,
   );
 }
 
@@ -724,6 +879,14 @@ const detailLabels: Record<string, string> = {
   replacement_device_id: "Replacement device ID",
   previous_signing_key_id: "Previous signing key ID",
   signing_key_id: "Signing key ID",
+  reason_code: "Refusal reason",
+  name: "Device name",
+  token_id: "Enrollment token ID",
+  agent_os: "Agent operating system",
+  agent_arch: "Agent architecture",
+  agent_version: "Agent version",
+  configuration_mode: "Configuration mode",
+  client_address: "Client address",
 };
 
 function AuditInspector({
@@ -744,18 +907,24 @@ function AuditInspector({
     valid ? `/audit/${id}` : null,
     null,
   );
+  const changes = data ? auditChanges(data.details) : [];
   return (
     <Modal
       open
       onClose={onClose}
       title="Event details"
       description="The recorded action and its associated identities."
+      size="lg"
     >
       <div className="modal-body audit-inspector">
         {!valid ? (
           <p role="alert">This event link has an invalid identifier.</p>
         ) : loading ? (
-          <Loading>Loading event…</Loading>
+          <div className="audit-inspector-loading" aria-busy="true">
+            <Loading>Loading event…</Loading>
+            <Skeleton width="60%" height={14} />
+            <Skeleton width="80%" height={12} />
+          </div>
         ) : error ? (
           <ErrorBox message={error} retry={reload} />
         ) : (
@@ -765,8 +934,19 @@ function AuditInspector({
                 <h2>{auditActionLabel(data.action)}</h2>
                 <Result outcome={data.outcome} />
               </div>
-              <p className="audit-muted">
-                <EventTime value={data.created_at} />
+              <p className="audit-detail-time">
+                {data.created_at ? (
+                  <>
+                    <time dateTime={data.created_at}>
+                      {exactLocal(data.created_at)}
+                    </time>
+                    <span className="audit-muted">
+                      {exactUtc(data.created_at)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="audit-muted">Time unavailable</span>
+                )}
               </p>
               <AuditPermalink route={auditRoute(id, query)} />
               <dl className="audit-detail-list">
@@ -776,7 +956,7 @@ function AuditInspector({
                     <ResourceLink
                       kind={data.actor_kind}
                       id={data.actor_id}
-                      name={data.actor || "Unknown actor"}
+                      name={actorLabel(data)}
                       navigate={navigate}
                     />
                     {data.actor_id && (
@@ -798,7 +978,7 @@ function AuditInspector({
                         id={
                           data.target_exists === false ? null : data.target_id
                         }
-                        name={data.target_name || data.target}
+                        name={targetLabel(data)}
                         navigate={navigate}
                       />
                     </dd>
@@ -838,6 +1018,46 @@ function AuditInspector({
                   </>
                 )}
               </dl>
+              {changes.length > 0 && (
+                <section
+                  className="audit-changes"
+                  aria-labelledby="audit-changes-title"
+                >
+                  <h3 id="audit-changes-title">What changed</h3>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Field</th>
+                        <th scope="col">Before</th>
+                        <th scope="col">
+                          <span className="sr-only">Changed to</span>
+                        </th>
+                        <th scope="col">After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changes.map((change) => (
+                        <tr key={change.label}>
+                          <th scope="row">{change.label}</th>
+                          <td
+                            className={
+                              change.before === undefined
+                                ? "audit-muted"
+                                : undefined
+                            }
+                          >
+                            {change.before ?? "Not recorded"}
+                          </td>
+                          <td aria-hidden="true" className="audit-change-arrow">
+                            <ArrowRight size={13} />
+                          </td>
+                          <td>{change.after}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
               <details className="audit-technical">
                 <summary>Technical details</summary>
                 <dl className="audit-detail-list">
@@ -919,7 +1139,10 @@ function exportDownloadPath(file: AuditExport) {
 function ExportScope({ filters }: { filters: AuditExport["filters"] }) {
   // Export metadata already contains normalized UTC timestamps. It is display-only:
   // never pass it through the day-input-to-timestamp request converter.
-  const scope = auditFilterSummary({ ...defaultAuditQuery, ...filters });
+  const scope = [
+    auditScopeSummary(filters.scope),
+    ...auditFilterSummary({ ...defaultAuditQuery, ...filters, scope: "all" }),
+  ].filter(Boolean);
   return scope.length ? (
     <ul className="audit-export-scope">
       {scope.map((value) => (
@@ -954,7 +1177,11 @@ function ExportAudit({
     error: retainedError,
     reload: reloadRetained,
   } = useResource<AuditExport[]>("/audit/exports", []);
-  const summary = auditFilterSummary(query);
+  // Exports record the scope they apply; event filters include every kind.
+  const summary = [
+    auditScopeSummary(effectiveAuditScope(query)),
+    ...auditFilterSummary(query),
+  ].filter(Boolean);
   useEffect(() => {
     active.current = true;
     const timer = setInterval(() => setNow(performance.now()), 1000);
