@@ -14,6 +14,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - Outbound-only agents with mutual TLS, per-device signed manifests, protection against older configurations, drift repair and automatic restore of the last working configuration.
 - Restricted and full modes, local allowances and device-local secret bindings, all controlled on the host.
 - Device metrics, issues, and an exportable audit log.
+- Alerts in Slack, any webhook or email when an issue opens, a rollout fails or a device goes offline, with quiet hours, a delivery log with retries, and editable detection thresholds.
 - Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
 - A Help center bundled with the server, searchable offline, with every page available as Markdown and an `llms.txt` index.
 

@@ -7,6 +7,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - **One-command device install.** On Linux and macOS, **Add device** gives you one command that downloads the agent from your server, checks its SHA-256, pins your server's certificate and starts the service. Windows uses the same `vectory setup` from PowerShell. Agents ship inside the server image, so there's no release step.
 - **Readable agent CLI.** `vectory setup`, `--help` for every command, a human-readable `status`, `doctor` checks that test the connection to your server, and `vectory logs`.
 - **Real reasons for failures.** Issues and device pages show Vector's own message, with secrets removed. Vector gets a data directory automatically when a pipeline doesn't set one.
+- **Alerts where you work.** Slack, webhook and email notifications for new issues, failed rollouts and offline devices, with quiet hours and a delivery log. See [Alerts and notifications](notifications.md).
 - **Shipping is the default.** Deploying a new version of a pipeline replaces the older one on those devices. Each deployment has a live rollout page.
 - **Faster pipeline building.** A template gallery, one-click **Add monitoring**, a VRL editor with autocomplete and sample tests, and a publish review that shows exactly what changed.
 - **A calmer, faster workspace.** A command palette (**Ctrl K** / **⌘ K**) and a first-run checklist on the Overview.
