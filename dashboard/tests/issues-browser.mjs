@@ -6,6 +6,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -14,6 +15,11 @@ const output = resolve(
   process.env.VECTORY_ISSUES_COMPONENT_OUTPUT || ".local/issues-component",
 );
 await mkdir(output, { recursive: true });
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const virtual = "\0virtual:issues-fixture";
 const server = await createServer({
   root: dashboard,
@@ -21,7 +27,7 @@ const server = await createServer({
   cacheDir: resolve(output, "vite-cache"),
   server: {
     host: "127.0.0.1",
-    port: 5204,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -396,17 +402,25 @@ async function fixture(props = {}, { layout = "list" } = {}) {
     return fail(500, "Unexpected synthetic request");
   });
   // The first load transforms the whole app; allow for a busy machine.
-  await page.goto("http://127.0.0.1:5204/__issues-fixture", {
+  await page.goto(`http://127.0.0.1:${port}/__issues-fixture`, {
     timeout: 60000,
   });
   await page.waitForFunction(() => window.ready);
   // Issues opens grouped by version and reason; most checks review the
   // flat list ("All issues"), which a device scope always shows.
   const mount = async (next = {}, view = layout) => {
-    await page.evaluate((props) => window.renderIssues(props), {
-      ...props,
-      ...next,
-    });
+    // Filters live in the URL: a fresh mount is a fresh visit, so it starts
+    // from a clean one (a reload keeps it; see the link check).
+    await page.evaluate(
+      (props) => {
+        history.replaceState(null, "", location.pathname);
+        window.renderIssues(props);
+      },
+      {
+        ...props,
+        ...next,
+      },
+    );
     await expect(
       page.getByRole("heading", { name: "Issues", exact: true }),
     ).toBeVisible();
@@ -1169,6 +1183,78 @@ try {
               animations: "disabled",
             });
           }
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "search, status, layout and sort live in the link: a reload or a shared URL restores the triage view",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.page
+          .getByRole("searchbox", { name: /Search devices/ })
+          .or(f.page.getByLabel("Search devices, pipelines, or reasons"))
+          .fill("issue device 00");
+        await setStatus(f.page, "acknowledged");
+        await f.page.getByRole("button", { name: /^Sort by Device/ }).click();
+        await expect
+          .poll(() => new URL(f.page.url()).hash)
+          .toMatch(/q=issue\+device\+00/);
+        const hash = new URL(f.page.url()).hash;
+        for (const part of ["state=acknowledged", "view=list", "sort=device"])
+          expect(hash).toContain(part);
+        // Defaults stay out of the link.
+        expect(hash).not.toContain("page=");
+        await f.page.reload();
+        await f.page.waitForFunction(() => window.ready);
+        requests.length = 0;
+        await f.page.evaluate(() => window.renderIssues());
+        await expect(
+          f.page.getByLabel("Search devices, pipelines, or reasons"),
+        ).toHaveValue("issue device 00");
+        await expect(
+          f.page
+            .getByRole("radiogroup", { name: "Issue status", exact: true })
+            .getByRole("radio", { name: "Acknowledged", exact: true }),
+        ).toHaveAttribute("aria-checked", "true");
+        await expect(
+          f.page
+            .getByRole("radiogroup", { name: "Issue layout", exact: true })
+            .getByRole("radio", { name: "All issues", exact: true }),
+        ).toHaveAttribute("aria-checked", "true");
+        await expect
+          .poll(() =>
+            requests.some(
+              (r) =>
+                r.path === "/issues/history" &&
+                r.query.search === "issue device 00" &&
+                r.query.state === "acknowledged" &&
+                r.query.sort === "device",
+            ),
+          )
+          .toBe(true);
+        // A hand-edited link with values the page doesn't know reads as the
+        // defaults instead of breaking.
+        await f.page.evaluate(() => {
+          location.hash = "?state=everything&view=list&sort=nope&dir=up";
+        });
+        await f.page.reload();
+        await f.page.waitForFunction(() => window.ready);
+        requests.length = 0;
+        await f.page.evaluate(() => window.renderIssues());
+        await expect
+          .poll(() =>
+            requests.some(
+              (r) =>
+                r.path === "/issues/history" &&
+                r.query.state === "open" &&
+                r.query.sort === "last_seen" &&
+                r.query.direction === "desc",
+            ),
+          )
+          .toBe(true);
       } finally {
         await f.close();
       }

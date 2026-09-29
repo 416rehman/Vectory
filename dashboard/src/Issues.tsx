@@ -28,11 +28,12 @@ import {
   useResource,
 } from "./ui";
 import DocLink from "./DocLink";
-import { DataTable, type TableColumn, type TableSort } from "./DataTable";
+import { DataTable, type TableColumn } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
 import { isDataPlaneCode, issueDispositions } from "./status";
+import { useHashQuery } from "./urlState";
 import "./control.css";
 import "./issues.css";
 import type { Notify } from "./toast";
@@ -41,6 +42,21 @@ const issueTime = (value: string | null) =>
   value ? when(value) : "Unavailable";
 type Disposition = Issue["disposition"] | "all";
 type View = "groups" | "list";
+const dispositions: Disposition[] = ["open", "acknowledged", "resolved", "all"];
+const sortColumns = ["code", "disposition", "device", "last_seen", "count"];
+/**
+ * A triage view is a link: `#/issues?q=nginx&state=all&view=list`. Values
+ * that aren't in use stay out of the URL.
+ */
+const issueQuery = {
+  q: "",
+  state: "open",
+  view: "groups",
+  sort: "last_seen",
+  dir: "desc",
+  page: 1,
+  gpage: 1,
+};
 const labels = {
   open: issueDispositions.open.label,
   acknowledged: issueDispositions.acknowledged.label,
@@ -122,17 +138,28 @@ export default function Issues({
   navigate: (path: string) => void;
   deviceId?: string;
 }) {
-  const [search, setSearch] = useState(""),
-    [query, setQuery] = useState(""),
-    [state, setState] = useState<Disposition>("open"),
-    [view, setView] = useState<View>(deviceId ? "list" : "groups"),
-    [sort, setSort] = useState<TableSort | null>({
-      column: "last_seen",
-      direction: "desc",
-    }),
-    [page, setPage] = useState(1),
-    [groupPage, setGroupPage] = useState(1),
-    [dialog, setDialog] = useState<Dialog | null>(null);
+  const [url, update] = useHashQuery(issueQuery);
+  // Anything a hand-edited link gets wrong falls back to the default.
+  const state = (dispositions as string[]).includes(url.state)
+    ? (url.state as Disposition)
+    : "open";
+  // One device's issues are a list; its page has no groups to show.
+  const view: View = deviceId || url.view === "list" ? "list" : "groups";
+  const sort = {
+    column: sortColumns.includes(url.sort) ? url.sort : "last_seen",
+    direction: url.dir === "asc" ? ("asc" as const) : ("desc" as const),
+  };
+  const { page, gpage: groupPage } = url;
+  const query = url.q;
+  // Typing settles for a moment before it becomes the URL's search; a new
+  // search from the URL (Back, a shared link) replaces what the box shows.
+  const [search, setSearch] = useState(url.q);
+  const [urlSearch, setUrlSearch] = useState(url.q);
+  if (urlSearch !== url.q) {
+    setUrlSearch(url.q);
+    if (search.trim() !== url.q) setSearch(url.q);
+  }
+  const [dialog, setDialog] = useState<Dialog | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null),
     container = useRef<HTMLDivElement | null>(null);
   function closeDialog(saved = false) {
@@ -149,24 +176,19 @@ export default function Issues({
   }
   useEffect(() => {
     if (search.trim() === query) return;
-    const timer = window.setTimeout(() => {
-      setQuery(search.trim());
-      setPage(1);
-      setGroupPage(1);
-    }, 250);
+    const timer = window.setTimeout(
+      () => update({ q: search.trim(), page: 1, gpage: 1 }),
+      250,
+    );
     return () => window.clearTimeout(timer);
-  }, [search, query]);
-  useEffect(() => {
-    setPage(1);
-    if (deviceId) setView("list");
-  }, [deviceId]);
+  }, [search, query, update]);
   const listParams = new URLSearchParams({
     search: query,
     state,
     page: String(page),
     page_size: String(PAGE_SIZE),
-    sort: sort?.column || "last_seen",
-    direction: sort?.direction || "desc",
+    sort: sort.column,
+    direction: sort.direction,
   });
   if (deviceId) listParams.set("device_id", deviceId);
   const groupParams = new URLSearchParams({
@@ -184,21 +206,22 @@ export default function Issues({
     emptyGroups,
   );
   const active = view === "list" ? list : groups;
+  // A page past the end (issues resolved meanwhile, an old link) moves back.
+  const lastPage = Math.max(1, Math.ceil(list.data.total / PAGE_SIZE));
+  const lastGroupPage = Math.max(1, Math.ceil(groups.data.total / PAGE_SIZE));
   useEffect(() => {
-    if (!list.loading && !list.error)
-      setPage((current) =>
-        Math.min(current, Math.max(1, Math.ceil(list.data.total / PAGE_SIZE))),
-      );
-  }, [list.loading, list.error, list.data.total]);
+    if (view === "list" && !list.loading && !list.error && page > lastPage)
+      update({ page: lastPage });
+  }, [view, list.loading, list.error, page, lastPage, update]);
   useEffect(() => {
-    if (!groups.loading && !groups.error)
-      setGroupPage((current) =>
-        Math.min(
-          current,
-          Math.max(1, Math.ceil(groups.data.total / PAGE_SIZE)),
-        ),
-      );
-  }, [groups.loading, groups.error, groups.data.total]);
+    if (
+      view === "groups" &&
+      !groups.loading &&
+      !groups.error &&
+      groupPage > lastGroupPage
+    )
+      update({ gpage: lastGroupPage });
+  }, [view, groups.loading, groups.error, groupPage, lastGroupPage, update]);
   function act(kind: Dialog["kind"], issue: Issue, target: HTMLButtonElement) {
     opener.current = target;
     setDialog({ kind, issue });
@@ -307,11 +330,7 @@ export default function Issues({
           options={(["open", "acknowledged", "resolved", "all"] as const).map(
             (value) => ({ value, label: labels[value] }),
           )}
-          onChange={(value) => {
-            setState(value);
-            setPage(1);
-            setGroupPage(1);
-          }}
+          onChange={(value) => update({ state: value, page: 1, gpage: 1 })}
         />
         {!deviceId && (
           <SegmentedControl
@@ -321,7 +340,7 @@ export default function Issues({
               { value: "groups", label: "By version and reason" },
               { value: "list", label: "All issues" },
             ]}
-            onChange={setView}
+            onChange={(value) => update({ view: value })}
           />
         )}
       </div>
@@ -360,10 +379,13 @@ export default function Issues({
             loading={list.loading}
             manualSorting
             sort={sort}
-            onSortChange={(value) => {
-              setSort(value);
-              setPage(1);
-            }}
+            onSortChange={(value) =>
+              update({
+                sort: value?.column || "last_seen",
+                dir: value?.direction || "desc",
+                page: 1,
+              })
+            }
             pagination={
               list.error
                 ? undefined
@@ -371,7 +393,7 @@ export default function Issues({
                     page,
                     size: PAGE_SIZE,
                     total: list.data.total,
-                    onPage: setPage,
+                    onPage: (next) => update({ page: next }),
                   }
             }
             empty={emptyState}
@@ -387,7 +409,7 @@ export default function Issues({
           retrying={groups.refreshing}
           empty={emptyState}
           actions={actions}
-          onPage={setGroupPage}
+          onPage={(next) => update({ gpage: next })}
         />
       )}
       {dialog?.kind === "disposition" && (

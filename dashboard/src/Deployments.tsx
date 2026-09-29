@@ -96,6 +96,7 @@ import {
   targetState,
 } from "./deploymentStatus";
 import { relativeTime } from "./time";
+import { serializeQuery, useHashQuery } from "./urlState";
 import {
   DeviceTimeline,
   FailureGroups,
@@ -706,6 +707,39 @@ type DeviceResultsQuery = {
   sort: string;
   direction: "asc" | "desc";
 };
+/**
+ * A rollout's device filter is part of its link (`?rstate=failed&rq=edge`),
+ * beside the list context the route already carries. Defaults stay out.
+ */
+const deviceResultsUrl = {
+  rq: "",
+  rstate: "all",
+  rpage: 1,
+  rsort: "device_name",
+  rdir: "asc",
+};
+type DeviceResultsUrl = typeof deviceResultsUrl;
+function readDeviceResults(url: DeviceResultsUrl): DeviceResultsQuery {
+  return {
+    search: url.rq,
+    // The server names states in snake case; anything else reads as all.
+    state: /^[a-z_]{1,40}$/.test(url.rstate) ? url.rstate : "all",
+    page: url.rpage,
+    sort: url.rsort === "state" ? "state" : "device_name",
+    direction: url.rdir === "desc" ? "desc" : "asc",
+  };
+}
+function deviceResultsPatch(
+  patch: Partial<DeviceResultsQuery>,
+): Partial<DeviceResultsUrl> {
+  return {
+    ...(patch.search !== undefined && { rq: patch.search }),
+    ...(patch.state !== undefined && { rstate: patch.state }),
+    ...(patch.page !== undefined && { rpage: patch.page }),
+    ...(patch.sort !== undefined && { rsort: patch.sort }),
+    ...(patch.direction !== undefined && { rdir: patch.direction }),
+  };
+}
 function DeviceResults({
   deployment,
   revision,
@@ -715,7 +749,7 @@ function DeviceResults({
   search,
   setSearch,
   query,
-  setQuery,
+  onQuery,
 }: {
   deployment: DeploymentSummary;
   revision: number;
@@ -726,21 +760,17 @@ function DeviceResults({
   search: string;
   setSearch(value: string): void;
   query: DeviceResultsQuery;
-  setQuery: React.Dispatch<React.SetStateAction<DeviceResultsQuery>>;
+  onQuery(patch: Partial<DeviceResultsQuery>): void;
 }) {
   const stopped = !isLive(deployment.status);
   useEffect(() => {
+    if (query.search === search.trim()) return;
     const timer = setTimeout(
-      () =>
-        setQuery((old) =>
-          old.search === search.trim()
-            ? old
-            : { ...old, search: search.trim(), page: 1 },
-        ),
+      () => onQuery({ search: search.trim(), page: 1 }),
       250,
     );
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, query.search, onQuery]);
   const params = new URLSearchParams({
     ...query,
     page: String(query.page),
@@ -757,8 +787,8 @@ function DeviceResults({
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correcting = !loading && !error && query.page > lastPage;
   useEffect(() => {
-    if (correcting) setQuery((old) => ({ ...old, page: lastPage }));
-  }, [correcting, lastPage]);
+    if (correcting) onQuery({ page: lastPage });
+  }, [correcting, lastPage, onQuery]);
   /** The device's name, opening its page; the table cell and phone card share it. */
   const deviceLink = (t: DeploymentTarget) => (
     <a
@@ -803,15 +833,13 @@ function DeviceResults({
           <span className="sr-only">Progress</span>
           <select
             value={query.state}
-            onChange={(event) => {
-              const state = event.target.value;
-              setQuery((old) => ({
-                ...old,
+            onChange={(event) =>
+              onQuery({
                 search: search.trim(),
-                state,
+                state: event.target.value,
                 page: 1,
-              }));
-            }}
+              })
+            }
           >
             <option value="all">All devices</option>
             {states.map((value) => (
@@ -878,12 +906,11 @@ function DeviceResults({
           manualSorting
           sort={{ column: query.sort, direction: query.direction }}
           onSortChange={(sort) =>
-            setQuery((old) => ({
-              ...old,
+            onQuery({
               page: 1,
               sort: sort?.column || "device_name",
               direction: sort?.direction || "asc",
-            }))
+            })
           }
           columns={[
             {
@@ -941,12 +968,7 @@ function DeviceResults({
                   label: `${targetLabel(value, { stopped })} (${deployment.state_counts[value] || 0})`,
                 })),
                 onChange: (state) =>
-                  setQuery((old) => ({
-                    ...old,
-                    search: search.trim(),
-                    state,
-                    page: 1,
-                  })),
+                  onQuery({ search: search.trim(), state, page: 1 }),
               },
             },
             {
@@ -977,7 +999,7 @@ function DeviceResults({
               count={data.total}
               page={query.page}
               size={data.page_size}
-              onPage={(page) => setQuery((old) => ({ ...old, page }))}
+              onPage={(page) => onQuery({ page })}
             />
           )}
       </div>
@@ -1083,7 +1105,7 @@ function TargetDetails({
             ? `Applies on its next check-in (within ${t.check_in_seconds} s).`
             : "Applies on its next check-in."
           : t.state === "verified_applied"
-            ? `Verified ${exactTime(t.verified_at)}`.trim()
+            ? `Applied ${exactTime(t.verified_at)}`.trim()
             : ["failed", "rolled_back", "incompatible"].includes(t.state)
               ? "No reason reported. Open device for details."
               : "No reported error."}
@@ -1250,14 +1272,23 @@ function RolloutPage({
     rememberOpener();
     setRetryScope(scope);
   }
-  const [deviceSearch, setDeviceSearch] = useState("");
-  const [deviceQuery, setDeviceQuery] = useState<DeviceResultsQuery>({
-    search: "",
-    state: "all",
-    page: 1,
-    sort: "device_name",
-    direction: "asc",
-  });
+  // The device filter is in the URL, so a filtered rollout can be shared and
+  // survives a reload. Typing settles before it reaches the URL; a search
+  // from the URL (Back, a link) replaces what the box shows.
+  const [deviceUrl, updateDeviceUrl] = useHashQuery(deviceResultsUrl);
+  const deviceQuery = readDeviceResults(deviceUrl);
+  const updateDeviceQuery = useCallback(
+    (patch: Partial<DeviceResultsQuery>) =>
+      updateDeviceUrl(deviceResultsPatch(patch)),
+    [updateDeviceUrl],
+  );
+  const [deviceSearch, setDeviceSearch] = useState(deviceUrl.rq);
+  const [urlDeviceSearch, setUrlDeviceSearch] = useState(deviceUrl.rq);
+  if (urlDeviceSearch !== deviceUrl.rq) {
+    setUrlDeviceSearch(deviceUrl.rq);
+    if (deviceSearch.trim() !== deviceUrl.rq) setDeviceSearch(deviceUrl.rq);
+  }
+  const deviceFilter = serializeQuery(deviceUrl, deviceResultsUrl);
   const committing = busy || assignmentCommitting;
   const busyRef = useRef(false),
     uncertainRef = useRef(false),
@@ -1838,7 +1869,13 @@ function RolloutPage({
                   )}
                 </div>
               )}
-              <CopyLink route={permalinkRoute} />
+              <CopyLink
+                route={
+                  deviceFilter
+                    ? `${permalinkRoute}${permalinkRoute.includes("?") ? "&" : "?"}${deviceFilter}`
+                    : permalinkRoute
+                }
+              />
             </PageHeader>
             {error && (
               <InlineError
@@ -2011,7 +2048,7 @@ function RolloutPage({
               search={deviceSearch}
               setSearch={setDeviceSearch}
               query={deviceQuery}
-              setQuery={setDeviceQuery}
+              onQuery={updateDeviceQuery}
             />
             <details className="control-disclosure">
               <summary>Technical details</summary>
