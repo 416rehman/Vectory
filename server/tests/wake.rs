@@ -38,7 +38,11 @@ async fn server(options: wake::Options) -> (tempfile::TempDir, State) {
     (temp, s)
 }
 fn held(limit: usize, hold: Duration) -> wake::Options {
-    wake::Options { limit, hold }
+    wake::Options {
+        limit,
+        hold,
+        ..Default::default()
+    }
 }
 
 /// Synthetic devices, each with a live credential whose fingerprint is
@@ -505,7 +509,12 @@ async fn one_wait_per_device_and_a_bounded_registry() {
 
 #[tokio::test]
 async fn a_burst_of_1000_changes_answers_each_waiter_once() {
-    let (_temp, s) = server(held(20_000, Duration::from_secs(25))).await;
+    // No pacing here (a burst above the fleet): this is about "once".
+    let (_temp, s) = server(wake::Options {
+        burst: 2000,
+        ..held(20_000, Duration::from_secs(25))
+    })
+    .await;
     let ids = devices(&s, 1000).await;
     let (cookie, csrf) = admin(&s).await;
     let session = (cookie.as_str(), csrf.as_str());
@@ -557,6 +566,71 @@ async fn a_burst_of_1000_changes_answers_each_waiter_once() {
     );
 }
 
+/// A release larger than the burst: the burst answers at once and the rest
+/// no faster than the rate, each once, while their waits keep listening.
+#[tokio::test]
+async fn a_large_release_is_paced() {
+    const BURST: usize = 20;
+    const RATE: u32 = 40;
+    let (_temp, s) = server(wake::Options {
+        burst: BURST as u32,
+        rate: RATE,
+        ..held(1000, Duration::from_secs(60))
+    })
+    .await;
+    let ids = devices(&s, 60).await;
+    let (cookie, csrf) = admin(&s).await;
+    let session = (cookie.as_str(), csrf.as_str());
+    let version = publish(&s, session, "Paced", 1).await;
+    let mut pending = Vec::new();
+    for id in &ids {
+        let (status, _, body) =
+            wait_request(agent(&s, id), "generation=0&policy_generation=0").await;
+        assert_eq!(status, StatusCode::OK);
+        pending.push(follow(body));
+    }
+    change(
+        &s,
+        session,
+        "POST",
+        "/api/v1/deployments",
+        deployment(devices_selector(&ids), json!({"version_id":version}), 10),
+    )
+    .await;
+    let queued = ids.iter().filter(|id| s.wake.listening(id)).count();
+    assert!(
+        queued >= 30,
+        "only {queued} waits still listen in their turn"
+    );
+    let mut times = Vec::new();
+    for mut receiver in pending {
+        let (at, answer) = answered(&mut receiver, Duration::from_secs(5))
+            .await
+            .expect("a paced wait was never answered");
+        assert_eq!(answer, json!({"changed":true}));
+        times.push(at);
+    }
+    times.sort();
+    assert_eq!(s.wake.woken(), ids.len() as u64);
+    let offsets: Vec<Duration> = times.iter().map(|t| t.duration_since(times[0])).collect();
+    assert!(
+        offsets[BURST - 1] < Duration::from_millis(100),
+        "{offsets:?}"
+    );
+    for (k, offset) in offsets.iter().enumerate().skip(BURST) {
+        let paced = Duration::from_secs_f64((k + 1 - BURST) as f64 / f64::from(RATE));
+        assert!(
+            *offset + Duration::from_millis(30) >= paced,
+            "answer {k} after {offset:?}, before its turn at {paced:?}"
+        );
+    }
+    let last = offsets[ids.len() - 1];
+    assert!(
+        last < Duration::from_secs(3),
+        "the last answer took {last:?}"
+    );
+}
+
 #[tokio::test]
 async fn shutdown_answers_every_waiter_and_refuses_new_ones() {
     let (_temp, s) = server(held(100, Duration::from_secs(25))).await;
@@ -575,10 +649,14 @@ async fn shutdown_answers_every_waiter_and_refuses_new_ones() {
         assert!(at.duration_since(started) < PROMPT);
     }
     assert_eq!(s.wake.parked(), 0);
+    // Every answered agent may try once more: the refusal reads nothing (the
+    // pool is closed) and holds it off for a second only, so it waits again
+    // after its next check-in to the restarted server.
+    s.pool.close().await;
     let (status, headers, _) =
         wait_request(agent(&s, &ids[0]), "generation=0&policy_generation=0").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(headers["retry-after"], "5");
+    assert_eq!(headers["retry-after"], "1");
 }
 
 #[tokio::test]
