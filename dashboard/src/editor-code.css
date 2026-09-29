@@ -45,6 +45,10 @@
 .editor-code-view .editor-code-footer > span {
   flex: 1;
 }
+.editor-code-comments {
+  color: var(--ed-warning);
+  font-weight: 550;
+}
 .editor-code-view .editor-code-toolbar select {
   width: 94px;
 }

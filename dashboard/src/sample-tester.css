@@ -2,7 +2,10 @@
 
 .sample-tester {
   display: grid;
+  /* One shrinkable column: a long sample line must not widen the inspector. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
   margin-top: 4px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -87,7 +90,9 @@
 }
 .sample-tester-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  min-width: 0;
 }
 .sample-tester-wide .sample-tester-body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
@@ -112,9 +117,14 @@
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  background: var(--surface);
+  /* Color only: the global select rule supplies the chevron image. */
+  background-color: var(--surface);
   font: inherit;
   font-size: 12.5px;
+}
+.sample-set-bar select {
+  padding-right: 28px;
+  background-position: right 7px center;
 }
 .sample-icon-button {
   display: inline-grid;
@@ -139,6 +149,10 @@
 .sample-icon-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.sample-editor {
+  min-width: 0;
+  overflow: hidden;
 }
 .sample-editor .configuration-code-editor,
 .sample-editor .configuration-code-editor .cm-editor {
@@ -168,6 +182,65 @@
   border-radius: var(--ed-radius-sm);
   color: var(--muted);
   font-size: 12.5px;
+}
+div.sample-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+div.sample-empty p {
+  margin: 0;
+}
+.sample-upstream {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.sample-upstream input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.sample-upstream-chain {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  color: var(--muted);
+}
+.sample-upstream-chain > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sample-upstream-chain code {
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.sample-route-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.sample-route-summary .sample-port strong {
+  font-variant-numeric: tabular-nums;
+}
+.sample-held {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .sample-error {
   border-style: solid;

@@ -1,6 +1,13 @@
 import { z } from "zod";
 import type { DataPlaneSummary } from "./status";
-import { assertExactNumbers, stringifyExactJSON } from "./configurationNumbers";
+import {
+  assertExactNumbers,
+  parseLosslessJSON,
+  stringifyExactJSON,
+} from "./configurationNumbers";
+
+/** Sample and test runs echo event payloads: keep big integers exact. */
+const EVENT_PAYLOAD_ROUTES = ["/vrl/test", "/configurations/test"];
 import { RollbackPreviewSchema } from "./rollbackReview";
 import { AssignmentRemovalPreviewSchema } from "./assignmentRemovalModel";
 import { ScheduledAssignmentRefreshPreviewSchema } from "./scheduledAssignmentRefreshModel";
@@ -198,9 +205,14 @@ export async function api<T = unknown>(
     const text = await response.text();
     if (!publicRoute && (!sessionValid || sentEpoch !== sessionEpoch))
       throw sessionFailure();
+    const events = EVENT_PAYLOAD_ROUTES.includes(route);
     let data: any;
     try {
-      data = text ? JSON.parse(text) : null;
+      data = text
+        ? events
+          ? parseLosslessJSON(text)
+          : JSON.parse(text)
+        : null;
     } catch {
       throw new APIError(
         "INVALID_RESPONSE",
@@ -211,7 +223,14 @@ export async function api<T = unknown>(
     try {
       assertExactNumbers(data, "response");
     } catch (failure) {
-      throw new APIError("UNSAFE_NUMBER", (failure as Error).message, 422);
+      const message = (failure as Error).message;
+      throw new APIError(
+        "UNSAFE_NUMBER",
+        events
+          ? `${message.split(":")[0]}: Vector returned a whole number larger than this browser can show exactly. Nothing was changed.`
+          : message,
+        422,
+      );
     }
     if (!response.ok) {
       if (
@@ -1658,6 +1677,16 @@ export const PipelineSummarySchema = z.object({
     })
     .nullable(),
   assigned_devices: z.number().int().nonnegative().optional(),
+  // Additive: devices grouped by the version of this pipeline they last verified.
+  running_versions: z
+    .array(
+      z.object({
+        id: z.string(),
+        number: z.number().int().positive(),
+        devices: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
 });
 export const PipelineLibraryPageSchema = z.object({
   items: z.array(PipelineSummarySchema).max(50),

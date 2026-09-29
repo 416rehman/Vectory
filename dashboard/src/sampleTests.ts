@@ -1,4 +1,5 @@
 import type { Config } from "./api";
+import { isExactInteger } from "./configurationNumbers";
 import { flattenEvent } from "./eventDiff";
 
 /** One sample's run through a step, as returned by `POST /vrl/test`. */
@@ -41,6 +42,7 @@ export function vrlLiteral(value: unknown): string {
   if (typeof value === "number")
     return Number.isFinite(value) ? String(value) : "null";
   if (typeof value === "boolean") return String(value);
+  if (isExactInteger(value)) return value.rawJSON;
   if (Array.isArray(value)) return `[${value.map(vrlLiteral).join(", ")}]`;
   return `{${Object.entries(value as Record<string, unknown>)
     .map(([key, item]) => `${vrlString(key)}: ${vrlLiteral(item)}`)

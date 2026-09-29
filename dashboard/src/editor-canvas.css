@@ -127,6 +127,24 @@
   min-width: 0;
   margin-left: auto;
 }
+/* Settings reads as a word where there is room, an icon where there is not. */
+.editor-toolbar .editor-settings-button {
+  width: auto;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+@media (max-width: 1099px) {
+  .editor-toolbar .editor-settings-button {
+    width: 32px;
+    padding: 0;
+  }
+  .editor-toolbar .editor-settings-button > span {
+    display: none;
+  }
+}
 .editor-toolbar-secondary {
   display: flex;
   align-items: center;
@@ -566,6 +584,35 @@
 .canvas-component-from code {
   color: var(--ink);
   background: transparent;
+}
+.canvas-component-from button {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--accent-ink, var(--accent));
+  background: none;
+  font: inherit;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.canvas-component-result strong code {
+  margin-left: 4px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 450;
+}
+.canvas-component-result[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.canvas-component-result[aria-disabled="true"] > .pipeline-component-icon,
+.canvas-component-result[aria-disabled="true"] strong {
+  opacity: 0.5;
+}
+.canvas-component-result[aria-disabled="true"] small {
+  color: var(--ed-warning);
 }
 .canvas-component-results {
   flex: 1;

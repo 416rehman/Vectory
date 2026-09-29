@@ -39,6 +39,51 @@
   line-height: 14px;
   font-weight: 500;
 }
+.pipeline-input-patterns {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ed-radius-sm);
+  background: var(--surface-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pipeline-input-patterns strong {
+  font-size: 12.5px;
+}
+.pipeline-input-patterns ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pipeline-input-patterns li {
+  display: block;
+  color: var(--muted);
+}
+.pipeline-input-patterns li code {
+  margin-right: 6px;
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-weight: 600;
+}
+.pipeline-input-patterns small {
+  color: var(--muted);
+}
+.editor-component-panel .editor-inspector-type {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-family: var(--ed-mono, var(--font-mono));
+  font-size: 10.5px;
+  font-weight: 500;
+}
 .editor-component-panel .editor-inspector-identity h2 {
   margin: 2px 0 5px;
   font-size: 18px;

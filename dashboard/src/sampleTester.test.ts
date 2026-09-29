@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { parseLosslessJSON } from "./configurationNumbers";
 import { diffEvents, displayValue, flattenEvent } from "./eventDiff";
+import { eventPaths } from "./vrlLanguage";
 import {
+  DEFAULT_SAMPLE,
   activeSet,
   emptyStore,
   parseSamples,
@@ -180,5 +183,57 @@ describe("unit tests from samples", () => {
       '{"a": [1, null], "b": "x"}',
     );
     expect(assertionsFor({})).toBe("true");
+  });
+});
+
+describe("epoch nanoseconds and other big integers", () => {
+  const response =
+    '{"output":{"ns":1790669601180123456,"ms":1790669601180,"n":1.5}}';
+  it("keep their exact digits through display, diff and saved tests", () => {
+    const { output } = parseLosslessJSON(response);
+    expect(output.ms).toBe(1790669601180);
+    expect(JSON.stringify(output)).toBe(
+      '{"ns":1790669601180123456,"ms":1790669601180,"n":1.5}',
+    );
+    expect(displayValue(output.ns)).toBe("1790669601180123456");
+    expect([...flattenEvent(output).keys()]).toEqual([".ns", ".ms", ".n"]);
+    expect(eventPaths([output])).toEqual([".ms", ".n", ".ns"]);
+    expect(diffEvents({ ns: 1 }, output)[0]).toMatchObject({
+      path: ".ns",
+      kind: "changed",
+    });
+    expect(assertionsFor(output).split("\n")[0]).toBe(
+      "assert_eq!(.ns, 1790669601180123456)",
+    );
+  });
+  it("in samples are sent back exactly", () => {
+    const parsed = parseSamples('{"id":18446744073709551615}');
+    expect(parsed.errors).toEqual([]);
+    expect(JSON.stringify(parsed.samples[0])).toBe(
+      '{"id":18446744073709551615}',
+    );
+  });
+});
+
+describe("sample sets follow the source", () => {
+  beforeEach(() => {
+    const values = new Map<string, string>();
+    (globalThis as any).localStorage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+    };
+  });
+  it("open on the events a source emits, and replace an untouched old default", () => {
+    const events =
+      '{"message":"<134>2 2026-09-29T08:45:37.562Z h app 1 ID1 - hi"}';
+    expect(readSamples("u", "p", events).sets[0].text).toBe(events);
+    // The old built-in example, saved untouched, is refreshed...
+    writeSamples("u", "p", emptyStore(DEFAULT_SAMPLE));
+    expect(readSamples("u", "p", events).sets[0].text).toBe(events);
+    // ...but anything the person wrote is kept.
+    writeSamples("u", "p", emptyStore('{"mine":true}'));
+    expect(readSamples("u", "p", events).sets[0].text).toBe('{"mine":true}');
+    // No fitting events: the store opens empty rather than red.
+    expect(readSamples("u", "q", "").sets[0].text).toBe("");
   });
 });

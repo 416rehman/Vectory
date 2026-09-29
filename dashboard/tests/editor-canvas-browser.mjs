@@ -1600,7 +1600,7 @@ try {
           "Check pipeline: Couldn't check",
         );
         await expect(verdict()).toHaveText(
-          "Couldn't check with Vector: Synthetic validator unavailable",
+          "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.",
         );
         // The last findings stay listed while the checker is unreachable.
         await expect(problemsPanel()).toContainText(
@@ -2350,7 +2350,14 @@ try {
         await menu()
           .getByRole("textbox", { name: "Search components" })
           .fill("prometheus_exporter");
-        await expect(menu().locator(".canvas-component-result")).toHaveCount(0);
+        // Incompatible steps stay listed, greyed, with the reason.
+        await expect(menu().locator(".canvas-component-result")).toHaveCount(1);
+        await expect(
+          menu().locator(".canvas-component-result"),
+        ).toHaveAttribute("aria-disabled", "true");
+        await expect(menu()).toContainText(
+          "Accepts metrics; branch.accepted sends logs.",
+        );
         await choose("sample", "Transforms");
         await saved((doc) => Object.keys(doc.config.transforms).length === 3);
         const added = Object.keys(fixture.document.config.transforms).find(

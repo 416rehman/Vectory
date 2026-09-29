@@ -4,8 +4,69 @@ import type { Config } from "./api";
 const SECTIONS = ["sources", "transforms", "sinks", "enrichment_tables"];
 const record = (value: unknown): value is Config =>
   !!value && typeof value === "object" && !Array.isArray(value);
-const same = (a: unknown, b: unknown) =>
-  a === b || JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Semantic equality of configuration values: key order never matters (the
+ * server returns sorted keys, a draft keeps insertion order), a missing key
+ * equals an undefined one, and `inputs` is a set.
+ */
+export function sameValue(a: unknown, b: unknown, key?: string): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    if (key === "inputs" && a.every((item) => typeof item === "string")) {
+      const sorted = (list: unknown[]) => [...(list as string[])].sort();
+      return sameValue(sorted(a), sorted(b));
+    }
+    return a.every((item, index) => sameValue(item, b[index]));
+  }
+  if (record(a) && record(b)) {
+    for (const name of new Set([...Object.keys(a), ...Object.keys(b)]))
+      if (!sameValue(a[name], b[name], name)) return false;
+    return true;
+  }
+  return false;
+}
+const same = (a: unknown, b: unknown, key?: string) => sameValue(a, b, key);
+
+/** Distance from a source: upstream steps sort before the steps they feed. */
+function depths(...configs: (Config | null)[]) {
+  const inputs = new Map<string, string[]>();
+  for (const config of configs)
+    for (const section of SECTIONS) {
+      const components = record(config?.[section]) ? config![section] : {};
+      for (const [id, component] of Object.entries(components))
+        if (!inputs.has(id))
+          inputs.set(
+            id,
+            record(component) && Array.isArray(component.inputs)
+              ? component.inputs.filter(
+                  (input: unknown): input is string =>
+                    typeof input === "string",
+                )
+              : [],
+          );
+    }
+  const memo = new Map<string, number>();
+  const depth = (id: string, seen: Set<string>): number => {
+    const known = memo.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    let deepest = 0;
+    for (const input of inputs.get(id) ?? []) {
+      // `route.errors` is the `errors` output of `route`.
+      const upstream = inputs.has(input)
+        ? input
+        : input.replace(/\.[^.]*$/, "");
+      if (inputs.has(upstream))
+        deepest = Math.max(deepest, depth(upstream, seen) + 1);
+    }
+    seen.delete(id);
+    memo.set(id, deepest);
+    return deepest;
+  };
+  return (id: string) => depth(id, new Set());
+}
 const PROGRAM_KEYS = new Set(["source", "condition", "route", "routes"]);
 
 /** VRL programs and conditions of a component, by option path. */
@@ -44,6 +105,17 @@ export function programLabel(path: string) {
   return exclusive ? `Route ${Number(exclusive[1]) + 1}` : path;
 }
 
+/** A value short enough to show inline: text up to 24 characters, a number, a flag. */
+const short = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  typeof value === "number" ||
+  typeof value === "boolean" ||
+  (typeof value === "string" && value.length <= 24 && !value.includes("\n"));
+export function shortValue(value: unknown) {
+  return value === undefined ? "unset" : JSON.stringify(value);
+}
+
 export type ProgramChange = {
   path: string;
   label: string;
@@ -57,6 +129,8 @@ export type ComponentChange = {
   change: "added" | "removed" | "changed";
   /** Changed options other than programs and inputs. */
   options: string[];
+  /** Before and after for options whose values are short scalars. */
+  values: Record<string, { before: unknown; after: unknown }>;
   programs: ProgramChange[];
   rewired: boolean;
 };
@@ -88,6 +162,7 @@ export function reviewChanges(
           type,
           change: "added",
           options: [],
+          values: {},
           programs: [...componentPrograms(component)].map(([path, text]) => ({
             path,
             label: programLabel(path),
@@ -105,7 +180,7 @@ export function reviewChanges(
           ...Object.keys(record(previous) ? previous : {}),
           ...Object.keys(record(component) ? component : {}),
         ]),
-      ].filter((key) => !same(previous?.[key], component?.[key]));
+      ].filter((key) => !same(previous?.[key], component?.[key], key));
       const beforePrograms = componentPrograms(previous),
         afterPrograms = componentPrograms(component);
       const programs: ProgramChange[] = [];
@@ -123,13 +198,21 @@ export function reviewChanges(
             after: now,
           });
       }
+      const options = keys.filter(
+        (key) => !PROGRAM_KEYS.has(key) && key !== "inputs",
+      );
       components.push({
         id,
         section,
         type,
         change: "changed",
-        options: keys.filter(
-          (key) => !PROGRAM_KEYS.has(key) && key !== "inputs",
+        options,
+        values: Object.fromEntries(
+          options.flatMap((key) =>
+            short(previous?.[key]) && short(component?.[key])
+              ? [[key, { before: previous?.[key], after: component?.[key] }]]
+              : [],
+          ),
         ),
         programs,
         rewired: keys.includes("inputs"),
@@ -146,10 +229,22 @@ export function reviewChanges(
               : "",
           change: "removed",
           options: [],
+          values: {},
           programs: [],
           rewired: false,
         });
   }
+  // Source to sink: sections in pipeline order, then upstream steps first.
+  const depth = depths(after, before);
+  const order = new Map(
+    components.map((component, index) => [component, index]),
+  );
+  components.sort(
+    (a, b) =>
+      SECTIONS.indexOf(a.section) - SECTIONS.indexOf(b.section) ||
+      depth(a.id) - depth(b.id) ||
+      order.get(a)! - order.get(b)!,
+  );
   const settings = [
     ...new Set([...Object.keys(before || {}), ...Object.keys(after || {})]),
   ].filter(
@@ -163,6 +258,62 @@ export function reviewChanges(
     ? null
     : { before: count(before?.tests), after: count(after?.tests) };
   return { components, settings, tests };
+}
+
+export type ChangeGroup =
+  | { kind: "step"; component: ComponentChange }
+  | {
+      kind: "group";
+      change: "added" | "removed";
+      section: string;
+      components: ComponentChange[];
+    };
+
+/**
+ * The review's rows. Steps that changed always get their own row; a long run
+ * of added or removed steps in one section folds into a single row with a
+ * count ("36 sources added") that opens on demand.
+ */
+export function groupChanges(
+  components: readonly ComponentChange[],
+  threshold = 8,
+): ChangeGroup[] {
+  const runs = new Map<string, ComponentChange[]>();
+  for (const component of components)
+    if (component.change !== "changed") {
+      const key = `${component.change}:${component.section}`;
+      runs.set(key, [...(runs.get(key) ?? []), component]);
+    }
+  const rows: ChangeGroup[] = [];
+  const emitted = new Set<string>();
+  for (const component of components) {
+    const key = `${component.change}:${component.section}`;
+    const run = runs.get(key);
+    if (component.change === "changed" || !run || run.length <= threshold)
+      rows.push({ kind: "step", component });
+    else if (!emitted.has(key)) {
+      emitted.add(key);
+      rows.push({
+        kind: "group",
+        change: component.change,
+        section: component.section,
+        components: run,
+      });
+    }
+  }
+  return rows;
+}
+
+const SECTION_NOUNS: Record<string, [string, string]> = {
+  sources: ["source", "sources"],
+  transforms: ["transform", "transforms"],
+  sinks: ["destination", "destinations"],
+  enrichment_tables: ["enrichment table", "enrichment tables"],
+};
+/** "36 sources", "1 destination". */
+export function sectionCount(section: string, count: number) {
+  const [one, many] = SECTION_NOUNS[section] ?? ["step", "steps"];
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 export type DiffLine = { kind: "same" | "added" | "removed"; text: string };

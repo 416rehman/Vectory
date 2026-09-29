@@ -1,11 +1,14 @@
-import { useId, useRef } from "react";
-import { FileUp } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ClipboardPaste, FileUp } from "lucide-react";
 import type { Config } from "./api";
 import { Button } from "./ui";
 import {
   assertValidPipelineSource,
   detectConfigurationFormat,
+  guessConfigurationFormat,
   MAX_CONFIGURATION_BYTES,
+  sourceErrorMessage,
+  type ConfigurationFormat,
 } from "./configurationSource";
 import { pipelineTemplates } from "./pipelineTemplates";
 import "./pipeline-templates.css";
@@ -22,21 +25,34 @@ const count = (config: Config) =>
     .map((section) => Object.keys(config[section] || {}).length)
     .reduce((total, value) => total + value, 0);
 
+/** Check configuration text for a new pipeline. */
+export function readStartText(
+  name: string,
+  text: string,
+  format: ConfigurationFormat,
+): StartImport {
+  try {
+    if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
+      throw Error("Configurations must be 1 MiB or smaller.");
+    const config = assertValidPipelineSource(text, format);
+    const steps = count(config);
+    return {
+      name,
+      config,
+      summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
+    };
+  } catch (error) {
+    return { name, error: sourceErrorMessage(text, error) };
+  }
+}
+
 /** Read a Vector configuration file for a new pipeline. */
 export async function readStartImport(file: File): Promise<StartImport> {
   try {
     if (file.size > MAX_CONFIGURATION_BYTES)
       throw Error("Configuration files must be 1 MiB or smaller.");
-    const config = assertValidPipelineSource(
-      await file.text(),
-      detectConfigurationFormat(file.name),
-    );
-    const steps = count(config);
-    return {
-      name: file.name,
-      config,
-      summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
-    };
+    const format = detectConfigurationFormat(file.name);
+    return readStartText(file.name, await file.text(), format);
   } catch (error) {
     return {
       name: file.name,
@@ -69,6 +85,15 @@ export default function PipelineStartChoice({
 }) {
   const file = useRef<HTMLInputElement>(null);
   const needsId = useId();
+  const needsBox = useRef<HTMLDivElement>(null);
+  // Choosing a template brings what it needs into view, not below the fold.
+  useEffect(() => {
+    if (value !== "empty")
+      needsBox.current?.scrollIntoView?.({ block: "nearest" });
+  }, [value]);
+  const pasteId = useId();
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
   const chosen = pipelineTemplates.find((template) => template.id === value);
   const option = (
     id: string,
@@ -112,7 +137,7 @@ export default function PipelineStartChoice({
         {option(
           "import",
           "Import a Vector config",
-          "Start from a YAML, JSON or TOML file.",
+          "Start from a YAML, JSON or TOML file, or paste one.",
         )}
       </div>
       {value === "import" && (
@@ -137,6 +162,52 @@ export default function PipelineStartChoice({
           >
             {imported ? "Choose another file" : "Choose file"}
           </Button>
+          <Button
+            type="button"
+            variant="ghost compact"
+            icon={ClipboardPaste}
+            disabled={disabled}
+            aria-expanded={pasting}
+            aria-controls={pasteId}
+            onClick={() => setPasting(!pasting)}
+          >
+            Paste instead
+          </Button>
+          {pasting && (
+            <div className="pipeline-start-paste" id={pasteId}>
+              <label className="sr-only" htmlFor={`${pasteId}-text`}>
+                Vector configuration
+              </label>
+              <textarea
+                id={`${pasteId}-text`}
+                rows={8}
+                spellCheck={false}
+                disabled={disabled}
+                placeholder={
+                  "sources:\n  app_logs:\n    type: file\n    include: [/var/log/app/*.log]"
+                }
+                value={pasted}
+                onChange={(event) => setPasted(event.target.value)}
+              />
+              <Button
+                type="button"
+                variant="secondary compact"
+                disabled={disabled || !pasted.trim()}
+                onClick={() => {
+                  const format = guessConfigurationFormat(pasted);
+                  onImport(
+                    readStartText(
+                      `Pasted ${format.toUpperCase()}`,
+                      pasted,
+                      format,
+                    ),
+                  );
+                }}
+              >
+                Use this configuration
+              </Button>
+            </div>
+          )}
           {imported && (
             <p
               className="pipeline-start-import-result"
@@ -155,7 +226,7 @@ export default function PipelineStartChoice({
         )}
       </div>
       {chosen && (
-        <div className="pipeline-start-needs" id={needsId}>
+        <div className="pipeline-start-needs" id={needsId} ref={needsBox}>
           <strong>You&apos;ll need</strong>
           <ul>
             {chosen.needs.map((need) => (
