@@ -1,4 +1,5 @@
 import type { Config } from "./api";
+import { patternInputs, unmatchedPatternMessage } from "./inputPatterns";
 
 /** One structured finding from the isolated Vector worker (see CONTRACT.md). */
 export type VectorDiagnostic = {
@@ -142,6 +143,22 @@ export function localProblems(
       code: "no_destination",
       message,
     });
+  // A wildcard input is drawn on the canvas; it only needs a word here when it
+  // matches nothing.
+  for (const input of patternInputs(config))
+    if (!input.matches.length && sectionOf(config, input.target)) {
+      const { message, hint } = unmatchedPatternMessage(input, config);
+      push({
+        severity: "warning",
+        origin: "draft",
+        component: input.target,
+        section: sectionOf(config, input.target),
+        field: "inputs",
+        code: "pattern_unmatched",
+        message,
+        hint,
+      });
+    }
   for (const message of variableMessages)
     push({
       severity: "error",
@@ -159,6 +176,12 @@ const CHECK_FAILURES = new Set([
   "validator_incomplete",
 ]);
 
+const GENERIC_PATTERN_NOTE =
+  /^dynamic input pattern requires native Vector topology validation\.?$/i;
+/** Vector's own words for a pipeline with no source or destination. */
+const NATIVE_EMPTY = /^No (?:sources|sinks) defined in the config\.?$/i;
+const LOCAL_EMPTY = /^Add a (?:source|destination)\b/;
+
 /** Findings from the last Vector check, falling back to older text-only servers. */
 export function checkProblems(
   check: PipelineCheck | null,
@@ -170,6 +193,10 @@ export function checkProblems(
     return check.diagnostics.flatMap((item, index): Problem[] => {
       // A check that could not run is the check's state, not a pipeline problem.
       if (item.code && CHECK_FAILURES.has(item.code)) return [];
+      // The structural pass cannot expand wildcards; the draft's own preview
+      // and the check's device note say what is left to resolve.
+      if (!item.code && GENERIC_PATTERN_NOTE.test(item.message.trim()))
+        return [];
       const component =
         item.component && sectionOf(config, item.component)
           ? item.component
@@ -242,6 +269,8 @@ export function mergeProblems(local: Problem[], vector: Problem[]) {
       localErrors.some(
         (item) => !item.component && item.section === "global",
       )) ||
+      (NATIVE_EMPTY.test(problem.message) &&
+        localErrors.some((item) => LOCAL_EMPTY.test(item.message))) ||
       (!!problem.component &&
         flagged.has(problem.component) &&
         (!problem.code || SETTINGS_CODES.has(problem.code))));

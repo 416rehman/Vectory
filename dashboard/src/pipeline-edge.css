@@ -51,6 +51,39 @@
     margin-bottom: 10px;
   }
 }
+.editor-graph
+  .react-flow__edge.pipeline-connection
+  .react-flow__edge-path.pipeline-edge-pattern {
+  stroke-dasharray: 5 5;
+  stroke-width: 1.5;
+  opacity: 0.85;
+}
+.editor-graph .react-flow__edge.pipeline-connection-pattern {
+  pointer-events: none;
+}
+.pipeline-edge-pattern-chip {
+  position: absolute;
+  max-width: 200px;
+  padding: 1px 7px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pipeline-edge-pattern-chip code {
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-size: 11px;
+}
 .pipeline-edge-actions,
 .pipeline-edge-insert {
   position: absolute;

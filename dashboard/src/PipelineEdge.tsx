@@ -29,6 +29,37 @@ function PipelineEdge(props: EdgeProps) {
   // Live: undefined when off, null when no device reports this output.
   const rate = props.data?.liveRate as number | null | undefined;
   const live = rate !== undefined;
+  // A wildcard input: a dashed, read-only line for each output it matches,
+  // named by the pattern.
+  const pattern = props.data?.pattern as string | undefined;
+  const more = Number(props.data?.patternMore) || 0;
+  if (pattern !== undefined)
+    return (
+      <>
+        <BaseEdge
+          id={props.id}
+          path={path}
+          data-connection-style={connectionStyle}
+          className={`pipeline-edge-pattern${live && rate ? " pipeline-edge-flowing" : ""}`}
+          markerEnd={props.markerEnd}
+          style={props.style}
+          interactionWidth={0}
+        />
+        <EdgeLabelRenderer>
+          <span
+            className="pipeline-edge-pattern-chip"
+            title={`Wildcard input ${pattern}. Vector resolves it on each device.`}
+            style={{
+              transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+            }}
+          >
+            <code>{pattern}</code>
+            {live && rate !== null && ` · ${formatRate(rate)}`}
+            {more > 0 && ` · +${more} more`}
+          </span>
+        </EdgeLabelRenderer>
+      </>
+    );
   return (
     <>
       <BaseEdge

@@ -21,6 +21,7 @@ import { catalog, componentSchema, vectorSchema, type Kind } from "./catalog";
 import { Button, Field, Modal } from "./ui";
 import SyntheticTester from "./SyntheticTester";
 import type { Upstream } from "./sampleUpstream";
+import { patternSummary, type PatternInput } from "./inputPatterns";
 import DocLink from "./DocLink";
 import PipelineSchemaFields, {
   FieldPathScope,
@@ -303,6 +304,18 @@ export type SettingsFocus = {
   nonce: number;
 };
 
+/** The heading over Vector's findings for one step: problems, or notes. */
+function summaryHeading(findings: readonly Problem[]) {
+  const errors = findings.filter((item) => item.severity === "error").length;
+  const notes = findings.length - errors;
+  if (!errors)
+    return notes === 1 ? "One thing to check" : `${notes} things to check`;
+  const problems = errors === 1 ? "a problem" : `${errors} problems`;
+  return notes
+    ? `Vector found ${problems} and ${notes} ${notes === 1 ? "note" : "notes"}`
+    : `Vector found ${problems}`;
+}
+
 export default function PipelineSettings({
   id,
   kind,
@@ -323,6 +336,7 @@ export default function PipelineSettings({
   onSaveTests,
   focus,
   upstream,
+  inputPatterns = [],
 }: {
   id: string;
   kind: Kind;
@@ -346,6 +360,8 @@ export default function PipelineSettings({
   focus?: SettingsFocus | null;
   /** What feeds this step, for the sample tester. */
   upstream?: Upstream;
+  /** This step's wildcard inputs and what they match now. */
+  inputPatterns?: readonly PatternInput[];
 }) {
   const definition = catalog.find(
     (c) => c.kind === kind && c.type === component.type,
@@ -617,14 +633,25 @@ export default function PipelineSettings({
               </ul>
             </div>
           )}
+          {inputPatterns.length > 0 && (
+            <div className="pipeline-input-patterns" role="status">
+              <strong>Wildcard inputs</strong>
+              <ul>
+                {inputPatterns.map((input) => (
+                  <li key={input.pattern}>
+                    <code>{input.pattern}</code>
+                    <span>
+                      {patternSummary(input).slice(input.pattern.length + 1)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <small>Edit inputs in Code view.</small>
+            </div>
+          )}
           {summary.length > 0 && (
             <div className="pipeline-vector-problems" role="status">
-              <strong>
-                Vector found{" "}
-                {summary.length === 1
-                  ? "a problem"
-                  : `${summary.length} problems`}
-              </strong>
+              <strong>{summaryHeading(summary)}</strong>
               <ul>
                 {summary.map((problem) => (
                   <li
