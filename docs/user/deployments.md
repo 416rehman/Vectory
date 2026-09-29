@@ -13,6 +13,8 @@ A deployment sends one published version, or a set of agent settings, to the dev
 
 Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
+After a rollback, deploying a fix of the same pipeline also replaces the rolled-back rollout and its rollback, at the rollback's priority, so every device takes the fix in one review. If an assignment still outranks some devices, the button reads **Deploy to 2 of 3 devices** and asks you to confirm what stays behind, for example "edge-nyc-02 keeps Edge syslog processing v1 (priority 101 rollback)".
+
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
 ## Review the target set
@@ -48,6 +50,7 @@ When several deployments target the same device, the highest priority wins. Pipe
 - A pipeline deployment at priority 200 beats one at 100.
 - Two different pipelines at the same winning priority conflict. Vectory never picks one arbitrarily; the review shows the conflict and the deployment that holds that priority.
 - Resolve a conflict by choosing a higher priority in **Advanced options**, or by removing the deployment you no longer need.
+- **Current winner** names what each device follows today, such as a rollback one priority up, and **Also bound** lists what else still holds it at your priority. **Replace existing** replaces all of them at once.
 
 Vectory never raises a priority for you. **No current priority conflict** means only that priorities allow the change; the device still has to accept it.
 
@@ -101,7 +104,19 @@ An offline device's last state is history, not the present. It becomes current a
 
 ## Follow a rollout
 
-Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline. Failures are grouped by reason. **Copy link** shares the page with anyone who has an account.
+Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Vector reloaded** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Vector reloaded** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. The page's address is its link: share it with anyone who has an account.
+
+The page leads with the one action that fits:
+
+| When | First action |
+| --- | --- |
+| It was rolled back | **Open rollback** names what the devices returned to, for example "Open rollback (Edge syslog processing v1)". |
+| A device still runs it but isn't delivering | A banner names the device, the step it can't deliver to and how full that buffer is. **Roll back edge-nyc-02** comes first. |
+| Only the pipeline can fix the failure: a port in use, a VRL error or an invalid option | **Fix in pipeline** opens the pipeline. **Retry failed** comes second, since a retry sends the same version. |
+| Devices failed for another reason | **Retry failed**. |
+| It's paused | **Resume**. |
+
+The Overview's **Needs you** lists what still needs a person, most urgent first: devices that aren't delivering, then failed applies, then rollouts that stopped by themselves. A device problem and the rollout it stopped read as one item, with **Roll back** when the server can review that rollback. A rolled-back rollout is resolved: it leaves **Needs you** and stays in **Recent changes**. **Dismiss** hides a stopped rollout for you in this browser; if it fails again, it comes back.
 
 ## Find a deployment or device result
 
@@ -113,15 +128,18 @@ Before a schedule starts, **Update scheduled devices** compares its saved device
 
 ## Pause, cancel and remove
 
+A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) holds these actions, each with a line on what it does:
+
 | Action | Effect |
 | --- | --- |
-| **Pause rollout** | Stops releasing to more devices. Devices already updated keep the version. |
+| **Pause** | Stops releasing to more devices; resume later. Devices already updated keep the version. |
+| **Cancel** | Stops releasing for good. Devices already updated keep the version. |
+| **Roll back** | Returns the devices it released to their previous version. See [Roll back deliberately](#roll-back-deliberately). |
+| **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 | **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
 | `vectory pause` on a device | The same, set by the host. Only the host can clear it. |
-| **Cancel rollout** | Stops releasing to more devices. Devices already updated keep the version. |
-| **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 
-**Remove this assignment** first shows each device's current and resulting state. A device with nothing else assigned keeps running its current configuration, unmanaged. If anything changes before you confirm, refresh the review.
+**Remove assignment** first shows what each device runs afterwards, by name: for example **Keeps Edge syslog processing v1 (no change)** or **Switches to Web access logs v2**. A device with nothing else assigned keeps running its current configuration, unmanaged. If anything changes before you confirm, refresh the review.
 
 **Resume rollout** checks for overlapping canaries first and stays paused if one is running.
 
@@ -147,7 +165,9 @@ A rollback deploys an earlier version as a new change. History never changes, an
 3. Review the devices, priority and rollout as carefully as for a new release, then confirm.
 4. Wait for **Applied** on each device.
 
-From a deployment, **Roll back** prepares this for you. **Review rollback** lists the devices it includes, the ones it excludes and why, and what happens to the original rollout: normally its remaining releases stop and the rollback takes over at a higher priority. Only **Roll back N devices** sends it.
+From a deployment, **Roll back** prepares this for you. **Review rollback** says who returns to what and what each device it leaves out runs afterwards, for example "edge-nyc-02 returns to Edge syslog processing v1. edge-fra-01 and edge-nyc-01 never received r15-demo v1 and keep Edge syslog processing v1 (no change)." The rollback takes over one priority above the rollout. Only **Roll back N devices** sends it.
+
+A canary that's still running rolls back in the same step: confirming stops the rollout and returns the devices it reached. If stopping it would switch a device it never reached to another version, or leave one without a pipeline, the review names that device and offers **Cancel rollout, then review rollback**.
 
 Devices that ran their own local configuration before this deployment have nothing to roll back to. For them, **Remove assignment** returns them to that configuration.
 
