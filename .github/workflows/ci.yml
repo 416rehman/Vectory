@@ -124,6 +124,7 @@ jobs:
         env:
           VECTORY_ISSUES_COMPONENT_OUTPUT: artifacts/issues-component
       - name: Check notification channels, delivery log, detection thresholds and the setup tip
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/notifications-browser.mjs
         env:
