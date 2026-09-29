@@ -5124,7 +5124,20 @@
             "issue_count"
           ],
           "additionalProperties": false,
-          "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+          "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+        },
+        "service_manager": {
+          "enum": [
+            "systemd",
+            "launchd",
+            "windows",
+            "none"
+          ],
+          "description": "What keeps the agent running, from enrollment and the latest check-in that reported it; absent for agents that do not report it. none means no service manager keeps it running: after setup's single check-in nothing does until the operator runs it."
+        },
+        "vector_running": {
+          "type": "boolean",
+          "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
         },
         "check_in_seconds": {
           "type": "integer",
@@ -8600,6 +8613,15 @@
         },
         "vector_version": {
           "type": "string"
+        },
+        "service_manager": {
+          "enum": [
+            "systemd",
+            "launchd",
+            "windows",
+            "none"
+          ],
+          "description": "What setup registered to keep the agent running. Optional: servers that predate it ignore it, and a value this server does not know is ignored."
         }
       },
       "required": [
@@ -8791,6 +8813,19 @@
             "$ref": "#/$defs/VectorLogGroup"
           },
           "description": "Sent only to servers that list the feature; an empty list means nothing to report."
+        },
+        "service_manager": {
+          "enum": [
+            "systemd",
+            "launchd",
+            "windows",
+            "none"
+          ],
+          "description": "What keeps this agent process running: the service manager it runs under, or none (a foreground run, a supervisor of the operator's own, or setup's one-shot check-in). Sent only to servers that list the service_manager feature."
+        },
+        "vector_running": {
+          "type": "boolean",
+          "description": "Whether the Vector process the agent supervises is running. Sent only to servers that list the vector_running feature."
         }
       },
       "required": [
@@ -8894,7 +8929,7 @@
             "type": "string",
             "pattern": "^[a-z0-9_]{1,64}$"
           },
-          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2). Agents send those fields only when listed, so older servers keep their strict validation. Unknown names are ignored."
+          "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, service_manager, vector_running). Agents send those fields only when listed, so older servers keep their strict validation. Unknown names are ignored."
         }
       },
       "required": [
@@ -12262,7 +12297,20 @@
             "issue_count"
           ],
           "additionalProperties": false,
-          "description": "Data-plane health measured from telemetry on the version the device verifiably runs; absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+          "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Degraded while status is verified, version_id equals desired_version_id and issues is nonempty."
+        },
+        "service_manager": {
+          "enum": [
+            "systemd",
+            "launchd",
+            "windows",
+            "none"
+          ],
+          "description": "What keeps the agent running, from enrollment and the latest check-in that reported it; absent for agents that do not report it. none means no service manager keeps it running: after setup's single check-in nothing does until the operator runs it."
+        },
+        "vector_running": {
+          "type": "boolean",
+          "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
         },
         "check_in_seconds": {
           "type": "integer",

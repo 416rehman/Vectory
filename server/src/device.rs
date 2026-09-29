@@ -307,7 +307,12 @@ async fn enroll_inner(
     }
     let id = db::id();
     let issued = s.keys.issue(&id, csr).map_err(|_| malformed())?;
-    let device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"configuration_mode":mode,"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
+    let mut device = json!({"id":id,"name":name,"os":v["os"],"arch":v["arch"],"agent_version":v["agent_version"],"vector_version":v["vector_version"],"configuration_mode":mode,"last_seen":Value::Null,"status":"unmanaged","labels":{},"desired_generation":0,"reported_generation":0,"actual_sha256":Value::Null,"apply_state":"unmanaged","sync_paused":false,"pause_acknowledged":false,"telemetry":Value::Null,"created_at":db::now()});
+    if let Some(kind) = service_manager(v) {
+        // Setup says what will keep the agent running; "none" lets Add device
+        // say so from the first check-in.
+        device["service_manager"] = json!(kind);
+    }
     sqlx::query("INSERT INTO devices(id,name,data) VALUES(?,?,?)")
         .bind(&id)
         .bind(&name)
@@ -402,7 +407,21 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
     "host_runtime",
     "vector_log_summary",
     "telemetry_v2",
+    "service_manager",
+    "vector_running",
 ];
+
+/// What keeps an agent running, as the agent reports it.
+const SERVICE_MANAGERS: &[&str] = &["systemd", "launchd", "windows", "none"];
+
+/// A reported service manager, or null when absent. The enrollment request
+/// ignores a value it doesn't know (a newer agent must still enroll); a
+/// heartbeat, which sends it only to servers listing the feature, rejects it.
+fn service_manager(v: &Value) -> Option<&str> {
+    v["service_manager"]
+        .as_str()
+        .filter(|kind| SERVICE_MANAGERS.contains(kind))
+}
 
 fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
     value.as_str().is_some_and(|s| {
@@ -585,6 +604,17 @@ pub async fn heartbeat(
     let logs = match v.get("vector_log_summary") {
         Some(list) => Some(log_summary(list)?),
         None => None,
+    };
+    let manager = match v.get("service_manager") {
+        None | Some(Value::Null) => None,
+        Some(_) => {
+            Some(service_manager(&v).ok_or_else(|| ApiError::invalid("Invalid service_manager"))?)
+        }
+    };
+    let vector_running = match v.get("vector_running") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(running)) => Some(*running),
+        Some(_) => return Err(ApiError::invalid("Invalid vector_running")),
     };
     let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
@@ -819,6 +849,20 @@ pub async fn heartbeat(
         fields.remove("host_runtime");
     } else {
         fields.insert("host_runtime".into(), runtime);
+    }
+    // What keeps the agent running changes rarely; a check-in without it
+    // (before the agent learned the feature) keeps what enrollment said.
+    // Whether Vector runs is current or unknown, never stale.
+    if let Some(kind) = manager {
+        fields.insert("service_manager".into(), json!(kind));
+    }
+    match vector_running {
+        Some(running) => {
+            fields.insert("vector_running".into(), json!(running));
+        }
+        None => {
+            fields.remove("vector_running");
+        }
     }
     match logs {
         Some(items) => {

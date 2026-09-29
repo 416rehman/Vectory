@@ -469,7 +469,6 @@ pub fn fleet_action(action: &str, outcome: &str) -> bool {
         | "deployment.activate"
         | "deployment.missed"
         | "deployment.refresh_targets"
-        | "device.enroll"
         | "device.revoke"
         | "device.retry"
         | "device.recovery_authorize"
@@ -485,6 +484,9 @@ pub fn fleet_action(action: &str, outcome: &str) -> bool {
             outcome,
             "verified_applied" | "failed" | "rolled_back" | "verification_unknown"
         ),
+        // A refused enrollment adds nothing to the fleet: the audit log and
+        // Add device's recent attempts keep it with its reason.
+        "device.enroll" => outcome != "failure",
         _ => false,
     }
 }
@@ -685,6 +687,7 @@ mod tests {
         assert!(!fleet_action("vrl.synthetic_test", "failed"));
         assert!(!fleet_action("device.apply_state", "downloaded"));
         assert!(fleet_action("device.apply_state", "failed"));
+        assert!(!fleet_action("device.enroll", "failure"));
     }
 
     #[test]
