@@ -16,6 +16,9 @@ import DocLink, { ExternalDocLink } from "./DocLink";
 import { Button, ErrorBox, Modal } from "./ui";
 import TabLabel from "./TabLabel";
 import PipelineVariables from "./PipelineVariables";
+import PipelineTestResults, {
+  type PipelineTestRun,
+} from "./PipelineTestResults";
 import "./pipeline-globals.css";
 import type { PipelineSection } from "./pipelineDestination";
 
@@ -85,12 +88,7 @@ export default function PipelineGlobals({
   const [section, setSection] = useState<string>(initialSection),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [result, setResult] = useState<{
-      valid: boolean;
-      errors: string[];
-      output?: string;
-      deferred?: boolean;
-    } | null>(null);
+    [result, setResult] = useState<PipelineTestRun | null>(null);
   const pending = useRef(new Set<string>()),
     request = useRef(0);
   const pendingChange = useCallback((id: string, dirty: boolean) => {
@@ -184,12 +182,9 @@ export default function PipelineGlobals({
     setError("");
     setResult(null);
     try {
-      const response = await post<{
-        valid: boolean;
-        errors: string[];
-        output?: string;
-        deferred?: boolean;
-      }>("/configurations/test", { config });
+      const response = await post<PipelineTestRun>("/configurations/test", {
+        config,
+      });
       if (current === request.current) setResult(response);
     } catch (failure) {
       if (current === request.current) setError((failure as Error).message);
@@ -274,23 +269,7 @@ export default function PipelineGlobals({
                 Run pipeline tests
               </Button>
               {error && <ErrorBox message={error} />}
-              {result && (
-                <div role="status">
-                  <strong>
-                    {result.deferred
-                      ? "These tests need the device environment"
-                      : result.valid
-                        ? "Pipeline tests passed"
-                        : "Pipeline tests failed"}
-                  </strong>
-                  {result.errors?.length > 0 && (
-                    <ErrorBox message={result.errors.join("\n")} />
-                  )}{" "}
-                  {result.output && (
-                    <pre className="code-preview">{result.output}</pre>
-                  )}
-                </div>
-              )}
+              {result && <PipelineTestResults run={result} />}
             </div>
           )}
           {section !== "variables" && <ExternalDocLink

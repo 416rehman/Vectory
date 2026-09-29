@@ -105,8 +105,7 @@ A `remap` transform runs [Vector Remap Language](https://vector.dev/docs/referen
 del(.temporary_debug_field)
 ```
 
-<!-- verify-after-merge: the VRL studio (inline editor with autocomplete and sample testing) -->
-Try a program against sample events in the editor, then add [pipeline tests](resources.md#test-transformations) to keep it working. Neither reads live device events. Vector checks VRL when you choose **Check pipeline**.
+The VRL editor highlights the program, completes function names and marks problems on the line Vector reports. Choose **Expand** for a wide editor. Under the program, add sample events (one JSON object per line) and choose **Run**: the server's sandboxed Vector runs the step on each sample and shows what comes out, or why an event was dropped. Samples stay in your browser. **Save as test** turns a result into a [pipeline test](resources.md#test-transformations) that keeps it working. Nothing here reads live device events.
 
 A remap that reads its program from a **File** reads it on the device. That file isn't uploaded or frozen into the version, and it needs full mode.
 
@@ -158,18 +157,19 @@ Devices receive JSON. Comments and formatting from an imported file aren't kept.
 
 ## Validate, test, publish
 
-<!-- verify-after-merge: Problems panel, check-state button labels and the publish review with a diff (W5) -->
 <!-- steps -->
-1. Choose **Check pipeline**. It checks connections, required fields and types, then asks the sandboxed Vector on your server to validate the configuration.
+1. Choose the check button in the toolbar. It checks connections, required fields and types, then asks the sandboxed Vector on your server to validate the configuration. The **Problems** panel under the canvas lists every problem by step; choose one to jump to the step, field or line. With **Auto-check** on, the editor checks again shortly after you stop editing.
 2. Run your tests under [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests).
-3. Choose **Review & publish**, add a note and choose **Publish version**. Committed edits are saved first.
-4. Deploy it: [Deploy a published version](deployments.md#deploy-a-published-version).
+3. Choose **Review & publish**. The review checks again and lists what changes since the last version, with line-by-line differences for VRL programs. Add a note and choose **Publish version**. Unsaved edits are saved first.
+4. Deploy it: choose **Choose devices** when the version is published, or see [Deploy a published version](deployments.md#deploy-a-published-version).
 
-| Check result | Meaning |
+| Check button | Meaning |
 | --- | --- |
-| Green | Vector accepted the configuration. |
-| Amber | It passed with warnings, or part of the check needs the device (for example a file only the device has). |
-| Red | It failed. The result names the component and setting. |
+| **Checked** | Vector accepted the configuration. Anything only a device can resolve, such as a local file, is checked there before it applies. |
+| **Partly checked** | No Vector checker is configured on the server, so only the structure was checked. |
+| **N problems** | Fix the listed problems before publishing. Each one names the step and setting. |
+| **Not checked** | You changed the pipeline since the last check. |
+| **Couldn't check** | The checker didn't answer. Publishing waits until a check succeeds. |
 
 Some checks can only run on the device, such as reading local files, resolving environment variables or talking to providers. The device runs them before it applies the version, and keeps its current configuration if they fail.
 
