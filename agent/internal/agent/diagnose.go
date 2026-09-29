@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,6 +78,8 @@ type redactor struct {
 	shortSecrets []string
 	labels       [][2]string
 	components   map[string]componentRef
+	// listen holds each component's configured socket addresses.
+	listen map[string][]string
 }
 
 var (
@@ -92,7 +97,7 @@ var (
 var vectorVocabulary = map[string]bool{"Log": true, "Metric": true, "Trace": true, "log": true, "metric": true, "trace": true, "_unmatched": true, "_default": true, "dropped": true}
 
 func newRedactor() *redactor {
-	r := &redactor{safe: map[string]bool{}, components: map[string]componentRef{}}
+	r := &redactor{safe: map[string]bool{}, components: map[string]componentRef{}, listen: map[string][]string{}}
 	for word := range vectorVocabulary {
 		r.safe[word] = true
 	}
@@ -132,26 +137,40 @@ func (r *redactor) addSecret(value string) {
 func isWordRune(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_' }
 
 // replaceWord replaces word only where it stands alone, not touching a letter,
-// digit or underscore on either side.
+// digit or underscore on either side. It searches from an offset into the
+// original string, so a skipped match keeps its left context ("abab" is one
+// word, not "ab" followed by a standalone "ab").
+//
+// Two trade-offs of whole-word matching, for credentials under four bytes:
+//   - a credential of one to three digits redacts every standalone number
+//     equal to it, as in "line «redacted», column 12";
+//   - CJK text has no spaces, so a short credential inside it touches letters
+//     on both sides and is not redacted.
 func replaceWord(s, word, with string) string {
+	if word == "" {
+		return s
+	}
 	var out strings.Builder
-	for {
-		i := strings.Index(s, word)
+	copied := 0
+	for from := 0; ; {
+		i := strings.Index(s[from:], word)
 		if i < 0 {
-			out.WriteString(s)
-			return out.String()
+			break
 		}
+		i += from
 		end := i + len(word)
 		before, nb := utf8.DecodeLastRuneInString(s[:i])
 		after, na := utf8.DecodeRuneInString(s[end:])
-		out.WriteString(s[:i])
 		if (nb > 0 && isWordRune(before)) || (na > 0 && isWordRune(after)) {
-			out.WriteString(word)
-		} else {
-			out.WriteString(with)
+			from = i + 1
+			continue
 		}
-		s = s[end:]
+		out.WriteString(s[copied:i])
+		out.WriteString(with)
+		copied, from = end, end
 	}
+	out.WriteString(s[copied:])
+	return out.String()
 }
 
 func containsWord(s, word string) bool {
@@ -180,6 +199,7 @@ func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 			component, _ := raw.(map[string]any)
 			typ, _ := component["type"].(string)
 			r.components[id] = componentRef{kind, typ}
+			r.listen[id] = listenAddresses(component)
 			if section == "sinks" {
 				if auth, ok := component["auth"].(map[string]any); ok {
 					for _, field := range []string{"user", "password", "token"} {
@@ -227,6 +247,64 @@ func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 
 func (r *redactor) allowed(token string) bool {
 	return r.safe[token] || r.safe[strings.Trim(token, trimPunctuation)]
+}
+
+// listenAddresses are a component's configured socket addresses: "address"
+// itself, or one level down (the opentelemetry source's grpc and http).
+func listenAddresses(component map[string]any) []string {
+	var out []string
+	add := func(settings map[string]any) {
+		if address, ok := settings["address"].(string); ok && address != "" {
+			out = append(out, address)
+		}
+	}
+	add(component)
+	for _, value := range component {
+		if nested, ok := value.(map[string]any); ok {
+			add(nested)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unprivilegedPortStart is the lowest port an unprivileged process may listen
+// on: Linux's net.ipv4.ip_unprivileged_port_start, 1024 unless changed (a
+// container runtime may lower it). macOS and Windows have no privileged ports.
+var unprivilegedPortStart = func() int {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+	if err != nil {
+		return 1024
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || n < 0 || n > 65536 {
+		return 1024
+	}
+	return n
+}
+
+// privilegedAddresses are the component's configured addresses on ports
+// below limit.
+func (r *redactor) privilegedAddresses(id string, limit int) []string {
+	var out []string
+	for _, address := range r.listen[id] {
+		_, port, err := net.SplitHostPort(address)
+		if n, e := strconv.Atoi(port); err == nil && e == nil && n > 0 && n < limit {
+			out = append(out, address)
+		}
+	}
+	return out
+}
+
+// bindFailure reports a listener that couldn't bind its socket. The syslog
+// and socket sources say so with error_code socket_bind; the HTTP-based ones
+// (http_server, opentelemetry, prometheus_exporter) with a TCP bind error.
+func bindFailure(rec vectorRecord) bool {
+	text := strings.ToLower(rec.Message + " " + rec.Error)
+	return rec.ErrorCode == "socket_bind" || strings.Contains(text, "tcpbind") || strings.Contains(text, "bind failed")
 }
 
 // sensitive reports tokens that could carry host or secret data when they do
@@ -375,6 +453,7 @@ var codeHints = map[string]string{
 	"TLS_FILE_UNREADABLE":    "Check that the certificate and key files exist on the device and that the Vector service account can read them.",
 	"FILE_NOT_FOUND":         "Check that the path exists on the device.",
 	"PERMISSION_DENIED":      "Give the Vector service account access to the path, or change the path.",
+	"PRIVILEGED_PORT":        "Use a port from 1024 up, such as 1514, and point senders there. Or allow it: sudo systemctl edit vectory.service, add [Service] AmbientCapabilities=CAP_NET_BIND_SERVICE, then restart.",
 	"UNKNOWN_FIELD":          "Remove the field or correct its name; check the component's reference for Vector " + VectorVersion + ".",
 	"UNKNOWN_COMPONENT_TYPE": "Use a component type that Vector " + VectorVersion + " supports.",
 	"MISSING_FIELD":          "Add the required field to this component.",
@@ -428,9 +507,26 @@ func (s *diagnosticSet) result() []Diagnostic {
 
 var httpStatus = regexp.MustCompile(`(?i)(?:status(?: code)?[: ]+|responded with (?:an error: )?|http )([1-5]\d\d)\b`)
 
+// windowsSocketReasons are Winsock error codes as Rust prints them after the
+// message ("... (os error 10061)"). Windows words the message in the system
+// language; the code is stable.
+var windowsSocketReasons = map[string]string{
+	"os error 10061": "connection_refused",
+	"os error 10060": "timeout",
+	"os error 10054": "connection_reset",
+	"os error 10051": "unreachable",
+	"os error 10065": "unreachable",
+	"os error 10048": "address_in_use",
+}
+
+var windowsSocketError = regexp.MustCompile(`os error 100\d\d`)
+
 // classifyNetwork maps an error chain to a bounded reason.
 func classifyNetwork(text string) string {
 	lower := strings.ToLower(text)
+	if reason := windowsSocketReasons[windowsSocketError.FindString(lower)]; reason != "" {
+		return reason
+	}
 	switch {
 	case strings.Contains(lower, "connection refused"):
 		return "connection_refused"
@@ -829,10 +925,10 @@ func (r *redactor) parseTestOutput(output []byte) []Diagnostic {
 
 // vectorRecord is one parsed line of Vector's JSON internal log.
 type vectorRecord struct {
-	Level, Message, Target, Error, ErrorType, Stage, Reason string
-	ComponentID, ComponentKind, ComponentType               string
-	Address, ChangedFields, Version                         string
-	Timestamp                                               string
+	Level, Message, Target, Error, ErrorType, ErrorCode, Stage, Reason string
+	ComponentID, ComponentKind, ComponentType                          string
+	Address, ChangedFields, Version                                    string
+	Timestamp                                                          string
 }
 
 func jsonText(v any) string {
@@ -863,7 +959,7 @@ func parseVectorRecord(line []byte) (vectorRecord, bool) {
 	rec := vectorRecord{
 		// "Log level is enabled." repeats the level key with a quoted value.
 		Level: strings.ToUpper(strings.Trim(jsonText(raw["level"]), `"`)), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
-		Error: jsonText(raw["error"]), ErrorType: jsonText(raw["error_type"]), Stage: jsonText(raw["stage"]),
+		Error: jsonText(raw["error"]), ErrorType: jsonText(raw["error_type"]), ErrorCode: jsonText(raw["error_code"]), Stage: jsonText(raw["stage"]),
 		Reason: jsonText(raw["reason"]), Address: jsonText(raw["address"]), ChangedFields: jsonText(raw["changed_fields"]),
 		Version: jsonText(raw["version"]), Timestamp: jsonText(raw["timestamp"]),
 		ComponentID: jsonText(raw["component_id"]), ComponentKind: jsonText(raw["component_kind"]), ComponentType: jsonText(raw["component_type"]),
@@ -922,10 +1018,20 @@ func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
 			}
 			d := r.componentFailure(rec.ComponentKind, rec.ComponentID, text)
 			d.Code = strings.Replace(d.Code, "COMPONENT_BUILD_FAILED", "COMPONENT_FAILED", 1)
-			if d.Code == "ADDRESS_IN_USE" {
+			switch {
+			case d.Code == "ADDRESS_IN_USE":
 				d.Message = "Another process is already listening on this component's address."
 				if address := addresses[rec.ComponentID]; address != "" {
 					d.Message = "Another process is already listening on " + address + "."
+				}
+			case d.Code == "PERMISSION_DENIED" && bindFailure(rec):
+				// A listener refused its port, not a path: on Linux, ports below
+				// 1024 need CAP_NET_BIND_SERVICE, which the service account lacks.
+				limit := unprivilegedPortStart()
+				if privileged := r.privilegedAddresses(rec.ComponentID, limit); len(privileged) > 0 {
+					d.Code, d.Field = "PRIVILEGED_PORT", "address"
+					// One apostrophe only: redaction reads a pair as a quotation.
+					d.Message = fmt.Sprintf("Vector can't listen on %s: ports below %d need a privilege the service account lacks.", strings.Join(privileged, " and "), limit)
 				}
 			}
 			set.add(r.finalize(d))

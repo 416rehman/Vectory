@@ -241,3 +241,51 @@ func TestAdoptionAndServiceRejectSharedDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A crash in the middle of an atomic write leaves its temporary file behind.
+// That must never block every later setup or install: the checks accept it,
+// and a stale one is cleaned up.
+func TestAtomicWriteLeftoversDontBlockSetup(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "managed.json")
+	if err := AtomicWrite(config, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	stale, fresh := filepath.Join(dir, atomicTempPrefix+"123456"), filepath.Join(dir, atomicTempPrefix+"654321")
+	for _, leftover := range []string{stale, fresh} {
+		if err := os.WriteFile(leftover, []byte(`{"partial`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * atomicTempStale)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckManagedDirectory(config, filepath.Join(t.TempDir(), "state")); err != nil {
+		t.Fatalf("a leftover temporary file blocked setup: %v", err)
+	}
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Fatal("a stale temporary file was kept")
+	}
+	// One that may belong to a write in progress is left alone, and a dry run
+	// changes nothing.
+	if _, err := os.Lstat(fresh); err != nil {
+		t.Fatal("a recent temporary file was removed")
+	}
+	if err := os.Chtimes(fresh, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkManagedDirectory(config, filepath.Join(t.TempDir(), "state"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(fresh); err != nil {
+		t.Fatal("a check without cleanup removed a file")
+	}
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, atomicTempPrefix+"777"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckFreshStateDirectory(state); err != nil {
+		t.Fatalf("a leftover temporary file blocked a fresh state directory: %v", err)
+	}
+}

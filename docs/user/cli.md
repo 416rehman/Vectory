@@ -10,7 +10,7 @@ vectory <command> [flags]
 
 - Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments.
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
-- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags.
+- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `130` `setup` was interrupted with Ctrl-C.
 
 Run `vectory --help` for the command list, `vectory help <command>` for one command, and `vectory --version` for the version.
 
@@ -72,7 +72,9 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 
 Before it asks for the token, `setup` checks that the service account can run Vector and the agent. A Vector under a private home folder, such as `/root/.vector/bin/vector`, is refused with the folder that blocks it: install Vector system-wide or pass `--vector-binary`.
 
-Run `setup` again after replacing the agent binary to upgrade: it restarts the service on the new build and waits for that build's first check-in, for example `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. Vector finishes its in-flight events before the old agent exits.
+Run `setup` again after replacing the agent binary to upgrade: it restarts the service on the new build and waits for that build's first check-in, for example `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. Vector finishes its in-flight events before the old agent exits. On Windows, where a running agent can't be replaced, setup first checks that the service is registered for this agent, then stops it; if a later step fails, it starts the service again and says which build it runs.
+
+Ctrl-C while `setup` waits for the first check-in stops only the wait: the service keeps running, and `setup` exits with code `130`.
 
 ## install
 
@@ -163,7 +165,8 @@ sudo vectory logs --follow
 | --- | --- |
 | `--lines N` | How many recent lines to print. Default 100. |
 | `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
-| `--raw` | Print Vector's JSON log lines unchanged. `--json` does the same. |
+| `--raw` | Print the log file's lines unchanged. |
+| `--json` | Print one JSON object per line: Vector's records as they are, and the agent's own notes with the same `timestamp`, `target` and `message` keys. |
 
 ## pause and resume
 

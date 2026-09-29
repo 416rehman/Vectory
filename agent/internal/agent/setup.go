@@ -87,6 +87,11 @@ func (e *SetupError) Error() string {
 type setupRun struct {
 	options SetupOptions
 	result  SetupResult
+	// stopped names the service setup stopped to replace the agent, until
+	// setup starts it again.
+	stopped string
+	// replaced: the new agent binary is in place.
+	replaced bool
 }
 
 func (r *setupRun) add(id, status, label, detail, fix string) {
@@ -273,7 +278,27 @@ func describeRunning(running []RunningVector) string {
 // check that can fail without the token runs first, and nothing on the host
 // changes before the token is entered. Re-running resumes where it stopped.
 func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
+	return setupWith(ctx, options, nativeService)
+}
+
+func setupWith(ctx context.Context, options SetupOptions, ops serviceOps) (SetupResult, error) {
 	r := &setupRun{options: options}
+	result, err := r.setup(ctx, ops)
+	return r.restartIfStopped(ops, result, err)
+}
+
+// restartIfStopped starts the service setup stopped to replace the agent when
+// a later step failed: an upgrade must never leave the device dark.
+func (r *setupRun) restartIfStopped(ops serviceOps, result SetupResult, err error) (SetupResult, error) {
+	if err == nil || r.stopped == "" {
+		return result, err
+	}
+	r.startAgain(ops)
+	return r.result, err
+}
+
+func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, error) {
+	options := r.options
 	r.result.DryRun = options.DryRun
 	defaults := DefaultPaths()
 
@@ -447,7 +472,7 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		if err := CheckFreshStateDirectory(dir); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose an empty --state-dir.")
 		}
-		if err := CheckManagedDirectory(managed, dir); err != nil {
+		if err := checkManagedDirectory(managed, dir, !options.DryRun); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose a --managed-config path in a directory of its own.")
 		}
 	}
@@ -532,6 +557,13 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 			}
 		}
 	}
+	if service != "none" {
+		// Registration refuses a service registered for another executable,
+		// state directory or account: say so before anything changes.
+		if err := ops.check(agentPath, dir, account); err != nil {
+			return r.failErr("service", "Service", err, "")
+		}
+	}
 
 	name := options.Name
 	if enrolled {
@@ -570,7 +602,7 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		}
 		if service != "none" {
 			plan := "Would register and start the " + service + " service, then wait for the first check-in."
-			if ServiceStatus(ctx).Running() {
+			if ops.status(ctx).Running() {
 				plan = ServiceInfoName(service) + " is running " + Version + "; nothing to restart."
 				if running := runningBuild(dir); running == nil || running.SHA256 != fileDigestOrEmpty(executable) {
 					plan = "Would restart " + ServiceInfoName(service) + " to run " + Version + ", then wait for its check-in."
@@ -600,18 +632,9 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		r.add("account", "ok", "Account", account+" (created, no login shell)", "")
 	}
 	if installBinary {
-		// Windows can't replace a running executable: stop the service first
-		// (it stops Vector); the service step starts it again.
-		if runtime.GOOS == "windows" && ServiceStatus(ctx).Running() {
-			if err := ServiceControl("stop"); err != nil {
-				return r.failErr("agent", "Agent", err, "Stop the Vectory service, then run the command again.")
-			}
-			r.add("agent", "info", "Agent", ServiceInfoName(service)+" stopped to replace "+agentPath+".", "")
+		if err := r.installAgent(ctx, ops, service, executable, agentPath, dir, account); err != nil {
+			return r.result, err
 		}
-		if err := installAgentBinary(executable, agentPath); err != nil {
-			return r.failErr("agent", "Agent", err, "Check that "+filepath.Dir(agentPath)+" is writable.")
-		}
-		r.add("agent", "ok", "Agent", agentPath+" "+Version+" (installed)", "")
 		if account != "" && service != "windows" {
 			if problem := accountAccessProblem(ctx, account, agentPath, false, "version"); problem != "" {
 				return r.fail("agent", "Agent", "The service account "+account+" can't run "+agentPath+": "+problem+".", agentAccessFix)
@@ -673,7 +696,11 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 			r.result.Next = "Start the agent under your supervisor: vectory run --state-dir " + quoteArg(dir)
 		} else {
 			started := time.Now()
-			if err := Run(ctx, dir, true, func(string) {}); err != nil {
+			err := Run(ctx, dir, true, func(string) {})
+			switch {
+			case ctx.Err() != nil:
+				return r.interrupted("Check-in", "Interrupted before the first check-in.", "Start the agent under your supervisor: vectory run --state-dir "+quoteArg(dir))
+			case err != nil:
 				return r.failErr("service", "Check-in", err, "")
 			}
 			r.add("service", "ok", "Check-in", fmt.Sprintf("checked in (%s) · no service registered", humanLatency(time.Since(started))), "")
@@ -684,17 +711,81 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 	}
 
 	r.result.Next = "Deploy a pipeline to " + settings.Name + " from the dashboard."
-	return r.startService(ctx, nativeService, service, agentPath, dir, account, settings.gracefulShutdownSeconds())
+	return r.startService(ctx, ops, service, agentPath, dir, account, settings.gracefulShutdownSeconds())
 }
 
 // serviceOps is the service manager setup drives; tests replace it.
 type serviceOps struct {
 	install func(exe, dir, account string) (ServiceRegistration, error)
+	// check reports, reading only, whether the service is registered for
+	// another executable, state directory or account (install refuses that).
+	check   func(exe, dir, account string) error
 	control func(action string) error
 	status  func(context.Context) ServiceInfo
+	// replace puts the agent binary where the service runs it from.
+	replace func(source, target string) error
+	// stopToReplace: the running executable can't be replaced (Windows), so
+	// setup stops the service first.
+	stopToReplace bool
+	// keepsDefinition: restart keeps the loaded definition (launchd), so an
+	// updated one takes a stop and a start.
+	keepsDefinition bool
 }
 
-var nativeService = serviceOps{install: ServiceInstallFor, control: ServiceControl, status: ServiceStatus}
+var nativeService = serviceOps{install: ServiceInstallFor, check: serviceRegistrationCheck, control: ServiceControl, status: ServiceStatus, replace: installAgentBinary,
+	stopToReplace: runtime.GOOS == "windows", keepsDefinition: runtime.GOOS == "darwin"}
+
+// installAgent puts the running agent at agentPath. Windows can't replace a
+// running executable, so a running service is stopped first, and only after
+// a read-only check that it is registered for this agent: registration would
+// refuse it later, with the service already stopped. If setup fails before
+// the service step starts it again, Setup restarts it.
+func (r *setupRun) installAgent(ctx context.Context, ops serviceOps, service, executable, agentPath, dir, account string) error {
+	if ops.stopToReplace && ops.status(ctx).Running() {
+		if err := ops.check(agentPath, dir, account); err != nil {
+			_, err = r.failErr("service", "Service", err, "")
+			return err
+		}
+		r.stopped = service
+		if err := ops.control("stop"); err != nil {
+			if ops.status(ctx).Running() {
+				r.stopped = ""
+			}
+			_, err = r.failErr("agent", "Agent", err, "Stop the Vectory service, then run the command again.")
+			return err
+		}
+		r.add("agent", "info", "Agent", ServiceInfoName(service)+" stopped to replace "+agentPath+".", "")
+	}
+	if err := ops.replace(executable, agentPath); err != nil {
+		_, err = r.failErr("agent", "Agent", err, "Check that "+filepath.Dir(agentPath)+" is writable.")
+		return err
+	}
+	r.replaced = true
+	r.add("agent", "ok", "Agent", agentPath+" "+Version+" (installed)", "")
+	return nil
+}
+
+// startAgain starts the service setup stopped to replace the agent, after a
+// later step failed: the device keeps running its pipeline.
+func (r *setupRun) startAgain(ops serviceOps) {
+	name := ServiceInfoName(r.stopped)
+	r.stopped = ""
+	if err := ops.control("start"); err != nil {
+		r.add("service", "fail", "Service", name+" is stopped, and starting it again failed: "+sentence(err.Error()), "Start it: vectory service-start")
+		return
+	}
+	build := "the previous build"
+	if r.replaced {
+		build = Version
+	}
+	r.add("service", "info", "Service", name+" restarted on "+build+".", "")
+}
+
+// interrupted ends setup after Ctrl-C while it waits for the first check-in.
+func (r *setupRun) interrupted(label, detail, fix string) (SetupResult, error) {
+	r.add("service", "warn", label, detail, fix)
+	return r.result, &SetupError{Step: r.result.Steps[len(r.result.Steps)-1]}
+}
 
 // startService registers the service and makes sure it ends up running the
 // installed build: an upgrade replaces the file, but the old process keeps
@@ -716,16 +807,34 @@ func (r *setupRun) startService(ctx context.Context, ops serviceOps, service, ag
 		wait = 45 * time.Second
 	}
 	started := time.Now()
-	restarted := false
+	startedHere, restarted := false, false
 	switch {
 	case !ops.status(ctx).Running():
+		// Setup stopped it to replace the agent: starting it is the restart.
+		restarted, r.stopped = r.stopped != "", ""
 		if err := ops.control("start"); err != nil {
 			return r.failErr("service", "Service", err, "")
 		}
-	case !current || registration == ServiceUpdated && runtime.GOOS == "darwin":
+		startedHere = true
+	case !current || registration == ServiceUpdated && ops.keepsDefinition:
 		r.add("service", "info", "Service", fmt.Sprintf("Restarting %s to run %s. Vector finishes in-flight events first (up to %d s).", serviceName, Version, drain), "")
 		started, restarted = time.Now(), true
-		if err := ops.control("restart"); err != nil {
+		if registration == ServiceUpdated && ops.keepsDefinition {
+			// launchd keeps a loaded definition across a restart: unload the
+			// job, then load the updated definition.
+			r.stopped = service
+			if err := ops.control("stop"); err != nil {
+				if ops.status(ctx).Running() {
+					r.stopped = ""
+				}
+				return r.failErr("service", "Service", err, "")
+			}
+			r.stopped = ""
+			err = ops.control("start")
+		} else {
+			err = ops.control("restart")
+		}
+		if err != nil {
 			return r.failErr("service", "Service", err, "")
 		}
 		wait += time.Duration(drain) * time.Second
@@ -742,15 +851,22 @@ func (r *setupRun) startService(ctx context.Context, ops serviceOps, service, ag
 		r.add("service", "ok", "Service", fmt.Sprintf("%s upgraded %s → %s · first check-in %s after restart", serviceName, running.Version, Version, humanLatency(checkedIn.Sub(started))), "")
 	case checkedIn != nil && restarted:
 		r.add("service", "ok", "Service", fmt.Sprintf("%s restarted on %s · first check-in %s after restart", serviceName, Version, humanLatency(checkedIn.Sub(started))), "")
-	case checkedIn != nil:
+	case checkedIn != nil && startedHere:
 		r.add("service", "ok", "Service", fmt.Sprintf("%s running · first check-in %s after start", serviceName, humanLatency(checkedIn.Sub(started))), "")
+	case checkedIn != nil:
+		r.add("service", "ok", "Service", fmt.Sprintf("%s running %s · last check-in %s ago", serviceName, Version, humanLatency(time.Since(*checkedIn))), "")
+	case ctx.Err() != nil:
+		return r.interrupted("Service", "Interrupted; "+serviceName+" keeps running.", "Check it later with `"+adminCommand(service, "vectory status")+"`.")
 	default:
-		what := "started"
-		if restarted {
+		what := "is running"
+		switch {
+		case restarted:
 			what = "restarted on " + Version
+		case startedHere:
+			what = "started"
 		}
-		r.add("service", "warn", "Service", serviceName+" "+what+", but hasn't checked in after "+humanLatency(wait)+".", "Check it with `sudo vectory doctor`; the service log: "+serviceLogHint(service))
-		r.result.Next = "Run `sudo vectory doctor` to check the connection."
+		r.add("service", "warn", "Service", serviceName+" "+what+", but hasn't checked in after "+humanLatency(wait)+".", serviceCheckHint(service))
+		r.result.Next = "Run `" + adminCommand(service, "vectory doctor") + "` to check the connection."
 	}
 	r.result.OK = true
 	return r.result, nil
@@ -789,14 +905,26 @@ func ServiceInfoName(service string) string {
 	return "agent"
 }
 
-func serviceLogHint(service string) string {
+// adminCommand is how to run an agent command as an administrator here.
+func adminCommand(service, command string) string {
+	if service == "windows" {
+		return command
+	}
+	return "sudo " + command
+}
+
+// serviceCheckHint says how to look into a service that hasn't checked in.
+// Only systemd keeps the agent's output: launchd discards it, and a Windows
+// service has no console and writes no event log. There, status shows the
+// last check-in error and logs shows Vector's own log.
+func serviceCheckHint(service string) string {
 	switch service {
 	case "systemd":
-		return "journalctl -u vectory.service -n 50"
+		return "Check it with `sudo vectory doctor`; the agent's log: journalctl -u vectory.service -n 50"
 	case "windows":
-		return "Event Viewer > Windows Logs > Application"
+		return "Check it with `vectory doctor` in an elevated PowerShell; `vectory status` shows the last check-in error and `vectory logs` Vector's log."
 	}
-	return "sudo vectory run in a terminal"
+	return "Check it with `sudo vectory doctor`; `sudo vectory status` shows the last check-in error and `sudo vectory logs` Vector's log."
 }
 
 // waitForCheckIn waits for a check-in after the given time, from the agent

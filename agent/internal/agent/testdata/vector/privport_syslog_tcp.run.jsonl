@@ -1,0 +1,13 @@
+{"timestamp":"2026-09-29T15:48:34.727881Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.728498Z","level":"INFO","message":"Loading configs.","paths":"[\"syslog_tcp.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.730768Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T15:48:34.730862Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.730873Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.731419Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T15:48:34.731583Z","level":"ERROR","message":"Error binding socket.","error":"TCP bind failed: Permission denied (os error 13)","error_code":"socket_bind","error_type":"io_failed","stage":"initializing","mode":"tcp","target":"vector::internal_events::socket","span":{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"},"spans":[{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.731649Z","level":"ERROR","message":"An error occurred that Vector couldn't handle: the task completed with an error.","target":"vector::topology","span":{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"},"spans":[{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.731663Z","level":"INFO","message":"All sources have finished.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T15:48:34.731669Z","level":"INFO","message":"Internal log [All sources have finished.] is being suppressed to avoid flooding.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T15:48:34.731681Z","level":"INFO","message":"All sources have finished.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.731686Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.731844Z","level":"INFO","message":"Vector has stopped.","target":"vector"}

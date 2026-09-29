@@ -62,9 +62,9 @@ func init() {
 		{name: "resume", group: "Day to day", summary: "Apply changes from the server again", usage: "resume [--state-dir PATH]", define: definePause(false)},
 		{name: "retry", group: "Day to day", summary: "Allow a failed configuration to be tried again", usage: "retry [--state-dir PATH]", define: defineRetry},
 		{name: "logs", group: "Day to day", summary: "Show Vector's own log on this host",
-			usage:    "logs [--lines N] [--follow] [--raw] [--state-dir PATH]",
-			about:    "Prints Vector's recent log lines (startup, reloads, component warnings and errors) from the agent's rotated log file. It never shows your events. Works while the service runs.",
-			examples: []string{"sudo vectory logs --follow", "sudo vectory logs --lines 500 --raw"},
+			usage:    "logs [--lines N] [--follow] [--raw | --json] [--state-dir PATH]",
+			about:    "Prints Vector's recent log lines (startup, reloads, component warnings and errors) from the agent's rotated log file. It never shows your events. Works while the service runs. --json prints one JSON object per line: Vector's records as they are, and the agent's notes with the same timestamp, target and message keys.",
+			examples: []string{"sudo vectory logs --follow", "sudo vectory logs --lines 500 --json"},
 			define:   defineLogs},
 		{name: "configure-metrics", group: "Day to day", summary: "Set or clear the local Vector metrics URL",
 			usage: "configure-metrics (--metrics-url URL | --clear-metrics-url) [--state-dir PATH]", about: "Run it while the agent is stopped.",
@@ -490,12 +490,19 @@ func defineLogs(c *cli) func() int {
 	follow := c.Bool("follow", "Keep printing new lines until interrupted (also -f)")
 	c.fs.BoolVar(follow, "f", false, "Shorthand for --follow")
 	lines := c.Int("lines", 100, "N", "Number of recent lines to print")
-	raw := c.Bool("raw", "Print Vector's JSON log lines unchanged")
-	c.JSON("Same as --raw")
+	raw := c.Bool("raw", "Print the log file's lines unchanged")
+	c.JSON("Print one JSON object per line")
 	return func() int {
 		ctx, stop := interruptible()
 		defer stop()
-		if err := agent.WriteVectorLog(ctx, *c.state, *lines, *follow, *raw || *c.json, c.stdout); err != nil {
+		format := agent.LogText
+		switch {
+		case *c.json:
+			format = agent.LogJSON
+		case *raw:
+			format = agent.LogRaw
+		}
+		if err := agent.WriteVectorLog(ctx, *c.state, *lines, *follow, format, c.stdout); err != nil {
 			return c.fail(err)
 		}
 		return exitOK

@@ -1,0 +1,10 @@
+{"timestamp":"2026-09-29T15:48:34.745162Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.745618Z","level":"INFO","message":"Loading configs.","paths":"[\"syslog_udp.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.747713Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T15:48:34.747782Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T15:48:34.747995Z","level":"ERROR","message":"Error binding socket.","error":"Permission denied (os error 13)","error_code":"socket_bind","error_type":"io_failed","stage":"initializing","mode":"udp","target":"vector::internal_events::socket","span":{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"},"spans":[{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.748171Z","level":"ERROR","message":"An error occurred that Vector couldn't handle: the task completed with an error.","target":"vector::topology","span":{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"},"spans":[{"component_id":"sys","component_kind":"source","component_type":"syslog","name":"source"}]}
+{"timestamp":"2026-09-29T15:48:34.748227Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.748250Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.748268Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.748353Z","level":"INFO","message":"Vector has stopped.","target":"vector"}

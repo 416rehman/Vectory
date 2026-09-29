@@ -72,7 +72,10 @@ type VectorBinary struct {
 	Problem string `json:"problem,omitempty"`
 }
 
-var vectorVersionLine = regexp.MustCompile(`^vector ([0-9]+\.[0-9]+\.[0-9]+)(?:[ -]|$)`)
+// vectorVersionLine captures the whole version token of `vector --version`,
+// pre-release or build suffix included ("0.58.1-rc1"), so SupportedVectorVersion
+// refuses what Vector's own startup record would later fail to match.
+var vectorVersionLine = regexp.MustCompile(`^vector ([0-9]+\.[0-9]+\.[0-9]+\S*)(?:\s|$)`)
 
 // InspectVector resolves a candidate path (following links, which is safe for
 // executables because adoption pins the resolved file's SHA-256) and asks it

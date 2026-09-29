@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func Digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -68,9 +69,30 @@ func PrivateDir(path string) error {
 	return protect(path, true)
 }
 
+// atomicTempPrefix names AtomicWrite's temporary files, so a leftover from a
+// crash mid-write is recognized rather than taken for an unrelated file.
+const atomicTempPrefix = ".vectory-tmp-"
+
+// atomicTempStale is the age after which a temporary or staged file can't
+// belong to a write or validation in progress.
+const atomicTempStale = 10 * time.Minute
+
+// agentLeftover reports the agent's own transient files: atomic-write
+// temporaries and staged candidates.
+func agentLeftover(name string) bool {
+	return strings.HasPrefix(name, atomicTempPrefix) || strings.HasPrefix(name, ".vectory-stage-") && strings.HasSuffix(name, ".json")
+}
+
 // Adoption and service registration must never change ownership/permissions on
 // shared directories such as /etc or an existing multi-file Vector installation.
+// The agent's own leftovers are accepted, and stale ones removed.
 func CheckManagedDirectory(config, state string) error {
+	return checkManagedDirectory(config, state, true)
+}
+
+// checkManagedDirectory is CheckManagedDirectory; a dry run passes clean false
+// and changes nothing.
+func checkManagedDirectory(config, state string, clean bool) error {
 	parent := filepath.Dir(filepath.Clean(config))
 	if parent == filepath.Clean(state) || parent == filepath.VolumeName(parent)+string(filepath.Separator) {
 		return errors.New("managed config requires a separate dedicated directory")
@@ -90,11 +112,15 @@ func CheckManagedDirectory(config, state string) error {
 			return errors.New("managed config directory contains unrelated entries; choose a dedicated directory")
 		}
 		name := entry.Name()
-		if name != filepath.Base(config) && !(strings.HasPrefix(name, ".vectory-stage-") && strings.HasSuffix(name, ".json")) {
+		if name != filepath.Base(config) && !agentLeftover(name) {
 			return errors.New("managed config directory contains unrelated files; choose a dedicated directory")
 		}
-		if err = SafePath(filepath.Join(parent, name)); err != nil {
+		path := filepath.Join(parent, name)
+		if err = SafePath(path); err != nil {
 			return err
+		}
+		if info, err := entry.Info(); clean && err == nil && agentLeftover(name) && info.Mode().IsRegular() && time.Since(info.ModTime()) > atomicTempStale {
+			_ = os.Remove(path)
 		}
 	}
 	return nil
@@ -116,7 +142,7 @@ func CheckFreshStateDirectory(dir string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() != "agent.lock" && entry.Name() != "adoption-backup.json" {
+		if entry.Name() != "agent.lock" && entry.Name() != "adoption-backup.json" && !strings.HasPrefix(entry.Name(), atomicTempPrefix) {
 			return errors.New("state directory contains unrelated files; choose a dedicated Vectory state directory")
 		}
 	}
@@ -127,7 +153,7 @@ func AtomicWrite(path string, data []byte) error {
 		return e
 	}
 	dir := filepath.Dir(path)
-	f, e := os.CreateTemp(dir, ".vectory-*")
+	f, e := os.CreateTemp(dir, atomicTempPrefix+"*")
 	if e != nil {
 		return e
 	}

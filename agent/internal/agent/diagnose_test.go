@@ -181,6 +181,52 @@ func TestRuntimeLogsExplainStartAndReloadFailures(t *testing.T) {
 	}
 }
 
+// Vector 0.58 without CAP_NET_BIND_SERVICE (recorded with setpriv
+// --bounding-set=-net_bind_service): every restricted-mode listener on a port
+// below 1024 fails with "Permission denied". That's the port, not a path.
+func TestPrivilegedPortIsNotAPathProblem(t *testing.T) {
+	previous := unprivilegedPortStart
+	t.Cleanup(func() { unprivilegedPortStart = previous })
+	unprivilegedPortStart = func() int { return 1024 }
+	sink := `,"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}`
+	cases := []struct{ fixture, config, id, kind, addresses string }{
+		{"privport_syslog_tcp.run.jsonl", `{"sources":{"sys":{"type":"syslog","mode":"tcp","address":"127.0.0.1:514"}}` + sink, "sys", "source", "127.0.0.1:514"},
+		{"privport_syslog_udp.run.jsonl", `{"sources":{"sys":{"type":"syslog","mode":"udp","address":"127.0.0.1:514"}}` + sink, "sys", "source", "127.0.0.1:514"},
+		{"privport_http.run.jsonl", `{"sources":{"web":{"type":"http_server","address":"0.0.0.0:80","decoding":{"codec":"json"}}}` + sink, "web", "source", "0.0.0.0:80"},
+		{"privport_otel.run.jsonl", `{"sources":{"otel":{"type":"opentelemetry","grpc":{"address":"127.0.0.1:317"},"http":{"address":"127.0.0.1:318"}}}` + sink, "otel", "source", "127.0.0.1:317 and 127.0.0.1:318"},
+		{"privport_prom.run.jsonl", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"],"address":"127.0.0.1:998"}}}`, "prom", "sink", "127.0.0.1:998"},
+	}
+	for _, c := range cases {
+		got := testRedactor(c.config).parseRuntimeRecords(records(t, c.fixture))
+		checkBounds(t, got)
+		if len(got) != 1 || got[0].Code != "PRIVILEGED_PORT" || got[0].ComponentID != c.id || got[0].ComponentKind != c.kind || got[0].Field != "address" ||
+			got[0].Message != "Vector can't listen on "+c.addresses+": ports below 1024 need a privilege the service account lacks." ||
+			!strings.Contains(got[0].Hint, "such as 1514") || !strings.Contains(got[0].Hint, "AmbientCapabilities=CAP_NET_BIND_SERVICE") {
+			t.Errorf("%s: %+v", c.fixture, got)
+		}
+	}
+	// macOS and Windows have no privileged ports, and neither has a Linux host
+	// that lowered the limit: the cause is elsewhere.
+	unprivilegedPortStart = func() int { return 0 }
+	if got := testRedactor(cases[0].config).parseRuntimeRecords(records(t, cases[0].fixture)); len(got) != 1 || got[0].Code != "PERMISSION_DENIED" {
+		t.Fatalf("no privileged ports: %+v", got)
+	}
+	unprivilegedPortStart = func() int { return 1024 }
+	// A Unix socket that can't be created is a path problem.
+	unix := []vectorRecord{{Level: "ERROR", Message: "Error binding socket.", Error: "Permission denied (os error 13)", ErrorCode: "socket_bind", Target: "vector::internal_events::socket", ComponentID: "sys", ComponentKind: "source", ComponentType: "syslog"}}
+	if got := testRedactor(`{"sources":{"sys":{"type":"syslog","mode":"unix","path":"/run/app/syslog.sock"}}` + sink).parseRuntimeRecords(unix); len(got) != 1 || got[0].Code != "PERMISSION_DENIED" || !strings.Contains(got[0].Hint, "path") {
+		t.Fatalf("unix socket: %+v", got)
+	}
+}
+
+func TestCodeHintsFitTheHeartbeatBound(t *testing.T) {
+	for code, hint := range codeHints {
+		if n := utf8.RuneCountInString(hint); n > maxDiagnosticHint {
+			t.Errorf("%s hint has %d characters, more than %d", code, n, maxDiagnosticHint)
+		}
+	}
+}
+
 // Native output is bounded before it is parsed; the bound must never leave a
 // partial line (and so a partial secret) behind.
 func TestBoundedOutputNeverKeepsAPartialSecret(t *testing.T) {
@@ -226,6 +272,22 @@ func TestCredentialsUnderFourBytesAreRedactedAsWholeWords(t *testing.T) {
 	one.addSecret("7")
 	if got := one.text("port 87 attempt 7 of 9 _7"); got != "port 87 attempt "+redactedToken+" of 9 _7" {
 		t.Fatalf("single character credential: %q", got)
+	}
+	// A skipped match keeps its left context: "abab" is one word.
+	ab := newRedactor()
+	ab.addSecret("ab")
+	for input, want := range map[string]string{
+		"abab":    "abab",
+		"ababab":  "ababab",
+		"xab ab":  "xab " + redactedToken,
+		"ab-ab":   redactedToken + "-" + redactedToken,
+		"ab_ab":   "ab_ab",
+		"(ab)":    "(" + redactedToken + ")",
+		"abab ab": "abab " + redactedToken,
+	} {
+		if got := ab.text(input); got != want {
+			t.Errorf("text(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -275,6 +337,14 @@ func TestNetworkErrorsHaveBoundedReasons(t *testing.T) {
 		"Server responded with an error: 503 Service Unavailable": "http_503",
 		"Http status: 401":                                        "http_401",
 		"TcpBind { source: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }": "address_in_use",
+		// Windows words these in the system language; the Winsock code is stable.
+		"error trying to connect: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)":                                                                 "connection_refused",
+		"tcp connect error: Es konnte keine Verbindung hergestellt werden, da der Zielcomputer die Verbindung verweigerte. (os error 10061)":                                                                       "connection_refused",
+		"A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)": "timeout",
+		"An existing connection was forcibly closed by the remote host. (os error 10054)":                                                                                                                          "connection_reset",
+		"A socket operation was attempted to an unreachable network. (os error 10051)":                                                                                                                             "unreachable",
+		"A socket operation was attempted to an unreachable host. (os error 10065)":                                                                                                                                "unreachable",
+		"TCP bind failed: Only one usage of each socket address (protocol/network address/port) is normally permitted. (os error 10048)":                                                                           "address_in_use",
 		"something else": "",
 	} {
 		if got := classifyNetwork(text); got != want {
