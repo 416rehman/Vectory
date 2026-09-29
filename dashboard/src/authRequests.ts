@@ -99,6 +99,18 @@ export function retryDelay(error: unknown) {
     : 0;
 }
 
+let lastSignInEmail = "";
+/**
+ * The account this tab last left, so the sign-in page can offer it again.
+ * Kept in memory only: a reload or another person's session starts empty.
+ */
+export function rememberSignInEmail(email: string) {
+  lastSignInEmail = email;
+}
+export function rememberedSignInEmail() {
+  return lastSignInEmail;
+}
+
 const SIGNED_OUT_KEY = "vectory-signed-out";
 /**
  * Leave a nonsecret timestamp when this browser signs out. Signing out deletes

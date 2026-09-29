@@ -20,7 +20,11 @@ import {
   type SessionSummary,
   type User,
 } from "./api";
-import { isUncertainOutcome, retryDelay } from "./authRequests";
+import {
+  isUncertainOutcome,
+  rememberSignInEmail,
+  retryDelay,
+} from "./authRequests";
 import {
   canUseAccountActionContext,
   matchesPasswordChangeReceipt,
@@ -415,8 +419,11 @@ export function AccountActions({
     }
     visible.current = null;
     clearSecrets();
-    if (mode === "signin") onSignIn();
-    else onReload();
+    // Signing in to check a password change uses this same account.
+    if (mode === "signin") {
+      rememberSignInEmail(user.email);
+      onSignIn();
+    } else onReload();
   }
   async function revokeOne(session: SessionSummary) {
     if (revoking) return;

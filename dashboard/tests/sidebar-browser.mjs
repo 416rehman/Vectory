@@ -1062,6 +1062,11 @@ try {
         page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
       ).toBeVisible();
       expect(signedIn).toBe(false);
+      // The account just signed out is offered again; the password is next.
+      await expect(
+        page.getByLabel("Email address", { exact: true }),
+      ).toHaveValue(user.email);
+      await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
       await expect(accountTrigger()).toHaveCount(0);
       expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
         "hidden",

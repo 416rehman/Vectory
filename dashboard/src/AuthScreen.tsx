@@ -24,6 +24,7 @@ import {
   authUserMatches,
   isMissingSession,
   isUncertainOutcome,
+  rememberedSignInEmail,
   retryDelay,
   useAuthRequest,
   type AuthRequest,
@@ -145,7 +146,8 @@ export default function AuthScreen({
     null,
   );
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  // After signing out in this tab, offer the same account again.
+  const [email, setEmail] = useState(rememberedSignInEmail);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [revealed, setRevealed] = useState(false);

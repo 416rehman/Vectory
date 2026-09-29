@@ -23,6 +23,7 @@ import {
   isDefinitiveAuthRejection,
   isMissingSession,
   noteSignedOut,
+  rememberSignInEmail,
 } from "./authRequests";
 import {
   matchesSignOutContext,
@@ -190,6 +191,7 @@ export default function SignOutDialog({
       }
       active.current = null;
       noteSignedOut();
+      rememberSignInEmail(currentUser.current.email);
       onSignedOut();
     } catch (failure) {
       if (!owns(request)) return;
@@ -233,6 +235,7 @@ export default function SignOutDialog({
       ) {
         invalidateSession();
         noteSignedOut();
+        rememberSignInEmail(currentUser.current.email);
         absent.current = {
           csrfVersion: getCSRFVersion(),
           epoch: getSessionEpoch(),
