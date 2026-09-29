@@ -5,6 +5,7 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       RUSTUP_TOOLCHAIN: 1.94.0
     steps:
@@ -30,6 +31,7 @@ jobs:
           VECTORY_SECURITY_SERVER: ${{ github.workspace }}/server/target/debug/vectory-server
   dashboard:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: dashboard
@@ -47,9 +49,11 @@ jobs:
         working-directory: help-center
       - run: npm test
       - name: Check typed variable wire schemas
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         run: node ../tests/variable-contract.mjs
       - name: Check help Markdown, links, writing rules and reference drift
+        timeout-minutes: 10
         if: ${{ !cancelled() }}
         run: node --test help-center/scripts/*.test.mjs
         working-directory: .
@@ -59,135 +63,162 @@ jobs:
       - run: npx playwright install --with-deps chromium
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       - name: Check the shared resource hook against stale, slow and interleaved replies
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/resource-race.mjs
         working-directory: .
         env:
           VECTORY_RESOURCE_RACE_EVIDENCE: artifacts/resource-race.json
       - name: Check shared column sorting, filtering and keyboard access
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/data-table-browser.mjs
       - name: Check fleet, group, policy and target tables
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/fleet-tables-browser.mjs
         env:
           VECTORY_FLEET_TABLES_OUTPUT: artifacts/fleet-tables
       - name: Check one page header, the first Tab stop and dialog focus return
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/page-chrome-browser.mjs
         env:
           VECTORY_PAGE_CHROME_OUTPUT: artifacts/page-chrome
       - name: Check library session boundaries and navigation state
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-library-browser.mjs
         env:
           VECTORY_LIBRARY_COMPONENT_OUTPUT: artifacts/pipeline-library-component
       - name: Check pipeline creation recovery and missing-name feedback
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-create-recovery-browser.mjs
         env:
           VECTORY_PIPELINE_CREATION_OUTPUT: artifacts/pipeline-creation-recovery
       - name: Check enrollment identity and pending-token boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/enrollment-browser.mjs
         env:
           VECTORY_ENROLLMENT_COMPONENT_OUTPUT: artifacts/enrollment-component
       - name: Check bounded deployment navigation and actions
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/deployments-browser.mjs
         env:
           VECTORY_DEPLOYMENTS_COMPONENT_OUTPUT: artifacts/deployments-component
       - name: Check issue disposition, review races and accessibility
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/issues-browser.mjs
         env:
           VECTORY_ISSUES_COMPONENT_OUTPUT: artifacts/issues-component
       - name: Check audit browsing, reviewed exports and accessible navigation
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/audit-browser.mjs
         env:
           VECTORY_AUDIT_COMPONENT_OUTPUT: artifacts/audit-component
       - name: Check people and telemetry column sorting, filtering and accessibility
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/account-metrics-tables-browser.mjs
         env:
           VECTORY_ACCOUNT_METRICS_TABLES_OUTPUT: artifacts/account-metrics-tables
       - name: Check deployment permalinks and navigation boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/deployment-routing-browser.mjs
         env:
           VECTORY_DEPLOYMENT_ROUTING_OUTPUT: artifacts/deployment-routing
       - name: Check staged sign-in and partial-authentication UI boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/staged-login-browser.mjs
         env:
           VECTORY_STAGED_LOGIN_OUTPUT: artifacts/staged-login
       - name: Check local authenticator QR, recovery handoff and accessibility
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/authenticator-setup-browser.mjs
         env:
           VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-setup
       - name: Check mobile authenticator action layout
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/authenticator-setup-browser.mjs
         env:
           VECTORY_AUTHENTICATOR_SETUP_FOCUS: mobile-footer
           VECTORY_AUTHENTICATOR_SETUP_OUTPUT: artifacts/authenticator-mobile-footer
       - name: Check contextual page help and unfinished editor fields
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/page-help-browser.mjs
         env:
           VECTORY_PAGE_HELP_OUTPUT: artifacts/page-help
       - name: Check collapsible sidebar, mobile focus and editor resizing
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/sidebar-browser.mjs
         env:
           VECTORY_SIDEBAR_OUTPUT: artifacts/sidebar-navigation
       - name: Check the command palette, shortcuts and search results
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/command-palette-browser.mjs
       - name: Check Overview actions and typed activity destinations
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/overview-browser.mjs
         env:
           VECTORY_OVERVIEW_OUTPUT: artifacts/overview-navigation
       - name: Check canvas creation, named connections and pending-edit guards
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas
       - name: Check rich code editing and reviewed file import boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-code-import-browser.mjs
         env:
           VECTORY_EDITOR_CODE_IMPORT_OUTPUT: artifacts/editor-code-import
       - name: Check pipeline candidate, schema and discarded Code results
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/pipeline-check-schema-browser.mjs
       - name: Check component inspector fields, raw JSON and accessibility
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/inspector-browser.mjs
         env:
           VECTORY_INSPECTOR_OUTPUT: artifacts/inspector-component
       - name: Check compact component search results at desktop and mobile widths
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: menu-layout
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-menu-layout
       - name: Check pipeline validation results stay inside narrow viewports
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: check-results
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-results
       - name: Check pipeline validation states and operator preflight
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/editor-canvas-browser.mjs
         env:
           VECTORY_EDITOR_CANVAS_FOCUS: check-state
           VECTORY_EDITOR_CANVAS_OUTPUT: artifacts/editor-canvas-check-state
       - name: Check enrollment connection and service setup guidance
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/enrollment-connection-browser.mjs
         env:
@@ -199,6 +230,7 @@ jobs:
         run: cargo +1.94.0 build --locked --manifest-path server/Cargo.toml --bin vectory-server
         working-directory: .
       - name: Exercise bundled help and account workflows on a fresh instance
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node help-center/tests/ci.mjs
         working-directory: .
@@ -206,96 +238,112 @@ jobs:
           VECTORY_HELP_ACCOUNT_TESTS: "true"
           VECTORY_HELP_CI_OUTPUT: artifacts/help-account-ci
       - name: Verify staged MFA, account authorization and reset races on isolated instances
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/account-review.mjs
         working-directory: .
         env:
           VECTORY_ACCOUNT_EVIDENCE: artifacts/account-review.json
       - name: Verify pipeline lifecycle authorization and immutable history
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/pipeline-review.mjs
         working-directory: .
         env:
           VECTORY_PIPELINE_EVIDENCE: artifacts/pipeline-review.json
       - name: Verify bounded library metadata and query isolation
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/library-review.mjs
         working-directory: .
         env:
           VECTORY_LIBRARY_EVIDENCE: artifacts/library-review.json
       - name: Verify rollback priority and transaction boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/rollback-review.mjs
         working-directory: .
         env:
           VECTORY_ROLLBACK_EVIDENCE: artifacts/rollback-review.json
       - name: Verify bounded deployment history and target isolation
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/deployment-history-review.mjs
         working-directory: .
         env:
           VECTORY_DEPLOYMENT_HISTORY_EVIDENCE: artifacts/deployment-history-review.json
       - name: Verify durable audit chronology and migration boundaries
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/audit-order-review.mjs
         working-directory: .
         env:
           VECTORY_AUDIT_ORDER_EVIDENCE: artifacts/audit-order-review.json
       - name: Verify issue acknowledgement authorization and transactions
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/issue-review.mjs
         working-directory: .
         env:
           VECTORY_ISSUE_EVIDENCE: artifacts/issue-review.json
       - name: Verify bounded audit queries and private snapshot export lifecycle
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/audit-review.mjs
         working-directory: .
         env:
           VECTORY_AUDIT_EVIDENCE: artifacts/audit-review.json
       - name: Check the resource hook's polling, deadlines and cancellation with controlled timers
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/resource-polling.mjs
         working-directory: .
         env:
           VECTORY_RESOURCE_REPORT: artifacts/resource-polling.json
       - name: Check pinned Vector schema fixtures round-trip losslessly
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/schema-fixtures.mjs
         working-directory: .
         env:
           VECTORY_SCHEMA_FIXTURES_EVIDENCE: artifacts/schema-fixtures.json
       - name: Check schema controls keep values through rename, reorder and null
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/schema-review.mjs
         working-directory: .
         env:
           VECTORY_SCHEMA_REVIEW_EVIDENCE: artifacts/schema-review.json
       - name: Check failed page loads recover inside the production build
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/lazy-page-recovery-review.mjs
         working-directory: .
         env:
           VECTORY_LAZY_PAGE_OUTPUT: artifacts/lazy-page-recovery
       - name: Check the device page never shows or acts on another record's reply
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/device-identity-review.mjs
         working-directory: .
         env:
           VECTORY_DEVICE_IDENTITY_OUTPUT: artifacts/device-identity
       - name: Check retried application keeps its reviewed preconditions
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/device-retry-context-review.mjs
         working-directory: .
         env:
           VECTORY_DEVICE_RETRY_CONTEXT_OUTPUT: artifacts/device-retry-context
       - name: Check revoking a device confirms from its exact status
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/device-revocation-review.mjs
         working-directory: .
         env:
           VECTORY_DEVICE_REVOCATION_OUTPUT: artifacts/device-revocation
       - name: Check authorizing device recovery shows its token once and never resends
+        timeout-minutes: 10
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node tests/security/device-recovery-request-review.mjs
         working-directory: .
@@ -370,6 +418,7 @@ jobs:
             vector-sha256: 9182491597f1bdedb08d84a051616c62deea770a9d905b697712cc6526919449
             vector-binary: vector-arm64-apple-darwin/bin/vector
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -424,6 +473,7 @@ jobs:
         working-directory: agent
   operational:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
