@@ -106,6 +106,12 @@ function ToastCard({ item }: { item: ToastItem }) {
     paused.current = false;
     start();
   };
+  // Hovering or focusing the toast holds it. A toast that appears under a
+  // resting pointer is not being hovered, so only real movement counts.
+  const hovered = useRef(false),
+    focused = useRef(false),
+    entry = useRef<{ x: number; y: number } | null>(null);
+  const sync = () => (hovered.current || focused.current ? pause() : resume());
   useEffect(() => {
     start();
     return () => clearTimeout(timer.current);
@@ -121,12 +127,36 @@ function ToastCard({ item }: { item: ToastItem }) {
       className="toast-item"
       data-tone={item.tone}
       role={item.tone === "error" ? "alert" : "status"}
-      onPointerEnter={pause}
-      onPointerLeave={resume}
-      onFocus={pause}
+      onPointerEnter={(event) => {
+        entry.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerMove={(event) => {
+        const from = entry.current;
+        if (
+          hovered.current ||
+          (from &&
+            Math.abs(event.clientX - from.x) +
+              Math.abs(event.clientY - from.y) <
+              2)
+        )
+          return;
+        hovered.current = true;
+        sync();
+      }}
+      onPointerLeave={() => {
+        entry.current = null;
+        hovered.current = false;
+        sync();
+      }}
+      onFocus={() => {
+        focused.current = true;
+        sync();
+      }}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-          resume();
+        if (event.currentTarget.contains(event.relatedTarget as Node | null))
+          return;
+        focused.current = false;
+        sync();
       }}
     >
       {Icon && <Icon className="toast-icon" size={16} aria-hidden="true" />}
