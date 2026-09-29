@@ -5,6 +5,7 @@ import {
   explainError,
   failedApplyStep,
   failureStagePhrase,
+  pickupText,
   progressSegments,
   releasePlan,
   targetLabel,
@@ -405,5 +406,25 @@ describe("time formatting", () => {
     expect(countdown(185_400)).toBe("3:06");
     expect(countdown(3_723_000)).toBe("1:02:03");
     expect(countdown(-5)).toBe("0:00");
+  });
+});
+
+describe("when a released device picks its version up", () => {
+  it("says seconds only while its agent holds a wait", () => {
+    expect(
+      pickupText({ wake: { listening: true }, check_in_seconds: 60 }),
+    ).toBe("Waiting for the agent (connected, usually a few seconds).");
+  });
+  it("keeps the check-in interval otherwise", () => {
+    expect(
+      pickupText({ wake: { listening: false }, check_in_seconds: 60 }),
+    ).toBe("Applies on its next check-in (within 60 s).");
+    // Servers without wake-ups say nothing about waits.
+    expect(pickupText({ check_in_seconds: 300 })).toBe(
+      "Applies on its next check-in (within 300 s).",
+    );
+    expect(pickupText({ wake: null, check_in_seconds: null })).toBe(
+      "Applies on its next check-in.",
+    );
   });
 });

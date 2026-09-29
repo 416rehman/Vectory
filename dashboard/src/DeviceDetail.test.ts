@@ -3,6 +3,7 @@ import type { Device } from "./api";
 import {
   deliveryMeasurement,
   failedRunningText,
+  pickupExplanation,
   unmanagedRunningText,
 } from "./DeviceDetail";
 
@@ -42,6 +43,58 @@ const failed = (code: string, overrides: Partial<Device> = {}) =>
     },
     ...overrides,
   });
+
+describe("a released version on its way", () => {
+  const released = (overrides: Partial<Device> = {}) =>
+    device({
+      status: "applying",
+      apply_state: "verified_applied",
+      desired_generation: 2,
+      reported_generation: 1,
+      desired_version_id: "00000000-0000-4000-8000-000000000002",
+      desired_sha256: "d".repeat(64),
+      check_in_seconds: 60,
+      ...overrides,
+    });
+  it("says seconds while the agent holds a wait", () => {
+    expect(pickupExplanation(released({ wake: { listening: true } }))).toBe(
+      "Waiting for the agent (connected, usually a few seconds). Its last verified configuration is tracked separately.",
+    );
+  });
+  it("keeps the ordinary explanation otherwise", () => {
+    // Not holding a wait, or a server that doesn't say.
+    expect(pickupExplanation(released({ wake: { listening: false } }))).toBe(
+      null,
+    );
+    expect(pickupExplanation(released())).toBe(null);
+    // Once the agent reports an attempt for this generation, the steps it
+    // reports explain the progress, never the wait.
+    expect(
+      pickupExplanation(
+        released({
+          wake: { listening: true },
+          configuration_attempt: {
+            generation: 2,
+            version_id: "00000000-0000-4000-8000-000000000002",
+            sha256: "d".repeat(64),
+            state: "downloaded",
+          },
+        }),
+      ),
+    ).toBe(null);
+    // Offline, paused or already on the version: nothing is on its way.
+    for (const overrides of [
+      { status: "offline" },
+      { status: "paused", sync_paused: true },
+      { status: "verified", reported_generation: 2 },
+    ])
+      expect(
+        pickupExplanation(
+          released({ wake: { listening: true }, ...overrides }),
+        ),
+      ).toBe(null);
+  });
+});
 
 describe("what runs on a device", () => {
   it("says nothing runs on a new device instead of an adopted workload", () => {
