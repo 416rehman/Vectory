@@ -225,7 +225,66 @@ async fn account_administration_authenticates_before_it_reads_the_body() {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path} {body}");
         let (status, body, _) = call(&app, method, &path, junk, Some(&viewer)).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path} {body}");
+        // Nor may a body that isn't JSON at all, or isn't declared as JSON,
+        // tell an anonymous caller anything before authentication.
+        for (content_type, raw) in [
+            ("application/json", "{not json"),
+            ("text/plain", "{\"unexpected\":true}"),
+        ] {
+            let (status, body) = send_raw(&app, method, &path, content_type, raw, None).await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {path} {content_type}: {body}"
+            );
+            let (status, body) =
+                send_raw(&app, method, &path, content_type, raw, Some(&viewer)).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{method} {path} {content_type}: {body}"
+            );
+        }
+        let (status, body) = send_raw(
+            &app,
+            method,
+            &path,
+            "application/json",
+            "{not json",
+            Some(&admin),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path} {body}");
     }
+}
+async fn send_raw(
+    app: &Router,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body: &str,
+    session: Option<&Session>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", content_type);
+    if let Some(session) = session {
+        request = request
+            .header("cookie", &session.cookie)
+            .header("x-csrf-token", &session.csrf);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_owned())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]

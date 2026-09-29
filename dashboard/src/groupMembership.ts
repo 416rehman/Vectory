@@ -1,5 +1,59 @@
-import type { GroupMembershipPreview, GroupMembershipState } from "./api";
+import {
+  APIError,
+  type GroupMembershipPreview,
+  type GroupMembershipState,
+} from "./api";
 import { assignmentName, policySummary } from "./deploymentReviewModel";
+
+/** Quiet retries of a busy preview, one a second, before it shows an error. */
+export const BUSY_PREVIEW_RETRIES = 3;
+
+/**
+ * The server never queues a preview behind heartbeats: while one is writing it
+ * answers 429 CAPACITY_BUSY ("Preview busy, retrying") instead.
+ */
+export function previewBusy(error: unknown) {
+  return (
+    error instanceof APIError &&
+    error.status === 429 &&
+    error.code === "CAPACITY_BUSY"
+  );
+}
+
+function pause(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", stop);
+      resolve();
+    }, ms);
+    function stop() {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }
+    signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
+/**
+ * Run a membership preview. While the server says it's busy, ask again once
+ * a second, quietly, up to BUSY_PREVIEW_RETRIES times; any other error, or
+ * the last busy answer, goes to the caller.
+ */
+export async function previewWithRetries<T>(
+  request: () => Promise<T>,
+  signal: AbortSignal,
+  wait: (ms: number, signal: AbortSignal) => Promise<void> = pause,
+): Promise<T> {
+  for (let retries = 0; ; retries++) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!previewBusy(error) || retries >= BUSY_PREVIEW_RETRIES) throw error;
+      await wait(1000, signal);
+    }
+  }
+}
 
 type Part = GroupMembershipPreview["devices"][number]["configuration"];
 

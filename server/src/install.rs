@@ -41,6 +41,11 @@ static DOWNLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(32)
 /// How long a client turned away by a download cap is asked to wait. Transfers
 /// take seconds, and the installer's curl retries after this delay.
 const BUSY_RETRY_SECONDS: u64 = 5;
+/// Installer fetches, and agent downloads, a minute from every address
+/// together, counted ahead of each address's own budget. Twice the rate at
+/// which enrollment admits new hosts (600 a minute), so it never paces a
+/// fleet install; it bounds how many address keys a flood can create.
+const PUBLIC_REQUESTS_PER_MINUTE: u32 = 1200;
 
 /// One verified agent build.
 #[derive(Clone, Debug)]
@@ -479,6 +484,11 @@ pub async fn download_platform(
     // the address is busy retries shortly without spending its rate limit.
     let address = peer_key(peer);
     let slot = AddressSlot::take(address.clone())?;
+    s.limit(
+        "agent-download".into(),
+        PUBLIC_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
+    )?;
     s.limit(
         format!("agent-download:{address}"),
         120,
@@ -984,6 +994,11 @@ pub async fn install_sh(
     if s.settings.disable_public_agent_downloads {
         return Err(downloads_disabled());
     }
+    s.limit(
+        "agent-installer".into(),
+        PUBLIC_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
+    )?;
     s.limit(
         format!("agent-installer:{}", peer_key(peer)),
         300,

@@ -310,3 +310,51 @@ async fn membership_preview_explains_effects_without_changing_anything() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn membership_preview_answers_busy_instead_of_queueing_behind_writers() {
+    let f = fixture(2).await;
+    let group = db::id();
+    let mut conn = f.state.pool.acquire().await.unwrap();
+    db::insert(&mut conn,"group",&json!({"id":group,"name":"edge","description":"","device_ids":[f.devices[0]],"created_at":db::now(),"revision":1})).await.unwrap();
+    drop(conn);
+    let body = json!({"group_id":group,"device_ids":[f.devices[0],f.devices[1]],"revision":1});
+    let preview = || {
+        f.app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/groups/membership-preview")
+                .header("cookie", &f.cookie)
+                .header("x-csrf-token", &f.csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
+    // A heartbeat or the scheduler is writing. The preview doesn't wait
+    // behind it: it answers at once, and the dashboard retries.
+    let writing = f.state.writer.lock().await;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), preview())
+        .await
+        .expect("the preview queued behind the writer")
+        .unwrap();
+    drop(writing);
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "1");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let busy: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(busy["error"]["code"], "CAPACITY_BUSY");
+    assert_eq!(busy["error"]["message"], "Preview busy, retrying");
+    // Once the writer is done, the same preview answers.
+    let response = preview().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let answered: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(answered["devices"][0]["change"], "added", "{answered}");
+    let (_, saved) = call(&f, "GET", &format!("/api/v1/groups/{group}"), None).await;
+    assert_eq!(
+        saved["device_ids"],
+        json!([f.devices[0]]),
+        "still unchanged"
+    );
+}

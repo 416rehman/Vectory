@@ -38,6 +38,15 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 - **Setup never leaves a stopped service behind.** It checks the service registration before it stops anything and starts the service again on every failure path; launchd stop and restart survive a long drain. The installer stays an upgrade command.
 - **Agent changes to know about:** `vectory logs --json` prints one JSON object per line (use `--raw` for the raw lines), setup exits 130 when interrupted while it waits for the check-in, the packaged launchd plist is `io.vectory.agent.plist`, and a pre-release Vector such as 0.58.1-rc1 is refused up front.
 
+- **Device lists are lighter.** `GET /devices` and the Overview return list rows without the host runtime, the Vector log summary or per-component telemetry (about 80% smaller for a busy device); the device page still reads the full record.
+- **The scheduler's cost no longer grows with history.** With two live rollouts on 20 devices a tick runs 17 queries whether none, 500 or 5,000 rollouts have finished (it used to run 965 at 500), and it rewrites nothing when nothing changed.
+- **The anonymous rate limiter never refuses a new client because it is full.** It evicts the entry that expires soonest; installer, download, enrollment and invite traffic have their own partition and global per-minute caps, so it cannot crowd out sign-in.
+- **Membership previews no longer queue behind heartbeats.** A busy server answers "Preview busy, retrying" and the dashboard retries quietly.
+- **Revoking a device resolves its open issues** as revoked, so the Overview stops counting them.
+- **Data-plane checks ignore a sample whose clock runs more than five minutes ahead**, instead of freezing evaluation until real time catches up.
+- **The administrator's two-factor reset authenticates before it reads the request body**, and a rollout's device timeline shows each device's latest changes instead of the oldest 5,000 rows.
+- **Upgrading:** migrations only go forward. An older server refuses a migrated database, so a downgrade means restoring a backup, and the first start after this release builds the telemetry index (slower on a large table).
+
 ### Documentation
 
 - The Help center was reorganized around tasks: a quickstart, installing the server, connecting a device and deploying a first pipeline come first, followed by a security model and references for the agent CLI, server configuration, `vectory-admin` and ports.

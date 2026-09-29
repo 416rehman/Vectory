@@ -191,16 +191,21 @@ pub fn data_plane_issue(device: &Value) -> Option<&Value> {
 }
 
 /// The most common first data-plane issue across a group: title, reason, fix.
+/// Issues count as the same condition by code and component: the message
+/// quotes each device's own measured rate, so it differs between devices
+/// with the same problem.
 fn delivery(devices: &[&Value]) -> Option<Value> {
-    let mut counts: BTreeMap<String, (usize, Value)> = BTreeMap::new();
+    let mut counts: BTreeMap<(&str, &str), (usize, &Value)> = BTreeMap::new();
     for issue in devices.iter().filter_map(|d| data_plane_issue(d)) {
-        let key = issue["message"].as_str().unwrap_or("").to_owned();
-        counts.entry(key).or_insert((0, issue.clone())).0 += 1;
+        let key = (text(issue, "code"), text(issue, "component_id"));
+        counts.entry(key).or_insert((0, issue)).0 += 1;
     }
+    // The first condition in key order wins a tie, so the pick is stable.
     counts
         .into_values()
+        .rev()
         .max_by_key(|(count, _)| *count)
-        .map(|(_, issue)| issue)
+        .map(|(_, issue)| issue.clone())
 }
 
 fn reason(devices: &[&Value]) -> Option<String> {
@@ -719,6 +724,37 @@ mod tests {
         healthy["data_plane"]["issues"] = json!([]);
         assert!(data_plane_issue(&healthy).is_none());
         assert_eq!(delivery(&[&device, &device]).unwrap()["hint"], "h");
+    }
+
+    #[test]
+    fn delivery_groups_the_same_condition_despite_different_measured_rates() {
+        let device = |component: &str, message: &str| {
+            let issue = json!({"code":"DATA_PLANE_SINK_ERRORS","component_id":component,"title":format!("{component} can't deliver events"),"message":message,"hint":"h"});
+            json!({"status":"verified","desired_version_id":"v2","data_plane":{"version_id":"v2","issues":[issue]}})
+        };
+        // Two devices share one failing sink; each message quotes its own rate.
+        let a = device(
+            "archive",
+            "The http sink archive is failing about 12 requests a minute.",
+        );
+        let b = device(
+            "archive",
+            "The http sink archive is failing about 9 requests a minute.",
+        );
+        let c = device(
+            "search",
+            "The http sink search is failing about 3 requests a minute.",
+        );
+        for order in [[&c, &a, &b], [&a, &c, &b], [&a, &b, &c]] {
+            assert_eq!(
+                delivery(&order).unwrap()["component_id"],
+                "archive",
+                "the condition two devices share wins"
+            );
+        }
+        // A tie picks the same condition whatever the device order.
+        assert_eq!(delivery(&[&a, &c]).unwrap()["component_id"], "archive");
+        assert_eq!(delivery(&[&c, &a]).unwrap()["component_id"], "archive");
     }
 
     #[test]

@@ -45,6 +45,11 @@ pub const MAX_OPEN_PER_DEVICE: usize = 10;
 const MAX_TRACKED: usize = 200;
 /// A sample older than this no longer describes the running pipeline.
 const SAMPLE_MAX_AGE_SECONDS: i64 = 600;
+/// A sample stamped further ahead of server time than this comes from a
+/// clock that is wrong, so it is not evaluated. One that is evaluated is
+/// remembered at server time at the latest: a clock that ran ahead and was
+/// then corrected must never hold back the evaluations that follow.
+const SAMPLE_MAX_AHEAD_SECONDS: i64 = 300;
 /// An open issue is rewritten at most this often while its condition holds.
 /// Every write lands in the heartbeat's transaction, under the writer lock,
 /// and moves the issue indexes; a steady outage should not pay it each time.
@@ -514,16 +519,22 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
         changed = true;
     }
     let now = Utc::now();
-    let sampled = parse_time(&o.sample["sampled_at"]);
+    let sampled = parse_time(&o.sample["sampled_at"]).filter(|at| {
+        (-SAMPLE_MAX_AHEAD_SECONDS..=SAMPLE_MAX_AGE_SECONDS)
+            .contains(&now.signed_duration_since(*at).num_seconds())
+    });
     let due = sampled.is_some_and(|at| {
-        now.signed_duration_since(at).num_seconds() <= SAMPLE_MAX_AGE_SECONDS
-            && parse_time(&state["sampled_at"]).is_none_or(|last| at > last)
+        parse_time(&state["sampled_at"]).is_none_or(|last| at > last)
             && parse_time(&state["evaluated_at"]).is_none_or(|last| {
                 now.signed_duration_since(last).num_seconds() >= EVALUATION_INTERVAL_SECONDS
             })
     });
-    if due {
+    if let Some(at) = sampled.filter(|_| due) {
         evaluate(db, &o, running, &mut state).await?;
+        state["sampled_at"] = json!(
+            at.min(now)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
         changed = true;
     }
     if changed {
@@ -658,7 +669,6 @@ async fn evaluate(
         .collect();
     state["keys"] = Value::Object(keys);
     state["buffers"] = Value::Object(buffers);
-    state["sampled_at"] = o.sample["sampled_at"].clone();
     state["evaluated_at"] = json!(now);
     state["evaluations"] = json!(
         state["evaluations"]

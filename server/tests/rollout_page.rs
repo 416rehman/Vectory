@@ -281,6 +281,67 @@ async fn timelines_use_recorded_apply_states_after_release() {
 }
 
 #[tokio::test]
+async fn timelines_show_each_devices_latest_changes_however_busy_the_page() {
+    let f = fixture(2).await;
+    let v1 = version(&f.state, &f.pipeline, 1).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    let created = rollout::create(&mut tx, &request(&f.devices, &v1, 100, false), "operator")
+        .await
+        .unwrap();
+    // One device flaps through thousands of recorded changes, then verifies.
+    let busy = &f.devices[0];
+    for n in 0..5100 {
+        let state = if n % 2 == 0 { "desired" } else { "downloaded" };
+        db::audit(&mut tx, busy, "device.apply_state", busy, state)
+            .await
+            .unwrap();
+    }
+    db::audit(
+        &mut tx,
+        busy,
+        "device.apply_state",
+        busy,
+        "verified_applied",
+    )
+    .await
+    .unwrap();
+    // The other device's few changes come after all of those.
+    let quiet = &f.devices[1];
+    for state in ["desired", "verified_applied"] {
+        db::audit(&mut tx, quiet, "device.apply_state", quiet, state)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let (status, page) = get(
+        &f,
+        &format!(
+            "/api/v1/deployments/{}/targets",
+            created["id"].as_str().unwrap()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let timeline = |device: &str| -> Vec<String> {
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["device_id"] == device)
+            .unwrap()["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["state"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let flapping = timeline(busy);
+    assert_eq!(flapping.len(), 12, "the latest twelve changes");
+    assert_eq!(flapping.last().unwrap(), "verified_applied");
+    assert_eq!(timeline(quiet), ["desired", "verified_applied"]);
+}
+
+#[tokio::test]
 async fn summaries_carry_lineage_and_history_filters_by_group_and_rollback() {
     let f = fixture(2).await;
     let v1 = version(&f.state, &f.pipeline, 1).await;
