@@ -1473,6 +1473,9 @@ export default function TargetDialog({
                     <span>
                       <span>
                         Replaces{" "}
+                        {replacement.assignment.rollback_of
+                          ? "the rollback to "
+                          : ""}
                         <AssignmentLink
                           id={replacement.assignment.id}
                           label={shortName(replacement.assignment)}
