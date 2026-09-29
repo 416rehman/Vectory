@@ -123,7 +123,7 @@ export default function TelemetryPanel({
   const [range, setRange] = useState<TelemetryRange>("1h"),
     [hover, setHover] = useState<number | null>(null);
   const resource = useResource<TelemetryHistory>(
-    `/devices/${device.id}/telemetry?range=${range}`,
+    `/devices/${encodeURIComponent(device.id)}/telemetry?range=${range}`,
     { device_id: device.id, samples: [] },
   );
   // Keep the previous render while a new range loads: no flash, no jump.
