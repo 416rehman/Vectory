@@ -186,6 +186,7 @@ import {
 import { vrlValue, withVrlValue } from "./PipelineSettings";
 import { upstreamOf } from "./sampleUpstream";
 import { copySteps, pasteSteps, stepsText } from "./canvasClipboard";
+import { patternEdges, patternInputs, patternSummary } from "./inputPatterns";
 import CanvasFind from "./CanvasFind";
 import {
   edgeRate,
@@ -2957,6 +2958,8 @@ export default function Editor({
     }
   }
   const selectedNode = nodes.find((n) => n.id === selected);
+  const patterns = useMemo(() => patternInputs(config), [config]);
+  const patternEdgeList = useMemo(() => patternEdges(patterns), [patterns]);
   const component = selectedNode
     ? selectedNode.data.enrichmentTable
       ? config.enrichment_tables?.[selectedNode.data.enrichmentTable]
@@ -3474,6 +3477,9 @@ export default function Editor({
             focusRequest?.component === selectedNode.id ? focusRequest : null
           }
           upstream={selectedUpstream}
+          inputPatterns={patterns.filter(
+            (input) => input.target === selectedNode.id,
+          )}
         />
       )
     ) : null;
@@ -3710,12 +3716,50 @@ export default function Editor({
       }),
     );
   });
+  // Wildcard inputs draw a dashed, read-only line to each output they match.
+  const currentPatternEdges = patternEdgeList.map((edge) => {
+    const category = nodeKinds.get(edge.source) || "transforms";
+    const rate = liveOn
+      ? edgeRate(liveData, edge.source, edge.sourceHandle)
+      : undefined;
+    return cachedFlowObject(
+      `pattern:${edge.id}`,
+      [edge, category, connectionStyle, rate],
+      () => ({
+        id: edge.id,
+        source: edge.source,
+        sourceHandle: edge.sourceHandle,
+        target: edge.target,
+        targetHandle: edge.targetHandle,
+        type: "pipeline",
+        className: "pipeline-connection pipeline-connection-pattern",
+        selectable: false,
+        focusable: false,
+        deletable: false,
+        reconnectable: false,
+        ariaLabel: `Wildcard input ${edge.pattern}: ${edge.source}${edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
+        domAttributes: {
+          "data-pipeline-category": category,
+        } as Edge["domAttributes"],
+        data: {
+          editable: false,
+          connectionStyle,
+          pattern: edge.pattern,
+          patternMore: edge.more,
+          liveRate: rate,
+        },
+      }),
+    );
+  });
   // Canvas arrays keep their identity while no element changed, and a config
   // edit reaches the canvas in a deferred render: a keystroke paints the
   // inspector first and the node summary follows. Drags and selections stay
   // immediate.
   const flowNodes = stableArray(flowNodeArray, currentFlowNodes),
-    flowEdges = stableArray(flowEdgeArray, currentFlowEdges);
+    flowEdges = stableArray(flowEdgeArray, [
+      ...currentFlowEdges,
+      ...currentPatternEdges,
+    ]);
   const deferredFlowNodes = useDeferredValue(flowNodes),
     deferredFlowEdges = useDeferredValue(flowEdges);
   const canvasNodes = graphFromEdit.current ? deferredFlowNodes : flowNodes,
