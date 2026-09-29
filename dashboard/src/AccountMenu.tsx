@@ -16,6 +16,7 @@ import type { User } from "./api";
 import { helpHref } from "./DocLink";
 import SignOutDialog from "./SignOutDialog";
 import { Kbd } from "./ui";
+import { roles } from "./roles";
 import "./account-menu.css";
 
 type Appearance = "light" | "dark" | "auto";
@@ -40,12 +41,6 @@ const appearances = [
   { value: "dark", label: "Dark", icon: Moon },
   { value: "auto", label: "Auto", icon: Monitor },
 ] as const;
-const roleNames: Record<User["role"], string> = {
-  viewer: "Viewer",
-  editor: "Editor",
-  operator: "Operator",
-  admin: "Administrator",
-};
 
 export default function AccountMenu({
   user,
@@ -70,7 +65,7 @@ export default function AccountMenu({
     .map((part) => Array.from(part)[0])
     .join("")
     .toLocaleUpperCase();
-  const role = roleNames[user.role] ?? user.role;
+  const role = roles[user.role]?.[0] ?? user.role;
 
   function closeConfirmation() {
     setConfirmingSignOut(false);
@@ -224,10 +219,10 @@ export default function AccountMenu({
                 href={helpHref()}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Vectory documentation (opens in a new tab)"
+                aria-label="Help center (opens in a new tab)"
               >
                 <BookOpen size={16} aria-hidden="true" />
-                <span>Vectory documentation</span>
+                <span>Help center</span>
                 <ExternalLink
                   className="account-menu-external"
                   size={13}

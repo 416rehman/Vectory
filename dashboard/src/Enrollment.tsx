@@ -62,6 +62,7 @@ import {
 import { describeAgent, progress, refusal } from "./enrollmentActivity";
 import "./control.css";
 import "./enrollment-page.css";
+import type { Notify } from "./toast";
 
 const platforms: { value: HostOS; label: string; icon: typeof Server }[] = [
   { value: "linux", label: "Linux", icon: Server },
@@ -326,7 +327,7 @@ export function Enrollment({
   navigate,
 }: {
   user: User;
-  notify: (message: string) => void;
+  notify: Notify;
   navigate: (path: string) => void;
 }) {
   const details = useResource<unknown>("/agent-install", null);
@@ -483,9 +484,11 @@ export function Enrollment({
   async function copy(value: string, what = "Command") {
     try {
       await navigator.clipboard.writeText(value);
-      notify(`${what} copied.`);
+      notify(`${what} copied.`, { tone: "success" });
     } catch {
-      notify("Clipboard access is unavailable. Select the text and copy it.");
+      notify("Clipboard access is unavailable. Select the text and copy it.", {
+        tone: "error",
+      });
     }
   }
   async function createCommand() {

@@ -1,5 +1,6 @@
 import { CircleX, TriangleAlert } from "lucide-react";
-import { ago, when } from "./api";
+import { when } from "./api";
+import { relativeTime } from "./time";
 import type { VectorLogGroup, VectorLogSummary } from "./runtimeModel";
 import "./vector-log.css";
 
@@ -30,7 +31,7 @@ export default function VectorLogSummaryView({
             {items.length
               ? `${errors} ${errors === 1 ? "error" : "errors"}, ${items.length - errors} ${items.length - errors === 1 ? "warning" : "warnings"}`
               : "None"}{" "}
-            · reported {ago(summary.reported_at).toLowerCase()}
+            · reported {relativeTime(summary.reported_at)}
           </span>
         )}
       </div>
@@ -83,7 +84,7 @@ export default function VectorLogSummaryView({
                       dateTime={item.last_seen}
                       title={when(item.last_seen)}
                     >
-                      {ago(item.last_seen).toLowerCase()}
+                      {relativeTime(item.last_seen)}
                     </time>
                     {item.count > 1 && (
                       <>

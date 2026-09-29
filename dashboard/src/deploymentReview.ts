@@ -5,7 +5,8 @@ import type {
   Policy,
   PreviewReplacement,
 } from "./api";
-import { interval, since } from "./deploymentStatus";
+import { interval } from "./deploymentStatus";
+import { relativeTime } from "./time";
 
 /** What the dialog asks for, in the words the review uses. */
 export type RequestedChange =
@@ -182,7 +183,9 @@ export function assignmentMeta(
   >,
   now = Date.now(),
 ) {
-  const ago = since(assignment.created_at, now)?.toLowerCase();
+  const ago = assignment.created_at
+    ? relativeTime(assignment.created_at, now)
+    : null;
   const who = assignment.created_by_name
     ? `Applied by ${assignment.created_by_name}${ago ? `, ${ago}` : ""}`
     : ago
@@ -199,13 +202,15 @@ export function assignmentSource(
   > & { label: string },
   now = Date.now(),
 ) {
-  const ago = since(assignment.created_at, now);
+  const ago = assignment.created_at
+    ? relativeTime(assignment.created_at, now)
+    : null;
   return [
     assignment.label,
     assignment.created_by_name
       ? `applied by ${assignment.created_by_name}`
       : null,
-    ago ? ago.toLowerCase() : null,
+    ago,
   ]
     .filter(Boolean)
     .join(", ")

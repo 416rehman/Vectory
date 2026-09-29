@@ -380,16 +380,17 @@ async function check(name, operation) {
   console.log("PASS", name);
 }
 async function open(index) {
+  const name = `Synthetic deployment ${String(index).padStart(3, "0")}`;
+  // Phones list deployments as cards: the change's name opens its rollout.
+  if ((page.viewportSize()?.width ?? 1024) < 640)
+    return page.getByRole("link", { name, exact: true }).click();
   await page
-    .getByRole("button", {
-      name: `View details for Synthetic deployment ${String(index).padStart(3, "0")}`,
-      exact: true,
-    })
+    .getByRole("button", { name: `View details for ${name}`, exact: true })
     .click();
 }
 async function closeDetails() {
   await details()
-    .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+    .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
     .click();
   await expect(details()).toHaveCount(0);
 }
@@ -422,7 +423,8 @@ try {
       await page
         .getByRole("radio", { name: "Failed", exact: true })
         .click();
-      await expect(page.locator(".pagination")).toContainText("1 / 1");
+      // One page of results needs no pager.
+      await expect(page.locator(".pagination")).toHaveCount(0);
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(9);
       expect(requests.at(-1).query.status).toBe("failed");
       expect(requests.at(-1).query.page).toBe("1");
@@ -635,7 +637,7 @@ try {
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(3);
       const saved = records;
       records = records.slice(0, 48);
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.getByRole("button", { name: "Refresh now", exact: true }).click();
       await expect(page.locator(".pagination")).toContainText("4 / 4");
       await expect(page.locator(".deployment-table tbody tr")).toHaveCount(12);
       records = saved;
@@ -666,7 +668,7 @@ try {
       delayedSummary = "";
       failTargets = "d-001";
       await details()
-        .getByRole("button", { name: "Try again", exact: true })
+        .getByRole("button", { name: "Retry", exact: true })
         .click();
       await expect(
         details().getByRole("heading", {
@@ -678,7 +680,7 @@ try {
         "Synthetic device results unavailable",
       );
       await details()
-        .getByRole("button", { name: "Try again", exact: true })
+        .getByRole("button", { name: "Retry", exact: true })
         .click();
       await expect(
         details().locator(".deployment-targets tbody tr"),
@@ -714,7 +716,7 @@ try {
       await expect(
         details().locator(".deployment-targets tbody tr"),
       ).toHaveCount(11);
-      await expect(details().locator(".pagination")).toContainText("1 / 1");
+      await expect(details().locator(".pagination")).toHaveCount(0);
       delayedTargetSearch = "synthetic device 0";
       await details()
         .getByLabel("Search deployment devices", { exact: true })
@@ -861,14 +863,12 @@ try {
         page.getByRole("button", { name: "Deploy a pipeline", exact: true }),
       ).toHaveCount(0);
       await page.setViewportSize({ width: 390, height: 844 });
-      // On a phone the list and the device results are cards, not tables.
-      await page
-        .getByRole("link", { name: "Synthetic deployment 003", exact: true })
-        .click();
+      await open(3);
+      // Phones list device results as cards, not a table that scrolls.
       await expect(
         details()
-          .getByRole("list", { name: "Device results" })
-          .locator("li.data-list-item"),
+          .getByRole("list", { name: "Device results", exact: true })
+          .getByRole("listitem"),
       ).toHaveCount(12);
       await expect(
         details().getByRole("button", { name: "Pause", exact: true }),

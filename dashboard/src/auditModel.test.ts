@@ -149,7 +149,7 @@ describe("what changed", () => {
         password: "never shown",
       }),
     ).toEqual([
-      { label: "State", before: "Written", after: "Applied and verified" },
+      { label: "State", before: "Applying", after: "Applied" },
       { label: "Version", after: "v7" },
     ]);
     expect(auditChanges({ generation: 2 })).toEqual([
@@ -189,7 +189,7 @@ describe("readable audit rows", () => {
     ).toEqual({
       title: "3 device results",
       devices: "edge-nyc-01, edge-nyc-02 and 1 more",
-      outcomes: "2 applied and verified, 1 rolled back",
+      outcomes: "2 applied, 1 rolled back",
     });
   });
   it("names a refused enrollment", () => {

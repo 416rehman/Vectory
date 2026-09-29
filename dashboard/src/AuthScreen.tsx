@@ -40,7 +40,7 @@ import {
 } from "./authControls";
 import { passwordIssue } from "./passwordStrength";
 import { Button, Spinner } from "./ui";
-import { Brand } from "./App";
+import { Brand } from "./Brand";
 
 const SetupHintSchema = z.object({
   source: z.enum(["file", "environment", "unknown"]),
@@ -708,7 +708,7 @@ export default function AuthScreen({
         setConfirm("");
         toSignIn({
           tone: "info",
-          text: "We couldn't confirm your new password was saved. Try signing in with it. If that doesn't work, ask your administrator for a new reset code.",
+          text: "We couldn't confirm your new password was saved. Try signing in with it. If that doesn't work, ask your administrator for a new reset link.",
         });
         return;
       }

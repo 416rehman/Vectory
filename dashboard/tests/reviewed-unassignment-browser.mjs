@@ -615,7 +615,7 @@ try {
             }),
           ),
         );
-        await expect(page.locator(".session-ended")).toContainText(
+        await expect(page.locator(".session-renewal")).toContainText(
           "Your session ended",
         );
         state.holds.shift()();
@@ -854,7 +854,8 @@ try {
         await expect(status()).toBeEnabled();
         await closeReview();
         await details()
-          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" })
+          .getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         await expect(details()).toHaveCount(0);
         await page.evaluate(
@@ -981,7 +982,7 @@ try {
               }),
             ),
           );
-          await expect(page.locator(".session-ended")).toContainText(
+          await expect(page.locator(".session-renewal")).toContainText(
             "Your session ended",
           );
           state.holds.shift()();
@@ -1003,11 +1004,12 @@ try {
             .getByRole("button", { name: "Cancel", exact: true })
             .click();
           await details()
-            .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+            .getByRole("navigation", { name: "Breadcrumb" })
+            .getByRole("link", { name: /^(Deployments|Schedules)$/ })
             .click();
           const requestsBefore = requests.length;
           await page
-            .getByRole("button", { name: "Refresh", exact: true })
+            .getByRole("button", { name: "Refresh now", exact: true })
             .click();
           await expect(
             page
@@ -1063,7 +1065,7 @@ try {
             }),
           ),
         );
-        await expect(page.locator(".session-ended")).toContainText(
+        await expect(page.locator(".session-renewal")).toContainText(
           "Your session ended",
         );
         expect(await original.evaluate((el) => el.isConnected)).toBe(true);
@@ -1101,7 +1103,7 @@ try {
         await expect(
           page.getByRole("button", { name: "Code", exact: true }),
         ).toBeVisible();
-        await expect(page.locator(".session-ended")).toHaveCount(0);
+        await expect(page.locator(".session-renewal")).toHaveCount(0);
         await page.evaluate(
           (id) => (location.hash = `#/deployments/${id}?page=1`),
           sourceId,

@@ -54,23 +54,6 @@ const sectionLabels: Record<string, string> = {
   deployments: "Activity",
   settings: "Settings",
 };
-/** Every route the dashboard knows, for NotFound vs permission messages. */
-export const knownPages = new Set([
-  "overview",
-  "configurations",
-  "devices",
-  "groups",
-  "policies",
-  "enrollment",
-  "deployments",
-  "schedules",
-  "issues",
-  "audit",
-  "settings",
-  "users",
-  "docs",
-]);
-
 export function sectionOf(page: string) {
   if (["devices", "groups", "policies", "enrollment"].includes(page))
     return "devices";

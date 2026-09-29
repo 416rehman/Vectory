@@ -367,7 +367,7 @@ try {
         await expect(panel(page)).toBeVisible();
         await expect(panel(page)).toContainText("0 of 1");
         await expect(dialog(page)).toContainText("1 of 2");
-        await expect(table(page)).toContainText("Verified");
+        await expect(table(page)).toContainText("Applied");
         await expect(table(page)).toContainText(
           "Canary gate: Another assignment is effective",
         );
@@ -421,7 +421,7 @@ try {
           await open(app.page);
           await expect(panel(app.page)).toBeVisible();
           await expect(panel(app.page)).toContainText("0 of 1");
-          await expect(table(app.page)).toContainText("Verified");
+          await expect(table(app.page)).toContainText("Applied");
           await expect(panel(app.page)).toContainText(reasonLabels[reason]);
           await expect(table(app.page)).toContainText(
             "Canary gate: " + reasonLabels[reason],
@@ -528,6 +528,11 @@ try {
         await panel(app.page)
           .getByRole("button", { name: "Refresh canary gate", exact: true })
           .click();
+        // Earlier data is still on screen, so the server's reason is behind Details.
+        await app.page
+          .getByRole("alert")
+          .getByText("Details", { exact: true })
+          .click();
         await expect(
           app.page.getByText("Synthetic summary unavailable", { exact: true }),
         ).toBeVisible();
@@ -535,7 +540,7 @@ try {
         await expect(panel(app.page)).not.toContainText("1 of 1");
         f.failSummary = false;
         await app.page
-          .getByRole("button", { name: "Try again", exact: true })
+          .getByRole("button", { name: "Retry", exact: true })
           .click();
         await expect(panel(app.page)).toContainText("1 of 1");
         await noWrites(f);

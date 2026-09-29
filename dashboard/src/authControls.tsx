@@ -1,22 +1,17 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-  type Ref,
-} from "react";
+import { useEffect, useId, useState, type ReactNode, type Ref } from "react";
 import {
   AlertCircle,
   ArrowBigUp,
-  Check,
   CircleHelp,
   Copy,
   Eye,
   EyeOff,
 } from "lucide-react";
+import { CopyButton } from "./ui";
 import { passwordStrength } from "./passwordStrength";
 import "./auth.css";
+
+export { CopyButton };
 
 /** Label row, control, and either an inline error or a hint, wired for assistive tech. */
 export function AuthField({
@@ -299,58 +294,6 @@ export function OtpInput({
   );
 }
 
-/** Copy text with brief confirmation and a selectable fallback message. */
-export function CopyButton({
-  text,
-  label = "Copy",
-  copiedLabel = "Copied",
-  variant = "secondary compact",
-  onCopied,
-}: {
-  text: string;
-  label?: string;
-  copiedLabel?: string;
-  variant?: string;
-  onCopied?: () => void;
-}) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <>
-      <button
-        type="button"
-        className={`button ${variant} copy-button`}
-        onClick={async () => {
-          clearTimeout(timer.current);
-          try {
-            await navigator.clipboard.writeText(text);
-            setState("copied");
-            onCopied?.();
-          } catch {
-            setState("failed");
-          }
-          timer.current = setTimeout(() => setState("idle"), 2400);
-        }}
-      >
-        {state === "copied" ? (
-          <Check size={15} aria-hidden="true" />
-        ) : (
-          <Copy size={15} aria-hidden="true" />
-        )}
-        {state === "copied" ? copiedLabel : label}
-      </button>
-      <span className="sr-only" role="status">
-        {state === "copied"
-          ? `${copiedLabel}.`
-          : state === "failed"
-            ? "Copy isn't available here. Select the text to copy it."
-            : ""}
-      </span>
-    </>
-  );
-}
-
 /** A command or secret-free value shown in monospace with a copy action. */
 export function CopyLine({
   value,
@@ -466,22 +409,3 @@ export function formatRemaining(
 }
 
 /** "just now", "5 min ago", "3 h ago", "2 days ago", then a date; "Never" when absent. */
-export function formatAgo(value: string | null | undefined, now = Date.now()) {
-  const at = value ? Date.parse(value) : NaN;
-  if (!Number.isFinite(at)) return "Never";
-  const minutes = Math.floor(Math.max(0, now - at) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
-  return new Date(at).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    year:
-      new Date(at).getFullYear() === new Date(now).getFullYear()
-        ? undefined
-        : "numeric",
-  });
-}

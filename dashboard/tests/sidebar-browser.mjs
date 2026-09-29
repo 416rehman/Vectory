@@ -264,7 +264,8 @@ await context.route("**/*", async (route) => {
     return reply({ user, csrf_token: "synthetic-session-token" });
   }
   if (method !== "GET") {
-    unexpected.push(`${method} ${path}`);
+    // The editor checks its draft on its own; that read-only POST is not a mutation.
+    if (!path.endsWith("/validate")) unexpected.push(`${method} ${path}`);
     return reply(
       {
         error: {
@@ -727,7 +728,12 @@ try {
       await noOverflow();
       await page.setViewportSize({ width: 375, height: 812 });
       await noOverflow();
-      expect(requests.filter((r) => r.method !== "GET")).toEqual([]);
+      // Validation is a read-only POST the editor sends on its own.
+      expect(
+        requests.filter(
+          (r) => r.method !== "GET" && !r.path.endsWith("/validate"),
+        ),
+      ).toEqual([]);
     },
   );
   await check(
@@ -774,7 +780,11 @@ try {
       expect(
         await page.locator('a[href^="javascript:"],a[href^="data:"]').count(),
       ).toBe(0);
-      expect(requests.filter((r) => r.method !== "GET")).toEqual([]);
+      expect(
+        requests.filter(
+          (r) => r.method !== "GET" && !r.path.endsWith("/validate"),
+        ),
+      ).toEqual([]);
       await noOverflow();
     },
   );
@@ -914,7 +924,7 @@ try {
         }),
       ).toHaveCount(0);
       const documentation = page.getByRole("menuitem", {
-        name: "Vectory documentation (opens in a new tab)",
+        name: "Help center (opens in a new tab)",
         exact: true,
       });
       await expect(documentation).toHaveAttribute("target", "_blank");
@@ -950,9 +960,12 @@ try {
         await expect(page).toHaveURL(
           new RegExp(`#/configurations/${ids.pipeline}$`),
         );
-        expect(requests.filter((request) => request.method !== "GET")).toEqual(
-          [],
-        );
+        expect(
+          requests.filter(
+            (request) =>
+              request.method !== "GET" && !request.path.endsWith("/validate"),
+          ),
+        ).toEqual([]);
       }
       await page
         .getByRole("button", { name: "Discard code changes", exact: true })
@@ -968,9 +981,12 @@ try {
         .click();
       await expect(page).toHaveURL(/#\/users$/);
       await page.setViewportSize({ width: 375, height: 812 });
-      expect(requests.filter((request) => request.method !== "GET")).toEqual(
-        [],
-      );
+      expect(
+        requests.filter(
+          (request) =>
+            request.method !== "GET" && !request.path.endsWith("/validate"),
+        ),
+      ).toEqual([]);
       // No draft: sign-out starts at once. A slow one shows its progress; a
       // failure checks the session itself before offering a deliberate retry.
       failLogout = true;
@@ -1050,7 +1066,10 @@ try {
       expect(signedIn).toBe(true);
       expect(
         requests
-          .filter((request) => request.method !== "GET")
+          .filter(
+            (request) =>
+              request.method !== "GET" && !request.path.endsWith("/validate"),
+          )
           .map(({ method, path }) => ({ method, path })),
       ).toEqual([
         { method: "POST", path: "/logout" },

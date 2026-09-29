@@ -705,8 +705,10 @@ try {
       const frame = card.getByRole("group", { name: /Fleet throughput/ });
       await frame.focus();
       await page.keyboard.press("End");
+      // The newest bucket (204/s) is still collecting devices' samples, so
+      // the line ends at the last complete one instead of dipping.
       await expect(card.locator('[aria-live="polite"]')).toContainText(
-        "in 204/s",
+        "in 198/s",
       );
       await page.keyboard.press("ArrowLeft");
       await expect(card.locator(".fleet-chart-tooltip")).toBeVisible();

@@ -31,13 +31,15 @@ import {
   type DeploymentOperation,
   type DeploymentStorageIssue,
 } from "./deploymentRequests";
-import { releasePlan, type StatusTone } from "./deploymentStatus";
+import { releasePlan } from "./deploymentStatus";
+import { deviceDisplayStatus, statusLabel, type StatusTone } from "./status";
 import { shortDigest } from "./enrollmentCommands";
 import {
   allowancesFile,
   fullModeRequirements,
   hasHostApprovals,
   hostApprovals,
+  type AgentCatalog,
 } from "./hostRequirements";
 import {
   AssignmentLink,
@@ -169,21 +171,30 @@ function HostApprovalNote({
   );
 }
 
-const deviceStates: Record<string, string> = {
-  verified: "Online",
-  unmanaged: "Online",
-  online: "Online",
-  applying: "Applying a change",
-  failed: "Last change failed",
-  rolled_back: "Last change rolled back",
-  verification_unknown: "Needs verification",
-  paused: "Sync paused",
-  offline: "Offline, applies when it reconnects",
-  awaiting_first_check_in: "Waiting for its first check-in",
-  revoked: "Revoked",
-};
+/**
+ * Which components a restricted device accepts. The 99 KB catalog is read
+ * only when this dialog opens, so it is not part of any page's download.
+ * "failed" means it could not be read: nothing can be declared safe then.
+ */
+function useAgentCatalog() {
+  const [catalog, setCatalog] = useState<AgentCatalog | "failed" | null>(null);
+  useEffect(() => {
+    let live = true;
+    import("./generated/vector-catalog.json").then(
+      (module) => live && setCatalog(module.default),
+      () => live && setCatalog("failed"),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return catalog;
+}
 function statusText(device: Device) {
-  return deviceStates[device.status] || device.status.replaceAll("_", " ");
+  const label = statusLabel("device", deviceDisplayStatus(device));
+  return device.status === "offline"
+    ? `${label}, applies when it reconnects`
+    : label;
 }
 function capitalize(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -501,7 +512,14 @@ export default function TargetDialog({
       blockersByDevice.set(id, labels);
     }
   }
-  const requirements = version ? fullModeRequirements(version.config) : [];
+  const agentCatalog = useAgentCatalog();
+  const requirements =
+    version && agentCatalog && agentCatalog !== "failed"
+      ? fullModeRequirements(version.config, agentCatalog)
+      : [];
+  // Until the component list is read, what the pipeline needs is unknown.
+  const capabilityUnknown =
+    !!version && !(agentCatalog && agentCatalog !== "failed");
   const restrictedTargets: Device[] = (
     preview?.devices ||
     devices.data.filter((device) => effective.has(device.id))
@@ -690,6 +708,12 @@ export default function TargetDialog({
       if (settingsMismatch.length)
         throw Error(
           "Some selected devices use different agent settings. Return to the device list and select devices with matching settings.",
+        );
+      if (capabilityUnknown)
+        throw Error(
+          agentCatalog === "failed"
+            ? "Vectory couldn't read the component list to check this pipeline. Reload the page and try again."
+            : "Vectory is still checking what this pipeline needs. Try again in a moment.",
         );
       if (capabilityBlocked)
         throw Error(
@@ -1826,7 +1850,7 @@ export default function TargetDialog({
             !!devices.error ||
             !!groups.error ||
             (!preview && !releaseValid) ||
-            (!!preview && capabilityBlocked) ||
+            (!!preview && (capabilityBlocked || capabilityUnknown)) ||
             // Nothing selected could run it: the note above says why.
             (!preview &&
               capabilityBlocked &&

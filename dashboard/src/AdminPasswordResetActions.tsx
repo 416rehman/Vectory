@@ -29,6 +29,7 @@ import {
 } from "./keyedRequest";
 import { Button, Modal, Spinner } from "./ui";
 import "./account.css";
+import type { Notify } from "./toast";
 
 /** A single-use sign-in link held only in this page's memory. */
 export type HeldLink = {
@@ -122,7 +123,7 @@ export default function AdminPasswordResetActions({
   onLinksChange: (
     update: (links: Record<string, HeldLink>) => Record<string, HeldLink>,
   ) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [password, setPassword] = useState("");
   const [shown, setShown] = useState<string | null>(null);
@@ -142,7 +143,9 @@ export default function AdminPasswordResetActions({
     if (Object.keys(linksRef.current).length) {
       onLinksChange(() => ({}));
       setShown(null);
-      notify("Held sign-in links were hidden because your sign-in changed.");
+      notify("Held sign-in links were hidden because your sign-in changed.", {
+        tone: "info",
+      });
     }
   });
   const statusPath = (request: { target: { id: string }; id: string }) =>
@@ -451,7 +454,7 @@ export default function AdminPasswordResetActions({
       );
       if (status.status !== "cancelled") throw Error();
       discard(link.userId);
-      notify(`Link for ${firstName(link.name)} revoked.`);
+      notify(`Link for ${firstName(link.name)} revoked.`, { tone: "success" });
       void reloadPeople();
     } catch {
       onLinksChange((current) =>

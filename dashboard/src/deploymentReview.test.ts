@@ -185,7 +185,7 @@ describe("pause and resume never dead-end", () => {
         now,
       ),
     ).toBe(
-      "Paused by “Maintenance” settings, applied by Ada, 2 h ago · priority 100.",
+      "Paused by “Maintenance” settings, applied by Ada, 2h ago · priority 100.",
     );
     expect(
       pauseSource({

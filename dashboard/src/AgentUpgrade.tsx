@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download } from "lucide-react";
+import { Download } from "lucide-react";
 import { api, withRequestDeadline, type Device, type Release } from "./api";
 import { agentUpgradeRelease } from "./agentUpgradeModel";
-import { Button, ErrorBox, Modal, Spinner } from "./ui";
+import { Button, CopyButton, ErrorBox, Modal, Spinner } from "./ui";
 import DocLink from "./DocLink";
 import "./agent-upgrade.css";
 
@@ -14,14 +14,12 @@ export default function AgentUpgrade({ device }: { device: Device }) {
     releases: Release[];
     error: string;
   }>({ loading: true, releases: [], error: "" });
-  const [copyStatus, setCopyStatus] = useState("");
   const opener = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     let current = true;
     const controller = new AbortController();
     setResult({ loading: true, releases: [], error: "" });
-    setCopyStatus("");
     void withRequestDeadline((deadline) => {
       deadline.addEventListener("abort", () => controller.abort(), {
         once: true,
@@ -118,23 +116,13 @@ export default function AgentUpgrade({ device }: { device: Device }) {
                 <div className="agent-upgrade-checksum">
                   <span>SHA-256</span>
                   <code>{release.sha256}</code>
-                  <Button
+                  <CopyButton
+                    text={release.sha256}
+                    label="Copy checksum"
+                    copiedMessage="Checksum copied."
+                    failedMessage="Copy unavailable. Select the checksum above to copy it manually."
                     variant="ghost compact"
-                    icon={Copy}
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(release.sha256);
-                        setCopyStatus("Checksum copied.");
-                      } catch {
-                        setCopyStatus(
-                          "Copy unavailable. Select the checksum above to copy it manually.",
-                        );
-                      }
-                    }}
-                  >
-                    Copy checksum
-                  </Button>
-                  {copyStatus && <p role="status">{copyStatus}</p>}
+                  />
                 </div>
                 <p className="agent-upgrade-note">
                   Verify the file against a checksum from your trusted release

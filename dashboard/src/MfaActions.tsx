@@ -39,6 +39,7 @@ import {
 } from "./authControls";
 import { Button, Modal, Spinner } from "./ui";
 import "./account.css";
+import type { Notify } from "./toast";
 
 type Flow = "setup" | "disable" | "codes";
 type Fields = Partial<Record<"password" | "code" | "form", string>>;
@@ -96,7 +97,7 @@ export default function MfaActions({
   ref?: Ref<MfaActionsHandle>;
   user: User;
   status: MfaResource;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [form, setForm] = useState<{ flow: Flow; fields: Fields } | null>(null);
   const [password, setPassword] = useState("");
@@ -310,6 +311,7 @@ export default function MfaActions({
         setForm(null);
         notify(
           "Two-factor authentication is off. Other browsers were signed out.",
+          { tone: "success" },
         );
         void status.reload();
       } else {
@@ -336,13 +338,13 @@ export default function MfaActions({
       const wait = retryDelay(failure);
       if (error?.code === "MFA_ALREADY_ENABLED") {
         setForm(null);
-        notify("Two-factor authentication is already on.");
+        notify("Two-factor authentication is already on.", { tone: "info" });
         void status.reload();
         return;
       }
       if (error?.code === "MFA_NOT_ENABLED") {
         setForm(null);
-        notify("Two-factor authentication is already off.");
+        notify("Two-factor authentication is already off.", { tone: "info" });
         void status.reload();
         return;
       }
@@ -447,7 +449,7 @@ export default function MfaActions({
       if (kind === "off") {
         setOutcome(null);
         setOutcomeOpen(false);
-        notify("Two-factor authentication is off.");
+        notify("Two-factor authentication is off.", { tone: "success" });
       } else if (kind === "retry-code") {
         setOutcome(null);
         setOutcomeOpen(false);
@@ -794,6 +796,7 @@ export default function MfaActions({
               codes.source === "setup"
                 ? "Two-factor authentication is on. Other browsers were signed out."
                 : "New recovery codes are ready. Your old codes no longer work.",
+              { tone: "success" },
             );
           }}
         />
