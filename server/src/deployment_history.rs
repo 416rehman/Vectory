@@ -461,12 +461,15 @@ pub async fn targets(
     ))
 }
 
-const FAILED_STATES: [&str; 5] = [
+const FAILED_STATES: [&str; 6] = [
     "failed",
     "rolled_back",
     "verification_unknown",
     "incompatible",
     "blocked",
+    // Applied, but a data-plane issue on this version shows it isn't
+    // delivering. Lanes and failure groups only; never a stored target state.
+    "degraded",
 ];
 /// The first sanitized diagnostic the agent reported for this exact candidate.
 /// Older agents and servers omit diagnostics; callers fall back to the error.
@@ -610,8 +613,10 @@ pub async fn rollout(
     let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('device_id',t.device_id,'device_name',substr(d.name,1,240),'state',t.state,'generation',t.generation,'released_at',t.released_at,'verified_at',t.verified_at,'error',t.error,\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
-        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds'))) \
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN t.state='verified_applied' AND json_extract(d.data,'$.data_plane.version_id')=? AND json_type(d.data,'$.data_plane.issues')='array' THEN json_extract(d.data,'$.data_plane.issues[0]') END) \
         FROM deployment_targets t LEFT JOIN devices d ON d.id=t.device_id WHERE t.deployment_id=? ORDER BY t.device_id LIMIT 10001")
+        .bind(context["version_id"].as_str())
         .bind(&id)
         .fetch_all(&mut *tx)
         .await?;
@@ -626,6 +631,19 @@ pub async fn rollout(
         .collect::<Result<Vec<_>>>()?;
     for target in &mut targets {
         finish_target(target);
+        // The first open data-plane issue explains a degraded device in the
+        // user's words: its title, the measured reason and the fix.
+        let issue = target
+            .as_object_mut()
+            .unwrap()
+            .remove("_data_plane")
+            .filter(|issue| issue.is_object());
+        if let Some(issue) = issue {
+            target["state"] = json!("degraded");
+            target["error"] = issue["title"].clone();
+            target["diagnostic"] = issue["message"].clone();
+            target["fix"] = issue["hint"].clone();
+        }
     }
     let status = context["status"].as_str().unwrap_or("");
     let canary = context["rollout"]["kind"] == "canary";
@@ -738,13 +756,15 @@ pub async fn rollout(
             state.clone(),
             diagnostic.clone().or(message.clone()).unwrap_or_default(),
         );
+        let fix = target["fix"].as_str().map(str::to_owned);
         failures
             .entry(key)
             .or_insert_with(|| {
-                (
-                    json!({"state":state,"message":message,"diagnostic":diagnostic}),
-                    Vec::new(),
-                )
+                let mut group = json!({"state":state,"message":message,"diagnostic":diagnostic});
+                if fix.is_some() {
+                    group["fix"] = json!(fix);
+                }
+                (group, Vec::new())
             })
             .1
             .push(json!({"device_id":target["device_id"],"device_name":target["device_name"]}));
