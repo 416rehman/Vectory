@@ -18,6 +18,7 @@ import { diffEvents, displayValue } from "./eventDiff";
 import type { VectorDiagnostic } from "./pipelineProblems";
 import {
   activeSet,
+  DEFAULT_SAMPLE,
   parseSamples,
   readSamples,
   uniqueSetName,
@@ -25,6 +26,13 @@ import {
   type SampleStore,
 } from "./sampleStore";
 import { unitTestFromSample, type SampleResult } from "./sampleTests";
+import {
+  eventsOnPort,
+  runnableStep,
+  sourceSamples,
+  type Upstream,
+} from "./sampleUpstream";
+import { componentTitle } from "./pipelineNodeModel";
 import { eventPaths } from "./vrlLanguage";
 import "./sample-tester.css";
 
@@ -48,7 +56,12 @@ type Completed = {
   status: "done";
   key: string;
   response: TesterResponse;
+  /** The events this step received (after upstream steps, when on). */
   samples: Record<string, unknown>[];
+  /** Index of the sample each received event came from. */
+  origins: number[];
+  /** Samples that upstream steps did not pass on, per step. */
+  held: { id: string; count: number }[];
 };
 
 const AUTO_KEY = "vectory.samples.autorun";
@@ -108,6 +121,7 @@ function outcomeLabel(result: SampleResult, type: string) {
 
 function SampleCard({
   index,
+  number,
   line,
   sample,
   result,
@@ -116,6 +130,8 @@ function SampleCard({
   onSave,
 }: {
   index: number;
+  /** The sample's position in the set, which may differ after upstream steps. */
+  number: number;
   line: number;
   sample: Record<string, unknown>;
   result: SampleResult;
@@ -135,7 +151,7 @@ function SampleCard({
     <li className="sample-result" data-tone={tone}>
       <header>
         <span className="sample-result-index" title={`Line ${line}`}>
-          {index + 1}
+          {number}
         </span>
         <Icon size={15} aria-hidden="true" className="sample-result-icon" />
         <strong>{outcomeLabel(result, type)}</strong>
@@ -186,7 +202,7 @@ function SampleCard({
               {type === "remap" && (
                 <ul
                   className="sample-diff"
-                  aria-label={`Changes to sample ${index + 1}`}
+                  aria-label={`Changes to sample ${number}`}
                 >
                   {changes.length === 0 && (
                     <li className="sample-diff-none">No fields changed.</li>
@@ -273,6 +289,7 @@ export default function SyntheticTester({
   onPaths,
   onJump,
   wide = false,
+  upstream,
 }: {
   userId: string;
   pipelineId: string;
@@ -288,9 +305,15 @@ export default function SyntheticTester({
   onPaths?: (paths: string[]) => void;
   onJump?: (field: string, line: number, column: number) => void;
   wide?: boolean;
+  /** What feeds this step; samples can run through it first. */
+  upstream?: Upstream;
 }) {
+  const examples = useMemo(
+    () => sourceSamples(upstream?.source ?? null),
+    [upstream?.source],
+  );
   const [store, setStore] = useState<SampleStore>(() =>
-    readSamples(userId, pipelineId),
+    readSamples(userId, pipelineId, examples),
   );
   const [persisted, setPersisted] = useState(true);
   const [auto, setAuto] = useState(readAuto);
@@ -313,13 +336,20 @@ export default function SyntheticTester({
     const { inputs: _inputs, graph: _graph, ...settings } = component || {};
     return settings;
   }, [component]);
+  const chain = upstream?.steps ?? [];
+  const through = chain.length > 0 && store.through?.[componentId] !== false;
+  const steps = through ? chain : [];
   const runnable =
     canRun &&
-    ["remap", "filter", "route", "exclusive_route"].includes(transform.type) &&
-    !(transform.type === "remap" && (transform.file || transform.files)) &&
+    runnableStep(transform) &&
     parsed.samples.length > 0 &&
     parsed.errors.every((error) => error.message.startsWith("Only the first"));
-  const key = JSON.stringify([transform, parsed.samples, timezone || null]);
+  const key = JSON.stringify([
+    transform,
+    parsed.samples,
+    timezone || null,
+    steps.map((step) => [step.transform, step.port]),
+  ]);
   const generation = useRef(0);
   const callbacks = useRef({ onCompile, onPaths });
   callbacks.current = { onCompile, onPaths };
@@ -351,24 +381,74 @@ export default function SyntheticTester({
             ? previous.previous
             : undefined,
     }));
-    try {
-      const response = await api<TesterResponse>("/vrl/test", {
+    const test = (step: Config, events: Record<string, unknown>[]) =>
+      api<TesterResponse>("/vrl/test", {
         method: "POST",
         body: JSON.stringify({
-          transform,
-          samples,
+          transform: step,
+          samples: events,
           timezone: timezone || null,
         }),
       });
+    try {
+      // Each upstream step runs first; its events on the output this step
+      // reads become the next step's samples.
+      let events = samples,
+        origins = samples.map((_, index) => index);
+      const held: Completed["held"] = [];
+      for (const step of steps) {
+        const reply = await test(step.transform, events);
+        if (current !== generation.current) return;
+        if (reply.compiled === false) {
+          setRun({
+            status: "failed",
+            message: `${step.id} doesn't compile yet, so samples can't reach this step. Fix ${step.id} or turn off "Run through upstream steps".`,
+          });
+          callbacks.current.onCompile?.(null);
+          return;
+        }
+        const passed = eventsOnPort(reply.results || [], step.port).slice(
+          0,
+          20,
+        );
+        const count = events.length - new Set(passed.map((e) => e.origin)).size;
+        if (count > 0) held.push({ id: step.id, count });
+        origins = passed.map((item) => origins[item.origin] ?? item.origin);
+        events = passed.map((item) => item.event);
+      }
+      if (!events.length) {
+        setRun({
+          status: "done",
+          key,
+          response: {
+            valid: true,
+            output: null,
+            errors: [],
+            results: [],
+          },
+          samples: [],
+          origins: [],
+          held,
+        });
+        return;
+      }
+      const response = await test(transform, events);
       if (current !== generation.current) return;
-      setRun({ status: "done", key, response, samples });
+      setRun({
+        status: "done",
+        key,
+        response,
+        samples: events,
+        origins,
+        held,
+      });
       callbacks.current.onCompile?.(
         response.compiled === false ? response.diagnostics || [] : [],
       );
       const outputs = (response.results || []).flatMap((result) =>
         result.outputs.map((output) => output.event),
       );
-      callbacks.current.onPaths?.(eventPaths([...samples, ...outputs]));
+      callbacks.current.onPaths?.(eventPaths([...events, ...outputs]));
     } catch (failure) {
       if (current !== generation.current) return;
       const unavailable =
@@ -401,8 +481,8 @@ export default function SyntheticTester({
     [],
   );
   useEffect(() => {
-    callbacks.current.onPaths?.(eventPaths(parsed.samples));
-  }, [parsed.samples]);
+    if (!through) callbacks.current.onPaths?.(eventPaths(parsed.samples));
+  }, [parsed.samples, through]);
 
   const completed =
     run.status === "done"
@@ -446,7 +526,7 @@ export default function SyntheticTester({
           component,
           sample: completed.samples[index],
           result,
-          name: `${componentId}: ${set.name} ${index + 1}`,
+          name: `${componentId}: ${set.name} ${(completed.origins[index] ?? index) + 1}`,
           existing: [...existingTests, ...created],
         }),
       );
@@ -503,6 +583,43 @@ export default function SyntheticTester({
           Run
         </button>
       </header>
+      {chain.length > 0 && (
+        <label className="sample-upstream">
+          <input
+            type="checkbox"
+            checked={through}
+            onChange={(event) =>
+              update({
+                ...store,
+                through: {
+                  ...store.through,
+                  [componentId]: event.target.checked,
+                },
+              })
+            }
+          />
+          <span>
+            Run through upstream steps{" "}
+            <span className="sample-upstream-chain">
+              {chain.map((step, index) => (
+                <span key={step.id}>
+                  {index > 0 && <ArrowRight size={11} aria-label="then" />}
+                  <code>
+                    {step.id}
+                    {step.port ? `.${step.port}` : ""}
+                  </code>
+                </span>
+              ))}
+            </span>
+          </span>
+        </label>
+      )}
+      {upstream?.blocked && !chain.length && (
+        <p className="sample-hint">
+          Samples go straight into this step: {upstream.blocked.id} (
+          {upstream.blocked.type}) can't run in the tester.
+        </p>
+      )}
       <div className="sample-tester-body">
         <div className="sample-input">
           <div className="sample-set-bar">
@@ -603,7 +720,10 @@ export default function SyntheticTester({
             />
           </div>
           <p className="sample-hint">
-            One JSON object per line. Samples stay in this browser
+            {through
+              ? `Events as ${upstream?.source ? `${upstream.source.id} (${componentTitle(upstream.source.type, "sources")}) emits` : "they enter"} them, one JSON object per line. `
+              : "One JSON object per line. "}
+            Samples stay in this browser
             {persisted
               ? ""
               : " for this visit (browser storage is unavailable)"}
@@ -618,9 +738,21 @@ export default function SyntheticTester({
               {run.message}
             </p>
           ) : !runnable && parsed.samples.length === 0 ? (
-            <p className="sample-empty">
-              Add a sample event to see what this step does with it.
-            </p>
+            <div className="sample-empty">
+              <p>
+                {upstream?.source
+                  ? `Paste a few events from ${upstream.source.id} as JSON lines to see what this step does with them.`
+                  : "Add a sample event to see what this step does with it."}
+              </p>
+              <button
+                type="button"
+                className="sample-run"
+                onClick={() => editText(examples || DEFAULT_SAMPLE)}
+              >
+                <Plus size={13} aria-hidden="true" />
+                Use example events
+              </button>
+            </div>
           ) : response?.compiled === false ? (
             <div className="sample-compile" role="status">
               <CircleX size={15} aria-hidden="true" />
@@ -631,6 +763,19 @@ export default function SyntheticTester({
             </div>
           ) : completed ? (
             <>
+              {completed.held.map((item) => (
+                <p key={item.id} className="sample-held">
+                  {item.count === 1
+                    ? `1 sample didn't reach this step: ${item.id} didn't pass it on.`
+                    : `${item.count} samples didn't reach this step: ${item.id} didn't pass them on.`}
+                </p>
+              ))}
+              {!results.length && !!completed.held.length && (
+                <p className="sample-empty">
+                  Turn off "Run through upstream steps" to test this step with
+                  your samples as they are.
+                </p>
+              )}
               <ol
                 className={`sample-results${stale ? " sample-results-stale" : ""}`}
               >
@@ -638,7 +783,11 @@ export default function SyntheticTester({
                   <SampleCard
                     key={index}
                     index={index}
-                    line={parsed.lines[index] || index + 1}
+                    line={
+                      parsed.lines[completed.origins[index] ?? index] ||
+                      index + 1
+                    }
+                    number={(completed.origins[index] ?? index) + 1}
                     sample={completed.samples[index]}
                     result={result}
                     component={component}

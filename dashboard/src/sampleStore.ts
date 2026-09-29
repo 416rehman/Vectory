@@ -10,6 +10,8 @@ export type SampleStore = {
   sets: SampleSet[];
   /** Selected set per component ID. */
   active: Record<string, string>;
+  /** Per component: false runs samples straight into it, skipping upstream steps. */
+  through?: Record<string, boolean>;
 };
 
 export const MAX_SAMPLE_SETS = 12;
@@ -21,10 +23,11 @@ export const DEFAULT_SAMPLE =
 const key = (userId: string, pipelineId: string) =>
   `vectory.samples.v1:${userId}:${pipelineId}`;
 
-export function emptyStore(): SampleStore {
+/** A fresh store; `text` is the first set's events (may be empty). */
+export function emptyStore(text = DEFAULT_SAMPLE): SampleStore {
   return {
     version: 1,
-    sets: [{ id: "default", name: "Sample events", text: DEFAULT_SAMPLE }],
+    sets: [{ id: "default", name: "Sample events", text }],
     active: {},
   };
 }
@@ -50,13 +53,18 @@ function valid(value: unknown): value is SampleStore {
   );
 }
 
-export function readSamples(userId: string, pipelineId: string): SampleStore {
+/** Saved sets, or a fresh store opening on `fallback` events. */
+export function readSamples(
+  userId: string,
+  pipelineId: string,
+  fallback = DEFAULT_SAMPLE,
+): SampleStore {
   try {
     const raw = localStorage.getItem(key(userId, pipelineId));
     const parsed = raw ? JSON.parse(raw) : null;
-    return valid(parsed) ? parsed : emptyStore();
+    return valid(parsed) ? parsed : emptyStore(fallback);
   } catch {
-    return emptyStore();
+    return emptyStore(fallback);
   }
 }
 

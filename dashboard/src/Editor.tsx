@@ -174,6 +174,7 @@ import {
   type Problem,
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
+import { upstreamOf } from "./sampleUpstream";
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
 import {
@@ -2584,6 +2585,19 @@ export default function Editor({
       ? config.enrichment_tables?.[selectedNode.data.enrichmentTable]
       : config[selectedNode.data.kind]?.[selectedNode.id]
     : null;
+  // Stable while the steps feeding the selection are unchanged, so typing in
+  // other steps doesn't re-run the tester.
+  const upstreamText = useMemo(
+    () =>
+      selected && config.transforms?.[selected]
+        ? JSON.stringify(upstreamOf(config, selected))
+        : "",
+    [config, selected],
+  );
+  const selectedUpstream = useMemo(
+    () => (upstreamText ? JSON.parse(upstreamText) : undefined),
+    [upstreamText],
+  );
   const selectedProblems = useMemo(
     () =>
       selected
@@ -3082,6 +3096,7 @@ export default function Editor({
           focus={
             focusRequest?.component === selectedNode.id ? focusRequest : null
           }
+          upstream={selectedUpstream}
         />
       )
     ) : null;
