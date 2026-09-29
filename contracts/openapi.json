@@ -5596,6 +5596,180 @@
         }
       }
     },
+    "/api/v1/deployments/binding-suggestions": {
+      "post": {
+        "summary": "Operator reads the nonsecret variable values each device already uses from its current assignment of the same pipeline, to prefill a new version",
+        "operationId": "post__api_v1_deployments_binding_suggestions",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "device_ids": {
+                    "type": "array",
+                    "maxItems": 10000,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "required": [
+                  "version_id",
+                  "device_ids"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "devices": {
+                      "type": "object",
+                      "propertyNames": {
+                        "format": "uuid"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "propertyNames": {
+                          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                        },
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 4096,
+                              "description": "Server also limits UTF-8 encoding to 4096 bytes."
+                            },
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "boolean"
+                            }
+                          ]
+                        },
+                        "description": "Values must exactly match published declaration names and types. Missing, extra, and secret-like values are rejected by the server."
+                      }
+                    },
+                    "sources": {
+                      "type": "object",
+                      "propertyNames": {
+                        "format": "uuid"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "deployment_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "version_number": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "deployment_id",
+                          "version_number"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "devices",
+                    "sources"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
     "/api/v1/deployments/requests/{request_id}": {
       "get": {
         "summary": "Operator or administrator confirms their own durable create or rollback result; echoed outer and inner request/operation/source identities must match; not found may still be in flight",
@@ -18068,6 +18242,17 @@
                 "type": "null"
               }
             ]
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -18229,6 +18414,15 @@
             "type": "integer",
             "minimum": 0
           },
+          "device_ids": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Every device in the group, bounded; devices lists the first few with names."
+          },
           "devices": {
             "type": "array",
             "maxItems": 8,
@@ -18264,6 +18458,7 @@
           "message",
           "diagnostic",
           "count",
+          "device_ids",
           "devices"
         ],
         "additionalProperties": false

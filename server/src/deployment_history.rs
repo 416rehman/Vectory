@@ -753,6 +753,15 @@ pub async fn rollout(
         .into_values()
         .map(|(mut group, devices)| {
             group["count"] = json!(devices.len());
+            // Every member (bounded) so a retry covers the whole group, not
+            // only the names shown.
+            group["device_ids"] = json!(
+                devices
+                    .iter()
+                    .take(1000)
+                    .map(|device| device["device_id"].clone())
+                    .collect::<Vec<_>>()
+            );
             group["devices"] = json!(devices.into_iter().take(8).collect::<Vec<_>>());
             group
         })
@@ -785,6 +794,118 @@ pub async fn rollout(
     Ok(Json(
         json!({"deployment_id":id,"status":status,"evaluated_at":db::now(),"stages":stages,"failures":failures,"removed_count":removed,"check_in_seconds":check_in_seconds,"next_admission_at":next_admission_at}),
     ))
+}
+
+/// Values each device last received for a new version's variables: from the
+/// most recent released deployment of the same pipeline that bound them, when
+/// the name and type still match. A rollback in between (which restores exact
+/// artifacts and binds nothing) doesn't lose them. Variables are nonsecret by
+/// contract; operators see them in review.
+pub async fn binding_suggestions(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["operator"], true).await?;
+    let object = v
+        .as_object()
+        .ok_or_else(|| ApiError::invalid("Request must be an object"))?;
+    if object
+        .keys()
+        .any(|key| key != "version_id" && key != "device_ids")
+    {
+        return Err(ApiError::invalid("Unknown request field"));
+    }
+    let uuid = |value: &Value| {
+        value
+            .as_str()
+            .and_then(|text| uuid::Uuid::parse_str(text).ok().map(|id| (text, id)))
+            .filter(|(text, id)| id.hyphenated().to_string() == *text)
+            .map(|(text, _)| text.to_owned())
+    };
+    let version_id =
+        uuid(&v["version_id"]).ok_or_else(|| ApiError::invalid("version_id must be a UUID"))?;
+    let devices: Vec<String> = v["device_ids"]
+        .as_array()
+        .filter(|ids| ids.len() <= 10_000)
+        .ok_or_else(|| ApiError::invalid("device_ids must list at most 10000 device IDs"))?
+        .iter()
+        .map(|id| uuid(id).ok_or_else(|| ApiError::invalid("device_ids must contain device IDs")))
+        .collect::<Result<_>>()?;
+    let mut tx = s.pool.begin().await?;
+    let version = db::record(&mut tx, "version", &version_id).await?;
+    let declared: BTreeMap<String, String> = version["variables"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    Some((
+                        item["name"].as_str()?.to_owned(),
+                        item["type"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut values = serde_json::Map::new();
+    let mut sources = serde_json::Map::new();
+    let Some(pipeline) = version["configuration_id"].as_str() else {
+        return Ok(Json(json!({"devices":values,"sources":sources})));
+    };
+    if declared.is_empty() || devices.is_empty() {
+        return Ok(Json(json!({"devices":values,"sources":sources})));
+    }
+    let typed = |kind: &str, value: &Value| match kind {
+        "integer" => value.is_i64(),
+        "boolean" => value.is_boolean(),
+        _ => value.as_str().is_some_and(|text| text.len() <= 4096),
+    };
+    for chunk in devices.chunks(500) {
+        let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(
+            "SELECT t.device_id AS device,d.id AS deployment,json_extract(d.data,'$.variable_bindings') AS bindings,\
+             CASE WHEN json_type(v.data,'$.number')='integer' THEN json_extract(v.data,'$.number') END AS number \
+             FROM deployment_targets t JOIN devices dev ON dev.id=t.device_id AND dev.revoked=0 \
+             JOIN records d ON d.kind='deployment' AND d.id=t.deployment_id \
+             JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id') \
+             WHERE t.generation>0 AND json_type(d.data,'$.variable_bindings')='object' AND json_extract(v.data,'$.configuration_id')=",
+        );
+        query.push_bind(pipeline);
+        query.push(" AND t.device_id IN (");
+        let mut separated = query.separated(",");
+        for id in chunk {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(") ORDER BY d.created_at DESC,d.id");
+        for row in query.build().fetch_all(&mut *tx).await? {
+            let device: String = row.get("device");
+            let bindings = db::parse(&row.get::<String, _>("bindings"))?;
+            let found = values
+                .entry(device.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            let mut added = false;
+            for (name, kind) in &declared {
+                if found.get(name).is_some() {
+                    continue;
+                }
+                let value = bindings["devices"][&device]
+                    .get(name)
+                    .or_else(|| bindings["defaults"].get(name));
+                if let Some(value) = value.filter(|value| typed(kind, value)) {
+                    found[name] = value.clone();
+                    added = true;
+                }
+            }
+            // The newest deployment that supplied a value is the source.
+            if added && !sources.contains_key(&device) {
+                sources.insert(
+                    device,
+                    json!({"deployment_id":row.get::<String, _>("deployment"),"version_number":row.get::<Option<i64>, _>("number")}),
+                );
+            }
+        }
+    }
+    values.retain(|_, found| found.as_object().is_some_and(|map| !map.is_empty()));
+    Ok(Json(json!({"devices":values,"sources":sources})))
 }
 
 #[cfg(test)]
