@@ -52,7 +52,7 @@ pub async fn history(
     .bind(&id)
     .fetch_one(&mut *tx)
     .await?;
-    let rows:Vec<String>=sqlx::query_scalar(&format!("SELECT json_remove(data,'$.config','$.graph','$.artifact','$.validation') FROM records WHERE kind='{kind}' AND json_extract(data,'$.configuration_id')=? ORDER BY CAST(json_extract(data,'$.{sequence}') AS INTEGER) DESC,id LIMIT ? OFFSET ?"))
+    let rows:Vec<String>=sqlx::query_scalar(&format!("SELECT json_remove(data,'$.config','$.graph','$.artifact','$.validation','$.variables') FROM records WHERE kind='{kind}' AND json_extract(data,'$.configuration_id')=? ORDER BY CAST(json_extract(data,'$.{sequence}') AS INTEGER) DESC,id LIMIT ? OFFSET ?"))
         .bind(&id).bind(page_size as i64).bind(offset).fetch_all(&mut *tx).await?;
     let items = rows
         .iter()

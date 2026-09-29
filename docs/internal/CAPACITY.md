@@ -49,3 +49,33 @@ The 10,000 case produced 22,096 connector failures, predominantly local connecti
 The [raw corrected measurement](../evidence/load-protocol-2026-09-26.json) retains per-second samples, exact counts, error types and binary hash. The [earlier failed experiment](../evidence/load-initial-client-limited.json) is preserved: synchronous TLS setup and Windows socket enumeration starved its client event loop, yielding only five samples at 10,000 identities. It is unsuitable for server-capacity inference. The corrected harness preloads TLS contexts outside timing and collects blocking process information on a monitoring thread; preparing 10,000 TLS contexts took 164.973 seconds outside measurement.
 
 Before setting a fleet limit, test a release build on a dedicated host with independent load generators, native HTTP/2 agents, bounded connection/handshake admission, sustained telemetry retention, real artifact distribution, configuration churn, measured database contention, canary completion, and outage/reconnect bursts. `tests/load/README.md` documents the command and private fixture handling. The current measurements establish a failure boundary, not a universal 1,000-device support promise.
+
+## Fleet reads through the dashboard API (2026-09-29)
+
+This measures what one dashboard read costs at 5,000 devices before and after server-side paging (the fleet-scale reads in `contracts/CONTRACT.md`). Two debug builds read identical copies of one synthetic fleet, side by side on a shared development host. **Compare the builds with each other; this is not a capacity claim.**
+
+**Fixture.** `tests/load/fleet-fixture.mjs` seeded 5,000 devices (4,750 live, 250 revoked; 27,507,936 bytes of stored device JSON, about 5.5 KB each), 500 groups with 21,551 memberships (all live devices, ten regions of 475, 50 racks of 100, 438 teams of 1 to 30), six pipelines and 4,500 rollout targets. Devices repeat twenty shapes: healthy, not delivering, updating, offline, failed, check required, paused, unmanaged, never connected and revoked, on an all-at-once rollout, a canary, a persistent group assignment and finished rollouts. Nothing enrolled or ran Vector; `verified_applied` is fixture input. The harness re-stamped the reporting devices' check-ins every 45 seconds so they stayed online.
+
+**Builds and host.** Before: `9434fef`, SHA-256 `1224817308adac16c7d5a6e461a94f654414d5fc2e4be09c08c9dbb40638f671`. After: `e08cf8e` (the server sources of the final commit), SHA-256 `0be8d0739c84c9c7cf1d7ea3737aa250367823bec9104ee04217e0f72bd6048c`. Both are `cargo build` debug builds without debug info. Linux, 4 CPUs, 16 GB, load average 7 to 11 from other builds during the run; Node 22 `fetch` over loopback. `tests/load/fleet-api.mjs` sampled each read five times, alternating the order, and waited 2.3 seconds before each sample. **Cold** is that first read, which builds the shared projection (it lives two seconds); **warm** is the same read right after it, as another viewer or poller within two seconds sees it. Medians; minimum and maximum are in the [raw evidence](../evidence/fleet-api-2026-09-29.json).
+
+| Read | Before | After |
+| --- | --- | --- |
+| Devices page, first page | `GET /devices` + `GET /groups`: 11,285,445 bytes; 2,898 + 82 ms | `GET /devices/inventory`: 111,354 bytes (50 rows); 1,459 ms cold, 38 ms warm |
+| Devices page, search `web-01` | The same download, filtered in the browser | `GET /devices/inventory?q=web-01`: 127,792 bytes; 1,563 ms cold, 51 ms warm |
+| Overview, `slim=1` | Parameter ignored: 10,377,261 bytes; 3,335 ms | 35,465 bytes; 1,466 ms cold, 108 ms warm |
+| Overview, default | 10,377,261 bytes; 2,923 ms | 10,393,377 bytes; 2,118 ms |
+| `GET /devices/{id}` | 6,922 bytes; 2,077 ms | 6,922 bytes, identical JSON; 5.5 ms |
+| Device page and its groups | `GET /devices/{id}` + `GET /groups`: 934,466 bytes; 2,077 + 82 ms | `GET /devices/{id}?include=groups`: 7,283 bytes; 18 ms |
+| Members of a 4,750-device group | `GET /groups` + `GET /devices`: 11,285,445 bytes; 82 + 2,898 ms | `GET /groups/{id}/members`: 4,311 bytes (50 rows); 1,236 ms cold, 108 ms warm |
+| Membership preview, 10 changes | `POST /groups/membership-preview`: 12,411 bytes; 130 ms | Same route, same answer: 12,411 bytes; 85 ms |
+
+Other reads on the new build: `GET /groups?slim=1` 88,480 bytes in 43 ms (the default `GET /groups` is 936,471 bytes in 133 ms, 927,544 bytes in 82 ms before); `GET /devices/inventory/ids` 185,290 bytes for 4,750 IDs in 1,479 ms cold, 26 ms warm; the legacy `GET /devices`, same response, 10,357,901 bytes in 1,720 ms (2,898 ms before, which also parsed the fields list rows drop). Compressed by a proxy, `GET /devices` would still be 308,100 bytes against 8,155 for an inventory page.
+
+What the numbers mean:
+
+- **Size no longer grows with the fleet** for the inventory, members, a device and the slim Overview. Only the legacy `GET /devices`, the default Overview (for its `devices`) and `GET /groups` without `slim` still do; the dashboard moves off them next.
+- **A cold read costs one fleet projection**, 1.2 to 1.5 seconds here: reading every device's list row once, then counting and summarizing in memory. It no longer grows with the number of requests: concurrent readers share one build, and every read within two seconds is warm. A single dashboard polling every 15 seconds mostly reads cold. Release builds are usually several times faster than these debug builds; this run didn't measure them.
+- **A device page stopped projecting the fleet.** `server/tests/fleet_scale.rs` counts SQL statements and rows instead of time: `GET /devices/{id}` runs 5 statements returning 4 rows with 1 or 2,000 devices. A projection build runs 17 statements with 20 or 2,000 devices; its rows grow with the fleet (76 at 20 devices, 2,350 at 2,000). Reads served from it run a fixed 3 to 9 statements and at most 15 rows. The test fails if any of that starts growing with the fleet.
+- **The membership preview is unchanged.** It takes the writer lock and answers "Preview busy" while a scheduler tick holds it: the new build's server refused 7 attempts across the six previews (the old one none, by timing), and the harness retried every 50 ms. Only the attempt that ran is timed.
+
+The harness checked that both builds listed all 5,000 devices, that the fleet stayed checked in, that the slim Overview differs from the default only by `devices`, that the inventory's first page is the first 50 live devices in natural name order, and that both builds returned identical device JSON and identical previews.

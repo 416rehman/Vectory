@@ -38,6 +38,24 @@ pub async fn extend(
         .iter()
         .filter(|d| d["status"] != "revoked")
         .collect();
+    let names: HashMap<&str, &str> = devices
+        .iter()
+        .map(|d| (text(d, "id"), text(d, "name")))
+        .collect();
+    merge(overview, device_aggregates(conn, &live).await?);
+    merge(overview, activity(conn, &names).await?);
+    Ok(())
+}
+pub(crate) fn merge(target: &mut Value, extra: Value) {
+    if let (Some(target), Value::Object(source)) = (target.as_object_mut(), extra) {
+        target.extend(source);
+    }
+}
+/// What the Overview derives from the live (non-revoked) device rows.
+pub(crate) async fn device_aggregates(
+    conn: &mut SqliteConnection,
+    live: &[&Value],
+) -> Result<Value> {
     let managed = live
         .iter()
         .filter(|d| !d["desired_version_id"].is_null())
@@ -47,33 +65,34 @@ pub async fn extend(
         .iter()
         .filter(|d| data_plane_issue(d).is_some())
         .count();
-    let versions = versions(conn, &live).await?;
+    let versions = versions(conn, live).await?;
+    let attention = attention(conn, live, &versions).await?;
+    Ok(json!({
+        "devices_managed": managed,
+        "devices_on_desired": on_desired,
+        "devices_degraded": degraded,
+        "versions": versions,
+        "attention": attention,
+    }))
+}
+/// What the Overview reads from rollouts and the audit trail. `names` names
+/// devices in collapsed activity rows.
+pub(crate) async fn activity(
+    conn: &mut SqliteConnection,
+    names: &HashMap<&str, &str>,
+) -> Result<Value> {
     let rollouts = rollouts(conn).await?;
-    let attention = attention(conn, &live, &versions).await?;
-    let names: HashMap<&str, &str> = devices
-        .iter()
-        .map(|d| (text(d, "id"), text(d, "name")))
-        .collect();
-    let (activity, hidden) = fleet_activity(conn, &names).await?;
+    let (activity, hidden) = fleet_activity(conn, names).await?;
     let versions_total: i64 =
         sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='version'")
             .fetch_one(&mut *conn)
             .await?;
-    let extra = json!({
-        "devices_managed": managed,
-        "devices_on_desired": on_desired,
-        "devices_degraded": degraded,
+    Ok(json!({
         "versions_total": versions_total,
-        "versions": versions,
         "rollouts": rollouts,
-        "attention": attention,
         "fleet_activity": activity,
         "security_events_hidden": hidden,
-    });
-    if let (Some(target), Value::Object(source)) = (overview.as_object_mut(), extra) {
-        target.extend(source);
-    }
-    Ok(())
+    }))
 }
 
 /// Pipeline name and number for every version a device is assigned.
@@ -114,7 +133,7 @@ async fn versions(conn: &mut SqliteConnection, devices: &[&Value]) -> Result<Val
 
 /// Live and paused rollouts, then scheduled ones starting soon, with progress.
 async fn rollouts(conn: &mut SqliteConnection) -> Result<Vec<Value>> {
-    let rows: Vec<String> = sqlx::query_scalar(
+    let rows: Vec<String> = sqlx::query_scalar(&format!(
         "WITH page AS MATERIALIZED (
             SELECT id,data,created_at FROM records
             WHERE kind='deployment' AND json_extract(data,'$.status') IN ('active','paused','scheduled')
@@ -140,12 +159,14 @@ async fn rollouts(conn: &mut SqliteConnection) -> Result<Vec<Value>> {
             'canary_size',json_extract(d.data,'$.rollout.canary_size'),
             'batch_size',json_extract(d.data,'$.rollout.batch_size'),
             'target_count',COALESCE((SELECT sum(n) FROM counts WHERE deployment_id=d.id),0),
-            'state_counts',json(COALESCE((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id),'{}'))
+            'state_counts',json(COALESCE((SELECT json_group_object(state,n) FROM counts WHERE deployment_id=d.id),'{{}}')),
+            'degraded',{}
          ) FROM page d
          LEFT JOIN records v ON v.kind='version' AND v.id=json_extract(d.data,'$.version_id')
          LEFT JOIN records c ON c.kind='configuration' AND c.id=json_extract(v.data,'$.configuration_id')
          ORDER BY d.created_at DESC,d.id ASC",
-    )
+        crate::deployment_history::DEGRADED
+    ))
     .fetch_all(&mut *conn)
     .await?;
     let horizon = Utc::now() + Duration::hours(SCHEDULED_WINDOW_HOURS);
@@ -208,29 +229,31 @@ fn delivery(devices: &[&Value]) -> Option<Value> {
         .map(|(_, issue)| issue.clone())
 }
 
+/// The sanitized failure summary a device reported for its current attempt,
+/// at most 300 characters.
+pub(crate) fn failure_summary(device: &Value) -> Option<String> {
+    let error = &device["configuration_attempt"]["error"];
+    // The error's own summary first, then its first error diagnostic:
+    // diagnostics can start with a warning, which is not why it failed.
+    error["message"]
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .or_else(|| {
+            error["diagnostics"]
+                .as_array()?
+                .iter()
+                .find(|d| d["severity"] != "warning")?["message"]
+                .as_str()
+        })
+        .or_else(|| error["code"].as_str())
+        .map(|summary| summary.chars().take(300).collect())
+}
+
 fn reason(devices: &[&Value]) -> Option<String> {
     // Prefer the most common sanitized failure summary the agents reported.
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for device in devices {
-        let error = &device["configuration_attempt"]["error"];
-        // The error's own summary first, then its first error diagnostic:
-        // diagnostics can start with a warning, which is not why it failed.
-        let summary = error["message"]
-            .as_str()
-            .filter(|m| !m.is_empty())
-            .or_else(|| {
-                error["diagnostics"]
-                    .as_array()?
-                    .iter()
-                    .find(|d| d["severity"] != "warning")?["message"]
-                    .as_str()
-            })
-            .or_else(|| error["code"].as_str());
-        if let Some(summary) = summary {
-            *counts
-                .entry(summary.chars().take(300).collect())
-                .or_default() += 1;
-        }
+    for summary in devices.iter().filter_map(|device| failure_summary(device)) {
+        *counts.entry(summary).or_default() += 1;
     }
     counts
         .into_iter()
