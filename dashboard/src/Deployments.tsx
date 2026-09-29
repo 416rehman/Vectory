@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   ArrowUpDown,
@@ -297,7 +304,8 @@ export function Deployments({
     { items: [], total: 0, page: query.page, page_size: 12 },
   );
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
-  const correcting = !loading && !error && query.page > lastPage;
+  // The list is not read while a rollout page is open, so its page is kept.
+  const correcting = !detailId && !loading && !error && query.page > lastPage;
   useEffect(() => {
     if (correcting) setQuery((old) => ({ ...old, page: lastPage }));
   }, [correcting, lastPage]);
@@ -917,34 +925,73 @@ function TargetDetails({
 }
 
 function CopyLink({ route }: { route: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "copied" | "fallback">("idle");
+  const [copying, setCopying] = useState(false);
+  const input = useRef<HTMLInputElement | null>(null);
+  const labelId = useId();
   const url = new URL(location.href);
   url.search = "";
   url.hash = "/" + route;
+  const link = url.href;
+  useEffect(() => {
+    setState("idle");
+  }, [link]);
+  useEffect(() => {
+    if (state === "fallback") {
+      input.current?.focus();
+      input.current?.select();
+    }
+  }, [state]);
   return (
-    <Button
-      variant="ghost compact"
-      icon={state === "copied" ? Check : Copy}
-      aria-label="Copy deployment link"
-      title={state === "failed" ? url.href : "Copy a link to this rollout"}
-      onClick={async () => {
-        try {
-          if (!navigator.clipboard?.writeText)
-            throw Error("Clipboard unavailable");
-          await navigator.clipboard.writeText(url.href);
-          setState("copied");
-          setTimeout(() => setState("idle"), 2000);
-        } catch {
-          setState("failed");
-        }
-      }}
-    >
-      {state === "copied"
-        ? "Copied"
-        : state === "failed"
-          ? "Copy failed"
-          : "Copy link"}
-    </Button>
+    <div className="rollout-link">
+      <div className="rollout-link-actions">
+        <Button
+          variant="ghost compact"
+          icon={state === "copied" ? Check : Copy}
+          busy={copying}
+          aria-label="Copy deployment link"
+          onClick={async () => {
+            setCopying(true);
+            try {
+              if (!navigator.clipboard?.writeText)
+                throw Error("Clipboard unavailable");
+              await navigator.clipboard.writeText(link);
+              setState("copied");
+            } catch {
+              setState("fallback");
+            } finally {
+              setCopying(false);
+            }
+          }}
+        >
+          {state === "copied" ? "Copied" : "Copy link"}
+        </Button>
+        <a href={link} target="_blank" rel="noopener noreferrer">
+          Open in new tab
+          <ExternalLink size={12} aria-hidden="true" />
+        </a>
+      </div>
+      {state === "copied" && (
+        <span className="rollout-link-status" role="status">
+          Deployment link copied.
+        </span>
+      )}
+      {state === "fallback" && (
+        <div className="rollout-link-fallback">
+          <label htmlFor={labelId}>Deployment link</label>
+          <input
+            ref={input}
+            id={labelId}
+            readOnly
+            value={link}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <p className="control-muted" role="status">
+            Clipboard access is unavailable. Select and copy the link above.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

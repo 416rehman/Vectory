@@ -195,6 +195,56 @@ a.control-row-title {
   justify-content: flex-end;
   gap: 8px;
 }
+.rollout-link {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  max-width: 320px;
+}
+.rollout-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+.rollout-link-actions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-weight: 550;
+  text-decoration: none;
+}
+.rollout-link-actions a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rollout-link-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rollout-link-fallback {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  font-size: 12px;
+}
+.rollout-link-fallback input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.rollout-link-fallback p {
+  margin: 0;
+}
 .button.is-unavailable {
   opacity: 0.55;
   cursor: help;
@@ -572,7 +622,9 @@ a.control-row-title {
     font-size: 23px;
   }
   .rollout-actions,
-  .rollout-action-row {
+  .rollout-action-row,
+  .rollout-link,
+  .rollout-link-actions {
     justify-items: start;
     justify-content: flex-start;
   }
