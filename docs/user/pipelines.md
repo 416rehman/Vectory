@@ -34,6 +34,11 @@ A **source** receives or generates events, a **transform** changes, filters or r
 | Move or remove a connection | Select it, then drag an end grip to another port, or press **Delete**. |
 | Change connection lines | **Connection style**: **Curved**, **Right-angle** or **Straight**. Display only. |
 | Tidy the graph | **Arrange graph**, then **Fit graph**. |
+| Insert a component into a connection | Choose **+** on the line, then pick a component. It is wired in between. |
+| Find a component | **Ctrl F** (**⌘ F**), then type an ID, name or type. The graph moves to it. |
+| Select several components | **Ctrl**-click (**⌘**-click) or **Shift**-drag; **Ctrl A** selects all. Then move, duplicate (**Ctrl D**) or delete them together. |
+| Copy components | Select them, then **Ctrl C**, **Ctrl V** (**⌘ C**, **⌘ V**). They are copied as Vector YAML and pasted with new IDs and their connections rewired. You can also paste components from any Vector configuration. |
+| See live rates | Turn on **Live**. Each connection shows events per second, with error, drop and buffer badges, summed across the devices verified running a version of this pipeline. It shows rates only, never event contents, and needs devices with [telemetry](telemetry.md) on. **Add monitoring** adds Vector's internal metrics if the pipeline doesn't export them. |
 | Rename a component | The pencil beside its name. Connections and test targets follow; wildcard inputs and VRL text don't, so review those. |
 | Undo | **Ctrl Z** (**⌘ Z**); add Shift to redo. |
 | Work from the keyboard | Arrow keys move a focused card, **Enter** opens it, **Delete** removes it, **Shift F10** opens its menu. **Canvas shortcuts** lists the rest. |
@@ -105,7 +110,7 @@ A `remap` transform runs [Vector Remap Language](https://vector.dev/docs/referen
 del(.temporary_debug_field)
 ```
 
-The VRL editor highlights the program, completes function names and marks problems on the line Vector reports. Choose **Expand** for a wide editor. Under the program, add sample events (one JSON object per line) and choose **Run**: the server's sandboxed Vector runs the step on each sample and shows what comes out, or why an event was dropped. Samples stay in your browser. **Save as test** turns a result into a [pipeline test](resources.md#test-transformations) that keeps it working. Nothing here reads live device events.
+The VRL editor highlights the program, completes function names and marks problems on the line Vector reports. Choose **Expand** for a wide editor. Under the program, add sample events (one JSON object per line) and choose **Run**: the server's sandboxed Vector runs the step on each sample and shows what comes out, or why an event was dropped. Samples stay in your browser, and a new sample starts from a realistic event for the source, such as a syslog line. **Auto-run** repeats the run when you pause typing. For a step that isn't first in the pipeline, **Run through upstream steps** sends the samples through the steps before it, so a `route` or `filter` sees the fields they added; turn it off to test the step alone. A `route` also shows how many samples each output received. **Save as test** turns a result into a [pipeline test](resources.md#test-transformations) that keeps it working. Nothing here reads live device events.
 
 A remap that reads its program from a **File** reads it on the device. That file isn't uploaded or frozen into the version, and it needs full mode.
 
@@ -125,7 +130,7 @@ An input names what a component reads from:
 | `routes.errors` | The `errors` output of the `routes` component. |
 | `normalize_*` | Every matching output, including ones added later. |
 
-Use graph connections when you want a fixed set. Wildcards live in **Code** view. Renaming a component doesn't rewrite patterns or VRL, so check the pipeline after a rename.
+Use graph connections when you want a fixed set. Wildcards live in **Code** view; the graph draws each one as dashed lines from the components it matches, with the pattern on a chip. Renaming a component doesn't rewrite patterns or VRL, so check the pipeline after a rename.
 
 ## Global settings
 
