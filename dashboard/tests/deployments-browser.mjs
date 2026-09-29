@@ -861,9 +861,14 @@ try {
         page.getByRole("button", { name: "Deploy a pipeline", exact: true }),
       ).toHaveCount(0);
       await page.setViewportSize({ width: 390, height: 844 });
-      await open(3);
+      // On a phone the list and the device results are cards, not tables.
+      await page
+        .getByRole("link", { name: "Synthetic deployment 003", exact: true })
+        .click();
       await expect(
-        details().locator(".deployment-targets tbody tr"),
+        details()
+          .getByRole("list", { name: "Device results" })
+          .locator("li.data-list-item"),
       ).toHaveCount(12);
       await expect(
         details().getByRole("button", { name: "Pause", exact: true }),
