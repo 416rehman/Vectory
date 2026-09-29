@@ -373,7 +373,8 @@ fn target_query(
         'next_release_at',(SELECT min(x.released_at) FROM deployment_targets x WHERE x.device_id=t.device_id AND x.deployment_id<>t.deployment_id AND x.released_at>t.released_at),\
         '_attempt',json_extract(d.data,'$.configuration_attempt'),'_terminal',json_extract(d.data,'$.terminal_configuration_attempt'),\
         '_policy',json(d.policy),'_policy_generation',d.policy_generation,\
-        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')))"
+        '_acknowledgement',json_object('policy_generation',json_extract(d.data,'$.policy_generation'),'heartbeat_floor_seconds',json_extract(d.data,'$.heartbeat_floor_seconds')),\
+        '_data_plane',CASE WHEN t.state='verified_applied' AND json_type(d.data,'$.data_plane.issues')='array' AND json_extract(d.data,'$.data_plane.version_id')=(SELECT json_extract(p.data,'$.version_id') FROM records p WHERE p.kind='deployment' AND p.id=t.deployment_id) THEN json_extract(d.data,'$.data_plane.issues[0]') END)"
     } else {
         "SELECT count(*)"
     });
@@ -503,6 +504,14 @@ fn finish_target(item: &mut Value) {
         .unwrap_or(0);
     let acknowledgement = object.remove("_acknowledgement").unwrap_or(Value::Null);
     let generation = object.get("generation").cloned().unwrap_or(Value::Null);
+    // Applied, but the device's telemetry shows the version isn't delivering:
+    // the open data-plane issue in the user's words (see data_plane.rs).
+    if let Some(issue) = object.remove("_data_plane").filter(Value::is_object) {
+        object.insert(
+            "delivery".into(),
+            json!({"code":issue["code"],"title":issue["title"],"message":issue["message"],"hint":issue["hint"]}),
+        );
+    }
     object.insert(
         "diagnostic".into(),
         json!(diagnostic(&terminal, &generation).or_else(|| diagnostic(&attempt, &generation))),
@@ -631,18 +640,13 @@ pub async fn rollout(
         .collect::<Result<Vec<_>>>()?;
     for target in &mut targets {
         finish_target(target);
-        // The first open data-plane issue explains a degraded device in the
-        // user's words: its title, the measured reason and the fix.
-        let issue = target
-            .as_object_mut()
-            .unwrap()
-            .remove("_data_plane")
-            .filter(|issue| issue.is_object());
-        if let Some(issue) = issue {
+        // Lanes and failure groups count a device that isn't delivering as
+        // failed, with the issue's title, measured reason and fix.
+        if let Some(delivery) = target.get("delivery").filter(|d| d.is_object()).cloned() {
             target["state"] = json!("degraded");
-            target["error"] = issue["title"].clone();
-            target["diagnostic"] = issue["message"].clone();
-            target["fix"] = issue["hint"].clone();
+            target["error"] = delivery["title"].clone();
+            target["diagnostic"] = delivery["message"].clone();
+            target["fix"] = delivery["hint"].clone();
         }
     }
     let status = context["status"].as_str().unwrap_or("");

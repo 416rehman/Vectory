@@ -922,7 +922,7 @@ function NeedsYou({
       subtitle={
         groups.length
           ? affected
-            ? `${countLabel(affected, "device")} need attention`
+            ? `${countLabel(affected, "device")} ${affected === 1 ? "needs" : "need"} attention`
             : "Nothing is failing"
           : undefined
       }

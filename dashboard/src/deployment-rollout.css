@@ -409,6 +409,24 @@
   font-weight: 500;
   white-space: pre-wrap;
 }
+.rollout-delivery {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.rollout-delivery strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.rollout-delivery > span {
+  color: var(--muted);
+}
+.rollout-delivery-label {
+  margin-right: 6px;
+  font-weight: 600;
+}
 .rollout-failure-fix {
   margin: 0;
   color: var(--ink);

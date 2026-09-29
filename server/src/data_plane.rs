@@ -259,7 +259,7 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
                 format!(
                     "The buffer in front of {id} is {state}. When it's full, Vector pauses every path that feeds {id}."
                 ),
-                format!("Fix what slows {id}, usually an unreachable or throttling destination. A bigger buffer only buys time."),
+                format!("Look at what slows {id}, usually an unreachable or throttling destination. A bigger buffer only buys time."),
                 json!({"buffer_utilization":fill,"previous_buffer_utilization":before}),
                 log,
             ));
@@ -341,7 +341,9 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
             };
             (
                 why,
-                format!("Fix {id}'s destination, or roll back to the last working version."),
+                format!(
+                    "Get {id}'s destination working again, or roll back to the last working version."
+                ),
             )
         }
         None => (

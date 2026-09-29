@@ -18575,6 +18575,60 @@
             ],
             "description": "Current gate blocker for this target of an active/paused canary. Null also covers pending or no-longer-targeted rows and must not be interpreted as verified. Omitted outside this context or by older servers."
           },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "DATA_PLANE_STALLED",
+                      "DATA_PLANE_SINK_ERRORS",
+                      "DATA_PLANE_BUFFER_FULL",
+                      "DATA_PLANE_ERROR_DROPS"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "message": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "hint": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "code",
+                  "title",
+                  "message",
+                  "hint"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only on a verified_applied row whose device has an open data-plane issue on the deployment's version: the issue's title, measured reason and fix. The recorded state is unchanged."
+          },
           "released_at": {
             "anyOf": [
               {
