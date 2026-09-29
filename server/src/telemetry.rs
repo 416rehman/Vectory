@@ -507,7 +507,9 @@ pub async fn fleet_summary(
            avg(json_extract(data,'$.errors_per_minute')) AS epm,\
            avg(json_extract(data,'$.dropped_per_minute')) AS dpm,\
            max(json_extract(data,'$.buffer_utilization')) AS buf \
-           FROM telemetry WHERE bucket>=?2 GROUP BY slot,device_id) \
+           FROM telemetry WHERE bucket>=?2 AND device_id IN (SELECT id FROM devices \
+             WHERE revoked=0 AND json_extract(policy,'$.telemetry_enabled') IS NOT 0) \
+           GROUP BY slot,device_id) \
          GROUP BY slot ORDER BY slot",
     )
     .bind(step)
