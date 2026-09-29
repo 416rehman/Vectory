@@ -14,7 +14,7 @@
   "paths": {
     "/api/v1/status": {
       "get": {
-        "summary": "Public initialization status",
+        "summary": "Public initialization status; setup_hint names the secret source (never its value) only while uninitialized",
         "operationId": "get__api_v1_status",
         "security": [],
         "parameters": [],
@@ -77,7 +77,7 @@
     },
     "/api/v1/bootstrap": {
       "post": {
-        "summary": "Transactionally initialize the first administrator",
+        "summary": "Transactionally initialize the first administrator. Errors: SETUP_SECRET_INVALID, ALREADY_INITIALIZED, SETUP_UNAVAILABLE, PASSWORD_TOO_WEAK, EMAIL_INVALID, NAME_INVALID",
         "operationId": "post__api_v1_bootstrap",
         "security": [],
         "parameters": [],
@@ -375,7 +375,7 @@
     },
     "/api/v1/session": {
       "get": {
-        "summary": "Current session and CSRF token",
+        "summary": "Current session, CSRF token and expiry. A 401 adds error.reason when this cookie's session ended recently",
         "operationId": "get__api_v1_session",
         "security": [
           {
@@ -390,6 +390,191 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/account/sessions": {
+      "get": {
+        "summary": "The caller's own active browser sessions, current first",
+        "operationId": "get__api_v1_account_sessions",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SessionSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "sessions"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/account/sessions/{id}/revoke": {
+      "post": {
+        "summary": "Sign out one of the caller's other sessions (404 SESSION_NOT_FOUND when already ended, 409 CURRENT_SESSION for this browser)",
+        "operationId": "post__api_v1_account_sessions__id__revoke",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
@@ -1415,7 +1600,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/User"
+                    "$ref": "#/components/schemas/Person"
                   }
                 }
               }
@@ -1467,7 +1652,7 @@
         }
       },
       "post": {
-        "summary": "Admin creates a local user; optional one-shot actor-scoped request_id permits secret-free status recovery and a cancellation fence, never password replay",
+        "summary": "Admin creates a local user with a password now, or (keyed only) invite:true for a single-use 24-hour invitation the person redeems to choose their own password; optional one-shot actor-scoped request_id permits secret-free status recovery and a cancellation fence, never password replay. Errors: EMAIL_TAKEN, REQUEST_ALREADY_USED, PASSWORD_TOO_WEAK",
         "operationId": "post__api_v1_users",
         "security": [
           {
@@ -1527,6 +1712,44 @@
                       "password",
                       "role",
                       "request_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "email": {
+                        "type": "string",
+                        "format": "email",
+                        "maxLength": 254
+                      },
+                      "role": {
+                        "enum": [
+                          "viewer",
+                          "editor",
+                          "operator",
+                          "admin"
+                        ]
+                      },
+                      "request_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "invite": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "email",
+                      "role",
+                      "request_id",
+                      "invite"
                     ],
                     "additionalProperties": false
                   },
@@ -8706,7 +8929,7 @@
     },
     "/api/v1/users/{id}/password-reset": {
       "post": {
-        "summary": "Admin issues one-use 15-minute reset code; optional one-shot actor-scoped request_id permits exact secret-free status and cancellation",
+        "summary": "Admin issues a one-use code: purpose reset (15 minutes), or purpose invite (24 hours) for someone who has never chosen a password; optional one-shot actor-scoped request_id permits exact secret-free status and cancellation. Errors: ACCOUNT_DISABLED, STALE_REVISION, WRONG_PASSWORD, REQUEST_ALREADY_USED",
         "operationId": "post__api_v1_users__id__password_reset",
         "security": [
           {
@@ -9039,7 +9262,7 @@
     },
     "/api/v1/password-reset": {
       "post": {
-        "summary": "Consume password reset code; revoke all sessions without bypassing MFA",
+        "summary": "Consume a password reset code (RESET_CODE_INVALID when unusable); revoke all sessions without bypassing MFA; return the account email for sign-in",
         "operationId": "post__api_v1_password_reset",
         "security": [],
         "parameters": [],
@@ -9076,13 +9299,330 @@
                   "type": "object",
                   "properties": {
                     "ok": {
-                      "type": "boolean"
+                      "const": true
+                    },
+                    "email": {
+                      "type": "string",
+                      "format": "email"
                     }
                   },
                   "required": [
-                    "ok"
+                    "ok",
+                    "email"
                   ],
-                  "additionalProperties": true
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/invite/preview": {
+      "post": {
+        "summary": "Show who a valid invitation is for (INVITE_INVALID otherwise); possession of the code is the authorization",
+        "operationId": "post__api_v1_invite_preview",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "instance_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "email",
+                    "name",
+                    "expires_at",
+                    "instance_name"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/invite/accept": {
+      "post": {
+        "summary": "Redeem an invitation: set the first password and start a session. The account has no password or second factor before this",
+        "operationId": "post__api_v1_invite_accept",
+        "security": [],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{64}$"
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "minLength": 12
+                  }
+                },
+                "required": [
+                  "code",
+                  "new_password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/two-factor-reset": {
+      "post": {
+        "summary": "Admin removes another person's authenticator and recovery codes and signs out their sessions. Errors: OWN_MFA, MFA_NOT_ENABLED, STALE_REVISION, WRONG_PASSWORD",
+        "operationId": "post__api_v1_users__id__two_factor_reset",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "current_password": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "current_password",
+                  "revision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  },
+                  "required": [
+                    "user"
+                  ],
+                  "additionalProperties": false
                 }
               }
             }
@@ -9135,7 +9675,7 @@
     },
     "/api/v1/mfa": {
       "get": {
-        "summary": "MFA status",
+        "summary": "MFA status with the count of unused recovery codes (null while off)",
         "operationId": "get__api_v1_mfa",
         "security": [
           {
@@ -9153,10 +9693,22 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean"
+                    },
+                    "recovery_codes_remaining": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
-                    "enabled"
+                    "enabled",
+                    "recovery_codes_remaining"
                   ],
                   "additionalProperties": true
                 }
@@ -9211,7 +9763,7 @@
     },
     "/api/v1/mfa/setup": {
       "post": {
-        "summary": "Password-gated MFA setup",
+        "summary": "Password-gated MFA setup; the pending setup expires at expires_at (10 minutes). MFA_ALREADY_ENABLED when on",
         "operationId": "post__api_v1_mfa_setup",
         "security": [
           {
@@ -9260,11 +9812,16 @@
                     },
                     "otpauth_url": {
                       "type": "string"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
                     }
                   },
                   "required": [
                     "secret",
-                    "otpauth_url"
+                    "otpauth_url",
+                    "expires_at"
                   ],
                   "additionalProperties": true
                 }
@@ -9319,7 +9876,7 @@
     },
     "/api/v1/mfa/confirm": {
       "post": {
-        "summary": "Enable MFA; display one-use recovery codes once",
+        "summary": "Enable MFA; display one-use recovery codes once. MFA_SETUP_EXPIRED after the setup window; INVALID_MFA_CODE (403) for a wrong code",
         "operationId": "post__api_v1_mfa_confirm",
         "security": [
           {
@@ -9365,6 +9922,123 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean"
+                    },
+                    "recovery_codes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "recovery_codes"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/mfa/recovery-codes": {
+      "post": {
+        "summary": "Replace all recovery codes; needs the password and a current authenticator code or an unused recovery code",
+        "operationId": "post__api_v1_mfa_recovery_codes",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "recovery_code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "password"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "const": true
                     },
                     "recovery_codes": {
                       "type": "array",
@@ -10847,6 +11521,17 @@
               },
               "message": {
                 "type": "string"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "GET /session 401 only: why this browser's session ended (expired, signed_out, signed_out_elsewhere, password_changed, access_changed, mfa_changed, mfa_reset, replaced, revoked) or null."
               }
             },
             "required": [
@@ -11003,6 +11688,58 @@
         ],
         "description": "Actor-scoped exact-target access edit status. An applied user is the immutable public commit snapshot, not necessarily the account’s current state. not_found is noncausal while a PUT may be in flight; cancellation fences only an absent request and cannot undo an applied edit."
       },
+      "Person": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/User"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "enum": [
+                  "invited",
+                  "active",
+                  "disabled"
+                ]
+              },
+              "mfa_enabled": {
+                "type": "boolean"
+              },
+              "last_login_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "invite_expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "mfa_enabled",
+              "last_login_at",
+              "invite_expires_at"
+            ],
+            "additionalProperties": true
+          }
+        ],
+        "description": "Administrator view of one account. invited means no password has been chosen yet; invite_expires_at is the live invitation expiry, if any."
+      },
       "UserCreateReceipt": {
         "type": "object",
         "properties": {
@@ -11012,6 +11749,24 @@
           },
           "user": {
             "$ref": "#/components/schemas/User"
+          },
+          "invite": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "code",
+              "expires_at"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -11108,13 +11863,20 @@
           "expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "purpose": {
+            "enum": [
+              "reset",
+              "invite"
+            ]
           }
         },
         "required": [
           "request_id",
           "user_id",
           "code",
-          "expires_at"
+          "expires_at",
+          "purpose"
         ],
         "additionalProperties": false
       },
@@ -11130,11 +11892,18 @@
               "expires_at": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "purpose": {
+                "enum": [
+                  "reset",
+                  "invite"
+                ]
               }
             },
             "required": [
               "code",
-              "expires_at"
+              "expires_at",
+              "purpose"
             ],
             "additionalProperties": false
           },
@@ -11235,13 +12004,134 @@
           },
           "csrf_token": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
           "user",
-          "csrf_token"
+          "csrf_token",
+          "expires_at"
         ],
         "additionalProperties": true
+      },
+      "SessionSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "client_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "current",
+          "created_at",
+          "last_seen_at",
+          "expires_at",
+          "user_agent",
+          "client_address"
+        ],
+        "additionalProperties": false
+      },
+      "SetupHint": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "enum": [
+              "file",
+              "environment",
+              "unknown"
+            ]
+          },
+          "variable": {
+            "anyOf": [
+              {
+                "enum": [
+                  "VECTORY_BOOTSTRAP_SECRET_FILE",
+                  "VECTORY_BOOTSTRAP_SECRET"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "container": {
+            "type": "boolean"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source",
+          "variable",
+          "container",
+          "path"
+        ],
+        "additionalProperties": false
       },
       "LoginChallenge": {
         "type": "object",
@@ -11283,6 +12173,12 @@
           },
           "version": {
             "type": "string"
+          },
+          "instance_name": {
+            "type": "string"
+          },
+          "setup_hint": {
+            "$ref": "#/components/schemas/SetupHint"
           }
         },
         "required": [
