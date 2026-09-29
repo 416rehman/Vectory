@@ -107,6 +107,7 @@ export default function PipelineLibrary({
   const recovery = usePipelineCreationOperations(user.id),
     recoveryRef = useRef<PipelineCreationRecoveryHandle>(null),
     createOpener = useRef<HTMLButtonElement | null>(null),
+    createButton = useRef<HTMLButtonElement | null>(null),
     nameInput = useRef<HTMLInputElement | null>(null);
   const unresolved =
     recovery.operations.length > 0 || recovery.errors.length > 0;
@@ -193,9 +194,11 @@ export default function PipelineLibrary({
     action: PipelineAction;
   } | null>(null);
   // ⌘K and the Overview checklist open the create dialog through this command.
+  // It runs after a route change, when nothing on this page has focus yet, so
+  // the header's Create button stands in as the opener focus returns to.
   useCommand(
     "pipeline.create",
-    () => beginCreate(document.activeElement as HTMLButtonElement | null),
+    () => beginCreate(createButton.current),
     can(user, "edit"),
   );
   function beginCreate(trigger: HTMLButtonElement | null) {
@@ -360,6 +363,7 @@ export default function PipelineLibrary({
       >
         {can(user, "edit") && (
           <Button
+            ref={createButton}
             icon={Plus}
             onPointerEnter={prefetchStartChoice}
             onFocus={prefetchStartChoice}
@@ -653,6 +657,7 @@ export default function PipelineLibrary({
       <Modal
         open={open}
         onClose={() => !active.current && !busy && setOpen(false)}
+        returnFocusRef={createOpener}
         title="Create pipeline"
         description="Create a draft first. Review devices after publishing."
       >

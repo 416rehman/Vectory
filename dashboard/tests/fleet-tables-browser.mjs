@@ -565,6 +565,21 @@ try {
     },
   );
   await check(
+    "a status badge carries its meaning as an accessible description and a hover tooltip, not a title",
+    async () => {
+      await load("devices");
+      const badge = rows("Devices").first().locator(".status-badge");
+      const meaning = await badge.getAttribute("aria-description");
+      expect(meaning, "the badge describes its state").toBeTruthy();
+      await expect(badge).toHaveAccessibleDescription(meaning);
+      expect(await badge.getAttribute("title")).toBeNull();
+      await badge.hover();
+      await expect(page.getByRole("tooltip")).toHaveText(meaning);
+      await page.mouse.move(1, 1);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
+    },
+  );
+  await check(
     "mobile devices render as a stacked list with quick filters and filtering inside review dialogs preserves focus and contrast",
     async () => {
       await load("devices");

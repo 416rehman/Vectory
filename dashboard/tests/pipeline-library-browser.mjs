@@ -236,6 +236,72 @@ try {
     },
   );
   await check(
+    "under StrictMode the create dialog keeps focus through its development remount and returns it on close",
+    async () => {
+      const create = page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true });
+      await create.focus();
+      await page.evaluate(() => {
+        window.__focusTrail = [];
+        document.addEventListener(
+          "focusin",
+          (event) =>
+            window.__focusTrail.push(
+              event.target.closest('[role="dialog"]')
+                ? "dialog"
+                : event.target.textContent.trim().slice(0, 40),
+            ),
+          true,
+        );
+      });
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", {
+        name: "Create pipeline",
+        exact: true,
+      });
+      await expect(dialog.getByLabel("Pipeline name")).toBeFocused();
+      // Radix hands focus back after a timeout; give a remount the chance.
+      await delay(300);
+      await expect(dialog.getByLabel("Pipeline name")).toBeFocused();
+      const trail = await page.evaluate(() => window.__focusTrail);
+      expect(trail, "focus never leaves the open dialog").toEqual(
+        trail.map(() => "dialog"),
+      );
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(create).toBeFocused();
+      // A dialog mounted already open (a row's Duplicate) runs its own
+      // effects twice as well; focus still stays inside it.
+      await page
+        .getByRole("button", { name: /^Actions for / })
+        .first()
+        .click();
+      await page.evaluate(() => (window.__focusTrail = []));
+      await page
+        .getByRole("menuitem", { name: "Duplicate pipeline", exact: true })
+        .click();
+      const duplicate = page.getByRole("dialog", {
+        name: "Duplicate pipeline",
+        exact: true,
+      });
+      await expect(duplicate).toBeVisible();
+      await delay(300);
+      const after = await page.evaluate(() => window.__focusTrail);
+      const entered = after.indexOf("dialog");
+      expect(entered, "focus enters the duplicate dialog").toBeGreaterThan(-1);
+      expect(
+        after.slice(entered),
+        "focus never leaves the duplicate dialog",
+      ).toEqual(after.slice(entered).map(() => "dialog"));
+      await duplicate
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await expect(duplicate).toHaveCount(0);
+      expect(unexpected).toEqual([]);
+    },
+  );
+  await check(
     "real App preserves search, archive filter, sort and page across library remount",
     async () => {
       await page.getByLabel("Search pipelines").fill("blue");

@@ -797,20 +797,24 @@ export function StatusBadge({
   const shownTone = tone ?? status?.tone ?? "neutral";
   const shownIcon = icon ?? status?.icon ?? toneIcons[shownTone];
   const Icon = statusIcons[shownIcon];
-  const title = description ?? status?.description;
-  return (
+  const about = description ?? status?.description;
+  // What the state means: a screen reader reads it as the badge's
+  // description, a pointer sees it as a tooltip (a native title reached
+  // neither keyboard nor assistive-technology users reliably).
+  const badge = (
     <span
       className={`status-badge ${className}`.trim()}
       data-tone={shownTone}
       data-appearance={appearance}
       data-state={value || undefined}
       data-icon={shownIcon}
-      title={title || undefined}
+      aria-description={about || undefined}
     >
       <Icon size={13} strokeWidth={2.2} aria-hidden="true" />
       <span>{label ?? status?.label}</span>
     </span>
   );
+  return about ? <Tooltip content={about}>{badge}</Tooltip> : badge;
 }
 
 /* ---------- Page chrome ---------- */
@@ -1483,12 +1487,14 @@ export function Modal({
       opener.current = active;
   }
   openRef.current = open;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode runs this cleanup and then the effect again on a live
+    // dialog; only a cleanup with no rerun is a real unmount.
+    unmounted.current = false;
+    return () => {
       unmounted.current = true;
-    },
-    [],
-  );
+    };
+  }, []);
   function restoreFocus() {
     // A development remount of the focus scope is not a real close.
     if (openRef.current && !unmounted.current && content.current?.isConnected)

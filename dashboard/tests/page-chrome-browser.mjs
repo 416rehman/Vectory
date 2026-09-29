@@ -212,6 +212,42 @@ try {
   }
   results.push("Dialogs return focus to the button that opened them");
   {
+    // The palette's Create pipeline runs on the Pipelines page after the
+    // route change, when nothing there has focus yet. Closing the dialog
+    // still hands focus to the page's Create button, not to the document.
+    const { context, page } = await open();
+    await page.goto(`${origin}#/overview`);
+    await expect(page.locator("main h1")).toHaveText("Overview");
+    await page.keyboard.press("ControlOrMeta+k");
+    const palette = page.getByRole("dialog", {
+      name: "Search Vectory",
+      exact: true,
+    });
+    await palette
+      .getByRole("combobox", { name: "Search Vectory", exact: true })
+      .fill("Create pipeline");
+    await palette
+      .getByRole("option", { name: "Create pipeline", exact: true })
+      .click();
+    await expect(page).toHaveURL(/#\/configurations$/);
+    const dialog = page.getByRole("dialog", {
+      name: "Create pipeline",
+      exact: true,
+    });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page
+        .locator("main")
+        .getByRole("button", { name: "Create pipeline", exact: true }),
+    ).toBeFocused();
+    await context.close();
+  }
+  results.push(
+    "A create command run from another page returns focus to the page's Create button",
+  );
+  {
     // A section tab lives inside the page, so the page it opens replaces it.
     // Focus goes to the new page's title instead of falling to the document,
     // and the next Tab continues inside the page, not at the skip link.
@@ -248,9 +284,7 @@ try {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/#\/overview$/);
     await expect(overview).toBeFocused();
-    await expect(page.locator("[data-route-announcer]")).toHaveText(
-      "Overview",
-    );
+    await expect(page.locator("[data-route-announcer]")).toHaveText("Overview");
     await context.close();
   }
   results.push(
