@@ -8,11 +8,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,18 @@ type setupServer struct {
 	// hold keeps heartbeats unanswered until release is closed.
 	hold    atomic.Bool
 	release chan struct{}
+	// features are listed in every manifest; beats and enrollment record
+	// what the agent sent.
+	features   []string
+	mu         sync.Mutex
+	beats      []map[string]any
+	enrollment map[string]any
+}
+
+func (s *setupServer) sent() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]map[string]any(nil), s.beats...)
 }
 
 func newSetupServer(t *testing.T) *setupServer {
@@ -68,14 +82,22 @@ func newSetupServer(t *testing.T) *setupServer {
 					return
 				}
 			}
-			var beat Heartbeat
-			_ = json.NewDecoder(r.Body).Decode(&beat)
+			var raw map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&raw)
+			s.mu.Lock()
+			s.beats = append(s.beats, raw)
+			s.mu.Unlock()
+			nonce, _ := raw["nonce"].(string)
 			now := time.Now().UTC().Truncate(time.Second)
-			_ = json.NewEncoder(w).Encode(signed(t, Manifest{ProtocolVersion: 1, DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", Nonce: beat.Nonce, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute), Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}}, signingKey))
+			_ = json.NewEncoder(w).Encode(signed(t, Manifest{ProtocolVersion: 1, DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", Nonce: nonce, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute), Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}, Features: s.features}, signingKey))
 		case "/agent/v1/enroll":
 			s.enrolls.Add(1)
+			body, _ := io.ReadAll(r.Body)
 			var request Enrollment
-			_ = json.NewDecoder(r.Body).Decode(&request)
+			_ = json.Unmarshal(body, &request)
+			s.mu.Lock()
+			_ = json.Unmarshal(body, &s.enrollment)
+			s.mu.Unlock()
 			if request.Token != "synthetic-setup-token" {
 				http.Error(w, `{"error":{"code":"ENROLLMENT_FAILED","message":"Enrollment failed"}}`, http.StatusUnauthorized)
 				return
@@ -222,8 +244,11 @@ func TestSetupRefusesToRebindAPossiblyDeliveredEnrollment(t *testing.T) {
 		t.Fatal("refused enrollment blocked a corrected retry", err)
 	}
 	// Without a service, setup proves the connection with one real check-in.
-	if server.heartbeats.Load() != 1 || stepStatus(result, "service") != "ok" || !strings.Contains(result.Next, "vectory run") {
-		t.Fatalf("check-in not performed: %+v", result.Steps)
+	// --service none is the operator's own choice: nothing needs attention.
+	// The Next line names this agent's absolute path, never whatever
+	// `vectory` PATH finds.
+	if server.heartbeats.Load() != 1 || stepStatus(result, "checkin") != "ok" || stepStatus(result, "service") != "" || result.NeedsAttention || !strings.Contains(result.Next, " run --state-dir "+quoteArg(dir)) || !filepath.IsAbs(strings.Fields(strings.TrimPrefix(result.Next, "Keep the agent running under your supervisor: "))[0]) {
+		t.Fatalf("check-in not performed: %+v %q", result.Steps, result.Next)
 	}
 	if state, _ := LoadState(dir); state.LastHeartbeat == nil || state.DeviceID == "" {
 		t.Fatal("check-in not recorded")

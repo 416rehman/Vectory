@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,8 +32,11 @@ type Engine struct {
 	Now         func() time.Time
 	Fault       func(string) error
 	// Log receives Vector's JSON log; nil in tests without a native driver.
-	Log        *vectorLog
-	supervisor *workloadSupervisor
+	Log *vectorLog
+	// ServiceManager is what keeps this agent process running (systemd,
+	// launchd, windows or none), reported to servers that accept it.
+	ServiceManager string
+	supervisor     *workloadSupervisor
 }
 
 func (e *Engine) now() time.Time {
@@ -373,7 +377,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 			return e.failAttempt("WRITE_FAILED", "commit", "Cannot securely preserve pre-apply content")
 		}
 	}
-	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), PreviousAbsent: os.IsNotExist(readErr), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
 		return e.failAttempt("WRITE_FAILED", "commit", "Cannot persist the apply recovery journal")
 	}
@@ -494,8 +498,20 @@ func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, atte
 	e.State.FailedGeneration = &g
 	e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
 	if e.State.LastGoodSHA256 == "" {
+		// Nothing verified ever ran here: this was the device's first
+		// version, so there is nothing earlier to go back to. Stop Vector and
+		// withdraw the failed version from the managed path, so no report
+		// claims it runs.
 		_ = e.Driver.Stop()
-		return fail("ROLLBACK_UNAVAILABLE", reason+"; no verified recovery content exists")
+		e.withdrawFirstVersion()
+		err := fail("ROLLBACK_UNAVAILABLE", reason+"; Vector is stopped and there is no earlier version to go back to")
+		// The outcome is durable and nothing is left to recover.
+		if e.save() == nil {
+			if removeErr := os.Remove(filepath.Join(e.Dir, "journal.json")); removeErr == nil || os.IsNotExist(removeErr) {
+				_ = syncDir(e.Dir)
+			}
+		}
+		return err
 	}
 	b, err := readArtifact(e.goodPath())
 	if err != nil || Digest(b) != e.State.LastGoodSHA256 {
@@ -525,6 +541,28 @@ func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, atte
 	}
 	return syncDir(e.Dir)
 }
+
+// withdrawFirstVersion puts the managed path back as it was before a failed
+// attempt on a device that never verified a configuration: no file, or the
+// file the attempt replaced. Only the attempt's own content is withdrawn,
+// as the journal identifies it; anything else is left alone. The actual
+// digest then describes what is there, so nothing claims the failed version.
+func (e *Engine) withdrawFirstVersion() {
+	defer func() { e.State.ActualSHA256 = e.actual() }()
+	var j Journal
+	if ReadJSON(filepath.Join(e.Dir, "journal.json"), &j) != nil || j.DesiredSHA256 == "" || e.actual() != j.DesiredSHA256 {
+		return
+	}
+	if j.PreviousAbsent {
+		_ = os.Remove(e.Settings.ManagedConfig)
+		return
+	}
+	previous, err := readArtifact(filepath.Join(e.Dir, "pre-attempt.json"))
+	if err == nil && Digest(previous) == j.PreviousSHA256 {
+		_ = AtomicWrite(e.Settings.ManagedConfig, previous)
+	}
+}
+
 func (e *Engine) cleanupGood() error {
 	files, err := filepath.Glob(filepath.Join(e.Dir, "good-*.json"))
 	if err != nil {
@@ -671,7 +709,26 @@ func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message st
 	_ = e.save()
 }
 
+// runOptions change how Run reports itself. serviceManager overrides what the
+// environment says: setup's one-shot check-in is none, since the process
+// stops right after it, and the Windows service entry is windows.
+type runOptions struct {
+	once           bool
+	serviceManager string
+}
+
+// Run runs the agent: continuously, or for one complete check-in.
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
+	return runWith(ctx, dir, runOptions{once: once}, report)
+}
+
+// RunWindowsService runs the agent as the Windows service.
+func RunWindowsService(ctx context.Context, dir string, report func(string)) error {
+	return runWith(ctx, dir, runOptions{serviceManager: "windows"}, report)
+}
+
+func runWith(ctx context.Context, dir string, options runOptions, report func(string)) error {
+	once := options.once
 	build := runningAgentBuild()
 	unlock, err := Lock(dir)
 	if err != nil {
@@ -683,6 +740,10 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		return err
 	}
 	e.State.Agent = build
+	e.ServiceManager = options.serviceManager
+	if e.ServiceManager == "" {
+		e.ServiceManager = runningServiceManager()
+	}
 	defer func() { e.Client.Close() }()
 	defer func() {
 		if e.Metrics != nil {
@@ -715,7 +776,7 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 			e.Settings.VectorVersion = version
 		}
 	}
-	failures, followed := 0, false
+	failures, followed, complete := 0, false, false
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
 	for {
@@ -723,6 +784,7 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 			return nil
 		}
 		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
+		known := slices.Clone(e.State.ServerFeatures)
 		err = supervisor.poll(ctx, e, report)
 		switch {
 		case err != nil && ctx.Err() != nil:
@@ -745,6 +807,14 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 			report("heartbeat: " + e.State.ApplyState)
 		}
 		if once {
+			// A first check-in learns which fields the server accepts. A
+			// process that stops right after it sends one complete check-in
+			// more, so the server sees what a running agent reports (host
+			// runtime, what keeps it running, whether Vector runs).
+			if err == nil && !complete && learnedFeatures(known, e.State.ServerFeatures) {
+				complete = true
+				continue
+			}
 			return err
 		}
 		seconds := e.State.Policy.HeartbeatSeconds
@@ -773,6 +843,37 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 			return nil
 		}
 	}
+}
+
+// learnedFeatures reports whether the server lists a heartbeat field the
+// agent didn't know it accepts before the last check-in.
+func learnedFeatures(before, after []string) bool {
+	for _, feature := range after {
+		if !slices.Contains(before, feature) {
+			return true
+		}
+	}
+	return false
+}
+
+// runningServiceManager says what keeps this process running, from what
+// service managers put in the environment of the processes they start:
+// systemd sets INVOCATION_ID for every unit and launchd sets
+// XPC_SERVICE_NAME to the job's label. The Windows service entry says so
+// itself. Anything else is none: a foreground run, a supervisor of the
+// operator's own, or nothing at all.
+func runningServiceManager() string {
+	switch runtime.GOOS {
+	case "linux":
+		if os.Getenv("INVOCATION_ID") != "" && SystemdAvailable() {
+			return "systemd"
+		}
+	case "darwin":
+		if os.Getenv("XPC_SERVICE_NAME") == launchdLabel {
+			return "launchd"
+		}
+	}
+	return "none"
 }
 
 // appliedOutcome is what a heartbeat tells the server about the last apply.
@@ -876,7 +977,4 @@ func ConfigureFullVector(dir string, enabled bool) error {
 		return commitSettingsWithRetryReset(dir, doc, s)
 	}
 	return doc.save(s)
-}
-func ExitDescription(code int) string {
-	return fmt.Sprintf("exit %d: 0 success; 1 operational error; 2 invalid command; 3 security/preflight rejection", code)
 }

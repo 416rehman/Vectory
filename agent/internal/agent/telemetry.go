@@ -253,6 +253,11 @@ func discoverExporter(config []byte, policy CapabilityPolicy) (address, namespac
 	if json.Unmarshal(config, &root) != nil {
 		return "", ""
 	}
+	// Restricted mode runs Vectory's own monitoring exporter without an
+	// allowance (see monitoringExporter); any other listener needs one.
+	var generic map[string]any
+	_ = json.Unmarshal(config, &generic)
+	_, monitoring := monitoringExporter(generic)
 	namespaces := map[string]string{}
 	for id, source := range root.Sources {
 		if source["type"] == "internal_metrics" {
@@ -304,7 +309,7 @@ func discoverExporter(config []byte, policy CapabilityPolicy) (address, namespac
 		if err != nil || ip == nil || !ip.IsLoopback() || perr != nil || n < 1 || n > 65535 {
 			continue
 		}
-		if !policy.FullVectorConfig && !policy.listenerAllowed(addr) {
+		if !policy.FullVectorConfig && !policy.listenerAllowed(addr) && (monitoring == "" || addr != monitoring) {
 			continue
 		}
 		inputs, _ := sink["inputs"].([]any)

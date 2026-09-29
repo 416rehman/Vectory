@@ -72,6 +72,12 @@ type SetupResult struct {
 	DeviceURL string       `json:"device_url,omitempty"`
 	Steps     []SetupStep  `json:"steps"`
 	Next      string       `json:"next,omitempty"`
+	// Service is what keeps the agent running: systemd, launchd, windows or
+	// none (a supervisor of the operator's own, or nothing).
+	Service string `json:"service,omitempty"`
+	// NeedsAttention: setup finished, but nothing keeps the agent running
+	// and the operator didn't choose that with --service none (exit 3).
+	NeedsAttention bool `json:"needs_attention,omitempty"`
 }
 
 // SetupError is returned when a step fails; the step carries the explanation.
@@ -87,6 +93,7 @@ func (e *SetupError) Error() string {
 type setupRun struct {
 	options SetupOptions
 	result  SetupResult
+	host    serviceHost
 	// stopped names the service setup stopped to replace the agent, until
 	// setup starts it again.
 	stopped string
@@ -131,26 +138,77 @@ func sentence(s string) string {
 	return s
 }
 
-func chooseService(requested string, platform PlatformInfo) (string, error) {
+// serviceChoice is the service manager setup registers the agent with. When
+// --service auto finds none, reason says why in a few words; explicit means
+// the operator passed --service none and runs the agent their own way.
+type serviceChoice struct {
+	kind     string // systemd, launchd, windows or none
+	explicit bool
+	reason   string
+}
+
+// serviceHost is what chooseService learns about this host; tests replace it.
+type serviceHost struct {
+	systemd func() bool   // systemd is running and systemctl is installed
+	why     func() string // why systemd can't keep the agent running here
+}
+
+var nativeServiceHost = serviceHost{systemd: SystemdAvailable, why: func() string { return noSystemdReason("/") }}
+
+func chooseService(requested string, platform PlatformInfo, host serviceHost) (serviceChoice, error) {
 	native := map[string]string{"linux": "systemd", "darwin": "launchd", "windows": "windows"}[platform.OS]
 	switch requested {
 	case "", "auto":
-		if native == "systemd" && !SystemdAvailable() {
-			return "none", nil
+		switch {
+		case native == "":
+			return serviceChoice{kind: "none", reason: "this platform has no service manager setup supports"}, nil
+		case native == "systemd" && !host.systemd():
+			return serviceChoice{kind: "none", reason: host.why()}, nil
 		}
-		if native == "" {
-			return "none", nil
-		}
-		return native, nil
+		return serviceChoice{kind: native}, nil
 	case "none":
-		return "none", nil
+		return serviceChoice{kind: "none", explicit: true}, nil
 	case "systemd", "launchd", "windows":
-		if requested != native || requested == "systemd" && !SystemdAvailable() {
-			return "", fmt.Errorf("--service %s isn't available on this host", requested)
+		if requested != native || requested == "systemd" && !host.systemd() {
+			return serviceChoice{}, fmt.Errorf("--service %s isn't available on this host", requested)
 		}
-		return requested, nil
+		return serviceChoice{kind: requested}, nil
 	}
-	return "", errors.New("--service must be auto, systemd, launchd, windows or none")
+	return serviceChoice{}, errors.New("--service must be auto, systemd, launchd, windows or none")
+}
+
+// noSystemdReason says why systemd can't keep the agent running on this
+// Linux host, reading only well-known marker files under root: containers,
+// WSL and OpenRC distributions (Alpine) are the usual reasons.
+func noSystemdReason(root string) string {
+	exists := func(path string) bool {
+		_, err := os.Lstat(filepath.Join(root, path))
+		return err == nil
+	}
+	switch {
+	case exists("run/openrc") || exists("sbin/openrc-run"):
+		return "this host uses OpenRC, not systemd"
+	case exists(".dockerenv") || exists("run/.containerenv"):
+		return "systemd isn't running in this container"
+	case exists("proc/sys/fs/binfmt_misc/WSLInterop") || wslKernel(filepath.Join(root, "proc/version")):
+		return "systemd isn't running in this WSL distribution"
+	case exists("run/systemd/system"):
+		return "systemctl isn't installed"
+	}
+	return "systemd isn't running"
+}
+
+// wslKernel reports whether /proc/version names Microsoft's WSL kernel.
+func wslKernel(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(f, head)
+	text := strings.ToLower(string(head[:n]))
+	return strings.Contains(text, "microsoft") || strings.Contains(text, "wsl")
 }
 
 // DefaultDeviceName derives a valid device name from the host name.
@@ -278,11 +336,11 @@ func describeRunning(running []RunningVector) string {
 // check that can fail without the token runs first, and nothing on the host
 // changes before the token is entered. Re-running resumes where it stopped.
 func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
-	return setupWith(ctx, options, nativeService)
+	return setupWith(ctx, options, nativeService, nativeServiceHost)
 }
 
-func setupWith(ctx context.Context, options SetupOptions, ops serviceOps) (SetupResult, error) {
-	r := &setupRun{options: options}
+func setupWith(ctx context.Context, options SetupOptions, ops serviceOps, host serviceHost) (SetupResult, error) {
+	r := &setupRun{options: options, host: host}
 	result, err := r.setup(ctx, ops)
 	return r.restartIfStopped(ops, result, err)
 }
@@ -306,10 +364,12 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if !map[string]bool{"linux": true, "darwin": true, "windows": true}[platform.OS] || !map[string]bool{"amd64": true, "arm64": true}[platform.Arch] {
 		return r.fail("platform", "Platform", platform.Summary()+" isn't a supported agent platform.", "")
 	}
-	service, err := chooseService(options.Service, platform)
+	choice, err := chooseService(options.Service, platform, r.host)
 	if err != nil {
 		return r.failErr("platform", "Platform", err, "")
 	}
+	service := choice.kind
+	r.result.Service = service
 	r.add("platform", "ok", "Platform", platform.Summary(), "")
 	if service != "none" && !Elevated() && !options.DryRun {
 		return r.fail("platform", "Privileges", "Setup needs administrator rights.", elevationHint)
@@ -346,11 +406,13 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 	agentPath, installBinary := executable, false
 	switch {
-	case service == "none":
 	case options.AgentPath != "":
-		// The installer placed the agent (--install-dir); that path is final.
+		// The installer placed the agent (--install-dir), or places it there
+		// after a dry run: that path is final, with or without a service.
 		agentPath = options.AgentPath
 		installBinary = !sameContents(executable, agentPath)
+	case service == "none":
+		// Without a service the agent runs from wherever it is.
 	case !packagedLocation(executable, defaults.Binary):
 		agentPath = defaults.Binary
 		installBinary = !sameContents(executable, agentPath)
@@ -358,6 +420,8 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	if !installBinary {
 		r.add("agent", "ok", "Agent", agentPath+" "+Version, "")
 	}
+	// The exact command that keeps this agent running without a service.
+	runCommand := quoteArg(agentPath) + " run --state-dir " + quoteArg(dir)
 
 	var origin string
 	if enrolled {
@@ -541,6 +605,16 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		default:
 			return r.fail("account", "Account", "The service account "+account+" doesn't exist.", "Add --create-user to create it (no login shell), or pass --service-user NAME for an existing account.")
 		}
+	case "none":
+		// The account is the service's; without one, say so instead of
+		// silently ignoring the flag.
+		if options.CreateUser {
+			verb := "Not created"
+			if options.DryRun {
+				verb = "Won't be created"
+			}
+			r.add("account", "info", "Account", verb+": --create-user makes the service's account, and no service is registered here.", "Without a service, the agent runs as whoever starts it.")
+		}
 	}
 
 	if account != "" && service != "windows" {
@@ -587,11 +661,17 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		}
 	}
 
+	_, statErr := os.Stat(managed)
+	adopted := statErr == nil
 	if options.DryRun {
 		if createAccount {
 			r.add("account", "plan", "Account", "Would create "+account+" (no login shell).", "")
 		}
-		if installBinary {
+		switch {
+		case installBinary && options.AgentPath != "":
+			// The installer checks and places the agent before setup runs.
+			r.add("agent", "plan", "Agent", "Would run "+agentPath+" "+Version+", where the installer puts it.", "")
+		case installBinary:
 			r.add("agent", "plan", "Agent", "Would install "+executable+" as "+agentPath+".", "")
 		}
 		if !installed {
@@ -609,6 +689,8 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 				}
 			}
 			r.add("service", "plan", "Service", plan, "")
+		} else {
+			r.withoutService(choice, runCommand, adopted, true)
 		}
 		r.result.OK = true
 		r.result.Next = "Run the same command without --dry-run to apply."
@@ -665,7 +747,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 
 	if !enrolled {
-		enrollment := EnrollmentOptions{Server: origin, Name: name, Token: token, CAFile: options.CAFile, CASHA256: options.CASHA256}
+		enrollment := EnrollmentOptions{Server: origin, Name: name, Token: token, CAFile: options.CAFile, CASHA256: options.CASHA256, ServiceManager: service}
 		if err := EnrollWithOptions(ctx, dir, enrollment); err != nil {
 			return r.failErr("enroll", "Enroll", err, "")
 		}
@@ -691,27 +773,70 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 
 	if service == "none" {
-		if _, err := os.Stat(managed); err == nil {
-			r.add("service", "info", "Service", "Not registered (--service none).", "Start the agent to run the adopted workload: vectory run --state-dir "+quoteArg(dir))
-			r.result.Next = "Start the agent under your supervisor: vectory run --state-dir " + quoteArg(dir)
+		if adopted {
+			// Setup never starts an adopted workload itself: the agent does,
+			// once it runs.
+			r.result.Next = "Start the agent under your supervisor: " + runCommand
 		} else {
 			started := time.Now()
-			err := Run(ctx, dir, true, func(string) {})
+			// The same full check-in a running agent sends, from a process
+			// that stops right after it: no service keeps it running.
+			err := runWith(ctx, dir, runOptions{once: true, serviceManager: "none"}, func(string) {})
 			switch {
 			case ctx.Err() != nil:
-				return r.interrupted("Check-in", "Interrupted before the first check-in.", "Start the agent under your supervisor: vectory run --state-dir "+quoteArg(dir))
+				return r.interrupted("Check-in", "Interrupted before the first check-in.", "Start the agent under your supervisor: "+runCommand)
 			case err != nil:
-				return r.failErr("service", "Check-in", err, "")
+				return r.failErr("checkin", "Check-in", err, "")
 			}
-			r.add("service", "ok", "Check-in", fmt.Sprintf("checked in (%s) · no service registered", humanLatency(time.Since(started))), "")
-			r.result.Next = "Keep the agent running under your supervisor: vectory run --state-dir " + quoteArg(dir)
+			detail := "checked in (" + humanLatency(time.Since(started)) + ")"
+			if choice.explicit {
+				detail += " · no service registered"
+			}
+			r.add("checkin", "ok", "Check-in", detail, "")
+			r.result.Next = "Keep the agent running under your supervisor: " + runCommand
+			if !choice.explicit {
+				r.result.Next = "Start the agent and keep it running: " + runCommand
+			}
 		}
+		r.withoutService(choice, runCommand, adopted, false)
 		r.result.OK = true
 		return r.result, nil
 	}
 
 	r.result.Next = "Deploy a pipeline to " + settings.Name + " from the dashboard."
 	return r.startService(ctx, ops, service, agentPath, dir, account, settings.gracefulShutdownSeconds())
+}
+
+// withoutService says what keeps the agent running when no service is
+// registered. With --service none the operator runs it their own way. When
+// --service auto found no service manager, the agent stops right after
+// setup's check-in (or never starts an adopted workload): that needs the
+// operator, so setup ends with exit 3 and the exact command.
+func (r *setupRun) withoutService(choice serviceChoice, run string, adopted, dryRun bool) {
+	if choice.explicit {
+		switch {
+		case adopted && dryRun:
+			r.add("service", "plan", "Service", "Not registered (--service none): the adopted workload runs once you start the agent.", "Start it under your supervisor: "+run)
+		case adopted:
+			r.add("service", "info", "Service", "Not registered (--service none).", "Start the agent to run the adopted workload: "+run)
+		case dryRun:
+			r.add("service", "plan", "Service", "Would check in once, then stop (--service none).", "Keep it running with your own supervisor: "+run)
+		}
+		return
+	}
+	r.result.NeedsAttention = true
+	why := "No supported service manager here (" + choice.reason + ")"
+	acknowledge := "Keep it running with your own supervisor (" + run + ") and pass --service none, or use a host with systemd."
+	switch {
+	case adopted && dryRun:
+		r.add("service", "warn", "Service", why+", so nothing would run the adopted workload.", acknowledge)
+	case adopted:
+		r.add("service", "warn", "Service", why+", so nothing runs the adopted workload.", "Start the agent under your own supervisor: "+run)
+	case dryRun:
+		r.add("service", "warn", "Service", why+", so the agent would stop after its first check-in.", acknowledge)
+	default:
+		r.add("service", "warn", "Service", why+", so the agent stopped after its first check-in.", "Keep it running with your own supervisor: "+run)
+	}
 }
 
 // serviceOps is the service manager setup drives; tests replace it.

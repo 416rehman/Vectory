@@ -109,6 +109,9 @@ type Enrollment struct {
 	AgentVersion      string `json:"agent_version"`
 	VectorVersion     string `json:"vector_version"`
 	ConfigurationMode string `json:"configuration_mode"`
+	// ServiceManager is what keeps the agent running (systemd, launchd,
+	// windows or none), sent by setup. Servers that predate it ignore it.
+	ServiceManager string `json:"service_manager,omitempty"`
 }
 type Heartbeat struct {
 	ProtocolVersion         int                   `json:"protocol_version"`
@@ -133,6 +136,12 @@ type Heartbeat struct {
 	// VectorLogSummary is nil for servers without the feature; an empty list
 	// tells a supporting server there is nothing to report.
 	VectorLogSummary *[]LogSummary `json:"vector_log_summary,omitempty"`
+	// ServiceManager says what keeps this agent process running: systemd,
+	// launchd or windows when it runs as that service, none otherwise.
+	// VectorRunning says whether the Vector process the agent supervises is
+	// running. Both go only to servers that list them in features.
+	ServiceManager string `json:"service_manager,omitempty"`
+	VectorRunning  *bool  `json:"vector_running,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated
@@ -281,10 +290,13 @@ type AgentBuild struct {
 }
 
 type Journal struct {
-	Stage                string                `json:"stage"`
-	Generation           uint64                `json:"generation"`
-	DesiredSHA256        string                `json:"desired_sha256"`
-	PreviousSHA256       string                `json:"previous_sha256"`
+	Stage          string `json:"stage"`
+	Generation     uint64 `json:"generation"`
+	DesiredSHA256  string `json:"desired_sha256"`
+	PreviousSHA256 string `json:"previous_sha256"`
+	// PreviousAbsent: the managed file didn't exist before this attempt, so
+	// withdrawing a failed first version removes it again.
+	PreviousAbsent       bool                  `json:"previous_absent,omitempty"`
 	SecretRevision       uint64                `json:"secret_revision,omitempty"`
 	ConfigurationAttempt *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 }
