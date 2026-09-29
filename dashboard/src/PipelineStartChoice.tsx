@@ -2,14 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ClipboardPaste, FileUp } from "lucide-react";
 import type { Config } from "./api";
 import { Button } from "./ui";
-import {
-  assertValidPipelineSource,
-  detectConfigurationFormat,
-  guessConfigurationFormat,
-  MAX_CONFIGURATION_BYTES,
-  sourceErrorMessage,
-  type ConfigurationFormat,
-} from "./configurationSource";
+import type { ConfigurationFormat } from "./configurationSource";
 import { pipelineTemplates } from "./pipelineTemplates";
 import "./pipeline-templates.css";
 
@@ -25,12 +18,18 @@ const count = (config: Config) =>
     .map((section) => Object.keys(config[section] || {}).length)
     .reduce((total, value) => total + value, 0);
 
+// Checking a configuration needs Vector's schema (about 1.4 MB), so it
+// downloads when someone imports or pastes one, never with the dialog.
+const loadSource = () => import("./configurationSource");
+
 /** Check configuration text for a new pipeline. */
-export function readStartText(
+export async function readStartText(
   name: string,
   text: string,
   format: ConfigurationFormat,
-): StartImport {
+): Promise<StartImport> {
+  const { assertValidPipelineSource, MAX_CONFIGURATION_BYTES, sourceErrorMessage } =
+    await loadSource();
   try {
     if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
       throw Error("Configurations must be 1 MiB or smaller.");
@@ -49,10 +48,12 @@ export function readStartText(
 /** Read a Vector configuration file for a new pipeline. */
 export async function readStartImport(file: File): Promise<StartImport> {
   try {
+    const { detectConfigurationFormat, MAX_CONFIGURATION_BYTES } =
+      await loadSource();
     if (file.size > MAX_CONFIGURATION_BYTES)
       throw Error("Configuration files must be 1 MiB or smaller.");
     const format = detectConfigurationFormat(file.name);
-    return readStartText(file.name, await file.text(), format);
+    return await readStartText(file.name, await file.text(), format);
   } catch (error) {
     return {
       name: file.name,
@@ -80,7 +81,8 @@ export default function PipelineStartChoice({
   value: string;
   disabled: boolean;
   imported: StartImport | null;
-  onChange: (value: string) => void;
+  /** The chosen start, with the template's name ("" for none). */
+  onChange: (value: string, templateName: string) => void;
   onImport: (value: StartImport | null) => void;
 }) {
   const file = useRef<HTMLInputElement>(null);
@@ -94,6 +96,26 @@ export default function PipelineStartChoice({
   const pasteId = useId();
   const [pasting, setPasting] = useState(false);
   const [pasted, setPasted] = useState("");
+  // The name being checked; only the newest check's answer is shown.
+  const [checking, setChecking] = useState<string | null>(null);
+  const check = useRef(0);
+  async function read(name: string, run: () => Promise<StartImport>) {
+    const ticket = ++check.current;
+    setChecking(name);
+    let result: StartImport;
+    try {
+      result = await run();
+    } catch {
+      result = {
+        name,
+        error:
+          "The configuration checker didn't load. Check your connection, then try again.",
+      };
+    }
+    if (ticket !== check.current) return;
+    setChecking(null);
+    onImport(result);
+  }
   const chosen = pipelineTemplates.find((template) => template.id === value);
   const option = (
     id: string,
@@ -110,7 +132,13 @@ export default function PipelineStartChoice({
         name="pipeline-start"
         disabled={disabled}
         checked={value === id}
-        onChange={() => onChange(id)}
+        onChange={() =>
+          onChange(
+            id,
+            pipelineTemplates.find((template) => template.id === id)?.title ??
+              "",
+          )
+        }
         aria-describedby={value === id && chosen ? needsId : undefined}
       />
       <span>
@@ -147,10 +175,11 @@ export default function PipelineStartChoice({
             type="file"
             hidden
             accept=".json,.yaml,.yml,.toml"
-            onChange={async (event) => {
+            onChange={(event) => {
               const chosenFile = event.target.files?.[0];
               event.target.value = "";
-              if (chosenFile) onImport(await readStartImport(chosenFile));
+              if (chosenFile)
+                void read(chosenFile.name, () => readStartImport(chosenFile));
             }}
           />
           <Button
@@ -194,28 +223,37 @@ export default function PipelineStartChoice({
                 variant="secondary compact"
                 disabled={disabled || !pasted.trim()}
                 onClick={() => {
-                  const format = guessConfigurationFormat(pasted);
-                  onImport(
-                    readStartText(
+                  const text = pasted;
+                  void read("Pasted configuration", async () => {
+                    const { guessConfigurationFormat } = await loadSource();
+                    const format = guessConfigurationFormat(text);
+                    return readStartText(
                       `Pasted ${format.toUpperCase()}`,
-                      pasted,
+                      text,
                       format,
-                    ),
-                  );
+                    );
+                  });
                 }}
               >
                 Use this configuration
               </Button>
             </div>
           )}
-          {imported && (
-            <p
-              className="pipeline-start-import-result"
-              role={imported.error ? "alert" : "status"}
-              data-error={imported.error ? true : undefined}
-            >
-              <code>{imported.name}</code> {imported.error ?? imported.summary}
+          {checking ? (
+            <p className="pipeline-start-import-result" role="status">
+              <code>{checking}</code> Checking…
             </p>
+          ) : (
+            imported && (
+              <p
+                className="pipeline-start-import-result"
+                role={imported.error ? "alert" : "status"}
+                data-error={imported.error ? true : undefined}
+              >
+                <code>{imported.name}</code>{" "}
+                {imported.error ?? imported.summary}
+              </p>
+            )
           )}
         </div>
       )}

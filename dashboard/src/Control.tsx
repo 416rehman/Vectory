@@ -27,7 +27,7 @@ import {
   Skeleton,
   useResource,
 } from "./ui";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
