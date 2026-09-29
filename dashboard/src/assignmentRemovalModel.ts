@@ -229,17 +229,34 @@ export function assertAssignmentRemovalReceipt(id: string, value: unknown) {
   return result;
 }
 
-export function removalEffectLabel(device: RemovalDevice) {
-  return {
-    fallback: "Use another assignment",
-    unmanaged: "Keep the local configuration",
-    default_policy: "Use default agent policy",
-    retained_pending: "Keep current state while rollout waits",
-    unchanged: "No desired-state change",
-    revoked: "Device revoked",
-    missing: "Device unavailable",
-    not_targeted: "No longer targeted",
-  }[device.effect];
+/**
+ * What the device runs after the removal, as a sentence about the device:
+ * "Keeps Edge syslog processing v1 (no change)", "Switches to Web access
+ * logs v2".
+ */
+export function removalEffectLabel(
+  device: RemovalDevice,
+  resource: AssignmentRemovalPreview["resource"] = "configuration",
+) {
+  const name = (state: RemovalState | null) =>
+    removalStateLabel(state, resource);
+  switch (device.effect) {
+    case "fallback":
+      return `Switches to ${name(device.after)}`;
+    case "unmanaged":
+      return "Keeps its last working config, unmanaged";
+    case "default_policy":
+      return "Uses the default agent settings";
+    case "retained_pending":
+      return `Keeps ${name(device.before)} until the next rollout reaches it`;
+    case "unchanged":
+    case "not_targeted":
+      return `Keeps ${name(device.after)} (no change)`;
+    case "revoked":
+      return "Device revoked";
+    case "missing":
+      return "Device unavailable";
+  }
 }
 
 export function removalStateLabel(
@@ -253,5 +270,5 @@ export function removalStateLabel(
       (state.assignment_id ? "Assigned agent policy" : "Default agent policy")
     );
   if (!state.version_id) return "No managed configuration";
-  return `${state.configuration_name || "Pipeline"}${state.version_number !== null ? ` · Version ${state.version_number}` : ""}`;
+  return `${state.configuration_name || "Pipeline"}${state.version_number !== null ? ` v${state.version_number}` : ""}`;
 }
