@@ -39,6 +39,7 @@ pub mod reset_requests;
 pub mod restored_access;
 pub mod rollback_review;
 pub mod rollout;
+pub mod schedule;
 pub mod scheduled_refresh;
 pub mod telemetry;
 pub mod token_requests;
@@ -69,6 +70,9 @@ pub struct Settings {
     /// Take the client address from the last X-Forwarded-For hop. Enable only
     /// when the HTTP listener is reachable solely through a trusted proxy.
     pub trust_proxy_headers: bool,
+    /// How many seconds after its time a due schedule still activates
+    /// (`VECTORY_SCHEDULE_LATE_START_SECONDS`); None uses the one-hour default.
+    pub schedule_late_start_seconds: Option<u64>,
     /// Agent builds shipped inside the server image. Entries in the operator
     /// mirror (`releases_dir`) replace the bundled build for their platform.
     pub bundled_releases_dir: Option<PathBuf>,

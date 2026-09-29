@@ -60,7 +60,7 @@ Vectory never raises a priority for you. **No current priority conflict** means 
 | --- | --- |
 | **All at once** | Every target gets the version now. |
 | **Canary, then batches** | A few devices first. After an observation period, if they apply cleanly, the rest follow in batches. |
-| **Scheduled** | The deployment starts at the time you choose. The target list is fixed when you schedule it. |
+| **Scheduled** | The deployment starts once, at the time you choose. The target list is fixed when you schedule it. If the server is down at that time, it starts when the server is back, up to an hour late ([the server's late-start window](server-config.md#server-settings)); later than that, it's marked **Schedule missed** and you create a new deployment. |
 
 For a first canary, try one device, a batch size that suits your fleet and a few minutes of observation.
 
@@ -133,11 +133,13 @@ A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) hol
 | Action | Effect |
 | --- | --- |
 | **Pause** | Stops releasing to more devices; resume later. Devices already updated keep the version. |
-| **Cancel** | Stops releasing for good. Devices already updated keep the version. |
+| **Cancel** | Stops releasing for good. Devices already updated keep the version. A schedule cancelled before it starts never starts. |
 | **Roll back** | Returns the devices it released to their previous version. See [Roll back deliberately](#roll-back-deliberately). |
 | **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 | **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
 | `vectory pause` on a device | The same, set by the host. Only the host can clear it. |
+
+If you cancel a schedule at the moment it starts, the server applies one action and then the other, never a mix. Cancel first: the schedule never starts. Start first: the devices it released keep the version, and the cancel stops the rest. The deployment's activity shows which came first.
 
 **Remove assignment** first shows what each device runs afterwards, by name: for example **Keeps Edge syslog processing v1 (no change)** or **Switches to Web access logs v2**. A device with nothing else assigned keeps running its current configuration, unmanaged. If anything changes before you confirm, refresh the review.
 
