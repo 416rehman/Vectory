@@ -23,10 +23,27 @@ function documentFor(agent: boolean) {
       Object.values(methods).flatMap((operation) => operation.tags ?? []),
     ),
   );
+  const schemes = spec.components.securitySchemes;
   return {
     ...spec,
     tags: spec.tags.filter((tag) => used.has(tag.name)),
     security: agent ? [{ deviceMTLS: [] }] : spec.security,
+    components: {
+      ...spec.components,
+      securitySchemes: {
+        // Shown in the authentication panel, which otherwise invites pasting
+        // an HttpOnly cookie that this page already sends.
+        sessionCookie: {
+          ...schemes.sessionCookie,
+          description:
+            "Your signed-in session, sent for you. Leave the value empty.",
+        },
+        deviceMTLS: {
+          ...schemes.deviceMTLS,
+          description: "Only the agent can present the device certificate.",
+        },
+      },
+    },
     info: {
       ...spec.info,
       title: agent ? "Vectory agent protocol" : "Vectory dashboard API",
@@ -50,20 +67,33 @@ function documentFor(agent: boolean) {
 function Reference() {
   const [agent, setAgent] = useState(false);
   useEffect(() => {
-    // Scalar 0.9.74's icon-only code copy controls lack accessible names.
-    // Scope this compatibility fix to that known control, including lazy content.
-    const nameCopyButtons = () =>
+    // Scalar 0.9.74's icon-only code copy controls and the cookie-name editor in
+    // its authentication panel lack accessible names, and that editor's
+    // combobox role lacks aria-expanded (its suggestion list is only for
+    // {{variables}}). Scope these compatibility fixes to those known controls,
+    // including lazy content.
+    const nameControls = () => {
       document
         .querySelectorAll<HTMLButtonElement>(
           "button.scalar-code-copy:not([aria-label])",
         )
         .forEach((button) => button.setAttribute("aria-label", "Copy code"));
-    const observer = new MutationObserver(nameCopyButtons);
+      document
+        .querySelectorAll<HTMLElement>(
+          '.code-input-lite__editor[role="combobox"][data-placeholder="api-key"]:not([aria-label])',
+        )
+        .forEach((editor) => {
+          editor.setAttribute("aria-label", "Cookie name");
+          if (!editor.hasAttribute("aria-expanded"))
+            editor.setAttribute("aria-expanded", "false");
+        });
+    };
+    const observer = new MutationObserver(nameControls);
     observer.observe(document.getElementById("root")!, {
       childList: true,
       subtree: true,
     });
-    nameCopyButtons();
+    nameControls();
     return () => observer.disconnect();
   }, []);
   const configuration = useMemo<AnyApiReferenceConfiguration>(
