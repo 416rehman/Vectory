@@ -658,6 +658,61 @@ vectory-page-actions {
 .sl-markdown-content td:first-child code {
   white-space: nowrap;
 }
+/* Stacked tables: on narrow screens, a table with three or more columns shows
+   one block per row, each value under its column's name; a two-column table
+   does the same, without names, instead of scrolling sideways. The script in
+   Footer.astro adds the class, the labels and explicit table roles. */
+@media (max-width: 40rem) {
+  .sl-markdown-content table.help-stacked-table,
+  .sl-markdown-content table.help-stacked-table :is(tbody, tr, td) {
+    display: block;
+  }
+  .sl-markdown-content table.help-stacked-table {
+    overflow: visible;
+  }
+  .sl-markdown-content table.help-stacked-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .sl-markdown-content table.help-stacked-table tr {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+  }
+  .sl-markdown-content table.help-stacked-table tr:first-child {
+    border-top: 1px solid var(--sl-color-gray-5);
+  }
+  .sl-markdown-content table.help-stacked-table td {
+    padding: 0;
+    border: 0;
+  }
+  .sl-markdown-content table.help-stacked-table td:first-child {
+    color: var(--sl-color-white);
+    font-weight: 600;
+  }
+  .sl-markdown-content table.help-stacked-table td:first-child code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .sl-markdown-content table.help-stacked-table td + td {
+    margin-top: 0.25rem;
+  }
+  .sl-markdown-content table.help-stacked-table:not([data-columns="2"]) td + td {
+    margin-top: 0.5rem;
+  }
+  .sl-markdown-content
+    table.help-stacked-table:not([data-columns="2"])
+    td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+  }
+}
 .help-footer {
   margin-top: 3rem;
 }
