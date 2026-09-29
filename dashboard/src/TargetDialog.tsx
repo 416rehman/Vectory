@@ -988,7 +988,10 @@ export default function TargetDialog({
       : device.running_version?.configuration_id === configurationId &&
           version?.number
         ? `v${version.number}`
-        : capitalize(requestedName(change));
+        : // A pipeline's own name keeps its case; only "version 1" is capitalized.
+          change.kind === "configuration" && change.pipeline
+          ? requestedName(change)
+          : capitalize(requestedName(change));
     return paused.has(device.id) ? `${next}, after sync resumes` : next;
   };
   /** The device already runs exactly what it would receive. */
