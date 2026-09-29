@@ -927,7 +927,8 @@ try {
         const f = await fixture({ role });
         try {
           await expect(
-            f.page.getByText("This page is unavailable for your account.", {
+            f.page.getByRole("heading", {
+              name: "Adding devices needs the Operator role",
               exact: true,
             }),
           ).toBeVisible();

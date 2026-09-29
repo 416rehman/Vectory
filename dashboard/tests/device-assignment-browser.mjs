@@ -258,7 +258,10 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${origin}/__device-assignment#/${path}`);
+  // A cold Vite transform on a busy host can outlast the 7 s action timeout.
+  await page.goto(`${origin}/__device-assignment#/${path}`, {
+    timeout: 60000,
+  });
 }
 const settings = () =>
   page.getByRole("region", { name: "Agent settings", exact: true });

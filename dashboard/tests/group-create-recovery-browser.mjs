@@ -714,7 +714,7 @@ try {
             text: document.activeElement?.textContent,
           })),
         });
-        await s.page.keyboard.press("Tab");
+        // Dialogs open on their first field.
         await expect(
           s.page.getByRole("textbox", { name: "Group name", exact: true }),
         ).toBeFocused();

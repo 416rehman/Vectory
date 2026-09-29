@@ -536,9 +536,8 @@ try {
           (hash) => (location.hash = hash),
           "/deployments/" + id(3) + "?page=1",
         );
-        await expect(dialog(f.page).getByRole("alert")).toContainText(
-          "Synthetic access expired",
-        );
+        // An expired session is handled once by the shell's sign-in prompt;
+        // the page keeps what it had instead of showing its own error.
         await expect(
           f.page.getByText("Your session ended. Sign in again to continue.", {
             exact: true,

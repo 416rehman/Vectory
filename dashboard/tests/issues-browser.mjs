@@ -253,7 +253,10 @@ async function fixture(props = {}) {
     unexpected.push(`${method} ${path}`);
     return fail(500, "Unexpected synthetic request");
   });
-  await page.goto("http://127.0.0.1:5204/__issues-fixture");
+  // A cold Vite transform on a busy host can outlast the 8 s action timeout.
+  await page.goto("http://127.0.0.1:5204/__issues-fixture", {
+    timeout: 60000,
+  });
   await page.waitForFunction(() => window.ready);
   const mount = async (next = {}) => {
     await page.evaluate((props) => window.renderIssues(props), {
@@ -551,10 +554,7 @@ try {
           has: f.page.getByText("Issue acknowledged", { exact: true }),
         });
         await prior
-          .getByRole("button", {
-            name: "Details: Issue acknowledged",
-            exact: true,
-          })
+          .getByRole("link", { name: "Issue acknowledged", exact: true })
           .click();
         await expect(f.dialog()).toContainText(
           "Original retired-device decision",
@@ -574,7 +574,7 @@ try {
         await f.page
           .getByRole("row")
           .filter({ has: f.page.getByText("Issue reopened", { exact: true }) })
-          .getByRole("button", { name: "Details: Issue reopened", exact: true })
+          .getByRole("link", { name: "Issue reopened", exact: true })
           .click();
         await expect(f.dialog()).toContainText("Later renewed review");
         expect(f.state.postRequests).toHaveLength(2);
