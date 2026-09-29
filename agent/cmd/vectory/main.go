@@ -43,6 +43,14 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "help", "-h", "-help", "--help":
 		if args[0] == "help" && len(args) > 1 {
+			switch args[1] {
+			case "help":
+				fmt.Fprint(stdout, "Usage:  vectory help [command]\n\nShow the list of commands, or the flags and examples of one command.\n")
+				return exitOK
+			case "version":
+				fmt.Fprint(stdout, "Usage:  vectory version [--json]\n\nPrint the agent version, the Vector releases it supports, and the Go\nversion and platform it was built for. --json prints one JSON document.\n")
+				return exitOK
+			}
 			cmd := findCommand(args[1])
 			if cmd == nil || cmd.hidden {
 				return unknownCommand(stderr, args[1])

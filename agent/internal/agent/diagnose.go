@@ -823,7 +823,8 @@ func parseVectorRecord(line []byte) (vectorRecord, bool) {
 		return vectorRecord{}, false
 	}
 	rec := vectorRecord{
-		Level: strings.ToUpper(jsonText(raw["level"])), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
+		// "Log level is enabled." repeats the level key with a quoted value.
+		Level: strings.ToUpper(strings.Trim(jsonText(raw["level"]), `"`)), Message: jsonText(raw["message"]), Target: jsonText(raw["target"]),
 		Error: jsonText(raw["error"]), ErrorType: jsonText(raw["error_type"]), Stage: jsonText(raw["stage"]),
 		Reason: jsonText(raw["reason"]), Address: jsonText(raw["address"]), ChangedFields: jsonText(raw["changed_fields"]),
 		Version: jsonText(raw["version"]), Timestamp: jsonText(raw["timestamp"]),
