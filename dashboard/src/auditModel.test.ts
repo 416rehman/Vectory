@@ -194,7 +194,7 @@ describe("readable audit rows", () => {
   });
   it("counts one device's steps once, by its latest result", () => {
     const at = (id: string, outcome: string, created_at: string) => ({
-      ...event(id, "device.apply_state", outcome, "r16-host"),
+      ...event(id, "device.apply_state", outcome, "web-01"),
       created_at,
     });
     // Newest first, as the audit list shows them, or oldest first.
@@ -210,7 +210,7 @@ describe("readable audit rows", () => {
     ])
       expect(deviceResultsSummary(items)).toEqual({
         title: "2 results for 1 device",
-        devices: "r16-host",
+        devices: "web-01",
         outcomes: "1 applied",
       });
   });

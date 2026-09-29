@@ -12,7 +12,7 @@ const approvals = {
   fileRoots: ["/var/log/app logs"],
 };
 const host = {
-  name: "r16-host",
+  name: "web-01",
   os: "linux",
   state_dir: "/var/lib/vectory-agent",
   service_manager: "systemd" as const,
@@ -109,7 +109,7 @@ describe("host approval commands", () => {
       { ...host, name: "edge-3", service_manager: "none" },
     ]);
     expect(blocks.map((block) => block.devices)).toEqual([
-      ["r16-host", "edge-2"],
+      ["web-01", "edge-2"],
       ["edge-3"],
     ]);
     expect(namedDevices(["a"])).toBe("a");

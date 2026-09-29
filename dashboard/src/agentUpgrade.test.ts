@@ -110,7 +110,7 @@ const install = AgentInstallSchema.parse({
   catalog_problems: [],
 });
 const host = {
-  name: "r16-host",
+  name: "web-01",
   os: "linux",
   state_dir: "/var/lib/vectory-agent",
   service_manager: "systemd" as const,
@@ -122,17 +122,17 @@ describe("upgrading an enrolled agent", () => {
       runningBuild({ ...host, agent_sha256: linux.sha256 }, linux),
     ).toEqual({
       current: true,
-      line: "r16-host already runs this build (SHA-256 975c1a33…0e9d19).",
+      line: "web-01 already runs this build (SHA-256 975c1a33…0e9d19).",
     });
     expect(
       runningBuild({ ...host, agent_sha256: "a".repeat(64) }, linux).line,
     ).toBe(
-      "r16-host runs another build (SHA-256 aaaaaaaa…aaaaaa); this server offers 0.2.0 (SHA-256 975c1a33…0e9d19).",
+      "web-01 runs another build (SHA-256 aaaaaaaa…aaaaaa); this server offers 0.2.0 (SHA-256 975c1a33…0e9d19).",
     );
     // An agent that doesn't report its build is never called current.
     expect(runningBuild(host, linux)).toEqual({
       current: false,
-      line: "Development builds can share a version label, and r16-host's agent doesn't report which build it runs, so this page can't tell whether it already runs this one.",
+      line: "Development builds can share a version label, and web-01's agent doesn't report which build it runs, so this page can't tell whether it already runs this one.",
     });
   });
 
@@ -215,7 +215,7 @@ describe("upgrading an enrolled agent", () => {
 
   it("says where the agent goes, and what an older agent doesn't tell", () => {
     expect(upgradeNotes(install, host)).toEqual([
-      "The agent goes to /usr/local/bin. If r16-host's agent is installed somewhere else, add `--install-dir` with that directory.",
+      "The agent goes to /usr/local/bin. If web-01's agent is installed somewhere else, add `--install-dir` with that directory.",
     ]);
     expect(
       upgradeNotes(install, {
@@ -224,8 +224,8 @@ describe("upgrading an enrolled agent", () => {
         service_manager: "none",
       }),
     ).toEqual([
-      "The agent goes to /usr/local/bin. If r16-host's agent is installed somewhere else, add `--install-dir` with that directory.",
-      "r16-host's agent doesn't report its state directory. If it isn't the default, add `--state-dir` with it; otherwise setup treats this as a new installation.",
+      "The agent goes to /usr/local/bin. If web-01's agent is installed somewhere else, add `--install-dir` with that directory.",
+      "web-01's agent doesn't report its state directory. If it isn't the default, add `--state-dir` with it; otherwise setup treats this as a new installation.",
       "Nothing restarts `vectory run` for you: setup says when to stop it and start it again on the new build.",
     ]);
   });

@@ -13,7 +13,7 @@ A deployment sends one published version, or a set of agent settings, to the dev
 
 Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
-From a device's page (**Deploy a pipeline**), another pipeline that only this device follows is replaced by default, so the review doesn't stop at a priority choice: it says "Replaces r16-first v1: only this device follows it, so nothing else changes." **Keep r16-first v1 as well** brings the choice back. A pipeline other devices also follow is never replaced this way.
+From a device's page (**Deploy a pipeline**), another pipeline that only this device follows is replaced by default, so the review doesn't stop at a priority choice: it says "Replaces edge-syslog v1: only this device follows it, so nothing else changes." **Keep edge-syslog v1 as well** brings the choice back. A pipeline other devices also follow is never replaced this way.
 
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
