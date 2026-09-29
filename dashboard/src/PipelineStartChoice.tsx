@@ -1,11 +1,13 @@
-import { useId, useRef } from "react";
-import { FileUp } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import { ClipboardPaste, FileUp } from "lucide-react";
 import type { Config } from "./api";
 import { Button } from "./ui";
 import {
   assertValidPipelineSource,
+  ConfigurationSourceError,
   detectConfigurationFormat,
   MAX_CONFIGURATION_BYTES,
+  type ConfigurationFormat,
 } from "./configurationSource";
 import { pipelineTemplates } from "./pipelineTemplates";
 import "./pipeline-templates.css";
@@ -22,21 +24,60 @@ const count = (config: Config) =>
     .map((section) => Object.keys(config[section] || {}).length)
     .reduce((total, value) => total + value, 0);
 
+/** The format of pasted text: JSON objects, TOML tables and keys, else YAML. */
+export function guessConfigurationFormat(text: string): ConfigurationFormat {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) return "json";
+  const tomlLike =
+    /^\s*\[{1,2}[A-Za-z0-9_."-]+\]{1,2}\s*$/m.test(text) ||
+    /^\s*[A-Za-z0-9_."-]+\s*=/m.test(text);
+  const yamlLike = /^\s*[A-Za-z0-9_"'-]+:(\s|$)/m.test(text);
+  return tomlLike && !yamlLike ? "toml" : "yaml";
+}
+
+/** "Line 4:3: message" for the first problem, so a parse error is findable. */
+export function sourceErrorMessage(text: string, error: unknown) {
+  const first =
+    error instanceof ConfigurationSourceError ? error.diagnostics[0] : null;
+  const message = first?.message || (error as Error)?.message || "";
+  if (!message) return "This configuration could not be read.";
+  if (!first || (first.from === 0 && !text.trim())) return message;
+  const before = text.slice(0, first.from).split("\n");
+  const line = before.length,
+    column = before.at(-1)!.length + 1;
+  return /^Line \d+/i.test(message)
+    ? message
+    : `Line ${line}:${column}: ${message.replace(/ at line \d+, column \d+:?$/, "")}`;
+}
+
+/** Check configuration text for a new pipeline. */
+export function readStartText(
+  name: string,
+  text: string,
+  format: ConfigurationFormat,
+): StartImport {
+  try {
+    if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
+      throw Error("Configurations must be 1 MiB or smaller.");
+    const config = assertValidPipelineSource(text, format);
+    const steps = count(config);
+    return {
+      name,
+      config,
+      summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
+    };
+  } catch (error) {
+    return { name, error: sourceErrorMessage(text, error) };
+  }
+}
+
 /** Read a Vector configuration file for a new pipeline. */
 export async function readStartImport(file: File): Promise<StartImport> {
   try {
     if (file.size > MAX_CONFIGURATION_BYTES)
       throw Error("Configuration files must be 1 MiB or smaller.");
-    const config = assertValidPipelineSource(
-      await file.text(),
-      detectConfigurationFormat(file.name),
-    );
-    const steps = count(config);
-    return {
-      name: file.name,
-      config,
-      summary: `${steps} ${steps === 1 ? "step" : "steps"}, checked locally. Vector checks it in the editor.`,
-    };
+    const format = detectConfigurationFormat(file.name);
+    return readStartText(file.name, await file.text(), format);
   } catch (error) {
     return {
       name: file.name,
@@ -69,6 +110,9 @@ export default function PipelineStartChoice({
 }) {
   const file = useRef<HTMLInputElement>(null);
   const needsId = useId();
+  const pasteId = useId();
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
   const chosen = pipelineTemplates.find((template) => template.id === value);
   const option = (
     id: string,
@@ -112,7 +156,7 @@ export default function PipelineStartChoice({
         {option(
           "import",
           "Import a Vector config",
-          "Start from a YAML, JSON or TOML file.",
+          "Start from a YAML, JSON or TOML file, or paste one.",
         )}
       </div>
       {value === "import" && (
@@ -137,6 +181,52 @@ export default function PipelineStartChoice({
           >
             {imported ? "Choose another file" : "Choose file"}
           </Button>
+          <Button
+            type="button"
+            variant="ghost compact"
+            icon={ClipboardPaste}
+            disabled={disabled}
+            aria-expanded={pasting}
+            aria-controls={pasteId}
+            onClick={() => setPasting(!pasting)}
+          >
+            Paste instead
+          </Button>
+          {pasting && (
+            <div className="pipeline-start-paste" id={pasteId}>
+              <label className="sr-only" htmlFor={`${pasteId}-text`}>
+                Vector configuration
+              </label>
+              <textarea
+                id={`${pasteId}-text`}
+                rows={8}
+                spellCheck={false}
+                disabled={disabled}
+                placeholder={
+                  "sources:\n  app_logs:\n    type: file\n    include: [/var/log/app/*.log]"
+                }
+                value={pasted}
+                onChange={(event) => setPasted(event.target.value)}
+              />
+              <Button
+                type="button"
+                variant="secondary compact"
+                disabled={disabled || !pasted.trim()}
+                onClick={() => {
+                  const format = guessConfigurationFormat(pasted);
+                  onImport(
+                    readStartText(
+                      `Pasted ${format.toUpperCase()}`,
+                      pasted,
+                      format,
+                    ),
+                  );
+                }}
+              >
+                Use this configuration
+              </Button>
+            </div>
+          )}
           {imported && (
             <p
               className="pipeline-start-import-result"
