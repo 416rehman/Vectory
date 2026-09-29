@@ -1599,6 +1599,33 @@ export default function Editor({
         : state.fromNode.id + "." + port,
     );
   };
+  /**
+   * Put the cursor where the new step needs input: its first required empty
+   * field, else its first field. Never the header's Rename button.
+   */
+  function focusFirstControl() {
+    const controls =
+      'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled), [contenteditable="true"]';
+    let frames = 0;
+    const attempt = () => {
+      const body = document.querySelector<HTMLElement>(
+        ".editor-inspector-body",
+      );
+      if (!body) {
+        if (++frames < 10) requestAnimationFrame(attempt);
+        return;
+      }
+      const required = Array.from(
+        body.querySelectorAll<HTMLElement>('[aria-required="true"]'),
+      ).find((element) => !(element as HTMLInputElement).value);
+      (
+        required ||
+        body.querySelector<HTMLElement>(controls) ||
+        body.querySelector<HTMLElement>("summary, button")
+      )?.focus();
+    };
+    requestAnimationFrame(attempt);
+  }
   function add(item: Component, input?: string) {
     if (!editable || busy || !guardInspectorDrafts()) return;
     try {
@@ -1641,13 +1668,7 @@ export default function Editor({
       setCanvasPicker(null);
       pickerPlacement.current = null;
       setSelected(result.id);
-      requestAnimationFrame(() => {
-        document
-          .querySelector<HTMLElement>(
-            '.editor-inspector-body input, .editor-inspector-body textarea, .editor-inspector-body [contenteditable="true"], .editor-inspector-body select, .editor-inspector-body summary, .editor-inspector button',
-          )
-          ?.focus();
-      });
+      focusFirstControl();
       notify(item.label + " added.");
     } catch (e) {
       setError((e as Error).message);

@@ -239,6 +239,52 @@ const DISPLAY_LABELS: Record<string, string> = {
   blackhole: "Discard events",
 };
 
+/**
+ * Words people search for that a component's name or description leaves out:
+ * the products it reads (nginx, apache), the job it does (archive, discard)
+ * and the names other tools use for it.
+ */
+const SEARCH_KEYWORDS: Record<string, string> = {
+  "sources:file":
+    "nginx apache httpd haproxy log logs files tail read path glob access error application app text disk",
+  "sources:syslog": "rsyslog syslog-ng linux messages network udp tcp",
+  "sources:journald": "systemd journal linux service units",
+  "sources:kubernetes_logs": "k8s kubernetes pods containers cluster",
+  "sources:docker_logs": "container containers docker compose",
+  "sources:demo_logs": "synthetic sample test fake generate example demo",
+  "sources:http_server": "webhook http endpoint receive listen post rest api",
+  "sources:opentelemetry": "otel otlp collector traces metrics logs grpc",
+  "sources:host_metrics": "cpu memory disk network system node machine",
+  "sources:internal_metrics": "vector monitoring self telemetry health",
+  "sources:kafka": "redpanda topic consumer stream queue",
+  "sources:prometheus_scrape": "scrape exporter metrics endpoint",
+  "sources:stdin": "pipe standard input terminal",
+  "transforms:remap":
+    "vrl edit fields parse modify rename script code json regex",
+  "transforms:route": "split branch condition if else fan out",
+  "transforms:exclusive_route": "split branch condition if else first match",
+  "transforms:filter": "drop keep discard where condition remove",
+  "transforms:sample": "sampling reduce volume rate percent thin",
+  "transforms:dedupe": "duplicates duplicate unique repeated",
+  "transforms:reduce": "aggregate combine multiline merge group stack trace",
+  "transforms:throttle": "rate limit cap quota burst",
+  "transforms:log_to_metric": "counter gauge histogram convert",
+  "sinks:aws_s3": "s3 amazon aws bucket archive object storage backup",
+  "sinks:loki": "grafana logs labels",
+  "sinks:elasticsearch": "opensearch elk search index kibana",
+  "sinks:console": "stdout stderr print debug terminal",
+  "sinks:blackhole": "discard drop null devnull throw away",
+  "sinks:prometheus_exporter": "scrape metrics grafana endpoint",
+  "sinks:http": "webhook post rest api endpoint",
+  "sinks:file": "write disk local save",
+  "sinks:kafka": "redpanda topic producer stream queue",
+  "sinks:datadog_logs": "dd datadog",
+  "sinks:splunk_hec_logs": "splunk hec",
+};
+export function searchKeywords(kind: Kind, type: string) {
+  return SEARCH_KEYWORDS[`${kind}:${type}`] || "";
+}
+
 export function displayLabel(type: string, kind?: Kind, fallback?: string) {
   return (
     (kind && DISPLAY_LABELS[`${kind}:${type}`]) ||
