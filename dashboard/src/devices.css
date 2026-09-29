@@ -277,6 +277,9 @@ a.device-version-name:hover {
 .device-banner a {
   color: var(--accent-text);
 }
+.device-banner .device-banner-action {
+  margin-top: var(--space-2);
+}
 .device-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -420,6 +423,14 @@ a.device-version-name:hover {
   line-height: 18px;
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
+}
+.device-running-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--danger-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .device-running-note {
   margin: var(--space-2) 0 0;
