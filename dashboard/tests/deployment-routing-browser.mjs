@@ -598,7 +598,7 @@ try {
         // An expired session is handled once, by the shell's re-sign-in
         // dialog; the page keeps what it had instead of showing its own error.
         const ended = f.page.getByRole("dialog", {
-          name: "Your session expired",
+          name: "Your session ended",
           exact: true,
         });
         await expect(ended).toBeVisible();

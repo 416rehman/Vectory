@@ -1,7 +1,7 @@
 // Actual App with isolated, explicitly synthetic HTTP. No preview or fleet access.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve, dirname, relative } from "node:path";

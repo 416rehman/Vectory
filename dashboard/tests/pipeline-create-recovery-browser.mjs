@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   root = resolve(dashboard, "..");
 const output = resolve(

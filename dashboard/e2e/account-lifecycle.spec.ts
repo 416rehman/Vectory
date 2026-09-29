@@ -28,6 +28,12 @@ type Account = {
 };
 const password = () => crypto.randomBytes(24).toString("base64url");
 
+/**
+ * The notification stack. Its cards are not live regions (the two hidden ones
+ * that speak them are), so a message is found in the region, not by role.
+ */
+const notifications = (page: Page) =>
+  page.getByRole("region", { name: "Notifications", exact: true });
 async function session(request: APIRequestContext) {
   const response = await request.get("/api/v1/session");
   expect(response.status()).toBe(200);
@@ -642,7 +648,7 @@ test("viewer password change and session revocation preserve the current browser
       .click();
     await expect(dialog).not.toBeVisible(afterPassword);
     await expect(
-      owner.getByRole("status").filter({ hasText: "Password changed." }),
+      notifications(owner).filter({ hasText: "Password changed." }),
     ).toBeVisible();
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
@@ -669,7 +675,7 @@ test("viewer password change and session revocation preserve the current browser
     await expect(signOutOne).toHaveCount(1);
     await signOutOne.click();
     await expect(
-      owner.getByRole("status").filter({ hasText: /^Signed out / }),
+      notifications(owner).filter({ hasText: /^Signed out / }),
     ).toBeVisible();
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);
@@ -694,9 +700,9 @@ test("viewer password change and session revocation preserve the current browser
       .click();
     await expect(revoke).not.toBeVisible(afterPassword);
     await expect(
-      owner
-        .getByRole("status")
-        .filter({ hasText: "Signed out of every other browser." }),
+      notifications(owner).filter({
+        hasText: "Signed out of every other browser.",
+      }),
     ).toBeVisible();
     expect((await owner.request.get("/api/v1/session")).status()).toBe(200);
     expect((await victim.request.get("/api/v1/session")).status()).toBe(401);

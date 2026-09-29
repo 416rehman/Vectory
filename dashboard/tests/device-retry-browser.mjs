@@ -1,7 +1,7 @@
 // Actual recovery component; all transport and device state are isolated synthetic fixtures.
 import { createServer, transformWithEsbuild } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
