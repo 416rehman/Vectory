@@ -391,3 +391,29 @@ async fn preview_http_exposes_policy_outcome_only_after_authentication_and_csrf(
     assert_eq!(fleet[0]["policy_assignment"]["id"], existing["id"]);
     assert!(fleet[0].get("assignment").is_none());
 }
+
+#[tokio::test]
+async fn a_preview_names_the_pipeline_it_deploys() {
+    let (_temp, s, ids) = fixture(1).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    let preview = rollout::preview(&mut tx, &configuration(&ids, 100, VERSION_A))
+        .await
+        .unwrap();
+    // The fixture's version has no pipeline record: nothing is invented.
+    assert_eq!(preview["configuration_name"], Value::Null);
+    db::insert(
+        &mut tx,
+        "configuration",
+        &json!({"id":"00000000-0000-4000-8000-000000000200","name":"r2-edge-syslog","created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    let preview = rollout::preview(&mut tx, &configuration(&ids, 100, VERSION_A))
+        .await
+        .unwrap();
+    assert_eq!(preview["configuration_name"], "r2-edge-syslog");
+    let settings = rollout::preview(&mut tx, &policy(&ids, 100, false))
+        .await
+        .unwrap();
+    assert_eq!(settings["configuration_name"], Value::Null);
+}

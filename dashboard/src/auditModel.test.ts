@@ -7,7 +7,10 @@ import {
   auditHistoryPath,
   auditResourceRoute,
   auditRoute,
+  auditEventLabel,
   defaultAuditQuery,
+  deviceResultsSummary,
+  groupDeviceResults,
   normalizeAuditQuery,
   readAuditQuery,
 } from "./auditModel";
@@ -154,5 +157,47 @@ describe("what changed", () => {
     ]);
     expect(auditChanges(null)).toEqual([]);
     expect(auditChanges({ state: { nested: true } })).toEqual([]);
+  });
+});
+
+describe("readable audit rows", () => {
+  const event = (
+    id: string,
+    action: string,
+    outcome = "success",
+    target_name: string | null = null,
+  ) => ({ id, action, outcome, target_name, created_at: null });
+  it("collapses runs of device results and keeps lone ones", () => {
+    const rows = groupDeviceResults([
+      event("1", "deployment.create"),
+      event("2", "device.apply_state", "verified_applied", "edge-nyc-01"),
+      event("3", "device.apply_state", "verified_applied", "edge-nyc-02"),
+      event("4", "device.apply_state", "rolled_back", "edge-fra-01"),
+      event("5", "configuration.publish"),
+      event("6", "device.apply_state", "desired", "edge-fra-01"),
+    ]);
+    expect(rows.map((row) => row.kind)).toEqual([
+      "event",
+      "results",
+      "event",
+      "event",
+    ]);
+    const group = rows[1];
+    expect(group.kind === "results" && group.items.length).toBe(3);
+    expect(
+      deviceResultsSummary(group.kind === "results" ? group.items : []),
+    ).toEqual({
+      title: "3 device results",
+      devices: "edge-nyc-01, edge-nyc-02 and 1 more",
+      outcomes: "2 applied and verified, 1 rolled back",
+    });
+  });
+  it("names a refused enrollment", () => {
+    expect(
+      auditEventLabel({ action: "device.enroll", outcome: "failure" }),
+    ).toBe("Enrollment refused");
+    expect(
+      auditEventLabel({ action: "device.enroll", outcome: "success" }),
+    ).toBe("Device enrolled");
   });
 });

@@ -53,7 +53,7 @@ const reasons: Record<string, { title: string; fix: string }> = {
   },
 };
 
-export function refusal(event: EnrollmentEvent) {
+export function refusal(event: { reason_code?: string | null }) {
   return (
     reasons[event.reason_code || ""] || {
       title: "the server refused it",
@@ -63,7 +63,11 @@ export function refusal(event: EnrollmentEvent) {
 }
 
 /** "linux/amd64, agent 0.1.0" and similar, from whatever the device sent. */
-export function describeAgent(event: EnrollmentEvent) {
+export function describeAgent(event: {
+  agent_os?: string | null;
+  agent_arch?: string | null;
+  agent_version?: string | null;
+}) {
   const platform =
     event.agent_os && event.agent_arch
       ? `${event.agent_os}/${event.agent_arch}`

@@ -321,7 +321,8 @@ a.device-version-name:hover {
   color: var(--text-muted);
   font-weight: 600;
 }
-.device-banner .device-delivery-foot {
+.device-banner .device-delivery-foot,
+.device-banner .device-banner-action {
   margin-top: var(--space-2);
 }
 .device-layout {
@@ -468,6 +469,14 @@ a.device-version-name:hover {
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
+.device-running-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--danger-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
 .device-running-note {
   margin: var(--space-2) 0 0;
   color: var(--text-muted);
@@ -506,6 +515,10 @@ a.device-version-name:hover {
 .device-failure-details-head strong {
   color: var(--text);
   font-size: var(--text-base);
+}
+.device-failure-details-head small {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 .device-failure-details-head code {
   padding: 0 var(--space-1-5);
@@ -725,7 +738,6 @@ a.device-version-name:hover {
   color: var(--text);
   font-weight: var(--weight-semibold);
   text-decoration: none;
-  text-transform: capitalize;
 }
 .device-issues a:hover {
   color: var(--accent-text);

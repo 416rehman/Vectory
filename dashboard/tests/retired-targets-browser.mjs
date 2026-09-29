@@ -607,7 +607,12 @@ try {
           try {
             const { page } = app;
             await open(page);
-            await expect(table(page)).toContainText("No longer targeted");
+            // On a phone the results are a list of cards, not a table.
+            await expect(
+              width < 640
+                ? dialog(page).getByRole("list", { name: "Device results" })
+                : table(page),
+            ).toContainText("No longer targeted");
             await expect(
               dialog(page).getByRole("button", {
                 name: "Roll back",

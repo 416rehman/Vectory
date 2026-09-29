@@ -54,7 +54,10 @@ type Lineage = Pick<
   | "rolled_back_to_version"
   | "replaced_by"
   | "failure_reason"
->;
+> &
+  Partial<
+    Pick<DeploymentSummary, "verified_count" | "target_count" | "state_counts">
+  >;
 
 function version(number: number | null | undefined) {
   return number ? `v${number}` : "another version";
@@ -97,6 +100,21 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
           : null,
     };
   }
+  // A rollout stops on failure, but its devices can verify afterwards (a
+  // retry, or the host fixed). Once every current device is verified, say so
+  // instead of contradicting the counts with "Failed".
+  const current = (d.target_count ?? 0) - ((d.state_counts || {}).removed ?? 0);
+  if (
+    d.status === "failed" &&
+    !latest &&
+    current > 0 &&
+    d.verified_count === current
+  )
+    return {
+      label: "Recovered",
+      tone: "success",
+      note: "Stopped after a failure; every device verified since",
+    };
   const note = latest
     ? `Replaced on ${replaced.reduce((sum, entry) => sum + entry.device_count, 0)} ${replaced.reduce((sum, entry) => sum + entry.device_count, 0) === 1 ? "device" : "devices"} by ${version(latest.version_number)}`
     : d.status === "failed" && d.failure_reason === "threshold"
@@ -111,6 +129,22 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
     tone: lifecycleTones[d.status] || "neutral",
     note,
   };
+}
+
+/**
+ * "2 of 3 verified": how many of the devices a rollout currently follows
+ * verified it. One wording for the list, the group view and cards.
+ */
+export function verifiedText(
+  d: Pick<
+    DeploymentSummary,
+    "target_count" | "verified_count" | "state_counts" | "rolled_back_by"
+  >,
+) {
+  const current = d.target_count - (d.state_counts.removed || 0);
+  if (!current && d.target_count) return "No devices follow this now";
+  if (!current) return "No devices";
+  return `${d.verified_count} of ${current} verified${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 
 /** Whether a rollout can still release devices (and is worth polling fast). */
@@ -341,16 +375,85 @@ const stepLabels: Record<TimelineStep["key"], string> = {
   applied: "Applied",
   verified: "Verified",
 };
+/** The apply step an agent's failure stage belongs to. */
+export type ApplyStep =
+  | "downloaded"
+  | "validated"
+  | "written"
+  | "reloaded"
+  | "verified";
+const failureStageSteps: Record<string, ApplyStep> = {
+  fetch: "downloaded",
+  download: "downloaded",
+  downloaded: "downloaded",
+  verify: "downloaded",
+  validation: "validated",
+  validate: "validated",
+  validated: "validated",
+  secrets: "validated",
+  credentials: "validated",
+  capability: "validated",
+  compatibility: "validated",
+  preflight: "validated",
+  materialization: "validated",
+  write: "written",
+  written: "written",
+  staging: "written",
+  commit: "written",
+  reload: "reloaded",
+  reload_requested: "reloaded",
+  startup: "reloaded",
+  start: "reloaded",
+  rollback: "reloaded",
+  recovery: "reloaded",
+  observation: "reloaded",
+  verification: "verified",
+  telemetry: "verified",
+};
+/**
+ * Which apply step failed, from the stage the agent reported ("validation",
+ * "rollback", …). The device page and the rollout page both read this, so
+ * they never blame different steps. "apply" is the unspecific default and
+ * maps to nothing; callers fall back to the device state.
+ */
+export function failedApplyStep(
+  stage: string | null | undefined,
+): ApplyStep | null {
+  return failureStageSteps[(stage || "").toLowerCase()] ?? null;
+}
+const stagePhrases: Record<ApplyStep, string> = {
+  downloaded: "while downloading",
+  validated: "while Vector checked it",
+  written: "while writing the config",
+  reloaded: "while restarting Vector",
+  verified: "while confirming Vector runs it",
+};
+/** "while restarting Vector" for a reported stage; empty when unknown. */
+export function failureStagePhrase(stage: string | null | undefined) {
+  const step = failedApplyStep(stage);
+  return step ? stagePhrases[step] : "";
+}
+const timelineStepFor: Record<ApplyStep, TimelineStep["key"]> = {
+  downloaded: "downloaded",
+  validated: "validated",
+  written: "applied",
+  reloaded: "applied",
+  verified: "verified",
+};
+
 /**
  * Released → downloaded → validated → applied → verified for one device, from
  * persisted release/verification times and recorded apply-state changes. A
- * step a check-in skipped is done without a time; nothing is invented.
+ * step a check-in skipped is done without a time; nothing is invented. A
+ * failure is placed at the stage the agent reported; without one, a rollback
+ * means Vector didn't come up (Applied), and anything else falls after the
+ * last recorded step.
  */
 export function timelineSteps(
   target: Pick<
     DeploymentTarget,
     "state" | "released_at" | "verified_at" | "timeline"
-  >,
+  > & { failure_stage?: string | null },
 ): TimelineStep[] {
   const keys = Object.keys(stepStates) as TimelineStep["key"][];
   const events = target.timeline || [];
@@ -373,6 +476,33 @@ export function timelineSteps(
   const failed = ["failed", "rolled_back", "incompatible", "blocked"].includes(
     target.state,
   );
+  const reported = failed ? failedApplyStep(target.failure_stage) : null;
+  const failedKey: TimelineStep["key"] | null = !failed
+    ? null
+    : reported
+      ? timelineStepFor[reported]
+      : target.state === "rolled_back"
+        ? "applied"
+        : null;
+  if (failedKey) {
+    const failedAt = keys.indexOf(failedKey);
+    return keys.map((key, index) => {
+      const at =
+        key === "released"
+          ? target.released_at || null
+          : key === "verified"
+            ? null
+            : firstAt(stepStates[key]);
+      const state: TimelineStep["state"] =
+        index < failedAt ? "done" : index === failedAt ? "failed" : "waiting";
+      return {
+        key,
+        label: stepLabels[key],
+        at: state === "done" ? at : null,
+        state,
+      };
+    });
+  }
   return keys.map((key, index) => {
     const at =
       key === "released"

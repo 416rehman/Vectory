@@ -1,10 +1,11 @@
-import { Layers, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Check, Copy, Layers, ShieldCheck } from "lucide-react";
 import type { AgentInstall } from "./api";
 import DocLink from "./DocLink";
 import {
   fingerprint,
+  fingerprintRows,
   shortDigest,
-  shortFingerprint,
   type HostOS,
   type Mode,
 } from "./enrollmentCommands";
@@ -99,6 +100,40 @@ export function isAbsoluteLocalFilePath(value: string, os: string): boolean {
   );
 }
 
+/** The whole CA fingerprint in rows of eight pairs, with Copy. */
+function Fingerprint({ sha256 }: { sha256: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="enroll-fingerprint">
+      <code aria-label={`SHA-256 fingerprint ${fingerprint(sha256)}`}>
+        {fingerprintRows(sha256).map((row) => (
+          <span key={row}>{row}</span>
+        ))}
+      </code>
+      <button
+        type="button"
+        className="button ghost compact"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(fingerprint(sha256));
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 2000);
+          } catch {
+            setCopied(false);
+          }
+        }}
+      >
+        {copied ? (
+          <Check size={14} aria-hidden="true" />
+        ) : (
+          <Copy size={14} aria-hidden="true" />
+        )}
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </span>
+  );
+}
+
 /**
  * What protects this install, with the real values: the installer's SHA-256,
  * the pinned server CA and the token's limits.
@@ -159,13 +194,12 @@ export function SecurityReceipt({
             </>
           ) : certificate?.ca_sha256 ? (
             <>
-              CA pinned{" "}
-              <code title={fingerprint(certificate.ca_sha256)}>
-                {shortFingerprint(certificate.ca_sha256)}
-              </code>
+              CA pinned
               {certificate.ca_name ? ` (${certificate.ca_name})` : ""}. The host
               trusts no other certificate for this server, and never the first
-              one it happens to see.
+              one it happens to see. If setup asks you to compare, it shows this
+              SHA-256 fingerprint:
+              <Fingerprint sha256={certificate.ca_sha256} />
             </>
           ) : (
             "The host must already trust this server's certificate."

@@ -234,6 +234,16 @@ async function load(name, props = {}) {
     }
     if (method === "POST" && path === "/deployments/binding-suggestions")
       return route.fulfill({ json: { devices: {}, sources: {} } });
+    // Agent settings also lists settings that were applied without saving.
+    if (method === "GET" && path === "/deployments/history")
+      return route.fulfill({
+        json: { items: [], total: 0, page: 1, page_size: 50 },
+      });
+    // Add device lists the last day's enrollment attempts.
+    if (method === "GET" && path === "/agent-install/activity")
+      return route.fulfill({
+        json: { events: [], now: "2026-09-27T12:00:00Z" },
+      });
     throw Error(`Unexpected synthetic request ${method} ${path}`);
   });
   await page.goto(origin + "/__fleet-tables");
@@ -437,13 +447,23 @@ try {
         },
         initialDeviceIds: [devices[0].id, devices[1].id],
       });
-      await expect(page.getByRole("button", { name: "Review deployment" })).toBeDisabled();
+      // No red error before anyone tries; trying names what's missing.
+      await expect(page.getByText(/needs a value/)).toHaveCount(0);
+      const previews = state.previews.length;
+      await page.getByRole("button", { name: "Review deployment" }).click();
+      await expect(
+        page.getByText("SAMPLE_RATE needs a value for 2 selected devices."),
+      ).toBeVisible();
+      expect(state.previews.length).toBe(previews);
       await page.getByLabel("Set default for selected devices").check();
       await page.getByLabel("Default for SAMPLE_RATE").fill("10");
-      await page.getByText("Device overrides", { exact: false }).click();
-      await page.getByLabel("Device to customize").selectOption(devices[1].id);
-      await page.getByLabel("Override SAMPLE_RATE").check();
-      await page.getByLabel("SAMPLE_RATE for Device 0001").fill("20");
+      // Every selected device has its own cell; an empty one uses the default.
+      await expect(
+        page.getByLabel("SAMPLE_RATE for Device 0000", { exact: true }),
+      ).toHaveAttribute("placeholder", "Default: 10");
+      await page
+        .getByLabel("SAMPLE_RATE for Device 0001", { exact: true })
+        .fill("20");
       await page.getByRole("button", { name: "Review deployment" }).click();
       const reviewed = state.previews.at(-1);
       expect(reviewed.variable_bindings).toEqual({

@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUpDown,
   Ban,
   CalendarClock,
@@ -49,6 +50,7 @@ import {
   RefreshButton,
   SearchBox,
   Spinner,
+  DEFAULT_POLL_INTERVAL,
   useResource,
 } from "./ui";
 import { DataTable } from "./DataTable";
@@ -86,6 +88,7 @@ import {
   since,
   statusFilters,
   targetFilterStates,
+  verifiedText,
   targetLabel,
   targetTone,
 } from "./deploymentStatus";
@@ -113,6 +116,7 @@ import {
 } from "./canaryGateModel";
 
 const knownStatuses = new Set(Object.keys(lifecycleLabels));
+const LIVE_POLL_INTERVAL = 4000;
 function title(d: DeploymentSummary) {
   return (
     d.name ||
@@ -329,6 +333,28 @@ export function Deployments({
   }, [detailId, loading]);
   const searching = query.search !== search.trim();
   const waiting = loading || searching || correcting;
+  /** The row's title, shared by the table and the phone cards. */
+  const detailLink = (d: DeploymentSummary) => (
+    <a
+      className="control-row-title"
+      data-deployment-link={d.id}
+      href={`#/${deploymentRoute(scheduled, d.id, query)}`}
+      onClick={(event) => {
+        if (
+          event.button !== 0 ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        openDetail(d.id);
+      }}
+    >
+      {title(d)}
+    </a>
+  );
   function reset() {
     setSearch("");
     setQuery({ search: "", status: "all", page: 1 });
@@ -442,6 +468,28 @@ export function Deployments({
           maxLength={200}
           placeholder={scheduled ? "Search schedules" : "Search deployments"}
         />
+        <label className="deployment-mobile-filter">
+          <span className="sr-only">Status</span>
+          <select
+            value={query.status}
+            onChange={(event) => {
+              const status = event.target.value;
+              setQuery((old) => ({
+                ...old,
+                search: search.trim(),
+                status,
+                page: 1,
+              }));
+            }}
+          >
+            <option value="all">All statuses</option>
+            {statusFilters.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <RefreshButton busy={refreshing} onClick={() => void refresh()}>
           Refresh
         </RefreshButton>
@@ -453,6 +501,33 @@ export function Deployments({
           className="deployment-table"
           data={error ? [] : data.items}
           rowKey={(row) => row.id}
+          onRowClick={(row, event) => {
+            if (event.metaKey || event.ctrlKey) return;
+            openDetail(row.id);
+          }}
+          mobileCard={(d) => {
+            const display = describeDeployment(d);
+            return {
+              title: detailLink(d),
+              status: (
+                <StatusChip tone={display.tone} spin>
+                  {display.label}
+                </StatusChip>
+              ),
+              meta: [
+                d.policy
+                  ? subtitle(d)
+                  : d.version_number !== null
+                    ? `v${d.version_number}`
+                    : subtitle(d),
+                verifiedText(d),
+                <DateCell
+                  key="date"
+                  value={scheduled ? d.scheduled_at : d.created_at}
+                />,
+              ],
+            };
+          }}
           loading={waiting}
           manualSorting
           sort={{
@@ -478,25 +553,7 @@ export function Deployments({
               sortable: true,
               cell: (d) => (
                 <>
-                  <a
-                    className="control-row-title"
-                    data-deployment-link={d.id}
-                    href={`#/${deploymentRoute(scheduled, d.id, query)}`}
-                    onClick={(event) => {
-                      if (
-                        event.button !== 0 ||
-                        event.ctrlKey ||
-                        event.metaKey ||
-                        event.shiftKey ||
-                        event.altKey
-                      )
-                        return;
-                      event.preventDefault();
-                      openDetail(d.id);
-                    }}
-                  >
-                    {title(d)}
-                  </a>
+                  {detailLink(d)}
                   <small>
                     {subtitle(d)}
                     {d.rollback_of && (
@@ -628,7 +685,7 @@ type DeviceResultsQuery = {
 function DeviceResults({
   deployment,
   revision,
-  pulse,
+  live,
   stages,
   navigate,
   search,
@@ -638,7 +695,8 @@ function DeviceResults({
 }: {
   deployment: DeploymentSummary;
   revision: number;
-  pulse: number;
+  /** Poll every 4 s while the rollout can still move. */
+  live: boolean;
   stages: Map<string, string>;
   navigate(path: string): void;
   search: string;
@@ -668,10 +726,8 @@ function DeviceResults({
     `/deployments/${deployment.id}/targets?${params}`,
     { items: [], total: 0, page: query.page, page_size: 12 },
     revision,
+    { interval: live ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL },
   );
-  useEffect(() => {
-    if (pulse) void reload();
-  }, [pulse, reload]);
   const now = useNow(true, 5000);
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correcting = !loading && !error && query.page > lastPage;
@@ -697,6 +753,28 @@ function DeviceResults({
           maxLength={200}
           placeholder="Search deployment devices"
         />
+        <label className="deployment-mobile-filter">
+          <span className="sr-only">Progress</span>
+          <select
+            value={query.state}
+            onChange={(event) => {
+              const state = event.target.value;
+              setQuery((old) => ({
+                ...old,
+                search: search.trim(),
+                state,
+                page: 1,
+              }));
+            }}
+          >
+            <option value="all">All devices</option>
+            {states.map((value) => (
+              <option key={value} value={value}>
+                {`${targetLabel(value, { stopped })} (${deployment.state_counts[value] || 0})`}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       {error && <ErrorBox message={error} retry={reload} />}
       <div className="control-table">
@@ -705,6 +783,35 @@ function DeviceResults({
           className="deployment-targets"
           data={error ? [] : data.items}
           rowKey={(row) => row.device_id}
+          mobileCard={(t) => ({
+            title: t.device_name || t.device_id,
+            href: `#/devices/${encodeURIComponent(t.device_id)}`,
+            status: (
+              <StatusChip
+                tone={targetTone(t.state)}
+                spin={isLive(deployment.status)}
+              >
+                {targetLabel(t.state, { stopped, replaced: !!t.replaced_by })}
+              </StatusChip>
+            ),
+            meta: [
+              stages.get(t.device_id) || null,
+              t.last_seen
+                ? `Checked in ${since(t.last_seen, now)?.toLowerCase()}`
+                : "Never checked in",
+              t.state === "removed" || t.state === "pending" ? null : (
+                <DeviceTimeline key="timeline" target={t} />
+              ),
+              <span key="details" className="rollout-mobile-details">
+                <TargetDetails
+                  t={t}
+                  deployment={deployment}
+                  stopped={stopped}
+                  navigate={navigate}
+                />
+              </span>,
+            ],
+          })}
           loading={loading || correcting || query.search !== search.trim()}
           manualSorting
           sort={{ column: query.sort, direction: query.direction }}
@@ -1029,19 +1136,30 @@ function RolloutPage({
   permalinkRoute: string;
   originLabel: string;
 }) {
+  // Poll faster while the rollout can still move. Background polls never
+  // cancel a slow read in flight, so a loaded server still gets its answer in.
+  // Changing a resource's interval reads it once more, so only the two reads
+  // that decide it follow this state; everything below uses `live` directly.
+  const [polling, setPolling] = useState(false);
+  const pollInterval = polling ? LIVE_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
   const {
     data: deployment,
     error,
     loading,
     reload,
     reloadResult,
+    updatedAt,
   } = useResource<DeploymentSummary | null>(
     `/deployments/${encodeURIComponent(id)}/summary`,
     null,
+    0,
+    { interval: pollInterval },
   );
   const lanes = useResource<RolloutLanes | null>(
     `/deployments/${encodeURIComponent(id)}/rollout`,
     null,
+    0,
+    { interval: pollInterval },
   );
   const [action, setAction] = useState<string | null>(null),
     [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(
@@ -1062,14 +1180,12 @@ function RolloutPage({
     [checkingStatus, setCheckingStatus] = useState(false),
     [statusReadError, setStatusReadError] = useState(""),
     [revision, setRevision] = useState(0),
-    [pulse, setPulse] = useState(0),
     [assignmentCommitting, setAssignmentCommitting] = useState(false),
     [assignmentRemovalOpen, setAssignmentRemovalOpen] = useState(false),
     [scheduledRefreshOpen, setScheduledRefreshOpen] = useState(false),
     [retryScope, setRetryScope] = useState<RolloutFailure | null | undefined>(
       undefined,
     ),
-    [updatedAt, setUpdatedAt] = useState<number | null>(null),
     [clockOffset, setClockOffset] = useState(0);
   const assignmentReturnFocus = useRef<HTMLElement | null>(null);
   // The rollout is a page, not a dialog: a dialog opened from it hands focus
@@ -1111,9 +1227,6 @@ function RolloutPage({
     }
   }, []);
   useEffect(() => {
-    if (deployment) setUpdatedAt(Date.now());
-  }, [deployment]);
-  useEffect(() => {
     if (lanes.data)
       setClockOffset(Date.parse(lanes.data.evaluated_at) - Date.now());
   }, [lanes.data]);
@@ -1123,18 +1236,7 @@ function RolloutPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading && !deployment]);
   const live = !!deployment && isLive(deployment.status);
-  // Refresh faster while a rollout can still move, and only while visible.
-  useEffect(() => {
-    if (!live) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      if (busyRef.current || assignmentCommittingRef.current) return;
-      void reload();
-      void lanes.reload();
-      setPulse((value) => value + 1);
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [live, reload, lanes.reload]);
+  useEffect(() => setPolling(live), [live]);
   useEffect(() => {
     mounted.current = true;
     const guard = (event: Event) => {
@@ -1545,15 +1647,31 @@ function RolloutPage({
                 />
                 {operate && (
                   <div className="rollout-action-row">
-                    {failedCount > 0 && deployment.version_id && (
+                    {deployment.rolled_back_by && (
                       <Button
-                        icon={RotateCcw}
+                        icon={ArrowRight}
                         disabled={locked}
-                        onClick={() => openRetry(null)}
+                        onClick={() =>
+                          goToDeployment(deployment.rolled_back_by!)
+                        }
                       >
-                        Retry failed ({failedCount})
+                        Open rollback
+                        {deployment.rolled_back_to_version
+                          ? ` (v${deployment.rolled_back_to_version})`
+                          : ""}
                       </Button>
                     )}
+                    {failedCount > 0 &&
+                      deployment.version_id &&
+                      !deployment.rolled_back_by && (
+                        <Button
+                          icon={RotateCcw}
+                          disabled={locked}
+                          onClick={() => openRetry(null)}
+                        >
+                          Retry failed ({failedCount})
+                        </Button>
+                      )}
                     {status === "active" && (
                       <Button
                         variant="secondary"
@@ -1768,18 +1886,34 @@ function RolloutPage({
                 lastWave={lastWave}
               />
             )}
+            {deployment.rolled_back_by && (
+              <p className="rollout-note rollout-rolled-back-note" role="note">
+                <Undo2 size={14} aria-hidden="true" />
+                <span>
+                  Rolled back to{" "}
+                  {deployment.rolled_back_to_version
+                    ? `v${deployment.rolled_back_to_version}`
+                    : "the earlier version"}
+                  {deployment.rolled_back_at
+                    ? ` at ${exactTime(deployment.rolled_back_at)}`
+                    : ""}
+                  . Fix the pipeline and publish a new version to try again.
+                </span>
+              </p>
+            )}
             {lanes.data && lanes.data.failures.length > 0 && (
               <FailureGroups
                 failures={lanes.data.failures}
                 navigate={navigate}
                 onRetry={
-                  operate && deployment.version_id
+                  operate && deployment.version_id && !deployment.rolled_back_by
                     ? (failure) => openRetry(failure)
                     : undefined
                 }
               />
             )}
             {deployment.status === "failed" &&
+              !deployment.rolled_back_by &&
               deployment.rollout.kind === "canary" && (
                 <p className="control-muted rollout-note">
                   Retrying a device sends the same version again. It doesn't
@@ -1789,7 +1923,7 @@ function RolloutPage({
             <DeviceResults
               deployment={deployment}
               revision={revision}
-              pulse={pulse}
+              live={live}
               stages={stageByDevice}
               navigate={navigate}
               search={deviceSearch}
@@ -1967,7 +2101,7 @@ function Lineage({
             }}
           >
             {link.label}
-            <ExternalLink
+            <ArrowRight
               size={12}
               aria-hidden="true"
               className="rollout-lineage-icon"

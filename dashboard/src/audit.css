@@ -95,6 +95,46 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Consecutive device apply results collapse into one expandable row. */
+.audit-results-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.audit-results-toggle:hover,
+.audit-results-toggle:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.audit-results-chevron {
+  color: var(--text-subtle);
+  transition: transform 120ms ease;
+}
+.audit-results-toggle[aria-expanded="true"] .audit-results-chevron {
+  transform: rotate(90deg);
+}
+.audit-results-outcomes {
+  font-size: var(--text-sm);
+}
+.audit-row-member td:first-child {
+  padding-left: calc(var(--space-4) + 18px);
+}
+.audit-row-member {
+  background: var(--surface-sunken);
+}
+@media (prefers-reduced-motion: reduce) {
+  .audit-results-chevron {
+    transition: none;
+  }
+}
 .audit-target {
   min-width: 0;
   color: var(--text-muted);

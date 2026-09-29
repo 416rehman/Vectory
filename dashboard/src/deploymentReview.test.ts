@@ -102,7 +102,10 @@ describe("replacement review copy", () => {
         described({ resource: "policy", policy_name: "Maintenance" }),
       ),
     ).toBe("“Maintenance” settings");
-    expect(runningName(device(1, "edge-01"))).toBe("Local config (adopted)");
+    expect(runningName(device(1, "edge-01"))).toBe("Nothing running yet");
+    expect(
+      runningName({ ...device(1, "edge-01"), actual_sha256: "a".repeat(64) }),
+    ).toBe("Its local config");
     const running = {
       ...device(2, "edge-02"),
       running_version: {

@@ -51,6 +51,7 @@ import {
 } from "./commandPaletteModel";
 import { pageEntries } from "./navigation";
 import { deviceDisplayStatus, type StatusDomain } from "./status";
+import { describeDeployment } from "./deploymentStatus";
 import { relativeTime } from "./time";
 import { Kbd, Spinner, StatusBadge, useMediaQuery } from "./ui";
 import "./command-palette.css";
@@ -60,7 +61,7 @@ type Item = PaletteEntry & {
   href?: string;
   external?: boolean;
   run?: () => void;
-  status?: { domain: StatusDomain; value: string };
+  status?: { domain: StatusDomain; value: string; label?: string };
   shortcut?: string[];
   current?: boolean;
   recent?: RecentItem;
@@ -425,7 +426,12 @@ export default function CommandPalette({
         keywords: `${deployment.configuration_name || ""} ${deployment.name || ""} deployment rollout`,
         icon: Rocket,
         href: `#/deployments/${deployment.id}`,
-        status: { domain: "deployment", value: deployment.status },
+        // The same words as the Deployments list ("Replaced", "Rolled back").
+        status: {
+          domain: "deployment",
+          value: deployment.status,
+          label: describeDeployment(deployment).label,
+        },
         recent: {
           key: `deployment:${deployment.id}`,
           kind: "deployment",
@@ -634,6 +640,7 @@ export default function CommandPalette({
                         <StatusBadge
                           domain={item.status.domain}
                           value={item.status.value}
+                          label={item.status.label}
                         />
                       )}
                       {item.current && (

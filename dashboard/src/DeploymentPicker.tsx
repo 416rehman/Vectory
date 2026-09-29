@@ -28,12 +28,18 @@ export default function DeploymentPicker({
   user,
   scheduled,
   returnFocusRef,
+  initialDeviceIds,
+  deviceName,
   onClose,
   onDone,
 }: {
   user: User;
   scheduled: boolean;
   returnFocusRef?: React.RefObject<HTMLElement | null>;
+  /** Preselected devices, when started from one device's page. */
+  initialDeviceIds?: string[];
+  /** Names the single preselected device in the picker's description. */
+  deviceName?: string;
   onClose(): void;
   onDone(message: string): void;
 }) {
@@ -107,6 +113,7 @@ export default function DeploymentPicker({
         version={version}
         pipelineName={pipeline?.name}
         initialStrategy={scheduled ? "scheduled" : undefined}
+        initialDeviceIds={initialDeviceIds}
         onClose={onClose}
         onDone={onDone}
       />
@@ -123,8 +130,18 @@ export default function DeploymentPicker({
       wide
       className="deployment-picker-modal"
       returnFocusRef={returnFocusRef}
-      title={scheduled ? "Schedule a deployment" : "Deploy a pipeline"}
-      description="Choose a published pipeline and version. Next, pick devices and how to release it."
+      title={
+        scheduled
+          ? "Schedule a deployment"
+          : deviceName
+            ? `Deploy a pipeline to ${deviceName}`
+            : "Deploy a pipeline"
+      }
+      description={
+        deviceName
+          ? `Choose a published pipeline and version. Next, review how it reaches ${deviceName}.`
+          : "Choose a published pipeline and version. Next, pick devices and how to release it."
+      }
     >
       <div className="modal-body deployment-picker">
         {(error || library.error) && (
@@ -180,7 +197,16 @@ export default function DeploymentPicker({
               {query
                 ? "No published pipeline matches this search."
                 : "No published pipelines yet. Publish a pipeline from the editor, then deploy it here."}{" "}
-              {!query && <a href="#/configurations">Open pipelines</a>}
+              {!query &&
+                (initialDeviceIds?.length === 1 ? (
+                  <a
+                    href={`#/configurations?device=${encodeURIComponent(initialDeviceIds[0])}`}
+                  >
+                    Start from a template
+                  </a>
+                ) : (
+                  <a href="#/configurations">Open pipelines</a>
+                ))}
             </p>
           )}
           {library.data.items.length > published.length && (
@@ -229,7 +255,7 @@ export default function DeploymentPicker({
           disabled={!versionId || opening}
           onClick={() => void next()}
         >
-          Choose devices
+          {deviceName ? "Continue" : "Choose devices"}
           <ArrowRight size={16} aria-hidden="true" />
         </Button>
       </div>
