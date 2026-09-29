@@ -297,14 +297,15 @@ export type SeriesBucket = { at: string; devices: number | null };
 export function completeSeries<T extends SeriesBucket>(
   series: T[],
   now = Date.now(),
+  /** The server's bucket width; a gap in the data must not stretch it. */
+  stepMs = 60_000,
 ): T[] {
   if (series.length < 2) return series;
   const last = series[series.length - 1];
   const previous = series[series.length - 2];
   const start = Date.parse(last.at);
-  const step = start - Date.parse(previous.at);
-  if (!Number.isFinite(start) || !(step > 0)) return series;
-  const end = start + step;
+  if (!Number.isFinite(start) || !(stepMs > 0)) return series;
+  const end = start + stepMs;
   const thin =
     last.devices !== null &&
     previous.devices !== null &&

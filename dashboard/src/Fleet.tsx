@@ -446,10 +446,13 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
             setOpen(false);
             notify("Group saved.", {
               tone: "success",
-              action: {
-                label: "View devices",
-                href: `#/devices?group=${encodeURIComponent(saved.id)}`,
-              },
+              // An empty group has no devices to show.
+              action: saved.device_ids.length
+                ? {
+                    label: "View devices",
+                    href: `#/devices?group=${encodeURIComponent(saved.id)}`,
+                  }
+                : undefined,
             });
             void groups.reload();
           }}
