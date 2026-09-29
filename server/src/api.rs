@@ -232,9 +232,30 @@ pub fn router(s: State) -> Router {
         .route("/api/{*path}", any(|| async { ApiError::missing() }))
         .route("/agent/{*path}", any(|| async { ApiError::missing() }))
         .fallback_service(spa)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn(reject_oversized))
         .layer(middleware::from_fn(security_headers))
         .with_state(s)
+}
+/// Largest accepted request body for the dashboard/API and agent listeners.
+pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
+/// Refuse a declared oversized body before reading any of it. `DefaultBodyLimit`
+/// still bounds chunked bodies, but only once a handler starts reading.
+pub async fn reject_oversized(request: Request, next: Next) -> Response {
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > MAX_REQUEST_BODY as u64) {
+        return ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PAYLOAD_TOO_LARGE",
+            "Request body is larger than 1 MiB",
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 async fn help_redirect(uri: Uri) -> Redirect {
     let location = uri
