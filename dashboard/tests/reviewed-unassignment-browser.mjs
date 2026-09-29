@@ -854,7 +854,7 @@ try {
         await expect(status()).toBeEnabled();
         await closeReview();
         await details()
-          .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+          .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
           .click();
         await expect(details()).toHaveCount(0);
         await page.evaluate(
@@ -1003,11 +1003,11 @@ try {
             .getByRole("button", { name: "Cancel", exact: true })
             .click();
           await details()
-            .getByRole("button", { name: /^Back to (deployments|schedules)$/ })
+            .getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: /^(Deployments|Schedules)$/ })
             .click();
           const requestsBefore = requests.length;
           await page
-            .getByRole("button", { name: "Refresh", exact: true })
+            .getByRole("button", { name: "Refresh now", exact: true })
             .click();
           await expect(
             page

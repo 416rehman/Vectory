@@ -522,7 +522,7 @@ try {
         await expect(f.row(12)).toBeVisible();
         f.state.listFailure = true;
         await f.page
-          .getByRole("button", { name: "Refresh", exact: true })
+          .getByRole("button", { name: "Refresh now", exact: true })
           .click();
         await expect(
           f.page.getByText("Synthetic issue history unavailable", {

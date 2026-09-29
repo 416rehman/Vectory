@@ -68,11 +68,6 @@ a.control-row-title {
   gap: var(--space-3);
   margin-top: var(--space-4);
 }
-.rollout-unavailable-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
 .rollout-version {
   padding: 2px 7px;
   border: 1px solid var(--line);

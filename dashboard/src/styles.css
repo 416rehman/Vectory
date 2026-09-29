@@ -476,6 +476,17 @@ details[open] > summary {
   text-overflow: ellipsis;
   color: var(--text);
 }
+/* A long name shrinks to an ellipsis; the live control keeps its size. */
+.page-context > nav {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.page-breadcrumb li:last-child {
+  overflow: hidden;
+}
+.page-context > .live-status {
+  flex: none;
+}
 .page-heading {
   display: flex;
   align-items: flex-start;
