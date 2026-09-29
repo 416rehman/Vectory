@@ -83,10 +83,10 @@ export const applyStates = {
     "The configuration is written. Vector is about to load it.",
   ),
   reload_requested: entry(
-    "Restarting Vector",
+    "Loading in Vector",
     "info",
     "progress",
-    "Vector is restarting with the new configuration.",
+    "Vector is loading it: a reload on Linux and macOS, a restart on Windows or if that fails.",
   ),
   verified_applied: entry(
     "Applied",
@@ -130,7 +130,7 @@ export const applyStepLabels = {
   downloaded: applyStates.downloaded.label,
   validated: applyStates.validated.label,
   written: "Written",
-  reloaded: "Vector reloaded",
+  reloaded: "Loaded in Vector",
   applied: applyStates.verified_applied.label,
 } as const;
 
