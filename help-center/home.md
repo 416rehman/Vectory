@@ -11,7 +11,7 @@ next: false
 <div class="help-paths">
 <a href="/help/quickstart/"><strong>Try it in 15 minutes →</strong><span>Run Vectory on one machine, connect it and deploy a pipeline.</span></a>
 <a href="/help/getting-started/"><strong>Understand Vectory →</strong><span>How the server, agents and Vector fit together, in two minutes.</span></a>
-<a href="/help/installation/"><strong>Connect a device →</strong><span>Install the agent on Linux, macOS or Windows with one command.</span></a>
+<a href="/help/installation/"><strong>Connect a device →</strong><span>Install the agent on Linux and macOS with one command, or on Windows from PowerShell.</span></a>
 <a href="/help/pipelines/"><strong>Build pipelines →</strong><span>Work with the graph, component settings, VRL and tests.</span></a>
 <a href="/help/deployments/"><strong>Deploy with confidence →</strong><span>Versions, targets, canaries, schedules and rollback.</span></a>
 <a href="/help/troubleshooting/"><strong>Fix a problem →</strong><span>Offline devices, rejected versions and missing data.</span></a>
