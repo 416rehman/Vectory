@@ -11,7 +11,6 @@ import { ExternalLink } from "lucide-react";
 import {
   APIError,
   api,
-  can,
   getCSRFVersion,
   getSessionEpoch,
   invalidateSession,
@@ -23,6 +22,7 @@ import {
   type LoginChallenge,
   type User,
 } from "./api";
+import { roleAllows } from "./roleAccess";
 import {
   authAuthorityUnchanged,
   authUserMatches,
@@ -1185,7 +1185,7 @@ export default function App() {
                 ) : page === "policies" ? (
                   <Policies user={user} notify={notify} />
                 ) : page === "enrollment" ? (
-                  can(user, "operate") ? (
+                  roleAllows(user, "operate") ? (
                     <Enrollment
                       user={user}
                       notify={notify}

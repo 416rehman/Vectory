@@ -5,7 +5,8 @@ import { GroupRecovery } from "./GroupRecovery";
 import { useGroupOperations } from "./groupRequests";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import { sortTableRows } from "./dataTableModel";
-import { can, type Device, type Group, type User } from "./api";
+import { type Device, type Group, type User } from "./api";
+import { roleAllows } from "./roleAccess";
 import {
   Button,
   EmptyState,
@@ -123,7 +124,7 @@ export function Groups({
   const [open, setOpen] = useState(false),
     [editing, setEditing] = useState<Group | null>(null),
     [savedGroup, setSavedGroup] = useState<Group | null>(null);
-  const allowed = can(user, "operate");
+  const allowed = roleAllows(user, "operate");
   const pageSize = GROUP_PAGE_SIZES.includes(query.size) ? query.size : 25;
   const sort = {
     column: query.sort || "group",
