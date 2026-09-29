@@ -119,7 +119,6 @@ export const applyStates = {
     "Configuration changes wait until sync resumes.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type ApplyState = keyof typeof applyStates;
 
 /**
  * The apply pipeline as completed steps, for the device page's progress and
@@ -185,7 +184,6 @@ export const deviceStatuses = {
     "Assignments with equal priority request different versions.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type DeviceStatus = keyof typeof deviceStatuses;
 
 export const connectionStates = {
   online: entry("Online", "success", "online", "Checked in recently."),
@@ -269,7 +267,6 @@ export const deploymentStatuses = {
     "A newer deployment took over its devices.",
   ),
 } satisfies Record<string, StatusEntry>;
-export type DeploymentStatus = keyof typeof deploymentStatuses;
 
 /** Per-device progress inside one deployment. */
 export const targetStates = {
@@ -315,7 +312,6 @@ export const targetStates = {
   ),
   revoked: deviceStatuses.revoked,
 } satisfies Record<string, StatusEntry>;
-export type TargetState = keyof typeof targetStates;
 
 export const issueDispositions = {
   open: entry("Open", "warning", "alert", "Reported and not yet resolved."),
@@ -393,7 +389,6 @@ export const auditOutcomes = {
   incompatible: targetStates.incompatible,
   paused: applyStates.paused,
 } satisfies Record<string, StatusEntry>;
-export type AuditOutcome = keyof typeof auditOutcomes;
 
 export const gateStates = {
   waiting: entry(

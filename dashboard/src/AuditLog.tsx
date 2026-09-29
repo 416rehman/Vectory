@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ChevronRight,
-  Copy,
   Download,
   ExternalLink,
   ScrollText,

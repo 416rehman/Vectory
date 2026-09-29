@@ -27,6 +27,7 @@ import {
   Spinner,
   useResource,
 } from "./ui";
+import { countLabel } from "./countLabel";
 import DocLink from "./DocLink";
 import { DataTable, type TableColumn } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
@@ -76,8 +77,6 @@ const emptyGroups: IssueGroupPage = {
   page: 1,
   page_size: PAGE_SIZE,
 };
-const plural = (count: number, one: string, many = `${one}s`) =>
-  `${count.toLocaleString()} ${count === 1 ? one : many}`;
 
 type VersionContext = {
   configuration_id?: string | null;
@@ -94,12 +93,12 @@ function versionLabel(context: VersionContext, versionId?: string | null) {
 function attemptsLabel(attempts: number, reports?: number, code?: string) {
   // Delivery issues count openings, and the checks that found the problem.
   if (isDataPlaneCode(code)) {
-    const text = plural(attempts, "occurrence");
-    return reports ? `${text} · seen in ${plural(reports, "check")}` : text;
+    const text = countLabel(attempts, "occurrence");
+    return reports ? `${text} · seen in ${countLabel(reports, "check")}` : text;
   }
-  const text = plural(attempts, "failed attempt");
+  const text = countLabel(attempts, "failed attempt");
   return reports && reports > attempts
-    ? `${text} · reported ${plural(reports, "time")}`
+    ? `${text} · reported ${countLabel(reports, "time")}`
     : text;
 }
 function resolution(issue: Issue) {
@@ -271,7 +270,7 @@ export default function Issues({
         <>
           {issue.count.toLocaleString()}
           {issue.reports !== undefined && issue.reports > issue.count && (
-            <small>reported {plural(issue.reports, "time")}</small>
+            <small>reported {countLabel(issue.reports, "time")}</small>
           )}
         </>
       ),
@@ -810,7 +809,7 @@ function IssueGroupCard({
         </div>
         <p className="issue-group-status">
           {group.issue_count > group.devices.length
-            ? plural(group.issue_count, "issue")
+            ? countLabel(group.issue_count, "issue")
             : counts.map((entry, index) => (
                 <span
                   key={entry.disposition}
@@ -829,7 +828,7 @@ function IssueGroupCard({
         </p>
       )}
       <p className="issue-group-meta">
-        {plural(group.device_count, "device")} ·{" "}
+        {countLabel(group.device_count, "device")} ·{" "}
         {attemptsLabel(group.attempts, group.reports, group.code)}
         {group.first_seen && (
           <> · failing since {issueTime(group.first_seen)}</>

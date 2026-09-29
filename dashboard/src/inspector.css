@@ -283,57 +283,6 @@
 .pipeline-settings > .schema-fields {
   margin-bottom: 20px;
 }
-.pipeline-settings .pipeline-disclosure > summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 550;
-}
-.pipeline-settings .pipeline-disclosure {
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  padding: 0;
-  margin: 0;
-}
-.pipeline-settings .pipeline-disclosure[open] {
-  padding-bottom: 12px;
-}
-.pipeline-settings .pipeline-disclosure > summary {
-  padding: 12px 0;
-}
-.pipeline-settings .pipeline-disclosure[open] > summary {
-  margin-bottom: 8px;
-}
-.pipeline-settings .pipeline-disclosure > p {
-  margin: 9px 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-.pipeline-settings .pipeline-disclosure > summary {
-  list-style: none;
-  cursor: pointer;
-}
-.pipeline-settings .pipeline-disclosure > summary::after {
-  content: "+";
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 15px;
-  font-weight: 400;
-}
-.pipeline-settings .pipeline-disclosure[open] > summary::after {
-  content: "−";
-}
-.pipeline-settings .pipeline-disclosure > summary::-webkit-details-marker {
-  display: none;
-}
-.pipeline-settings :is(summary, .pipeline-remove-option):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 2px;
-}
 
 .pipeline-vector-problems {
   margin: 0 0 16px;

@@ -1,12 +1,5 @@
 import { useEffect, useId, useState, type ReactNode, type Ref } from "react";
-import {
-  AlertCircle,
-  ArrowBigUp,
-  CircleHelp,
-  Copy,
-  Eye,
-  EyeOff,
-} from "lucide-react";
+import { AlertCircle, ArrowBigUp, CircleHelp, Eye, EyeOff } from "lucide-react";
 import { CopyButton } from "./ui";
 import { passwordStrength } from "./passwordStrength";
 import "./auth.css";
@@ -407,5 +400,3 @@ export function formatRemaining(
   if (minutes < 60) return `in ${minutes} min`;
   return `in ${Math.round(minutes / 60)} h`;
 }
-
-/** "just now", "5 min ago", "3 h ago", "2 days ago", then a date; "Never" when absent. */

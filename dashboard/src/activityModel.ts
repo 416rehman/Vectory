@@ -1,5 +1,6 @@
 /** Turn audit summaries into short sentences that name what changed. */
-import { auditActionLabel, auditResourceRoute, isAuditId } from "./auditModel";
+import { auditActionLabel, auditResourceRoute } from "./auditModel";
+import { countLabel } from "./countLabel";
 import { statusLabel } from "./status";
 
 export type ActivityItem = {
@@ -31,14 +32,11 @@ export type ActivityItem = {
 };
 export type Part = { text: string; href?: string | null; strong?: boolean };
 
-const plural = (n: number, word: string) =>
-  `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
-
 /** "edge-01, edge-02 and 3 more" from a bounded name list and a total. */
 export function nameList(names: string[], total = names.length) {
   const shown = names.slice(0, 2);
   const rest = total - shown.length;
-  if (!shown.length) return plural(total, "device");
+  if (!shown.length) return countLabel(total, "device");
   if (rest > 0) return `${shown.join(", ")} and ${rest} more`;
   return shown.length === 2 ? `${shown[0]} and ${shown[1]}` : shown[0];
 }
@@ -97,7 +95,7 @@ export function describeActivity(item: ActivityItem): Part[] {
   const repeat = item.repeat ?? 1;
   const devices = item.device_names || [];
   const count = item.deployment?.target_count;
-  const toDevices = count ? ` to ${plural(count, "device")}` : "";
+  const toDevices = count ? ` to ${countLabel(count, "device")}` : "";
   const canary =
     item.deployment?.rollout_kind === "canary" ? " as a canary" : "";
   switch (item.action) {
@@ -134,7 +132,7 @@ export function describeActivity(item: ActivityItem): Part[] {
         actor,
         { text: " scheduled " },
         targetPart(item, pipelineLabel(item)),
-        { text: count ? ` for ${plural(count, "device")}` : "" },
+        { text: count ? ` for ${countLabel(count, "device")}` : "" },
       ];
     case "deployment.release":
       return [

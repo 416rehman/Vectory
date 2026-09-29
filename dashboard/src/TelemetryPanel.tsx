@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { Check, X } from "lucide-react";
 import { when, type Device } from "./api";
 import { relativeTime } from "./time";

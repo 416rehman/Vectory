@@ -6,7 +6,8 @@ import {
   CircleX,
   LoaderCircle,
 } from "lucide-react";
-import { ago, type Config, type Version } from "./api";
+import type { Config, Version } from "./api";
+import { relativeTime } from "./time";
 import { Button } from "./ui";
 import ProblemText from "./ProblemText";
 import { displayLabel, type Kind } from "./catalog";
@@ -189,7 +190,7 @@ export default function PublishReview({
       )}
       <p className="publish-review-facts">
         {published
-          ? `Compared with v${published.number}, published ${ago(published.created_at).replace(/^Just now$/, "just now")}.`
+          ? `Compared with v${published.number}, published ${relativeTime(published.created_at, Date.now(), "at an unknown time")}.`
           : "This will be the first version of this pipeline."}{" "}
         {reach ?? "Checking where it runs…"}
       </p>
