@@ -114,6 +114,7 @@ export default function DeploymentPicker({
         pipelineName={pipeline?.name}
         initialStrategy={scheduled ? "scheduled" : undefined}
         initialDeviceIds={initialDeviceIds}
+        fromDevicePage={!!deviceName && initialDeviceIds?.length === 1}
         onClose={onClose}
         onDone={onDone}
       />
