@@ -101,6 +101,8 @@ function MemberHealth({ devices }: { devices: Device[] }) {
 const groupDefaults = {
   q: "",
   members: "",
+  /** The open group, so a group view has a link: #/groups?group=<id>. */
+  group: "",
   page: 1,
   size: 25,
   sort: "group",
@@ -188,7 +190,23 @@ export function Groups({
     if (!group && createBlocked) return;
     setEditing(group || null);
     setOpen(true);
+    if (group) update({ group: group.id });
   }
+  function closeEditor() {
+    setOpen(false);
+    if (query.group) update({ group: "" });
+  }
+  // A shared link opens its group once the list has loaded.
+  useEffect(() => {
+    if (!query.group || open || groups.loading) return;
+    const linked = groups.data.find((group) => group.id === query.group);
+    if (linked) {
+      setEditing(linked);
+      setOpen(true);
+    } else if (!groups.error) update({ group: "" });
+    // Only a changed link or a fresh list reopens a group.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.group, groups.loading, groups.data]);
   useCommand("group.create", () => edit(), allowed && !createBlocked);
   const firstRun = !groups.loading && !groups.error && groups.data.length === 0;
   const memberHealth = (group: Group) => (
@@ -443,13 +461,13 @@ export function Groups({
           devices={devices.data}
           deviceLoading={devices.loading}
           deviceError={devices.error}
-          onClose={() => setOpen(false)}
+          onClose={closeEditor}
           onRefresh={() => {
             void groups.reload();
           }}
           onSaved={(saved) => {
             setSavedGroup(saved);
-            setOpen(false);
+            closeEditor();
             notify("Group saved.");
             void groups.reload();
           }}

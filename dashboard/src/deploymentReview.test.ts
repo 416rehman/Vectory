@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AssignmentDescription, DeploymentPreview, Device } from "./api";
 import {
+  allowancesFile,
   assignmentName,
   conflictRows,
+  hostApprovals,
   defaultRelease,
   inferPipelineName,
   pauseSource,
@@ -102,7 +104,10 @@ describe("replacement review copy", () => {
         described({ resource: "policy", policy_name: "Maintenance" }),
       ),
     ).toBe("“Maintenance” settings");
-    expect(runningName(device(1, "edge-01"))).toBe("Local config (adopted)");
+    expect(runningName(device(1, "edge-01"))).toBe("Nothing running yet");
+    expect(
+      runningName({ ...device(1, "edge-01"), actual_sha256: "a".repeat(64) }),
+    ).toBe("Its local config");
     const running = {
       ...device(2, "edge-02"),
       running_version: {
@@ -315,5 +320,47 @@ describe("release settings", () => {
       }).kind,
     ).toBe("canary");
     expect(scheduledAt(defaultRelease)).toBeNull();
+  });
+});
+
+describe("restricted-host approvals", () => {
+  it("finds destinations, listeners and file roots the way the agent checks them", () => {
+    const approvals = hostApprovals({
+      data_dir: "/var/lib/vector",
+      sources: {
+        nginx: { type: "file", include: ["/var/log/nginx/*.log"] },
+        syslog: { type: "syslog", address: "0.0.0.0:1514", mode: "tcp" },
+      },
+      sinks: {
+        loki: {
+          type: "loki",
+          endpoint: "https://logs.example.net",
+          inputs: [],
+        },
+        es: {
+          type: "elasticsearch",
+          endpoints: ["http://10.0.0.5:9200"],
+          inputs: [],
+        },
+      },
+    });
+    expect(approvals).toEqual({
+      destinations: ["10.0.0.5:9200", "logs.example.net:443"],
+      listeners: ["0.0.0.0:1514"],
+      fileRoots: ["/var/lib/vector", "/var/log/nginx"],
+    });
+    expect(JSON.parse(allowancesFile(approvals))).toEqual({
+      allowed_file_roots: ["/var/lib/vector", "/var/log/nginx"],
+      allowed_network_hosts: ["10.0.0.5:9200", "logs.example.net:443"],
+      allowed_listen_addresses: ["0.0.0.0:1514"],
+    });
+  });
+  it("needs nothing for a self-contained pipeline", () => {
+    expect(
+      hostApprovals({
+        sources: { demo: { type: "demo_logs", format: "json" } },
+        sinks: { out: { type: "blackhole", inputs: ["demo"] } },
+      }),
+    ).toEqual({ destinations: [], listeners: [], fileRoots: [] });
   });
 });

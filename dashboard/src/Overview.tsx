@@ -246,7 +246,7 @@ export function Overview({
   );
   const summary = useTelemetrySummary(!!data && live.length > 0, interval);
   // Stopped and rolled-back rollouts leave "in progress" but still need you.
-  const stopped = useStoppedRollouts(!!data);
+  const stopped = useStoppedRollouts(!!data && live.length > 0);
   const operate = roleAllows(user, "operate");
   const now = Date.now();
   const steps = data

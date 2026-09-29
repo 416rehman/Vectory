@@ -863,8 +863,20 @@ async fn preview_inner(
 ) -> Result<Value> {
     validate_request_inner(v, trusted_rollback)?;
     let selected = select(db, &v["selector"]).await?;
+    // The pipeline's current name, so a review never shows a bare "Version 1".
+    let mut configuration_name = Value::Null;
     let artifact_previews = if let Some(version_id) = v["version_id"].as_str() {
         let version = db::record(db, "version", version_id).await?;
+        if let Some(pipeline) = version["configuration_id"].as_str() {
+            configuration_name = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT CASE WHEN json_type(data,'$.name')='text' THEN substr(json_extract(data,'$.name'),1,120) END FROM records WHERE kind='configuration' AND id=?",
+            )
+            .bind(pipeline)
+            .fetch_optional(&mut *db)
+            .await?
+            .flatten()
+            .map_or(Value::Null, Value::from);
+        }
         if trusted_rollback && v["rollback_artifacts"].is_object() {
             let overrides = v["rollback_artifacts"].as_object().unwrap();
             if overrides.len() != selected.len()
@@ -1102,7 +1114,7 @@ async fn preview_inner(
     }
     Ok(
         json!({"devices":fleet,"conflicts":conflicts_described,"warnings":warnings,"outcomes":outcomes,"artifact_previews":artifact_previews,"create_idempotency":true,"request_correlation":true,"blockers":blockers,
-            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused}),
+            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused,"configuration_name":configuration_name}),
     )
 }
 /// Display metadata for an assignment: names and numbers, never selectors,

@@ -33,6 +33,7 @@ import {
   type DeploymentStorageIssue,
 } from "./deploymentRequests";
 import { releasePlan, type StatusTone } from "./deploymentStatus";
+import { shortDigest } from "./enrollmentCommands";
 import {
   AssignmentLink,
   ConflictTable,
@@ -41,8 +42,11 @@ import {
   ReleaseStrategyFields,
 } from "./DeploymentReview";
 import {
+  allowancesFile,
   assignmentMeta,
   conflictRows,
+  hasHostApprovals,
+  hostApprovals,
   defaultRelease,
   devicesText,
   inferPipelineName,
@@ -185,6 +189,79 @@ function fullModeRequirements(config: Record<string, any>): string[] {
   inspect(config);
   return [...required];
 }
+/**
+ * A restricted host refuses destinations, listeners and paths it hasn't
+ * approved. Say which ones this version uses, and hand over the exact
+ * allowances file and commands for the host.
+ */
+function HostApprovalNote({
+  approvals,
+  devices,
+}: {
+  approvals: ReturnType<typeof hostApprovals>;
+  devices: Device[];
+}) {
+  const [copied, setCopied] = useState(false);
+  const parts = [
+    approvals.destinations.length
+      ? `${approvals.destinations.length === 1 ? "destination" : "destinations"} ${approvals.destinations.join(", ")}`
+      : "",
+    approvals.listeners.length
+      ? `${approvals.listeners.length === 1 ? "listener" : "listeners"} ${approvals.listeners.join(", ")}`
+      : "",
+    approvals.fileRoots.length
+      ? `files under ${approvals.fileRoots.join(", ")}`
+      : "",
+  ].filter(Boolean);
+  const hostSteps = [
+    "sudo vectory service-stop",
+    "sudo tee /etc/vectory/allowances.json <<'EOF'",
+    allowancesFile(approvals),
+    "EOF",
+    "sudo vectory install --capability-policy /etc/vectory/allowances.json",
+    "sudo vectory service-start",
+  ].join("\n");
+  return (
+    <div className="control-note target-approval-note" role="status">
+      <strong>
+        {devices.length === 1
+          ? `${devices[0].name} runs`
+          : `${devices.length} selected devices run`}{" "}
+        in restricted mode and refuse this version until their host approves it
+      </strong>
+      <p>
+        It uses {parts.join("; ")}. Only the host operator can allow these; the
+        dashboard can&apos;t.
+      </p>
+      <details className="target-approval-steps">
+        <summary>Commands for the host</summary>
+        <p>
+          Run these on each restricted host. The file replaces the host&apos;s
+          current allowances, so keep anything it already allows.
+        </p>
+        <pre tabIndex={0} aria-label="Host approval commands">
+          <code>{hostSteps}</code>
+        </pre>
+        <button
+          type="button"
+          className="button secondary compact"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(hostSteps);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 2000);
+            } catch {
+              setCopied(false);
+            }
+          }}
+        >
+          {copied ? "Copied" : "Copy commands"}
+        </button>
+      </details>
+    </div>
+  );
+}
+
 const deviceStates: Record<string, string> = {
   verified: "Online",
   unmanaged: "Online",
@@ -274,6 +351,7 @@ export default function TargetDialog({
   );
   const devices = useResource<Device[]>("/devices", []),
     groups = useResource<Group[]>("/groups", []);
+
   const [selected, setSelected] = useState<string[]>(initialDeviceIds),
     [groupIds, setGroupIds] = useState<string[]>([]),
     [exclude, setExclude] = useState<string[]>([]),
@@ -304,7 +382,11 @@ export default function TargetDialog({
     [prefill, setPrefill] = useState<{
       values: number;
       devices: number;
+      /** "Edge syslog processing v2" when every value came from one version. */
+      source: string | null;
     } | null>(null),
+    // Missing values are pointed out once someone tries to review.
+    [bindingAttempted, setBindingAttempted] = useState(false),
     [busy, setBusy] = useState(false),
     [created, setCreated] = useState<{
       id: string | null;
@@ -314,6 +396,10 @@ export default function TargetDialog({
     } | null>(null),
     [error, setError] = useState(""),
     [preview, setPreview] = useState<Reviewed | null>(null);
+  // Callers such as the editor don't pass the pipeline's name; the reviewed
+  // preview carries it, so the review never shows a bare "Version 1".
+  const knownPipelineName =
+    pipelineName || preview?.configuration_name || undefined;
   const effective = useMemo(
     () =>
       new Set(
@@ -474,9 +560,21 @@ export default function TargetDialog({
     // Never refill a value someone cleared on purpose.
     applied.forEach((key) => prefilledKeys.current.add(key));
     setBindingInputs(next);
+    const origins = new Set(
+      [...touched].map((device) => {
+        const source = result.sources?.[device];
+        if (!source?.configuration_name) return null;
+        return source.version_number
+          ? `${source.configuration_name} v${source.version_number}`
+          : source.configuration_name;
+      }),
+    );
+    const origin =
+      origins.size === 1 ? ([...origins][0] as string | null) : null;
     setPrefill((previous) => ({
       values: (previous?.values || 0) + applied.length,
       devices: Math.max(previous?.devices || 0, touched.size),
+      source: previous && previous.source !== origin ? null : origin,
     }));
     setPreview(null);
   }
@@ -509,6 +607,18 @@ export default function TargetDialog({
   });
   const capabilityBlocked =
     requirements.length > 0 && restrictedTargets.length > 0;
+  // Restricted devices also refuse destinations, listeners and paths their
+  // host hasn't approved. Nothing here knows a host's allowances, so say
+  // exactly what each restricted host must allow before this version runs.
+  const approvals = useMemo(
+    () => (version ? hostApprovals(version.config) : null),
+    [version],
+  );
+  const needsApproval =
+    !capabilityBlocked &&
+    !!approvals &&
+    hasHostApprovals(approvals) &&
+    restrictedTargets.length > 0;
   const settingsMismatch: Device[] =
     policy && preserveExistingSettings
       ? (
@@ -568,9 +678,8 @@ export default function TargetDialog({
   async function review(next: Inputs) {
     if (inFlight.current || created) return;
     if (bindingResult.errors.length) {
-      setError(
-        "Complete the device-specific values before reviewing this deployment.",
-      );
+      // The values section lists exactly what's missing.
+      setBindingAttempted(true);
       return;
     }
     if (!releaseValid) {
@@ -776,7 +885,7 @@ export default function TargetDialog({
         kind: "configuration",
         configurationId: version?.configuration_id || null,
         pipeline:
-          pipelineName ||
+          knownPipelineName ||
           inferPipelineName(preview, version?.configuration_id || null),
         number: version?.number ?? null,
       };
@@ -790,6 +899,16 @@ export default function TargetDialog({
   const shortName = (assignment: AssignmentDescription) =>
     shortAssignmentName(assignment, configurationId);
   function outcomeFor(device: Device): Outcome | null {
+    // A device the server won't release to never reads as "New".
+    const blocked = blockersByDevice.get(device.id);
+    if (blocked?.length)
+      return {
+        label: "Blocked",
+        tone: "danger",
+        detail: blocked.join("; "),
+        link: null,
+        takes: false,
+      };
     const outcome = outcomes.get(device.id);
     if (!outcome) return null;
     if (outcome.outcome === "replace")
@@ -872,6 +991,14 @@ export default function TargetDialog({
         : capitalize(requestedName(change));
     return paused.has(device.id) ? `${next}, after sync resumes` : next;
   };
+  /** The device already runs exactly what it would receive. */
+  const sameContent = (device: Device) => {
+    if (policy || !device.actual_sha256) return false;
+    const rendered =
+      artifactByDevice.get(device.id)?.sha256 ||
+      (declarations.length ? null : version?.sha256);
+    return !!rendered && rendered === device.actual_sha256;
+  };
   const artifactPreviews = preview?.artifact_previews || [];
   const artifactByDevice = new Map(
     artifactPreviews.map((artifact) => [artifact.device_id, artifact]),
@@ -950,6 +1077,15 @@ export default function TargetDialog({
     paused.has(device.id),
   );
   const single = preview?.devices.length === 1;
+  const chosenGroups = groups.data.filter((group) =>
+    groupIds.includes(group.id),
+  );
+  const groupNames =
+    chosenGroups.length === 0
+      ? ""
+      : chosenGroups.length <= 2
+        ? chosenGroups.map((group) => group.name).join(" and ")
+        : `${chosenGroups[0].name} and ${chosenGroups.length - 1} more groups`;
   const title = policy
     ? policyName
       ? `Apply “${policyName}”`
@@ -958,8 +1094,8 @@ export default function TargetDialog({
           ? "Pause sync"
           : "Resume sync"
         : "Apply agent settings"
-    : pipelineName
-      ? `Deploy ${pipelineName} v${version?.number ?? ""}`
+    : knownPipelineName
+      ? `Deploy ${knownPipelineName} v${version?.number ?? ""}`
       : `Deploy version ${version?.number ?? ""}`;
 
   if (storageIssue?.actor_id === userId)
@@ -1083,39 +1219,42 @@ export default function TargetDialog({
             message={`To keep each device's check-in and metrics settings, choose devices that share them. These devices differ or haven't reported settings: ${settingsMismatch.map((device) => device.name).join(", ")}.`}
           />
         )}
-        {!!requirements.length && (
+        {!!requirements.length && (capabilityBlocked || !effective.size) && (
           <div className="control-note" role="status">
             <strong>
               {capabilityBlocked
-                ? "Some selected devices use restricted mode"
-                : "This pipeline uses full Vector capabilities"}
+                ? `${restrictedTargets.length === 1 ? `${restrictedTargets[0].name} runs` : `${restrictedTargets.length} selected devices run`} in restricted mode and will refuse this version`
+                : "This version needs Full Vector mode"}
             </strong>
-            {capabilityBlocked ? (
+            <p>
+              It uses {requirements.join(", ")}.{" "}
+              {capabilityBlocked
+                ? "Choose devices in Full Vector mode, or have the host operator enable it; the dashboard can't."
+                : "Choose devices in Full Vector mode."}{" "}
+              <DocLink
+                topic="installation"
+                section="choose-configuration-capabilities"
+              >
+                Enable Full Vector mode on a device
+              </DocLink>
+            </p>
+            {capabilityBlocked && restrictedTargets.length > 1 && (
               <p>
-                This pipeline uses {requirements.join(", ")}. Full Vector mode
-                must be enabled locally by the host operator; the dashboard
-                cannot enable it.{" "}
-                <DocLink
-                  topic="installation"
-                  section="choose-configuration-capabilities"
-                >
-                  Enable full Vector mode on a device
-                </DocLink>
-              </p>
-            ) : (
-              <p>
-                This pipeline uses {requirements.join(", ")}. All selected
-                devices currently report full Vector mode.
-              </p>
-            )}
-            {capabilityBlocked && (
-              <p>
-                Choose devices with full Vector mode or change this pipeline.
-                Restricted devices:{" "}
-                {restrictedTargets.map((device) => device.name).join(", ")}.
+                Restricted:{" "}
+                {restrictedTargets
+                  .slice(0, 5)
+                  .map((device) => device.name)
+                  .join(", ")}
+                {restrictedTargets.length > 5
+                  ? ` and ${restrictedTargets.length - 5} more`
+                  : ""}
+                .
               </p>
             )}
           </div>
+        )}
+        {needsApproval && approvals && (
+          <HostApprovalNote approvals={approvals} devices={restrictedTargets} />
         )}
         {!preview ? (
           <fieldset className="target-selection" disabled={busy}>
@@ -1132,7 +1271,10 @@ export default function TargetDialog({
               />
             </label>
             {groups.data.length > 0 && (
-              <details className="control-disclosure target-group-list">
+              <details
+                className="control-disclosure target-group-list"
+                open={groups.data.length <= 12}
+              >
                 <summary>
                   Choose groups ({groups.data.length})
                   {groupIds.length > 0 && `, ${groupIds.length} selected`}
@@ -1237,12 +1379,24 @@ export default function TargetDialog({
                 {prefill && (
                   <p className="target-prefill" role="status">
                     <Check size={15} aria-hidden="true" />
-                    Filled {prefill.values}{" "}
-                    {prefill.values === 1 ? "value" : "values"} from the version{" "}
-                    {prefill.devices === 1
-                      ? "this device runs"
-                      : "these devices run"}{" "}
-                    now. Change any of them before you review.
+                    <span>
+                      Filled {prefill.values}{" "}
+                      {prefill.values === 1 ? "value" : "values"} from{" "}
+                      {prefill.source ? (
+                        <>
+                          <strong>{prefill.source}</strong>, what{" "}
+                          {prefill.devices === 1
+                            ? "this device runs"
+                            : "these devices run"}{" "}
+                          now
+                        </>
+                      ) : prefill.devices === 1 ? (
+                        "the version this device runs now"
+                      ) : (
+                        "the versions these devices run now"
+                      )}
+                      . Change any of them before you review.
+                    </span>
                   </p>
                 )}
                 <DeploymentVariableFields
@@ -1258,9 +1412,11 @@ export default function TargetDialog({
                     setError("");
                   }}
                 />
-                {effective.size > 0 && bindingResult.errors.length > 0 && (
-                  <ErrorBox message={bindingResult.errors.join("\n")} />
-                )}
+                {bindingAttempted &&
+                  effective.size > 0 &&
+                  bindingResult.errors.length > 0 && (
+                    <ErrorBox message={bindingResult.errors.join("\n")} />
+                  )}
               </>
             )}
             <ReleaseStrategyFields
@@ -1432,10 +1588,12 @@ export default function TargetDialog({
                 <dt>Membership</dt>
                 <dd>
                   {body.target_mode === "persistent"
-                    ? "Follows the selected groups"
+                    ? `Follows ${groupNames || "the selected groups"}`
                     : single
                       ? "Fixed to this device"
-                      : `Fixed to these ${devicesText(preview.devices.length)}`}
+                      : groupNames
+                        ? `Fixed to the ${devicesText(preview.devices.length)} in ${groupNames} now`
+                        : `Fixed to these ${devicesText(preview.devices.length)}`}
                 </dd>
               </div>
               {declarations.length > 0 && (
@@ -1571,6 +1729,12 @@ export default function TargetDialog({
                         >
                           {afterText(device)}
                         </strong>
+                        {outcomeFor(device)?.takes !== false &&
+                          sameContent(device) && (
+                            <small className="target-same-content">
+                              Same content as it runs now
+                            </small>
+                          )}
                       </span>
                     ),
                   },
@@ -1651,8 +1815,14 @@ export default function TargetDialog({
                               {artifactByDevice.get(device.id) && (
                                 <div>
                                   <strong>Rendered SHA-256</strong>
-                                  <code>
-                                    {artifactByDevice.get(device.id)!.sha256}
+                                  <code
+                                    title={
+                                      artifactByDevice.get(device.id)!.sha256
+                                    }
+                                  >
+                                    {shortDigest(
+                                      artifactByDevice.get(device.id)!.sha256,
+                                    )}
                                   </code>
                                   <small>
                                     {artifactByDevice.get(device.id)!.size}{" "}
@@ -1741,6 +1911,10 @@ export default function TargetDialog({
             !!groups.error ||
             (!preview && !releaseValid) ||
             (!!preview && capabilityBlocked) ||
+            // Nothing selected could run it: the note above says why.
+            (!preview &&
+              capabilityBlocked &&
+              restrictedTargets.length >= effective.size) ||
             (!!preview &&
               (preview.create_idempotency !== true ||
                 preview.request_correlation !== true)) ||
@@ -1748,6 +1922,7 @@ export default function TargetDialog({
             !!preview?.conflicts?.length ||
             blockers.length > 0 ||
             (!preview &&
+              bindingAttempted &&
               declarations.length > 0 &&
               bindingResult.errors.length > 0) ||
             artifactReviewIncomplete

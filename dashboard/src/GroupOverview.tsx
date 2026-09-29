@@ -160,10 +160,10 @@ export default function GroupOverview({
                 <li key={d.id}>
                   <a href={route(d.id)}>{assignmentTitle(d)}</a>
                   <span className="control-muted">
-                    Priority {d.priority} ·{" "}
                     {d.target_mode === "persistent"
-                      ? "follows membership"
-                      : "fixed devices from when it was created"}
+                      ? "Follows this group"
+                      : "Deployed to its members at the time (fixed)"}{" "}
+                    · priority {d.priority}
                   </span>
                   <StatusChip tone={display.tone} spin={isLive(d.status)}>
                     {display.label}

@@ -6631,6 +6631,18 @@
           ],
           "description": "Highest priority among suggested replacements, to reuse."
         },
+        "configuration_name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current name of the pipeline whose version is previewed; null for agent settings. Omitted by older servers."
+        },
         "winning_priority": {
           "anyOf": [
             {
