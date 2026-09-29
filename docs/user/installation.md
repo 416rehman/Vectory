@@ -1,6 +1,6 @@
 # Connect a device
 
-Install the Vectory agent on a host that runs Vector 0.58.0. The agent connects out to your server, runs the pipelines you deploy and reports what Vector is doing. It takes about five minutes per host.
+Install the Vectory agent on a host that runs Vector 0.58 (any patch release, such as 0.58.0 or 0.58.1). The agent connects out to your server, runs the pipelines you deploy and reports what Vector is doing. It takes about five minutes per host.
 
 > [!TIP]
 > **Fastest path**
@@ -8,7 +8,7 @@ Install the Vectory agent on a host that runs Vector 0.58.0. The agent connects 
 
 ## Before you start
 
-- **Vector 0.58.0** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
+- **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
 <!-- verify-after-merge: token defaults (one use, 24 hours) after the Add device redesign -->
 - **An enrollment token.** **Add device** creates one. It is shown once. By default it works for one enrollment and expires after 24 hours.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
@@ -85,7 +85,7 @@ The installer and `vectory setup` then:
 
 <!-- steps -->
 1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
-2. Find Vector 0.58.0 and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
+2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in restricted mode, unless you asked for full mode.
 4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
 5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one.

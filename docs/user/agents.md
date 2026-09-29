@@ -108,7 +108,7 @@ On the device page, confirm the same device identity, a fresh check-in and the e
 The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed binary. After you upgrade or move Vector on purpose, approve the new binary:
 
 <!-- steps -->
-1. Get the new Vector 0.58.0 binary from a trusted source and note the SHA-256 of the executable itself (not of its archive): `sha256sum /usr/bin/vector`.
+1. Get the new Vector 0.58.x binary from a trusted source and note the SHA-256 of the executable itself (not of its archive): `sha256sum /usr/bin/vector`.
 2. Stop the agent: `sudo vectory service-stop`.
 3. Approve it:
 

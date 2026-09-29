@@ -574,8 +574,9 @@ func ProbeVector(ctx context.Context, s Settings) (string, error) {
 	if e := cmd.Run(); e != nil {
 		return "", errors.New("cannot execute Vector --version")
 	}
-	if !strings.HasPrefix(out.b.String(), "vector "+VectorVersion+" ") {
-		return "", errors.New("this release requires Vector " + VectorVersion)
+	match := vectorVersionLine.FindStringSubmatch(strings.TrimSpace(out.b.String()))
+	if match == nil || !SupportedVectorVersion(match[1]) {
+		return "", errors.New("this release requires Vector " + VectorSeries)
 	}
-	return VectorVersion, nil
+	return match[1], nil
 }

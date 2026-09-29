@@ -3,11 +3,11 @@ package agent
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -35,6 +35,113 @@ var supported = map[string]map[string]bool{
 }
 var environmentVariable = regexp.MustCompile(`\$[A-Za-z_]`)
 
+// externalVRL lists VRL functions that reach outside the event: the
+// environment, secrets, DNS, enrichment tables and HTTP. Restricted mode
+// denies them because they bypass the host's allowances.
+var externalVRL = []string{"get_env_var", "get_secret", "set_secret", "remove_secret", "dns_lookup", "reverse_dns", "http_request", "get_enrichment_table", "find_enrichment_table"}
+
+// PolicyRefusal says exactly what restricted mode refused: the component,
+// the resource (destination host:port, listener, path) and the allowance
+// that would permit it. Its Error text is a fixed category.
+type PolicyRefusal struct {
+	Code          string
+	Category      string // fixed text, see Error
+	Section       string // sources, transforms, sinks, or "" for a global setting
+	ComponentID   string
+	ComponentType string
+	Field         string
+	Resource      string // host:port, listen address, path, setting or VRL function
+	Allowance     string // allowed_network_hosts, allowed_listen_addresses, allowed_file_roots
+	Suggested     string // the allowance entry that would permit it
+}
+
+func (e *PolicyRefusal) Error() string { return e.Category }
+
+func refusal(code, category string) *PolicyRefusal {
+	return &PolicyRefusal{Code: code, Category: category}
+}
+
+// componentKind is the singular kind for a component section.
+func componentKind(section string) string {
+	return map[string]string{"sources": "source", "transforms": "transform", "sinks": "sink"}[section]
+}
+
+// subject names what was refused: `Sink "out" (http)` or `The pipeline`.
+func (e *PolicyRefusal) subject() string {
+	if e.ComponentID == "" {
+		return "The pipeline"
+	}
+	kind := componentKind(e.Section)
+	subject := strings.ToUpper(kind[:1]) + kind[1:] + ` "` + e.ComponentID + `"`
+	if e.ComponentType != "" {
+		subject += " (" + e.ComponentType + ")"
+	}
+	return subject
+}
+
+// Diagnostic explains the refusal and its fix. The resource comes from the
+// published pipeline; the caller's redaction still applies.
+func (e *PolicyRefusal) Diagnostic() Diagnostic {
+	d := Diagnostic{Severity: "error", Code: e.Code, ComponentKind: componentKind(e.Section), ComponentID: e.ComponentID, Field: e.Field}
+	grant := func(entry string) string {
+		return `Add "` + entry + `" to ` + e.Allowance + ` on the host (vectory install --capability-policy FILE), or deploy to a full-mode device.`
+	}
+	subject := e.subject()
+	switch {
+	case e.Allowance == "allowed_network_hosts" && e.Resource != "":
+		d.Message = subject + " sends to " + e.Resource + ", which this host hasn't approved."
+		d.Hint = grant(e.Suggested)
+	case e.Allowance == "allowed_listen_addresses" && e.Resource != "":
+		d.Message = subject + " listens on " + e.Resource + ", which this host hasn't approved."
+		d.Hint = grant(e.Suggested)
+	case e.Allowance == "allowed_file_roots" && e.Resource != "":
+		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
+		d.Hint = grant(e.Suggested)
+	case e.Code == "NETWORK_DESTINATION_DENIED" && e.Resource != "":
+		d.Message = subject + " uses " + e.Resource + ", which restricted mode can't approve: use http(s)://host:port without credentials."
+	case e.Code == "NETWORK_DESTINATION_DENIED":
+		d.Message = subject + " needs an explicit " + e.Field + " in restricted mode."
+	case e.Code == "LISTENER_DENIED" && e.ComponentID == "":
+		d.Message = "The Vector API must listen on a loopback address in restricted mode."
+	case e.Code == "LISTENER_DENIED":
+		d.Message = subject + " needs an explicit listen address in restricted mode."
+	case e.Code == "FILE_ACCESS_DENIED" && e.Resource != "":
+		d.Message = subject + " uses " + e.Resource + ", which must be an absolute path without symbolic links in restricted mode."
+	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && e.Field != "":
+		d.Message = subject + ` sets "` + e.Field + `", which restricted mode doesn't allow.`
+		d.Hint = "Remove it, or deploy to a full-mode device."
+	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && e.ComponentID != "":
+		d.Message = subject + " isn't available in restricted mode."
+		d.Hint = "Use a component restricted mode supports, or deploy to a full-mode device."
+	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && e.Resource != "":
+		d.Message = `The top-level setting "` + e.Resource + `" isn't allowed in restricted mode.`
+		d.Hint = "Remove it, or deploy to a full-mode device."
+	case e.Code == "DYNAMIC_CAPABILITY_DENIED" && e.Resource != "":
+		d.Message = subject + " calls " + e.Resource + ", which restricted mode doesn't allow."
+		d.Hint = "Use fixed values in the pipeline, or deploy to a full-mode device."
+	case e.Code == "DYNAMIC_CAPABILITY_DENIED":
+		d.Message = subject + " uses an environment substitution or template in " + e.Field + "; restricted mode needs fixed values."
+	case e.Code == "TLS_VERIFICATION_REQUIRED":
+		d.Message = subject + " turns off " + e.Field + "; restricted mode always verifies TLS."
+	case e.Code == "CONSOLE_TARGET_DENIED":
+		d.Message = subject + " must set target to stderr in restricted mode."
+	default:
+		d.Message = subject + " isn't allowed by this host's restricted-mode policy."
+	}
+	return d
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Check applies restricted mode to an effective configuration. The first
+// refusal, in a stable order, is returned as a *PolicyRefusal.
 func (p CapabilityPolicy) Check(data []byte) error {
 	var root map[string]any
 	if e := json.Unmarshal(data, &root); e != nil {
@@ -48,58 +155,22 @@ func (p CapabilityPolicy) Check(data []byte) error {
 	if p.FullVectorConfig {
 		return nil
 	}
-	for k, v := range root {
+	for _, k := range sortedKeys(root) {
+		v := root[k]
 		switch k {
 		case "sources", "transforms", "sinks":
 			components, ok := v.(map[string]any)
 			if !ok {
 				return errors.New("component section must be an object")
 			}
-			for _, raw := range components {
-				c, ok := raw.(map[string]any)
+			for _, id := range sortedKeys(components) {
+				c, ok := components[id].(map[string]any)
 				if !ok {
 					return errors.New("component must be an object")
 				}
 				typ, _ := c["type"].(string)
-				// Resource-bearing components cannot rely on implicit defaults, which
-				// would bypass explicit local path/destination/listener authorization.
-				switch typ {
-				case "http":
-					if uri, ok := c["uri"].(string); !ok || uri == "" {
-						return errors.New("capability denied: HTTP sink needs an explicit authorized uri")
-					}
-				case "loki":
-					if uri, ok := c["endpoint"].(string); !ok || uri == "" {
-						return errors.New("capability denied: Loki sink needs an explicit authorized endpoint")
-					}
-				case "elasticsearch":
-					if endpoints, ok := c["endpoints"].([]any); !ok || len(endpoints) == 0 {
-						return errors.New("capability denied: Elasticsearch needs explicit authorized endpoints")
-					}
-				case "http_server", "syslog", "prometheus_exporter":
-					if address, ok := c["address"].(string); !ok || address == "" {
-						return errors.New("capability denied: source needs an explicit authorized listener")
-					}
-				case "opentelemetry":
-					for _, protocol := range []string{"http", "grpc"} {
-						block, ok := c[protocol].(map[string]any)
-						if !ok {
-							return errors.New("capability denied: OpenTelemetry requires explicit HTTP and gRPC listener configuration")
-						}
-						if address, ok := block["address"].(string); !ok || address == "" {
-							return errors.New("capability denied: OpenTelemetry listener address required")
-						}
-					}
-				}
-				if typ == "console" {
-					if target := c["target"]; target != "stderr" {
-						return errors.New("capability denied: console requires explicit stderr target to isolate JSON startup logs")
-					}
-				}
-				if !supported[k][typ] {
-					return fmt.Errorf("capability denied: unsupported %s component", k)
-				}
-				if e := p.walk(c, ""); e != nil {
+				if e := p.component(k, typ, c); e != nil {
+					e.Section, e.ComponentID, e.ComponentType = k, id, typ
 					return e
 				}
 			}
@@ -109,6 +180,7 @@ func (p CapabilityPolicy) Check(data []byte) error {
 				return errors.New("data_dir must be a path")
 			}
 			if e := p.file(s); e != nil {
+				e.Field = "data_dir"
 				return e
 			}
 		case "api":
@@ -120,30 +192,149 @@ func (p CapabilityPolicy) Check(data []byte) error {
 				addr, _ := a["address"].(string)
 				host, _, e := net.SplitHostPort(addr)
 				if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-					return errors.New("Vector API must use an explicit loopback address")
+					r := refusal("LISTENER_DENIED", "Vector API must use an explicit loopback address")
+					r.Field = "api.address"
+					return r
 				}
 			}
 		case "acknowledgements", "healthchecks", "timezone":
 			if e := p.walk(v, k); e != nil {
 				return e
 			}
+		case "tests":
+			if e := checkTests(v); e != nil {
+				return e
+			}
 		default:
-			return errors.New("capability denied: unsupported top-level setting")
+			r := refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: unsupported top-level setting")
+			r.Resource = k
+			return r
 		}
 	}
 	return nil
 }
-func (p CapabilityPolicy) walk(v any, key string) error {
+
+// component checks one component; the caller fills in its identity.
+func (p CapabilityPolicy) component(section, typ string, c map[string]any) *PolicyRefusal {
+	// Resource-bearing components cannot rely on implicit defaults, which
+	// would bypass explicit local path/destination/listener authorization.
+	missing := func(field, category string) *PolicyRefusal {
+		r := refusal("NETWORK_DESTINATION_DENIED", category)
+		r.Field = field
+		return r
+	}
+	switch typ {
+	case "http":
+		if uri, ok := c["uri"].(string); !ok || uri == "" {
+			return missing("uri", "capability denied: HTTP sink needs an explicit authorized uri")
+		}
+	case "loki":
+		if uri, ok := c["endpoint"].(string); !ok || uri == "" {
+			return missing("endpoint", "capability denied: Loki sink needs an explicit authorized endpoint")
+		}
+	case "elasticsearch":
+		if endpoints, ok := c["endpoints"].([]any); !ok || len(endpoints) == 0 {
+			return missing("endpoints", "capability denied: Elasticsearch needs explicit authorized endpoints")
+		}
+	case "http_server", "syslog", "prometheus_exporter":
+		if address, ok := c["address"].(string); !ok || address == "" {
+			r := refusal("LISTENER_DENIED", "capability denied: source needs an explicit authorized listener")
+			r.Field = "address"
+			return r
+		}
+	case "opentelemetry":
+		for _, protocol := range []string{"grpc", "http"} {
+			block, ok := c[protocol].(map[string]any)
+			if !ok {
+				r := refusal("LISTENER_DENIED", "capability denied: OpenTelemetry requires explicit HTTP and gRPC listener configuration")
+				r.Field = protocol + ".address"
+				return r
+			}
+			if address, ok := block["address"].(string); !ok || address == "" {
+				r := refusal("LISTENER_DENIED", "capability denied: OpenTelemetry listener address required")
+				r.Field = protocol + ".address"
+				return r
+			}
+		}
+	}
+	if typ == "console" {
+		if target := c["target"]; target != "stderr" {
+			r := refusal("CONSOLE_TARGET_DENIED", "capability denied: console requires explicit stderr target to isolate JSON startup logs")
+			r.Field = "target"
+			return r
+		}
+	}
+	if !supported[section][typ] {
+		return refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: unsupported "+section+" component")
+	}
+	return p.walk(c, "")
+}
+
+// checkTests accepts Vector unit tests in restricted mode. Tests run only in
+// `vector test` during validation: they insert sample events into
+// transforms and check the output, with no sources, sinks or I/O. Sample
+// events are data, not resources, so only their VRL (input and condition
+// `source` programs) is checked for functions that reach outside the event.
+func checkTests(v any) *PolicyRefusal {
+	tests, ok := v.([]any)
+	if !ok {
+		r := refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: unsupported top-level setting")
+		r.Resource = "tests"
+		return r
+	}
+	var find func(any) *PolicyRefusal
+	find = func(value any) *PolicyRefusal {
+		switch x := value.(type) {
+		case map[string]any:
+			for _, k := range sortedKeys(x) {
+				if e := find(x[k]); e != nil {
+					return e
+				}
+			}
+		case []any:
+			for _, item := range x {
+				if e := find(item); e != nil {
+					return e
+				}
+			}
+		case string:
+			if function := externalFunction(x); function != "" {
+				r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: external VRL capability")
+				r.Field, r.Resource = "tests", function
+				return r
+			}
+		}
+		return nil
+	}
+	return find(tests)
+}
+
+func externalFunction(program string) string {
+	lower := strings.ToLower(program)
+	for _, f := range externalVRL {
+		if strings.Contains(lower, f) {
+			return f
+		}
+	}
+	return ""
+}
+
+func (p CapabilityPolicy) walk(v any, key string) *PolicyRefusal {
 	switch x := v.(type) {
 	case map[string]any:
-		for k, value := range x {
+		for _, k := range sortedKeys(x) {
+			value := x[k]
 			lower := strings.ToLower(k)
 			if lower == "command" || lower == "exec" || lower == "provider" || lower == "secret" || lower == "secrets" || lower == "source_files" || lower == "files" || lower == "enrichment_tables" {
-				return errors.New("capability denied: executable, provider, or external code setting")
+				r := refusal("UNSUPPORTED_LOCAL_CAPABILITY", "capability denied: executable, provider, or external code setting")
+				r.Field = k
+				return r
 			}
 			if lower == "verify_certificate" || lower == "verify_hostname" {
 				if b, ok := value.(bool); ok && !b {
-					return errors.New("TLS verification cannot be disabled")
+					r := refusal("TLS_VERIFICATION_REQUIRED", "TLS verification cannot be disabled")
+					r.Field = lower
+					return r
 				}
 			}
 			if e := p.walk(value, lower); e != nil {
@@ -158,24 +349,29 @@ func (p CapabilityPolicy) walk(v any, key string) error {
 		}
 	case string:
 		if environmentVariable.MatchString(x) || strings.Contains(x, "${") || strings.Contains(x, "{{") || strings.Contains(x, "%{") {
-			return errors.New("capability denied: substitution and dynamic resource templates are unsupported")
+			r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: substitution and dynamic resource templates are unsupported")
+			r.Field = key
+			return r
 		}
-		lower := strings.ToLower(x)
-		for _, f := range []string{"get_env_var", "get_secret", "set_secret", "remove_secret", "dns_lookup", "get_enrichment_table", "find_enrichment_table"} {
-			if strings.Contains(lower, f) {
-				return errors.New("capability denied: external VRL capability")
-			}
+		if function := externalFunction(x); function != "" {
+			r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: external VRL capability")
+			r.Field, r.Resource = key, function
+			return r
 		}
 		if key == "endpoint" || key == "endpoints" || key == "uri" || key == "url" || strings.Contains(x, "://") {
 			if e := p.network(x); e != nil {
+				e.Field = key
 				return e
 			}
 		}
 		if key == "address" && !p.listenerAllowed(x) {
-			return errors.New("capability denied: listener is not locally allowed")
+			r := refusal("LISTENER_DENIED", "capability denied: listener is not locally allowed")
+			r.Field, r.Resource, r.Allowance, r.Suggested = key, x, "allowed_listen_addresses", x
+			return r
 		}
 		if key == "include" || key == "exclude" || key == "path" || strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_path") || strings.HasSuffix(key, "_dir") {
 			if e := p.file(x); e != nil {
+				e.Field = key
 				return e
 			}
 		}
@@ -192,10 +388,14 @@ func (p CapabilityPolicy) listenerAllowed(address string) bool {
 	}
 	return false
 }
-func (p CapabilityPolicy) network(s string) error {
+func (p CapabilityPolicy) network(s string) *PolicyRefusal {
 	u, e := url.Parse(s)
 	if e != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-		return errors.New("capability denied: invalid network destination")
+		r := refusal("NETWORK_DESTINATION_DENIED", "capability denied: invalid network destination")
+		if e == nil && u.User == nil {
+			r.Resource = s
+		}
+		return r
 	}
 	port := u.Port()
 	if port == "" {
@@ -210,11 +410,18 @@ func (p CapabilityPolicy) network(s string) error {
 			return nil
 		}
 	}
-	return errors.New("capability denied: network destination is not locally allowed")
+	r := refusal("NETWORK_DESTINATION_DENIED", "capability denied: network destination is not locally allowed")
+	r.Resource, r.Allowance, r.Suggested = host, "allowed_network_hosts", host
+	return r
 }
-func (p CapabilityPolicy) file(s string) error {
+func (p CapabilityPolicy) file(s string) *PolicyRefusal {
+	denied := func(category string) *PolicyRefusal {
+		r := refusal("FILE_ACCESS_DENIED", category)
+		r.Resource = s
+		return r
+	}
 	if !filepath.IsAbs(s) {
-		return errors.New("capability denied: resource path must be absolute")
+		return denied("capability denied: resource path must be absolute")
 	}
 	clean := filepath.Clean(s)
 	// Wildcards may occur only below an allowed root; check all existing matches for links.
@@ -231,18 +438,25 @@ func (p CapabilityPolicy) file(s string) error {
 			continue
 		}
 		if e = SafePath(static); e != nil {
-			return errors.New("capability denied: resource has unsafe path")
+			return denied("capability denied: resource has unsafe path")
 		}
 		matches, e := filepath.Glob(clean)
 		if e != nil {
-			return errors.New("invalid resource glob")
+			return denied("invalid resource glob")
 		}
 		for _, m := range matches {
 			if e = SafePath(m); e != nil {
-				return errors.New("capability denied: resource links are forbidden")
+				return denied("capability denied: resource links are forbidden")
 			}
 		}
 		return nil
 	}
-	return errors.New("capability denied: file root is not locally allowed")
+	r := denied("capability denied: file root is not locally allowed")
+	// Suggest the directory itself (or the static part of a pattern).
+	suggested := static
+	if static == clean && !strings.HasSuffix(s, string(filepath.Separator)) {
+		suggested = filepath.Dir(clean)
+	}
+	r.Allowance, r.Suggested = "allowed_file_roots", suggested
+	return r
 }

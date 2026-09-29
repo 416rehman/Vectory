@@ -169,7 +169,7 @@ func vectorMissing(ctx context.Context, binary string) error {
 	if found, _ := FindVector(ctx); found != nil {
 		return fmt.Errorf("%s Found Vector %s at %s: use --vector-binary %s", message, found.Version, found.Path, quoteArg(found.Path))
 	}
-	return errors.New(message + " Install Vector " + VectorVersion + " (https://vector.dev/download/) or pass the right --vector-binary")
+	return errors.New(message + " Install Vector " + VectorSeries + " (https://vector.dev/download/) or pass the right --vector-binary")
 }
 
 func InstallWithOptions(ctx context.Context, dir string, options InstallOptions) error {
@@ -222,9 +222,9 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 			return err
 		}
 		s := options.compose(Settings{VectorBinary: binary, ManagedConfig: config, Adopted: true, ValidationSeconds: 30, StartupSeconds: 20})
-		if _, err = probe(ctx, s); err != nil {
-			if found := InspectVector(ctx, binary); found.Version != "" && found.Version != VectorVersion {
-				return fmt.Errorf("found Vector %s at %s; this agent requires %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, VectorVersion)
+		if s.VectorVersion, err = probe(ctx, s); err != nil {
+			if found := InspectVector(ctx, binary); found.Version != "" && !SupportedVectorVersion(found.Version) {
+				return fmt.Errorf("found Vector %s at %s; this agent requires %s. Install it from https://vector.dev/download/ or pass --vector-binary", found.Version, binary, VectorSeries)
 			}
 			return err
 		}

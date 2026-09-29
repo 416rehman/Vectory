@@ -123,7 +123,7 @@ func (l *vectorLog) handle(line []byte) {
 	// Verdicts count only from Vector's own targets: a pipeline's VRL log()
 	// writes arbitrary messages to the same stream (target vrl::stdlib::log).
 	switch {
-	case rec.Message == "Vector has started." && rec.Target == "vector" && rec.Version == VectorVersion:
+	case rec.Message == "Vector has started." && rec.Target == "vector" && SupportedVectorVersion(rec.Version):
 		l.signals.started++
 		l.notify()
 	case rec.Message == "Vector has reloaded." && rec.Target == "vector":

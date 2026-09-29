@@ -58,7 +58,7 @@ func runWith(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 && (args[1] == "--json" || args[1] == "-json") {
 			writeJSON(stdout, map[string]string{"version": agent.Version, "vector_version": agent.VectorVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
 		} else {
-			fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorVersion, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			fmt.Fprintf(stdout, "vectory %s (for Vector %s, %s, %s/%s)\n", agent.Version, agent.VectorSeries, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		}
 		return exitOK
 	}
