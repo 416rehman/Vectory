@@ -465,13 +465,13 @@ try {
         await page.keyboard.press("Enter");
         await expect.poll(() => fixture.pendingValidations.length).toBe(1);
         if (cancellation === "escape") await page.keyboard.press("Escape");
-        else await button("Find a page").focus();
+        else await page.locator(".sidebar-search").focus();
         fixture.pendingValidations.shift()();
         await expect(control()).toHaveAttribute("data-check-state", "partial");
         await expect(resultsTip()).toHaveCount(0);
         await expect(control()).not.toBeFocused();
         if (cancellation === "outside-focus")
-          await expect(button("Find a page")).toBeFocused();
+          await expect(page.locator(".sidebar-search")).toBeFocused();
       }
       await load({ width: 375, touch: true });
       await control().tap();

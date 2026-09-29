@@ -35,6 +35,8 @@ The theme is applied before first paint by `public/theme-init.js` (the CSP forbi
 
 Use the shared scale, hairline separators and clear text hierarchy. Avoid decorative status dots, excessive pills, marketing copy, uppercase micro-labels and repeated explanations. Make actual values and useful actions easy to see.
 
+**Class names.** Shared primitives in `primitives.css` use generic names (`status-badge`, `empty-state`, `live-status`, `filter-chip`); page styles carry their page's prefix (`overview-`, `device-`, `devices-`, `groups-`, `audit-`), so two pages can't restyle each other by accident.
+
 Schema fields share one ordered list across curated and native settings. Each field has a clear boundary and a header containing its label, required marker, a tiny help control and one actions menu. Help appears on hover, focus or tap; null, JSON and removal actions stay inside the field menu. Optional fields are selected from a compact searchable floating dropdown, then join the same list; meaningful field icons are used where known without generic icons on every result. JSON values share a highlighted editor with local diagnostics, formatting and explicit apply/discard actions. Text links to documentation carry an outward-link indicator; circle-help icon actions do not.
 
 ## Information architecture

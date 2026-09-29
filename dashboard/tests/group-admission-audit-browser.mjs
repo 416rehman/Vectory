@@ -395,9 +395,7 @@ const auditEvent = (details = {}) => ({
   details,
 });
 async function openAudit(page) {
-  await page
-    .getByRole("button", { name: "Details: Group updated", exact: true })
-    .click();
+  await page.getByRole("link", { name: "Group updated", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "Event details" }),
   ).toBeVisible();

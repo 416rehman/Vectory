@@ -106,7 +106,7 @@ try {
     await page.goto(origin + "/__group-stale-review");
     await page
       .getByRole("button", {
-        name: "Synthetic production group Original description",
+        name: "Synthetic production group",
         exact: true,
       })
       .click();
