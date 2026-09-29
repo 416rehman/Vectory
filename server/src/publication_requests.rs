@@ -93,8 +93,7 @@ pub async fn before_validation(
     if crate::deployment_requests::request_id(request)?.is_none() {
         return Ok(None);
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, h, &["operator"], true).await?;
     if let Some(version) = replay(
         &mut tx,
@@ -133,8 +132,7 @@ pub async fn lookup(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let key = crate::deployment_requests::parse_id(&id)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let id: Option<String> = sqlx::query_scalar(
         "SELECT version_id FROM publication_requests WHERE actor_id=? AND request_id=?",
@@ -162,8 +160,7 @@ pub async fn history(
         .map_err(|_| ApiError::invalid("configuration_id must be a hyphenated UUID"))?;
     let (_, page, size, offset) =
         crate::deployment_history::bounds(None, input.page, input.page_size)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let actor = actor["id"].as_str().unwrap();
     let total: i64 = sqlx::query_scalar(

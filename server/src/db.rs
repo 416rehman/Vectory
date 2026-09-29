@@ -4,6 +4,22 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection};
 tokio::task_local! { pub static REQUEST_ID: String; }
+pub type WriteTransaction = sqlx::Transaction<'static, sqlx::Sqlite>;
+/// Open a write transaction on a connection that already holds the writer lock.
+/// `BEGIN IMMEDIATE` takes SQLite's write lock before the first read, so a write
+/// made elsewhere waits out `busy_timeout` instead of failing this transaction
+/// with a stale snapshot ("database is locked") after it has read.
+pub async fn begin_write(pool: &sqlx::SqlitePool) -> sqlx::Result<WriteTransaction> {
+    pool.begin_with("BEGIN IMMEDIATE").await
+}
+/// Every serialized writer: the process-wide writer lock plus an immediate
+/// transaction. Bind as `let (_guard, mut tx)` so the transaction ends first.
+pub async fn write_tx(
+    s: &crate::App,
+) -> sqlx::Result<(tokio::sync::MutexGuard<'_, ()>, WriteTransaction)> {
+    let guard = s.writer.lock().await;
+    Ok((guard, begin_write(&s.pool).await?))
+}
 pub fn telemetry_retention_days() -> i64 {
     std::env::var("VECTORY_TELEMETRY_RETENTION_DAYS")
         .ok()

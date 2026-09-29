@@ -522,8 +522,7 @@ pub async fn create(
         true,
     )
     .await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(
         &mut tx,
         &h,
@@ -615,8 +614,7 @@ pub async fn draft(
         return Err(ApiError::missing());
     }
     validate_draft(&v)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
     let mut c = db::record(&mut tx, "configuration", &id).await?;
     crate::pipelines::ensure_editable(&c)?;
@@ -690,8 +688,7 @@ pub async fn edit_group(
     if collection != "groups" {
         return Err(ApiError::missing());
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let previous = db::record(&mut tx, "group", &id).await?;
     let next_revision = crate::groups::check_revision(&previous, &v)?;
@@ -760,8 +757,7 @@ pub async fn action(
         }
         checked = Some(validation::validate_isolated(&s, &configuration["config"]).await?);
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, roles, true).await?;
     let out = match (collection.as_str(), action.as_str()) {
         ("configurations", "duplicate") => {
@@ -1003,8 +999,7 @@ pub async fn deployment_preview(
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
     auth::authorize(&s, &h, &["operator"], true).await?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     Ok(Json(rollout::preview(&mut tx, &v).await?))
 }

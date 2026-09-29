@@ -489,6 +489,102 @@ async fn admin_again(app: &Router) -> Session {
     sign_in(app, "admin@example.test", PASSWORD, "Desk").await
 }
 
+async fn last_seen(state: &State) -> String {
+    sqlx::query_scalar("SELECT last_seen_at FROM session_details")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn last_active_updates_never_break_or_wait_on_a_writer() {
+    let (_temp, state, app, admin) = fixture().await;
+    let stale = "2000-01-01T00:00:00Z";
+    sqlx::query("UPDATE session_details SET last_seen_at=?")
+        .bind(stale)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // Why writers begin immediately: a deferred transaction that has read
+    // cannot write after another connection commits (SQLITE_BUSY_SNAPSHOT).
+    let mut deferred = state.pool.begin().await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *deferred)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE session_details SET last_seen_at='2000-01-01T00:00:01Z'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let stale_snapshot = sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *deferred)
+        .await
+        .unwrap_err();
+    assert!(
+        stale_snapshot.to_string().contains("locked"),
+        "{stale_snapshot}"
+    );
+    drop(deferred);
+    sqlx::query("UPDATE session_details SET last_seen_at=?")
+        .bind(stale)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // An authenticated request during a writer transaction skips its
+    // best-effort last-active write instead of queueing behind or breaking it.
+    let (guard, mut tx) = vectory_server::db::write_tx(&state).await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let (current, members) = tokio::join!(
+        get(&app, "/api/v1/session", Some(&admin)),
+        get(&app, "/api/v1/users", Some(&admin)),
+    );
+    assert_eq!(current.status, StatusCode::OK, "{}", current.body);
+    assert_eq!(members.status, StatusCode::OK, "{}", members.body);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(guard);
+    assert_eq!(last_seen(&state).await, stale);
+
+    // A write made outside the writer lock waits for an immediate writer to
+    // commit rather than invalidating the writer's snapshot.
+    let (guard, mut tx) = vectory_server::db::write_tx(&state).await.unwrap();
+    sqlx::query("SELECT count(*) FROM users")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let pool = state.pool.clone();
+    let outside = tokio::spawn(async move {
+        sqlx::query("UPDATE session_details SET user_agent='Outside writer'")
+            .execute(&pool)
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    sqlx::query("UPDATE users SET name=name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    drop(guard);
+    outside.await.unwrap().unwrap();
+
+    // With the writer free, the next request records activity.
+    assert_eq!(
+        get(&app, "/api/v1/session", Some(&admin)).await.status,
+        StatusCode::OK
+    );
+    assert_ne!(last_seen(&state).await, stale);
+}
+
 #[tokio::test]
 async fn failed_and_throttled_sign_ins_are_audited_with_account_and_client() {
     let (_temp, state, app, admin) = fixture().await;

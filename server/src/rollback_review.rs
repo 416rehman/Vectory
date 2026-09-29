@@ -54,8 +54,7 @@ pub async fn get(
     auth::authorize(&s, &h, &["operator"], false).await?;
     crate::deployment_history::query(raw.as_deref(), parsed)?;
     let source = id(&source)?;
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
     let result = preview(&mut tx, &source).await?;
     tx.rollback().await?;

@@ -536,8 +536,7 @@ async fn command(
             "Provide a current positive revision; a note is at most 1000 characters and required to reopen",
         ));
     }
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let mut issue = db::record(&mut tx, "issue", &id).await?;
     if revision(&issue) != input.revision {

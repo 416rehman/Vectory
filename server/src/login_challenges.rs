@@ -107,8 +107,7 @@ pub async fn complete(
         return Err(expired());
     }
     let verifier = db::hash(&v.challenge_token);
-    let _guard = s.writer.lock().await;
-    let mut tx = s.pool.begin().await?;
+    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let challenge = sqlx::query("SELECT * FROM login_challenges WHERE verifier=?")
         .bind(&verifier)
         .fetch_optional(&mut *tx)
