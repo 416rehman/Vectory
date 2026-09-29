@@ -138,7 +138,9 @@ import {
   connectConnection,
   besidePosition,
   freePosition,
+  placeBlock,
   primaryOutput,
+  type BlockStep,
 } from "./pipelineEditing";
 import PipelineSchemaFields from "./PipelineSchemaFields";
 import { resolveSchema } from "./pipelineSchema";
@@ -2047,39 +2049,36 @@ export default function Editor({
     return true;
   }
   /** Add steps from Vector configuration text, placed in free space. */
-  function pasteText(text: string, keepPositions = true) {
+  function pasteText(text: string) {
     if (!editable || busy || !guardInspectorDrafts()) return;
     try {
       const pasted = pasteSteps(config, text);
       const graph = toGraph(pasted.config, { nodes, edges });
       const originals = new Map(nodes.map((node) => [node.id, node]));
-      const placed: typeof nodes = [...nodes];
+      const steps: BlockStep[] = [...pasted.ids].map(([from, to]) => {
+        const kind = pasted.kinds.get(to) || "transforms";
+        return {
+          id: to,
+          kind,
+          component: pasted.config[kind][to],
+          position: originals.get(from)?.position,
+        };
+      });
+      // Copies of steps from this pipeline land just below the originals,
+      // and steps from elsewhere at the top left of what is on screen.
+      const known = steps.every((step) => step.position);
       const bounds = graphRef.current?.getBoundingClientRect();
       const origin = flow.current?.screenToFlowPosition({
-        x: (bounds?.left ?? 0) + (bounds?.width ?? 800) / 3,
-        y: (bounds?.top ?? 0) + (bounds?.height ?? 600) / 3,
+        x: (bounds?.left ?? 0) + 120,
+        y: (bounds?.top ?? 0) + 120,
       }) ?? { x: 80, y: 80 };
-      const column = { sources: 0, transforms: 1, sinks: 2 } as const;
-      const positions = new Map<string, { x: number; y: number }>();
-      for (const [from, to] of pasted.ids) {
-        const original = originals.get(from);
-        const kind = pasted.kinds.get(to) || "transforms";
-        const spot = freePosition(
-          placed,
-          original && keepPositions
-            ? { x: original.position.x + 60, y: original.position.y + 60 }
-            : {
-                x: origin.x + column[kind] * PIPELINE_NODE_COLUMN_GAP,
-                y: origin.y,
-              },
-        );
-        positions.set(to, spot);
-        placed.push({
-          id: to,
-          position: spot,
-          data: { kind, component: pasted.config[kind][to] },
-        });
-      }
+      const anchor = known
+        ? {
+            x: Math.min(...steps.map((step) => step.position!.x)) + 40,
+            y: Math.min(...steps.map((step) => step.position!.y)) + 40,
+          }
+        : origin;
+      const positions = placeBlock(nodes, steps, anchor);
       graph.nodes = graph.nodes.map((node) =>
         positions.has(node.id)
           ? { ...node, position: positions.get(node.id)!, selected: true }
