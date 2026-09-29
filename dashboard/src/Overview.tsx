@@ -62,6 +62,7 @@ import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
 import { StoppedRolloutItems, useStoppedRollouts } from "./StoppedRollouts";
 import type { StoppedRollout } from "./stoppedRollouts";
+import NotificationsHint from "./NotificationsHint";
 import "./overview.css";
 
 type Navigate = (path: string) => void;
@@ -1062,6 +1063,7 @@ function NeedsYou({
           </div>
         </div>
       )}
+      <NotificationsHint user={user} placement="card" />
     </Card>
   );
 }

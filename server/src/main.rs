@@ -1,5 +1,5 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use vectory_server::{Settings, api, device, initialize, install, rollout};
+use vectory_server::{Settings, api, device, initialize, install, notifier, rollout};
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
@@ -161,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
         disable_public_agent_downloads: public_downloads == "false",
         agent_port,
         agent_certificate_pem,
+        outbound: Default::default(),
     };
     let state = initialize(settings).await?;
     tracing::info!(
@@ -188,6 +189,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+    // Notifications send from their own task: a slow receiver never holds
+    // the writer lock, a heartbeat, the scheduler or a request.
+    tokio::spawn(notifier::run(state.clone()));
     let listener = tokio::net::TcpListener::bind(&web_addr).await?;
     let app =
         api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();

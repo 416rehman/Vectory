@@ -275,6 +275,32 @@ pub fn router(s: State) -> Router {
             "/api/v1/tokens/requests/{id}/cancel",
             post(crate::token_requests::cancel),
         )
+        .route(
+            "/api/v1/notifications/channels",
+            get(crate::notifications::list).post(crate::notifications::create),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}",
+            get(crate::notifications::detail)
+                .put(crate::notifications::update)
+                .delete(crate::notifications::remove),
+        )
+        .route(
+            "/api/v1/notifications/channels/{id}/test",
+            post(crate::notifications::test),
+        )
+        .route(
+            "/api/v1/notifications/preview",
+            post(crate::notifications::preview),
+        )
+        .route(
+            "/api/v1/notifications/deliveries",
+            get(crate::notifications::deliveries),
+        )
+        .route(
+            "/api/v1/detection",
+            get(crate::detection::get).put(crate::detection::put),
+        )
         .route("/api/v1/releases", get(crate::install::list_releases))
         .route(
             "/api/v1/releases/{name}",

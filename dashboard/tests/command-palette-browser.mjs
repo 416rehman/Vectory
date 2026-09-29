@@ -6,6 +6,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
+import { configuredChannels } from "./notification-fixtures.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -165,6 +166,8 @@ await context.route("**/*", async (route) => {
   if (path === "/settings") return reply({ instance_name: "Synthetic" });
   if (path === "/mfa") return reply({ enabled: false });
   if (path === "/account/sessions") return reply({ sessions: [] });
+  // An administrator's Overview and Issues ask whether a notification channel exists.
+  if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/overview")
     return reply({
       devices_total: 1,

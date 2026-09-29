@@ -52,7 +52,7 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 | `VECTORY_RELEASES_DIR` | `<data dir>/releases` | Optional mirror of agent downloads with a `catalog.json`. An entry here overrides the bundled one for the same OS and CPU. |
 | `VECTORY_PUBLIC_AGENT_URL` | The agent listener | Agent URL that **Add device** puts in install commands, for when devices reach the server through another name or port. |
 | `VECTORY_PUBLIC_AGENT_DOWNLOADS` | `true` | Serve the installer and agent downloads on the agent listener. Set `false` to require manual downloads. |
-| `VECTORY_PUBLIC_URL` | `http://<this host>:<web port>` | The dashboard address people use (`https://` or `http://`). The installer prints a link to the new device there, and the startup banner shows it. |
+| `VECTORY_PUBLIC_URL` | `http://<this host>:<web port>` | The dashboard address people use (`https://` or `http://`). The installer prints a link to the new device there, the startup banner shows it, and, when you set it, notifications link back to it. |
 
 > [!IMPORTANT]
 > **A production server refuses to start without its safety settings**

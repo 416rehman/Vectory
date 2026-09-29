@@ -231,7 +231,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -260,7 +260,8 @@ fn base(details: bool) -> String {
             text("details.agent_arch", 64),
             text("details.agent_version", 64),
             text("details.configuration_mode", 16),
-            text("details.client_address", 64)
+            text("details.client_address", 64),
+            text("details.summary", 500)
         )
     } else {
         String::new()
@@ -278,7 +279,7 @@ fn base(details: bool) -> String {
             SELECT s.sequence,s.created_at AS order_time,substr(r.id,1,128) AS id,
                 COALESCE({},'unknown') AS actor_id,COALESCE({},'unknown') AS action,
                 COALESCE({},'') AS target,COALESCE({},'unknown') AS outcome,
-                {} AS explicit_device,{} AS request_id,{} AS created_at {extras}
+                {} AS explicit_device,{} AS request_id,{} AS created_at,{} AS detail_name {extras}
             FROM audit_sequence s CROSS JOIN records r ON r.kind='audit' AND r.id=s.audit_id
         ), classified AS (
             SELECT raw.*,
@@ -313,7 +314,9 @@ fn base(details: bool) -> String {
                     CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
                     CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
                     CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
-                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END) AS target_name,
+                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END,
+                    CASE WHEN a.action LIKE 'notification.channel.%' THEN a.detail_name
+                         WHEN a.action='detection.update' THEN 'Detection thresholds' END) AS target_name,
                 CASE WHEN length(a.explicit_device)=36 THEN a.explicit_device
                      WHEN a.action='deployment.release' AND {a_compound} THEN substr(a.target,38,36)
                      WHEN a.target_kind='device' AND length(a.linked_target)=36 THEN a.linked_target
@@ -342,7 +345,9 @@ fn base(details: bool) -> String {
             text("details.device_id", 128)
         ),
         text("request_id", 128),
-        timestamp("s.created_at")
+        timestamp("s.created_at"),
+        // Notification channels are named in their own audit details.
+        text("details.name", 120)
     )
 }
 fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
@@ -558,6 +563,13 @@ fn details(v: &Value, extra: &Value) -> Value {
             "enrollment_tokens_to_revoke",
             "mfa_recovery_codes",
         ],
+        // Written by notifications and detection: a name and a change summary
+        // built from secret-free settings (never a URL path or credential).
+        "notification.channel.create"
+        | "notification.channel.update"
+        | "notification.channel.delete"
+        | "notification.channel.test" => &["name", "summary"],
+        "detection.update" => &["summary"],
         // Written by the enrollment endpoint from bounded, secret-free fields.
         "device.enroll" => &[
             "reason_code",
