@@ -65,6 +65,8 @@ import {
 } from "./status";
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
+import { reportsMetrics } from "./overviewModel";
+import { pipelineRoute } from "./SelectedDevice";
 import {
   failedApplyStep,
   failureStagePhrase,
@@ -218,6 +220,56 @@ export function runningVersionText(device: Device) {
     ? number
     : `${running.configuration_name} ${number}`;
 }
+/**
+ * A local configuration the agent adopted at setup: the digest it reports
+ * when no managed version ever ran. Only Vector's reported state says
+ * whether it runs; older agents don't report it.
+ */
+function adoptedConfiguration(device: Device, untilDeploy: boolean) {
+  const sha = device.actual_sha256 || "";
+  const adopted = `A local configuration adopted at setup (SHA-256 ${sha.slice(0, 8)}…)`;
+  if (device.vector_running === false)
+    return `${adopted} is in place, but Vector isn't running`;
+  const verb = device.vector_running ? "keeps running" : "stays in place";
+  return untilDeploy
+    ? `${adopted} ${verb} until you deploy`
+    : `${adopted} ${verb}`;
+}
+/** What runs on a device that has no pipeline assigned. */
+export function unmanagedRunningText(device: Device) {
+  return device.actual_sha256
+    ? `${adoptedConfiguration(device, true)}.`
+    : "Nothing yet. Vector starts when you deploy a pipeline.";
+}
+/**
+ * What runs after the assigned version failed, when no managed version was
+ * ever verified here: nothing (a first version that couldn't start stops
+ * Vector, and an agent that withdrew it reports no digest), or the local
+ * configuration adopted at setup.
+ */
+export function failedRunningText(
+  device: Device,
+  v: string,
+): { text: string; note: string | null } {
+  if (device.configuration_attempt?.error?.code === "ROLLBACK_UNAVAILABLE")
+    return {
+      text: `Nothing running: Vector stopped after ${v} failed to start.`,
+      note: null,
+    };
+  const note =
+    device.status === "rolled_back"
+      ? `${v} was rolled back`
+      : `${v} failed to apply`;
+  // Older agents keep reporting the failed version's own digest.
+  const adopted =
+    !!device.actual_sha256 &&
+    device.actual_sha256 !== device.desired_sha256 &&
+    device.actual_sha256 !== device.configuration_attempt?.sha256;
+  return {
+    text: adopted ? adoptedConfiguration(device, false) : "Nothing running yet",
+    note,
+  };
+}
 function RunningLine({ device, number }: { device: Device; number?: number }) {
   const v = number ? `v${number}` : "the assigned version";
   const attempt = device.configuration_attempt;
@@ -227,11 +279,7 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
       <span className="device-muted">Unknown. Device access is revoked.</span>
     );
   if (!device.desired_version_id)
-    return (
-      <span className="device-muted">
-        Not managed by Vectory. An adopted local workload may still be running.
-      </span>
-    );
+    return <span className="device-muted">{unmanagedRunningText(device)}</span>;
   if (device.status === "verified")
     return (
       <span className="device-running-value" data-tone="success">
@@ -267,18 +315,12 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
           <span className="device-muted">· {after}</span>
         </span>
       );
+    const { text, note } = failedRunningText(device, v);
     return (
       <span className="device-running-value">
         <CircleX size={14} aria-hidden="true" />
-        {device.actual_sha256
-          ? "Its local config, from before Vectory"
-          : "Nothing yet"}
-        <span className="device-muted">
-          ·{" "}
-          {device.status === "rolled_back"
-            ? `${v} was rolled back`
-            : `${v} failed to apply`}
-        </span>
+        {text}
+        {note && <span className="device-muted">· {note}</span>}
       </span>
     );
   }
@@ -406,6 +448,67 @@ function DeliveryHealth({ device }: { device: Device }) {
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Why "Applied" says nothing about delivery on this device, if it doesn't:
+ * no fresh metrics sample, so only Vector's log could show a failing sink.
+ * "none": the running pipeline has no exporter the agent reads (or the agent
+ * doesn't say); "waiting": it has one and the first sample is due;
+ * "disabled": agent settings turn metrics off. Null when measured, or when
+ * the device isn't applied or already shows a delivery problem.
+ */
+export function deliveryMeasurement(
+  device: Device,
+  now = Date.now(),
+): "none" | "waiting" | "disabled" | null {
+  if (
+    device.status !== "verified" ||
+    dataPlaneIssues(device).length ||
+    reportsMetrics(device, now)
+  )
+    return null;
+  if (device.effective_policy?.telemetry_enabled === false) return "disabled";
+  const source = device.host_runtime?.metrics_source;
+  return source === "explicit" || source === "discovered" ? "waiting" : "none";
+}
+function DeliveryMeasurement({
+  device,
+  pipelineId,
+}: {
+  device: Device;
+  pipelineId: string | null;
+}) {
+  const state = deliveryMeasurement(device);
+  if (!state) return null;
+  return (
+    <p className="device-delivery-unmeasured">
+      <CircleHelp size={14} aria-hidden="true" />
+      <span>
+        {state === "waiting" ? (
+          "Delivery health: not measured yet. The first metrics sample arrives with the next check-in."
+        ) : state === "disabled" ? (
+          <>
+            Delivery health: not measured. Metrics are turned off in{" "}
+            <a href="#/policies">Agent settings</a>.
+          </>
+        ) : (
+          <>
+            Delivery health: not measured.{" "}
+            {pipelineId ? (
+              <a
+                href={`#/${pipelineRoute(pipelineId, undefined, { panel: "tools" })}`}
+              >
+                Add monitoring
+              </a>
+            ) : (
+              "Add monitoring to its pipeline."
+            )}
+          </>
+        )}
+      </span>
+    </p>
   );
 }
 
@@ -950,6 +1053,13 @@ export default function DeviceDetail({
             <p>
               No check-in for three heartbeat intervals. What it runs now can't
               be confirmed.{" "}
+              {device.service_manager === "none" && (
+                <>
+                  No service manager keeps its agent running, so start it again
+                  on the host with <code>vectory run</code>, under your own
+                  supervisor.{" "}
+                </>
+              )}
               <DocLink
                 topic="troubleshooting"
                 section="a-device-is-offline-or-never-connects"
@@ -1038,10 +1148,13 @@ export default function DeviceDetail({
             {version.data?.message && (
               <p className="device-running-note">“{version.data.message}”</p>
             )}
+            <DeliveryMeasurement device={device} pipelineId={pipelineId} />
             <p className="device-explanation">
               {device.desired_version_id
                 ? deviceApplicationExplanation(device, version.data)
-                : "No published pipeline is assigned. An adopted local workload may continue running; a device without a managed configuration waits without starting Vector. An agent check-in alone does not confirm a running workload."}
+                : device.actual_sha256
+                  ? "No published pipeline is assigned. The configuration adopted at setup stays in place until you deploy one."
+                  : "No published pipeline is assigned. The agent checks in and waits; Vector starts with the first version you deploy."}
             </p>
             {device.uses_local_secrets && (
               <p className="device-secret-note">
