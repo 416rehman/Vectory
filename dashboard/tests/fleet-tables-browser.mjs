@@ -169,52 +169,27 @@ async function load(name, props = {}) {
       if (path === "/tokens") return reply(tokens);
       if (path === "/releases") return reply([]);
       if (path === "/agent-install")
-        return reply({
-          agent_url: null,
-          agent_url_configured: false,
-          listener_enabled: false,
-          dashboard_url: null,
-          certificate: null,
-          downloads_enabled: true,
-          installer: null,
-          default_install_dir: "/usr/local/bin",
-          releases: [],
-          catalog_problems: [],
-        });
-      if (
-        /^\/groups\/requests\//.test(path) ||
-        /^\/deployments\/requests\//.test(path)
-      )
+        return reply({ agent_url: null, agent_url_configured: false, listener_enabled: false, dashboard_url: null, certificate: null, downloads_enabled: true, installer: null, default_install_dir: "/usr/local/bin", releases: [], catalog_problems: [] });
+      if (/^\/groups\/requests\//.test(path) || /^\/deployments\/requests\//.test(path))
         return reply({ request_id: path.split("/").at(-1), found: false });
     }
     const body = req.postDataJSON();
     if (path === "/deployments/preview") {
       state.previews.push(body);
-      const selected = devices.filter((d) =>
-        body.selector.device_ids.includes(d.id),
-      );
+      const selected = devices.filter((d) => body.selector.device_ids.includes(d.id));
       return reply({
         devices: selected,
         warnings: [],
         conflicts: [],
         create_idempotency: true,
         request_correlation: true,
-        ...(body.variable_bindings
-          ? {
-              artifact_previews: selected.map((device) => ({
-                device_id: device.id,
-                sha256: createHash("sha256")
-                  .update(
-                    JSON.stringify({
-                      device_id: device.id,
-                      bindings: body.variable_bindings,
-                    }),
-                  )
-                  .digest("hex"),
-                size: 128,
-              })),
-            }
-          : {}),
+        ...(body.variable_bindings ? {
+          artifact_previews: selected.map((device) => ({
+            device_id: device.id,
+            sha256: createHash("sha256").update(JSON.stringify({ device_id: device.id, bindings: body.variable_bindings })).digest("hex"),
+            size: 128,
+          })),
+        } : {}),
       });
     }
     if (path.endsWith("/refresh-preview"))
@@ -226,12 +201,8 @@ async function load(name, props = {}) {
         scheduled_at: "2026-10-01T12:00:00Z",
         ready: true,
         review_token: "b".repeat(64),
-        saved_devices: devices
-          .slice(0, 1)
-          .map(({ id, name, status }) => ({ id, name, status })),
-        devices: devices
-          .slice(0, 3)
-          .map(({ id, name, status }) => ({ id, name, status })),
+        saved_devices: devices.slice(0, 1).map(({ id, name, status }) => ({ id, name, status })),
+        devices: devices.slice(0, 3).map(({ id, name, status }) => ({ id, name, status })),
         warnings: [],
         blockers: [],
       });
@@ -246,49 +217,19 @@ async function load(name, props = {}) {
       (path === "/deployments" || path.endsWith("/refresh"))
     ) {
       state.writes.push({ path, body });
-      if (path === "/deployments")
-        return reply({
-          ...body,
-          id: id(8001),
-          operation: "create",
-          source_deployment_id: null,
-          request_correlation: true,
-          status: "active",
-          created_at: "2026-09-27T12:00:00Z",
-          targets: body.expected_device_ids.map((device_id) => ({
-            device_id,
-            state: "pending",
-            generation: 0,
-          })),
-        });
+      if (path === "/deployments") return reply({
+        ...body, id: id(8001), operation: "create", source_deployment_id: null,
+        request_correlation: true, status: "active", created_at: "2026-09-27T12:00:00Z",
+        targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0 })),
+      });
       expect(body.review_token).toBe("b".repeat(64));
       return reply({
-        id: id(8000),
-        version_id: id(3000),
-        policy: null,
-        selector: {
-          device_ids: body.expected_device_ids,
-          group_ids: [],
-          exclude_ids: [],
-        },
-        priority: 0,
-        target_mode: "snapshot",
-        status: "scheduled",
-        scheduled_at: "2026-10-01T12:00:00Z",
-        created_at: "2026-09-27T12:00:00Z",
-        rollout: {
-          kind: "all",
-          canary_size: 1,
-          batch_size: 1,
-          observation_seconds: 0,
-          failure_threshold: 0,
-        },
-        targets: body.expected_device_ids.map((device_id) => ({
-          device_id,
-          state: "pending",
-          generation: 0,
-          error: null,
-        })),
+        id: id(8000), version_id: id(3000), policy: null,
+        selector: { device_ids: body.expected_device_ids, group_ids: [], exclude_ids: [] },
+        priority: 0, target_mode: "snapshot", status: "scheduled",
+        scheduled_at: "2026-10-01T12:00:00Z", created_at: "2026-09-27T12:00:00Z",
+        rollout: { kind: "all", canary_size: 1, batch_size: 1, observation_seconds: 0, failure_threshold: 0 },
+        targets: body.expected_device_ids.map(device_id => ({ device_id, state: "pending", generation: 0, error: null })),
       });
     }
     if (method === "POST" && path === "/deployments/binding-suggestions")
@@ -342,11 +283,7 @@ async function sort(label) {
     .click();
 }
 async function check(name, run) {
-  if (
-    process.env.VECTORY_FLEET_TABLES_ONLY &&
-    !name.includes(process.env.VECTORY_FLEET_TABLES_ONLY)
-  )
-    return;
+  if (process.env.VECTORY_FLEET_TABLES_ONLY && !name.includes(process.env.VECTORY_FLEET_TABLES_ONLY)) return;
   await run();
   results.push({ name, passed: true });
   console.log("PASS", name);
@@ -411,9 +348,7 @@ try {
       await expect(rows("Devices")).toHaveCount(50);
       expect(new URL(page.url()).hash).toContain("size=50");
       state.failDevices = true;
-      await page
-        .getByRole("button", { name: "Refresh now", exact: true })
-        .click();
+      await page.getByRole("button", { name: "Refresh now", exact: true }).click();
       // A failed refresh keeps the last list visible but not actionable.
       await expect(
         page.getByText("Couldn't refresh devices.", { exact: true }),
@@ -505,18 +440,10 @@ try {
           config: {
             api: { enabled: false, address: "127.0.0.1:8686" },
             sources: { input: { type: "demo_logs", format: "json" } },
-            transforms: {
-              sample: { type: "sample", inputs: ["input"], rate: 10 },
-            },
+            transforms: { sample: { type: "sample", inputs: ["input"], rate: 10 } },
             sinks: { discard: { type: "blackhole", inputs: ["sample"] } },
           },
-          variables: [
-            {
-              name: "SAMPLE_RATE",
-              path: "/transforms/sample/rate",
-              type: "integer",
-            },
-          ],
+          variables: [{ name: "SAMPLE_RATE", path: "/transforms/sample/rate", type: "integer" }],
         },
         initialDeviceIds: [devices[0].id, devices[1].id],
       });
@@ -544,21 +471,12 @@ try {
         devices: { [devices[1].id]: { SAMPLE_RATE: 20 } },
       });
       await expect(rows("Deployment review devices")).toHaveCount(2);
-      await expect(rows("Deployment review devices").nth(1)).toContainText(
-        "Override",
-      );
-      await expect(rows("Deployment review devices").nth(1)).toContainText(
-        "Rendered SHA-256",
-      );
+      await expect(rows("Deployment review devices").nth(1)).toContainText("Override");
+      await expect(rows("Deployment review devices").nth(1)).toContainText("Rendered SHA-256");
       await page.getByRole("button", { name: "Deploy to devices" }).click();
       await expect.poll(() => state.writes.length).toBe(1);
-      expect(state.writes.at(-1).body.variable_bindings).toEqual(
-        reviewed.variable_bindings,
-      );
-      expect(state.writes.at(-1).body.expected_device_ids).toEqual([
-        devices[0].id,
-        devices[1].id,
-      ]);
+      expect(state.writes.at(-1).body.variable_bindings).toEqual(reviewed.variable_bindings);
+      expect(state.writes.at(-1).body.expected_device_ids).toEqual([devices[0].id, devices[1].id]);
     },
   );
   await check(
