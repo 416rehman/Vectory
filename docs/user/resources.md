@@ -126,8 +126,7 @@ This sets `.owner = "platform"`. In a real pipeline, look up a field from the ev
 
 ## Test transformations
 
-<!-- verify-after-merge: the test explorer and "Save as unit test" from the VRL studio (W5) -->
-Tests prove that a transform does what you expect, using events you supply. In [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**.
+Tests prove that a transform does what you expect, using events you supply. In [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**. Each test is listed as passed or failed; a failed test shows Vector's reason and the events the step produced. To start a test from a sample, run the sample in the VRL editor and choose **Save as test**.
 
 This test belongs to the [complete example](pipelines.md#try-a-complete-example), whose `normalize` transform sets `.service`:
 

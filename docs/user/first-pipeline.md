@@ -9,7 +9,6 @@ Create a pipeline from the built-in synthetic example, publish it and deploy it 
 
 ## 1. Create the pipeline
 
-<!-- verify-after-merge: the create dialog (or its new templates gallery) still offers "Try a synthetic example" -->
 <!-- steps -->
 1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**.
 2. Name it `Hello Vectory` and choose **Try a synthetic example**.
@@ -34,16 +33,15 @@ The example works in restricted mode. It reads no files and sends nothing over t
 
 ## 2. Check it
 
-Choose **Check pipeline**. A sandboxed copy of Vector 0.58.0 on your server validates the complete configuration. Green means Vector accepted it.
+Choose the check button in the editor toolbar; before the first check it reads **Not checked**. A sandboxed copy of Vector 0.58.0 on your server validates the complete configuration, and the **Problems** panel under the canvas opens with the result. **Checked** means Vector accepted it. While **Auto-check** is on, the editor also checks again shortly after you stop editing.
 
 If something is wrong, the results name the component and setting to fix. Checks that need the device itself, such as files that only exist there, run on the device before it applies the version.
 
 ## 3. Publish a version
 
-<!-- verify-after-merge: publish review shows a diff against the last version and then leads straight into device selection -->
-Choose **Review & publish**, add a short note such as `First version`, and choose **Publish version**.
+Choose **Review & publish**. The review checks the draft again and lists what changes since the last published version, with line-by-line differences for VRL programs. Add a short note such as `First version` and choose **Publish version**.
 
-Publishing freezes the draft as version 1. It changes nothing on any device yet.
+Publishing freezes the draft as version 1. It changes nothing on any device yet. The confirmation offers **Choose devices** to deploy it now, or **Done** to deploy later.
 
 ## 4. Deploy it to your device
 

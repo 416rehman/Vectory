@@ -97,7 +97,6 @@ Keep the page open. Within a few seconds your machine appears as a new device an
 
 ## 5. Deploy your first pipeline
 
-<!-- verify-after-merge: the create dialog still offers "Try a synthetic example" (it may move into the templates gallery) -->
 <!-- steps -->
 1. Open [**Pipelines**](/#/configurations) and choose **Create pipeline**. Pick **Try a synthetic example**, name it, and choose **Create pipeline**. The example generates demo logs, tags them with VRL and prints them to the console. It reads no files and sends nothing anywhere.
 2. Choose **Review & publish**, then **Publish version**.

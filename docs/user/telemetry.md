@@ -23,9 +23,9 @@ A pipeline and agent settings can come from different deployments with different
 
 Vectory reads metrics from a Prometheus exporter in your own pipeline. It never inserts components by itself.
 
-<!-- verify-after-merge: the editor's "Add monitoring" action (W5) and agent auto-discovery of a loopback prometheus_exporter (W2) -->
+<!-- verify-after-merge: agent auto-discovery of a loopback prometheus_exporter (W2) -->
 <!-- steps -->
-1. In the editor, choose **Add monitoring**. It adds an `internal_metrics` source and a `prometheus_exporter` sink on `127.0.0.1:9598`.
+1. In the editor, open **Actions** and choose **Add monitoring**. It adds an `internal_metrics` source and a `prometheus_exporter` sink on `127.0.0.1:9598` (the next free port if that one is taken), without changing your other steps.
 2. On restricted devices, allow the listener: add `127.0.0.1:9598` to `allowed_listen_addresses` in the device's [allowances](installation.md#configure-restricted-allowances).
 3. Publish and deploy the pipeline.
 4. Open the device's **Metrics**. Numbers appear within two check-ins: rates need two samples.
