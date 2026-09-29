@@ -62,6 +62,14 @@ pub struct Filters {
         skip_serializing_if = "Option::is_none"
     )]
     pub target_id: Option<String>,
+    /// `changes` hides sign-in activity; `security` shows only sign-in,
+    /// account and signing-key events. Absent means every event.
+    #[serde(
+        default,
+        deserialize_with = "optional_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scope: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_string",
@@ -85,6 +93,7 @@ pub struct HistoryQuery {
     actor_id: Option<String>,
     device_id: Option<String>,
     target_id: Option<String>,
+    scope: Option<String>,
     from: Option<String>,
     to: Option<String>,
     page: Option<u64>,
@@ -141,6 +150,14 @@ impl Filters {
                 return Err(ApiError::invalid(
                     "Invalid action, family or outcome filter",
                 ));
+            }
+        }
+        if let Some(scope) = &mut self.scope {
+            *scope = scope.trim().to_owned();
+            match scope.as_str() {
+                "" => self.scope = None,
+                "changes" | "security" => {}
+                _ => return Err(ApiError::invalid("Invalid scope filter")),
             }
         }
         if self.action.is_some() && self.family.is_some() {
@@ -330,6 +347,15 @@ fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {
                 .push("=")
                 .push_bind(value.clone());
         }
+    }
+    match f.scope.as_deref() {
+        Some("changes") => {
+            q.push(" AND NOT (action IN ('login','logout') OR substr(action,1,6)='login.')");
+        }
+        Some("security") => {
+            q.push(" AND (action IN ('bootstrap','login','logout') OR substr(action,1,6)='login.' OR substr(action,1,8)='account.' OR substr(action,1,5)='user.' OR substr(action,1,4)='mfa.' OR substr(action,1,8)='signing.' OR substr(action,1,22)='server.restore_access.')");
+        }
+        _ => {}
     }
     if let Some(family) = &f.family {
         q.push(" AND (action=")
@@ -559,6 +585,7 @@ pub async fn history(
         actor_id: q.actor_id,
         device_id: q.device_id,
         target_id: q.target_id,
+        scope: q.scope,
         from: q.from,
         to: q.to,
     }

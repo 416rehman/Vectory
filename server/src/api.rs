@@ -590,7 +590,10 @@ pub async fn list(
             let deployments = db::records(&mut conn, "deployment").await?;
             let issues_open = crate::issues::open_count(&mut conn).await?;
             let audit = recent_activity(&mut conn).await?;
-            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
+            let mut overview = json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"recent_activity":audit});
+            crate::overview::extend(&mut conn, &devices, &mut overview).await?;
+            overview["devices"] = json!(devices);
+            overview
         }
         _ => return Err(ApiError::missing()),
     };

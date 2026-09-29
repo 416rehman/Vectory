@@ -128,6 +128,13 @@ export function useResource<T>(
           return result;
         }
       } catch (e) {
+        // An ended session is handled by the shell's re-sign-in flow; the page
+        // keeps what it has and reloads on "vectory:session-changed".
+        if (
+          e instanceof APIError &&
+          (e.code === "SESSION_ENDED" || e.status === 401)
+        )
+          return;
         if (current())
           setState((previous) => {
             const same = previous.path === path;
@@ -178,7 +185,9 @@ export function useResource<T>(
       if (visible() && Date.now() - lastSuccess.current > interval / 2)
         void load(true);
     };
+    const renewed = () => void load();
     document.addEventListener("visibilitychange", returned);
+    window.addEventListener("vectory:session-changed", renewed);
     return () => {
       mounted.current = false;
       ++requestId.current;
@@ -186,6 +195,7 @@ export function useResource<T>(
       activeRequest.current = null;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", returned);
+      window.removeEventListener("vectory:session-changed", renewed);
     };
   }, [path, refresh, load, interval]);
   // Hide old-resource data during the render before the new path's effect runs.
