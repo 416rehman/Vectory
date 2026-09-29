@@ -1,0 +1,10 @@
+{"timestamp":"2026-09-29T15:48:34.855569Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.856243Z","level":"INFO","message":"Loading configs.","paths":"[\"prom.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.858311Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T15:48:34.858386Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.858395Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T15:48:34.858460Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T15:48:34.858690Z","level":"ERROR","message":"Failed to start Prometheus exporter: TCP bind failed: Permission denied (os error 13).","target":"vector::sinks::prometheus::exporter","span":{"component_id":"prom","component_kind":"sink","component_type":"prometheus_exporter","name":"sink"},"spans":[{"component_id":"prom","component_kind":"sink","component_type":"prometheus_exporter","name":"sink"}]}
+{"timestamp":"2026-09-29T15:48:34.858743Z","level":"ERROR","message":"An error occurred that Vector couldn't handle: the task completed with an error.","target":"vector::topology","span":{"component_id":"prom","component_kind":"sink","component_type":"prometheus_exporter","name":"sink"},"spans":[{"component_id":"prom","component_kind":"sink","component_type":"prometheus_exporter","name":"sink"}]}
+{"timestamp":"2026-09-29T15:48:34.858805Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T15:48:34.859093Z","level":"INFO","message":"Vector has stopped.","target":"vector"}
