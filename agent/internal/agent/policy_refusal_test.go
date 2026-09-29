@@ -179,6 +179,9 @@ func TestAnHTTPRoutePathIsNotAFilePath(t *testing.T) {
 			t.Errorf("%s refused: %v", name, err)
 		}
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX paths")
+	}
 	// A path that does name a file is still checked, and a top-level directory
 	// is never suggested as the allowance.
 	var refusal *PolicyRefusal
