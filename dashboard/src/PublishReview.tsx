@@ -33,6 +33,10 @@ const changeWords: Record<ComponentChange["change"], string> = {
   changed: "Changed",
 };
 
+/** Refusals that mean the checker could not run, not that the draft is wrong. */
+const checkerDown = (code: string) =>
+  code === "CAPABILITY_DENIED" || code === "WORKER_BUSY";
+
 function describe(component: ComponentChange) {
   if (component.change !== "changed") return component.type;
   const parts = component.programs.map((program) => `${program.label} changed`);
@@ -125,10 +129,16 @@ export default function PublishReview({
               ? "Vector rejected this version. Nothing was published."
               : rejection.code === "STALE_REVISION"
                 ? "The draft changed while you reviewed it. Nothing was published."
-                : "The server refused to publish. Nothing was published."}
+                : checkerDown(rejection.code)
+                  ? "Not published. Vector's checker is unavailable, so Vectory couldn't verify this draft."
+                  : "The server refused to publish. Nothing was published."}
           </strong>
           <p>
-            <ProblemText text={rejection.message} />
+            {checkerDown(rejection.code) ? (
+              "Try again in a minute."
+            ) : (
+              <ProblemText text={rejection.message} />
+            )}
           </p>
         </div>
       )}
@@ -142,11 +152,14 @@ export default function PublishReview({
         <Icon size={16} aria-hidden="true" />
         <strong>{statusLabel}</strong>
         <span>{verdict}</span>
-        {onCheck && (status === "unchecked" || status === "stale") && (
-          <Button variant="secondary compact" onClick={onCheck}>
-            Check now
-          </Button>
-        )}
+        {onCheck &&
+          (status === "unchecked" ||
+            status === "stale" ||
+            status === "unavailable") && (
+            <Button variant="secondary compact" onClick={onCheck}>
+              {status === "unavailable" ? "Check again" : "Check now"}
+            </Button>
+          )}
       </div>
       {errors.length > 0 && (
         <ul className="publish-review-problems" aria-label="Problems to fix">

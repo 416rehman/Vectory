@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { parseLosslessJSON } from "./configurationNumbers";
 import { diffEvents, displayValue, flattenEvent } from "./eventDiff";
+import { eventPaths } from "./vrlLanguage";
 import {
   activeSet,
   emptyStore,
@@ -180,5 +182,34 @@ describe("unit tests from samples", () => {
       '{"a": [1, null], "b": "x"}',
     );
     expect(assertionsFor({})).toBe("true");
+  });
+});
+
+describe("epoch nanoseconds and other big integers", () => {
+  const response =
+    '{"output":{"ns":1790669601180123456,"ms":1790669601180,"n":1.5}}';
+  it("keep their exact digits through display, diff and saved tests", () => {
+    const { output } = parseLosslessJSON(response);
+    expect(output.ms).toBe(1790669601180);
+    expect(JSON.stringify(output)).toBe(
+      '{"ns":1790669601180123456,"ms":1790669601180,"n":1.5}',
+    );
+    expect(displayValue(output.ns)).toBe("1790669601180123456");
+    expect([...flattenEvent(output).keys()]).toEqual([".ns", ".ms", ".n"]);
+    expect(eventPaths([output])).toEqual([".ms", ".n", ".ns"]);
+    expect(diffEvents({ ns: 1 }, output)[0]).toMatchObject({
+      path: ".ns",
+      kind: "changed",
+    });
+    expect(assertionsFor(output).split("\n")[0]).toBe(
+      "assert_eq!(.ns, 1790669601180123456)",
+    );
+  });
+  it("in samples are sent back exactly", () => {
+    const parsed = parseSamples('{"id":18446744073709551615}');
+    expect(parsed.errors).toEqual([]);
+    expect(JSON.stringify(parsed.samples[0])).toBe(
+      '{"id":18446744073709551615}',
+    );
   });
 });

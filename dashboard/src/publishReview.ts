@@ -4,8 +4,69 @@ import type { Config } from "./api";
 const SECTIONS = ["sources", "transforms", "sinks", "enrichment_tables"];
 const record = (value: unknown): value is Config =>
   !!value && typeof value === "object" && !Array.isArray(value);
-const same = (a: unknown, b: unknown) =>
-  a === b || JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Semantic equality of configuration values: key order never matters (the
+ * server returns sorted keys, a draft keeps insertion order), a missing key
+ * equals an undefined one, and `inputs` is a set.
+ */
+export function sameValue(a: unknown, b: unknown, key?: string): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    if (key === "inputs" && a.every((item) => typeof item === "string")) {
+      const sorted = (list: unknown[]) => [...(list as string[])].sort();
+      return sameValue(sorted(a), sorted(b));
+    }
+    return a.every((item, index) => sameValue(item, b[index]));
+  }
+  if (record(a) && record(b)) {
+    for (const name of new Set([...Object.keys(a), ...Object.keys(b)]))
+      if (!sameValue(a[name], b[name], name)) return false;
+    return true;
+  }
+  return false;
+}
+const same = (a: unknown, b: unknown, key?: string) => sameValue(a, b, key);
+
+/** Distance from a source: upstream steps sort before the steps they feed. */
+function depths(...configs: (Config | null)[]) {
+  const inputs = new Map<string, string[]>();
+  for (const config of configs)
+    for (const section of SECTIONS) {
+      const components = record(config?.[section]) ? config![section] : {};
+      for (const [id, component] of Object.entries(components))
+        if (!inputs.has(id))
+          inputs.set(
+            id,
+            record(component) && Array.isArray(component.inputs)
+              ? component.inputs.filter(
+                  (input: unknown): input is string =>
+                    typeof input === "string",
+                )
+              : [],
+          );
+    }
+  const memo = new Map<string, number>();
+  const depth = (id: string, seen: Set<string>): number => {
+    const known = memo.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    let deepest = 0;
+    for (const input of inputs.get(id) ?? []) {
+      // `route.errors` is the `errors` output of `route`.
+      const upstream = inputs.has(input)
+        ? input
+        : input.replace(/\.[^.]*$/, "");
+      if (inputs.has(upstream))
+        deepest = Math.max(deepest, depth(upstream, seen) + 1);
+    }
+    seen.delete(id);
+    memo.set(id, deepest);
+    return deepest;
+  };
+  return (id: string) => depth(id, new Set());
+}
 const PROGRAM_KEYS = new Set(["source", "condition", "route", "routes"]);
 
 /** VRL programs and conditions of a component, by option path. */
@@ -105,7 +166,7 @@ export function reviewChanges(
           ...Object.keys(record(previous) ? previous : {}),
           ...Object.keys(record(component) ? component : {}),
         ]),
-      ].filter((key) => !same(previous?.[key], component?.[key]));
+      ].filter((key) => !same(previous?.[key], component?.[key], key));
       const beforePrograms = componentPrograms(previous),
         afterPrograms = componentPrograms(component);
       const programs: ProgramChange[] = [];
@@ -150,6 +211,17 @@ export function reviewChanges(
           rewired: false,
         });
   }
+  // Source to sink: sections in pipeline order, then upstream steps first.
+  const depth = depths(after, before);
+  const order = new Map(
+    components.map((component, index) => [component, index]),
+  );
+  components.sort(
+    (a, b) =>
+      SECTIONS.indexOf(a.section) - SECTIONS.indexOf(b.section) ||
+      depth(a.id) - depth(b.id) ||
+      order.get(a)! - order.get(b)!,
+  );
   const settings = [
     ...new Set([...Object.keys(before || {}), ...Object.keys(after || {})]),
   ].filter(

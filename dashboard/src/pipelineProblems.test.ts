@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { APIError } from "./api";
+import { cleanSummary } from "./ProblemsPanel";
 import {
   applyFix,
+  checkFailureMessage,
   checkLabel,
   checkProblems,
   checkStatus,
@@ -447,7 +450,7 @@ describe("pipeline problems", () => {
     });
     expect(status).toBe("unavailable");
     expect(checkLabel(status, 0)).toBe("Couldn't check");
-    expect(checkVerdict(unavailable, 0)).toMatch(/checker is unavailable/);
+    expect(checkVerdict(unavailable, 0)).toMatch(/checker isn.t reachable/);
     expect(
       checkStatus({
         checking: false,
@@ -500,5 +503,34 @@ describe("pipeline problems", () => {
       "archive",
       "geo",
     ]);
+  });
+
+  it("never reads as clean when the check could not run", () => {
+    expect(cleanSummary("unavailable")).toBe("Not checked");
+    expect(cleanSummary("unchecked")).toBe("Not checked");
+    expect(cleanSummary("stale")).toBe("Not checked");
+    expect(cleanSummary("checking")).toBe("Checking…");
+    expect(cleanSummary("passed")).toBe("No problems");
+    expect(cleanSummary("device")).toBe("No problems");
+    expect(
+      checkFailureMessage(
+        new APIError(
+          "CAPABILITY_DENIED",
+          "Isolated Vector validator is unavailable",
+          503,
+          true,
+        ),
+      ),
+    ).toBe(
+      "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.",
+    );
+    expect(checkFailureMessage(new TypeError("Failed to fetch"))).toMatch(
+      /^Couldn't reach Vectory/,
+    );
+    expect(
+      checkFailureMessage(
+        new APIError("INVALID_INPUT", "Bad draft", 400, true),
+      ),
+    ).toBe("Couldn't check with Vector: Bad draft");
   });
 });

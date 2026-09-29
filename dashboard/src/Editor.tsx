@@ -160,6 +160,7 @@ import PipelineCheckButton from "./PipelineCheckButton";
 import ProblemsPanel from "./ProblemsPanel";
 import {
   applyFix,
+  checkFailureMessage,
   checkLabel,
   checkProblems,
   checkStatus,
@@ -890,12 +891,17 @@ export default function Editor({
       checkedConfig,
     ],
   );
+  // Auto-check needs a source and a destination; until then stale Vector
+  // findings (such as "No sources defined") would contradict the canvas.
+  const missingForCheck = [
+    Object.keys(checkedConfig.sources || {}).length ? "" : "source",
+    Object.keys(checkedConfig.sinks || {}).length ? "" : "destination",
+  ].filter(Boolean);
+  const dropStaleVector = checkStale && missingForCheck.length > 0;
   const problems = useMemo(() => {
-    const vector = checkProblems(
-      check?.result || null,
-      checkedConfig,
-      checkStale,
-    );
+    const vector = dropStaleVector
+      ? []
+      : checkProblems(check?.result || null, checkedConfig, checkStale);
     const program = (
       draft: "checked" | "current",
       component: string,
@@ -909,7 +915,7 @@ export default function Editor({
       draftProblems,
       checkStale ? settleStaleProblems(vector, program) : vector,
     );
-  }, [draftProblems, check, checkedConfig, checkStale]);
+  }, [draftProblems, check, checkedConfig, checkStale, dropStaleVector]);
   const problemCounts = countProblems(problems);
   // Vector errors from a check of this exact draft block publishing: the
   // server would refuse the same draft.
@@ -931,13 +937,15 @@ export default function Editor({
   });
   const statusLabel = checkLabel(status, problemCounts.errors);
   const verdict = checkError
-    ? `Couldn't check with Vector: ${checkError}`
+    ? checkError
     : checkStale
       ? pendingFieldCount
         ? "Apply or discard the field you're editing, then check again."
-        : autoCheck
-          ? "Changed since the last check. Checking again when you pause."
-          : "Changed since the last check."
+        : autoCheck && missingForCheck.length
+          ? `Add a ${missingForCheck.join(" and a ")} and Vector checks automatically.`
+          : autoCheck
+            ? "Changed since the last check. Checking again when you pause."
+            : "Changed since the last check."
       : checkVerdict(check?.result || null, problemCounts.errors);
   const autoCheckAttempt = useRef<{
     config: Config;
@@ -2073,7 +2081,7 @@ export default function Editor({
       if (generation !== checkGeneration.current) return;
       // An automatic check that could not run (busy checker, lost session)
       // keeps the earlier findings and tries again after the next edit.
-      if (!auto) setCheckError((e as Error).message);
+      if (!auto) setCheckError(checkFailureMessage(e));
     } finally {
       if (generation === checkGeneration.current) {
         checkInFlight.current = false;
@@ -2226,13 +2234,13 @@ export default function Editor({
       // A peer can send this shared intent while our preflight or POST waits,
       // so a structured rejection alone cannot rule out a committed result
       // under the same request key. It becomes definitive once the server
-      // confirms that no version was committed under that key.
+      // confirms that no version was committed under that key. That holds
+      // for a structured 5xx too, such as an unavailable Vector checker.
       if (
         operation &&
         failure instanceof APIError &&
         failure.serverRejection &&
         failure.status >= 400 &&
-        failure.status < 500 &&
         failure.code !== "IDEMPOTENCY_CONFLICT" &&
         (await rejectedWithoutCommit(operation, controller.signal))
       ) {
@@ -3094,6 +3102,8 @@ export default function Editor({
       onFix={fixProblem}
       checking={checking}
       canFix={canFixProblem}
+      status={status}
+      onCheck={checkable ? () => void validate() : undefined}
     />
   );
   function fitGraph() {
@@ -3130,14 +3140,12 @@ export default function Editor({
         ? 0
         : 220;
       const node = selected ? nodes.find((node) => node.id === selected) : null;
+      if (node && nodeInView(node)) return;
       if (node)
         flow.current?.setCenter(
           node.position.x + PIPELINE_NODE_WIDTH / 2,
           node.position.y + PIPELINE_NODE_BODY_HEIGHT / 2,
-          {
-            zoom: Math.max(flow.current.getZoom(), 0.85),
-            duration,
-          },
+          { zoom: flow.current.getZoom(), duration },
         );
       else
         flow.current?.fitView({
@@ -3149,11 +3157,34 @@ export default function Editor({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [selected, view, nodes.length]);
+  /** Whether a node is fully visible in the canvas as laid out now. */
+  function nodeInView(node: { position: { x: number; y: number } }) {
+    const instance = flow.current,
+      pane = graphRef.current?.querySelector(".react-flow");
+    if (!instance || !pane) return false;
+    const bounds = pane.getBoundingClientRect();
+    const { x, y, zoom } = instance.getViewport();
+    const left = node.position.x * zoom + x,
+      top = node.position.y * zoom + y;
+    return (
+      left >= 0 &&
+      top >= 0 &&
+      left + PIPELINE_NODE_WIDTH * zoom <= bounds.width &&
+      top + PIPELINE_NODE_BODY_HEIGHT * zoom <= bounds.height
+    );
+  }
   useEffect(() => {
     if (!selected || view !== "canvas" || historyOpen) return;
     const onEscape = (event: KeyboardEvent) => {
+      // Escape belongs to the control that has focus first: completion
+      // popups, code editors (Escape then Tab leaves them), fields and menus.
+      const target = event.target instanceof Element ? event.target : null;
       if (
         event.key === "Escape" &&
+        !event.defaultPrevented &&
+        !target?.closest(
+          '.cm-editor, input, textarea, select, [contenteditable="true"], [role="listbox"], [role="menu"]',
+        ) &&
         !document.querySelector('[role="dialog"]')
       ) {
         event.preventDefault();
@@ -4952,7 +4983,9 @@ export default function Editor({
               hasPendingFields ||
               importedCodeDirty.current ||
               unresolvedPublish ||
-              !!publishNotice
+              !!publishNotice ||
+              // The server refuses a draft its checker cannot verify.
+              status === "unavailable"
             }
             onClick={publish}
           >

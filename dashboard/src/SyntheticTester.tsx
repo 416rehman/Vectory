@@ -599,6 +599,7 @@ export default function SyntheticTester({
               value={set.text}
               diagnostics={sampleDiagnostics}
               onChange={editText}
+              wrap
             />
           </div>
           <p className="sample-hint">

@@ -472,6 +472,20 @@ export function checkStatus({
   return check.vector_validated ? "passed" : "device";
 }
 
+/** Why a check request failed, in words for the Problems panel. */
+export function checkFailureMessage(failure: unknown) {
+  const error = failure as { status?: number; code?: string; message?: string };
+  if (failure instanceof TypeError || error?.status === 0)
+    return "Couldn't reach Vectory, so this draft hasn't been checked. Check your connection and try again.";
+  if (
+    error?.status === 503 ||
+    error?.code === "CAPABILITY_DENIED" ||
+    error?.code === "WORKER_BUSY"
+  )
+    return "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check.";
+  return `Couldn't check with Vector: ${error?.message || "unknown error"}`;
+}
+
 export function checkLabel(status: CheckStatus, errors: number) {
   switch (status) {
     case "checking":
@@ -512,7 +526,7 @@ export function checkVerdict(check: PipelineCheck | null, errors: number) {
     return check.diagnostics?.some(
       (item) => item.code === "validator_unavailable",
     )
-      ? "The Vector checker is unavailable. Publishing is blocked until it responds."
+      ? "Vector's checker isn't reachable, so this draft hasn't been checked. Publishing waits for a successful check."
       : sentence(failure);
   if (!check.static_checked)
     return "Only the pipeline structure was checked. Each device validates before applying.";

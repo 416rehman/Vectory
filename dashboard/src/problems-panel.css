@@ -65,6 +65,45 @@
 .problems-icon-clean {
   color: var(--ed-success);
 }
+.problems-icon-unchecked,
+.problems-icon-checking {
+  color: var(--muted);
+}
+.problems-icon-checking {
+  animation: problems-spin 900ms linear infinite;
+}
+@keyframes problems-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .problems-icon-checking {
+    animation: none;
+  }
+}
+.problems-retry {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.problems-retry:hover {
+  background: var(--surface-hover);
+}
+.problems-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .problems-verdict {
   flex: 1;
   min-width: 0;
