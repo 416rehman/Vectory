@@ -142,6 +142,21 @@ a.device-version-name:hover {
 .data-table.devices-table th.device-number .data-table-heading {
   justify-content: flex-end;
 }
+.device-flow {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.device-flow-arrow {
+  color: var(--text-subtle);
+}
+.device-flow-out[data-tone="danger"] {
+  color: var(--danger-text, var(--mark-danger));
+  font-weight: 600;
+}
 .devices-table .device-check input,
 .groups-table .device-check input {
   display: block;
@@ -276,6 +291,38 @@ a.device-version-name:hover {
 }
 .device-banner a {
   color: var(--accent-text);
+}
+.device-delivery-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.device-delivery-list li {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--warning-border);
+}
+.device-delivery-issue {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: var(--leading-sm);
+  overflow-wrap: anywhere;
+}
+.device-delivery-list p {
+  overflow-wrap: anywhere;
+}
+.device-banner .device-delivery-fix {
+  color: var(--text);
+}
+.device-delivery-fix span {
+  margin-right: var(--space-1);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.device-banner .device-delivery-foot {
+  margin-top: var(--space-2);
 }
 .device-layout {
   display: grid;

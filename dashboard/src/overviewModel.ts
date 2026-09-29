@@ -3,6 +3,7 @@ import { deviceDisplayStatus, type DeviceStatusInput } from "./status";
 
 export type HealthBucket =
   | "applied"
+  | "degraded"
   | "updating"
   | "check"
   | "failed"
@@ -11,6 +12,7 @@ export type HealthBucket =
   | "unmanaged";
 export const healthOrder: HealthBucket[] = [
   "applied",
+  "degraded",
   "updating",
   "check",
   "failed",
@@ -20,6 +22,7 @@ export const healthOrder: HealthBucket[] = [
 ];
 export const healthLabels: Record<HealthBucket, string> = {
   applied: "Applied",
+  degraded: "Degraded",
   updating: "Updating",
   check: "Check required",
   failed: "Failed",
@@ -30,6 +33,8 @@ export const healthLabels: Record<HealthBucket, string> = {
 /** The device states each bucket stands for (for filters and links). */
 export const healthStates: Record<HealthBucket, string[]> = {
   applied: ["verified"],
+  // Applied, but an open data-plane issue says it isn't delivering.
+  degraded: ["degraded"],
   updating: ["applying"],
   check: ["verification_unknown"],
   failed: ["failed", "rolled_back", "conflict"],

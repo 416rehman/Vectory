@@ -121,6 +121,12 @@ export type ApplyState = keyof typeof applyStates;
 /** The device's single effective state, computed by the server. */
 export const deviceStatuses = {
   verified: applyStates.verified_applied,
+  degraded: entry(
+    "Degraded",
+    "warning",
+    "alert",
+    "Applied, but not delivering. An open delivery issue says why.",
+  ),
   applying: entry(
     "Updating",
     "info",
@@ -278,6 +284,16 @@ export const issueDispositions = {
 } satisfies Record<string, StatusEntry>;
 export type IssueDisposition = keyof typeof issueDispositions;
 
+/** Delivery problems the server finds in telemetry (`DATA_PLANE_*` issues). */
+export const dataPlaneCodes = [
+  "DATA_PLANE_STALLED",
+  "DATA_PLANE_SINK_ERRORS",
+  "DATA_PLANE_BUFFER_FULL",
+  "DATA_PLANE_ERROR_DROPS",
+] as const;
+export const isDataPlaneCode = (code: string | null | undefined) =>
+  (dataPlaneCodes as readonly string[]).includes(code ?? "");
+
 /** Audit outcomes, including device apply transitions recorded in the audit. */
 export const auditOutcomes = {
   success: entry("Succeeded", "success", "check", "The action completed."),
@@ -397,6 +413,25 @@ export function statusOf(domain: StatusDomain, value: string): StatusEntry {
 export const statusLabel = (domain: StatusDomain, value: string) =>
   statusOf(domain, value).label;
 
+/** One open delivery problem, as the server summarizes it on the device. */
+export type DataPlaneIssue = {
+  issue_id?: string | null;
+  code: string;
+  component_id?: string | null;
+  component_kind?: string | null;
+  title: string;
+  message?: string | null;
+  hint?: string | null;
+  since?: string | null;
+};
+/** The server's data-plane summary for the version the device runs. */
+export type DataPlaneSummary = {
+  version_id: string | null;
+  evaluations?: number | null;
+  evaluated_at?: string | null;
+  issues: DataPlaneIssue[];
+};
+
 /** Minimal device fields the display state depends on. */
 export type DeviceStatusInput = {
   status: string;
@@ -404,13 +439,35 @@ export type DeviceStatusInput = {
   local_paused?: boolean;
   pause_acknowledged?: boolean;
   last_seen?: string | null;
+  desired_version_id?: string | null;
+  data_plane?: DataPlaneSummary | null;
 };
 
 /**
+ * Open delivery problems of a device that verifiably runs the version they
+ * were measured on. Apply state stays separate: the device is still applied.
+ */
+export function dataPlaneIssues(device: DeviceStatusInput): DataPlaneIssue[] {
+  const summary = device.data_plane;
+  if (
+    device.status !== "verified" ||
+    !summary?.version_id ||
+    summary.version_id !== device.desired_version_id ||
+    !Array.isArray(summary.issues)
+  )
+    return [];
+  return summary.issues.filter(
+    (issue) => issue && typeof issue.title === "string",
+  );
+}
+
+/**
  * The state to show for a device. A dashboard pause reads "Pause requested"
- * until the agent acknowledges it; a host-local pause is always in effect.
+ * until the agent acknowledges it; a host-local pause is always in effect. An
+ * applied device that isn't delivering reads "Degraded".
  */
 export function deviceDisplayStatus(device: DeviceStatusInput): string {
+  if (dataPlaneIssues(device).length) return "degraded";
   if (
     device.status === "paused" &&
     !device.local_paused &&

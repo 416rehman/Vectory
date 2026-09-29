@@ -101,9 +101,11 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
     ? `Replaced on ${replaced.reduce((sum, entry) => sum + entry.device_count, 0)} ${replaced.reduce((sum, entry) => sum + entry.device_count, 0) === 1 ? "device" : "devices"} by ${version(latest.version_number)}`
     : d.status === "failed" && d.failure_reason === "threshold"
       ? "Stopped after device failures"
-      : d.status === "failed" && d.failure_reason === "incompatible"
-        ? "A device became incompatible"
-        : null;
+      : d.status === "failed" && d.failure_reason === "data_plane"
+        ? "Stopped: a device isn't delivering"
+        : d.status === "failed" && d.failure_reason === "incompatible"
+          ? "A device became incompatible"
+          : null;
   return {
     label: lifecycleLabels[d.status] || d.status.replaceAll("_", " "),
     tone: lifecycleTones[d.status] || "neutral",
@@ -128,6 +130,7 @@ const targetLabels: Record<string, string> = {
   incompatible: "Incompatible",
   failed: "Failed",
   blocked: "Blocked",
+  degraded: "Not delivering",
   removed: "No longer targeted",
   revoked: "Revoked",
 };
@@ -143,6 +146,7 @@ const targetTones: Record<string, StatusTone> = {
   incompatible: "danger",
   failed: "danger",
   blocked: "danger",
+  degraded: "warning",
   pending: "neutral",
   removed: "neutral",
   revoked: "neutral",
@@ -193,7 +197,12 @@ const segmentStates: [ProgressSegment["key"], string, string[]][] = [
   ],
   ["waiting", "Waiting for check-in", ["desired"]],
   ["queued", "Not released", ["pending"]],
-  ["failed", "Failed", ["failed", "rolled_back", "incompatible", "blocked"]],
+  // Degraded (applied, not delivering) counts against the failure threshold.
+  [
+    "failed",
+    "Failed",
+    ["failed", "rolled_back", "incompatible", "blocked", "degraded"],
+  ],
 ];
 /**
  * Stacked progress from persisted target states. Only verified_applied counts
@@ -215,6 +224,28 @@ export function progressSegments(
             .reduce((sum, [, n]) => sum + n, 0)
         : 0),
   }));
+}
+
+/**
+ * Recorded target counts with devices that verified but aren't delivering
+ * moved from verified to degraded (which the failed segment counts), so the
+ * bar agrees with the stages and failure groups. Returns how many moved.
+ */
+export function withDegraded(
+  counts: Record<string, number>,
+  degraded: number,
+): { counts: Record<string, number>; moved: number } {
+  const verified = counts.verified_applied || 0;
+  const moved = Math.max(0, Math.min(Math.trunc(degraded) || 0, verified));
+  if (!moved) return { counts, moved: 0 };
+  return {
+    counts: {
+      ...counts,
+      verified_applied: verified - moved,
+      degraded: (counts.degraded || 0) + moved,
+    },
+    moved,
+  };
 }
 
 function plural(count: number, one: string, many = `${one}s`) {

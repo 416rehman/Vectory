@@ -9,6 +9,7 @@ import {
   Pause,
   Rocket,
   TriangleAlert,
+  Unplug,
   WifiOff,
   X,
 } from "lucide-react";
@@ -53,7 +54,12 @@ import {
   TimeAgo,
   useResource,
 } from "./ui";
-import { connectionState, deviceDisplayStatus, statusLabel } from "./status";
+import {
+  connectionState,
+  dataPlaneIssues,
+  deviceDisplayStatus,
+  statusLabel,
+} from "./status";
 import { exactLocal } from "./time";
 import { runsDesired } from "./deviceModel";
 import "./devices.css";
@@ -300,6 +306,66 @@ function FailureDetails({
       >
         Troubleshoot a rejected pipeline
       </DocLink>
+    </div>
+  );
+}
+
+/* ---------- Delivery health (data-plane issues from telemetry) ---------- */
+
+/**
+ * Applied but not delivering: each open delivery problem the server found in
+ * this device's telemetry, naming the component, with the measured reason and
+ * the fix. Apply state stays "Applied"; this is the separate health signal.
+ */
+function DeliveryHealth({ device }: { device: Device }) {
+  const issues = dataPlaneIssues(device);
+  if (!issues.length) return null;
+  const since = issues
+    .map((issue) => issue.since)
+    .filter((at): at is string => !!at)
+    .sort()[0];
+  return (
+    <div
+      className="device-banner device-delivery"
+      data-tone="warning"
+      role="note"
+      aria-labelledby="device-delivery-title"
+    >
+      <Unplug size={16} aria-hidden="true" />
+      <div>
+        <strong id="device-delivery-title">Applied, but not delivering</strong>
+        <ul className="device-delivery-list">
+          {issues.map((issue) => (
+            <li key={`${issue.code}:${issue.component_id || ""}`}>
+              <span className="device-delivery-issue">{issue.title}</span>
+              {issue.message && <p>{issue.message}</p>}
+              {issue.hint && (
+                <p className="device-delivery-fix">
+                  <span>Fix</span> {issue.hint}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p className="device-delivery-foot">
+          {since && (
+            <>
+              Since <TimeAgo value={since} />.{" "}
+            </>
+          )}
+          Clears by itself after three clean checks.{" "}
+          <a href={`#/issues?device=${encodeURIComponent(device.id)}`}>
+            Open issues
+          </a>
+          {" · "}
+          <DocLink
+            topic="troubleshooting"
+            section="a-pipeline-applies-but-delivers-nothing"
+          >
+            Troubleshoot delivery
+          </DocLink>
+        </p>
+      </div>
     </div>
   );
 }
@@ -816,6 +882,7 @@ export default function DeviceDetail({
           </div>
         </div>
       )}
+      <DeliveryHealth device={device} />
       <div className="device-layout">
         <div className="device-main">
           <section

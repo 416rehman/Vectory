@@ -43,6 +43,10 @@ pub async fn extend(
         .filter(|d| !d["desired_version_id"].is_null())
         .count();
     let on_desired = live.iter().filter(|d| d["status"] == "verified").count();
+    let degraded = live
+        .iter()
+        .filter(|d| data_plane_issue(d).is_some())
+        .count();
     let versions = versions(conn, &live).await?;
     let rollouts = rollouts(conn).await?;
     let attention = attention(conn, &live, &versions).await?;
@@ -58,6 +62,7 @@ pub async fn extend(
     let extra = json!({
         "devices_managed": managed,
         "devices_on_desired": on_desired,
+        "devices_degraded": degraded,
         "versions_total": versions_total,
         "versions": versions,
         "rollouts": rollouts,
@@ -173,6 +178,31 @@ struct Group<'a> {
     since: Option<String>,
 }
 
+/// The first open data-plane issue of a device that verifiably runs the
+/// version it was measured on. Anything else (another version, not applied)
+/// is not a current delivery problem of this device.
+pub fn data_plane_issue(device: &Value) -> Option<&Value> {
+    let summary = &device["data_plane"];
+    (device["status"] == "verified"
+        && summary["version_id"].is_string()
+        && summary["version_id"] == device["desired_version_id"])
+        .then(|| summary["issues"].as_array().and_then(|list| list.first()))
+        .flatten()
+}
+
+/// The most common first data-plane issue across a group: title, reason, fix.
+fn delivery(devices: &[&Value]) -> Option<Value> {
+    let mut counts: BTreeMap<String, (usize, Value)> = BTreeMap::new();
+    for issue in devices.iter().filter_map(|d| data_plane_issue(d)) {
+        let key = issue["message"].as_str().unwrap_or("").to_owned();
+        counts.entry(key).or_insert((0, issue.clone())).0 += 1;
+    }
+    counts
+        .into_values()
+        .max_by_key(|(count, _)| *count)
+        .map(|(_, issue)| issue)
+}
+
 fn reason(devices: &[&Value]) -> Option<String> {
     // Prefer the most common sanitized failure summary the agents reported.
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -211,6 +241,7 @@ async fn attention(
 ) -> Result<Vec<Value>> {
     let mut failed: BTreeMap<(Option<&str>, &str), Vec<&Value>> = BTreeMap::new();
     let mut unknown: BTreeMap<Option<&str>, Vec<&Value>> = BTreeMap::new();
+    let mut degraded: BTreeMap<Option<&str>, Vec<&Value>> = BTreeMap::new();
     let (mut offline, mut paused, mut unmanaged, mut applying) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for device in devices {
@@ -224,6 +255,9 @@ async fn attention(
             "paused" => paused.push(*device),
             "unmanaged" => unmanaged.push(*device),
             "applying" => applying.push(*device),
+            "verified" if data_plane_issue(device).is_some() => {
+                degraded.entry(version).or_default().push(*device)
+            }
             _ => {}
         }
     }
@@ -236,6 +270,22 @@ async fn attention(
             state: Some(state),
             devices: list,
             since: None,
+        });
+    }
+    for (version_id, list) in degraded {
+        let since = list
+            .iter()
+            .filter_map(|d| data_plane_issue(d)?["since"].as_str())
+            .filter_map(time)
+            .min()
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        groups.push(Group {
+            cause: "degraded",
+            severity: "danger",
+            version_id,
+            state: Some("degraded"),
+            devices: list,
+            since,
         });
     }
     for (version_id, list) in unknown {
@@ -357,6 +407,15 @@ async fn attention(
                 "since": group.since,
                 "reason": if group.cause == "failed" { reason(&group.devices) } else { None },
             });
+            if group.cause == "degraded" {
+                if let Some(issue) = delivery(&group.devices) {
+                    item["title"] = issue["title"].clone();
+                    item["reason"] = issue["message"].clone();
+                    item["fix"] = issue["hint"].clone();
+                    item["code"] = issue["code"].clone();
+                    item["component_id"] = issue["component_id"].clone();
+                }
+            }
             if group.cause == "paused" {
                 item["requested"] = json!(
                     group
@@ -640,6 +699,26 @@ mod tests {
         assert_eq!(out[0]["first_at"], "02");
         assert_eq!(out[1]["repeat"], 1);
         assert_eq!(out[2]["device_names"], json!(["edge-01"]));
+    }
+
+    #[test]
+    fn degraded_means_verified_on_the_measured_version_with_an_open_issue() {
+        let issue = json!({"code":"DATA_PLANE_SINK_ERRORS","title":"out can't deliver events","message":"m","hint":"h"});
+        let device = json!({"status":"verified","desired_version_id":"v2","data_plane":{"version_id":"v2","issues":[issue]}});
+        assert_eq!(
+            data_plane_issue(&device).unwrap()["code"],
+            "DATA_PLANE_SINK_ERRORS"
+        );
+        let mut other = device.clone();
+        other["desired_version_id"] = json!("v3");
+        assert!(data_plane_issue(&other).is_none());
+        let mut applying = device.clone();
+        applying["status"] = json!("applying");
+        assert!(data_plane_issue(&applying).is_none());
+        let mut healthy = device.clone();
+        healthy["data_plane"]["issues"] = json!([]);
+        assert!(data_plane_issue(&healthy).is_none());
+        assert_eq!(delivery(&[&device, &device]).unwrap()["hint"], "h");
     }
 
     #[test]

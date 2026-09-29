@@ -194,22 +194,129 @@ pub(crate) async fn record_failure(db: &mut SqliteConnection, f: Failure<'_>) ->
 
 /// Resolve a device's open issues: `verified` when it verified a
 /// configuration after the failure, `unassigned` when its assignment was
-/// removed. Acknowledgement context stays as history.
+/// removed. Acknowledgement context stays as history. Verifying a
+/// configuration says nothing about delivery, so data-plane issues resolve
+/// only through their own evaluation (or when the assignment goes away).
 pub(crate) async fn resolve_device(
     db: &mut SqliteConnection,
     device_id: &str,
     reason: &str,
 ) -> Result<()> {
-    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0")
+    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND (?=0 OR COALESCE(json_extract(data,'$.code'),'') NOT GLOB 'DATA_PLANE_*')")
         .bind(device_id)
+        .bind(reason == "verified")
         .fetch_all(&mut *db)
         .await?;
     for row in rows {
         let mut issue = db::parse(&row)?;
-        advance_revision(&mut issue)?;
-        issue["resolved"] = json!(true);
-        issue["resolved_reason"] = json!(reason);
-        issue["resolved_at"] = json!(db::now());
+        resolve(&mut issue, reason)?;
+        db::update(db, "issue", &issue).await?;
+    }
+    Ok(())
+}
+fn resolve(issue: &mut Value, reason: &str) -> Result<()> {
+    advance_revision(issue)?;
+    issue["resolved"] = json!(true);
+    issue["resolved_reason"] = json!(reason);
+    issue["resolved_at"] = json!(db::now());
+    Ok(())
+}
+
+/// One data-plane evaluation that found a condition (see `data_plane`).
+pub(crate) struct DataPlaneReport<'a> {
+    pub device_id: &'a str,
+    pub version_id: &'a str,
+    pub code: &'static str,
+    /// Keyed component; `None` for a pipeline-wide condition.
+    pub component: Option<&'a str>,
+    /// Validated-shape diagnostics; the first explains the condition.
+    pub diagnostics: &'a Value,
+    pub evidence: &'a Value,
+    pub deployment_id: Option<String>,
+}
+/// Open or refresh a data-plane issue keyed by device, version, code and
+/// component. `count` counts openings (a recurrence after resolution is a new
+/// occurrence and clears an acknowledgement); `reports` counts evaluations
+/// that found the condition while it was open. Returns the issue ID.
+pub(crate) async fn record_data_plane(
+    db: &mut SqliteConnection,
+    r: DataPlaneReport<'_>,
+) -> Result<String> {
+    let component = r.component.unwrap_or("");
+    let id = db::hash(format!(
+        "{}:{}:{}:component:{component}",
+        r.device_id, r.version_id, r.code
+    ));
+    let now = db::now();
+    let (mut issue, new) = match db::record(db, "issue", &id).await {
+        Ok(v) => (v, false),
+        Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => (
+            json!({"id":id,"device_id":r.device_id,"code":r.code,"stage":"delivery","count":0,"reports":0,"first_seen":now,"resolved":false,"revision":1}),
+            true,
+        ),
+        Err(e) => return Err(e),
+    };
+    if new || issue["resolved"] == true {
+        if !new {
+            advance_revision(&mut issue)?;
+        }
+        clear_acknowledgement(&mut issue);
+        issue["count"] = increment(counter(&issue, "count"))?;
+        issue["resolved"] = json!(false);
+        if let Some(o) = issue.as_object_mut() {
+            o.remove("resolved_reason");
+            o.remove("resolved_at");
+        }
+    }
+    issue["reports"] = increment(counter(&issue, "reports"))?;
+    issue["last_seen"] = json!(now);
+    issue["component"] = json!(r.component);
+    // Never fail a heartbeat over presentation: an invalid finding renders
+    // from the code's generic message instead.
+    issue["diagnostics"] =
+        crate::configuration_attempt::diagnostics(r.diagnostics).unwrap_or_else(|_| json!([]));
+    issue["evidence"] = r.evidence.clone();
+    issue["desired_version_id"] = json!(r.version_id);
+    issue["deployment_id"] = json!(r.deployment_id);
+    if new {
+        db::insert(db, "issue", &issue).await?;
+    } else {
+        db::update(db, "issue", &issue).await?;
+    }
+    Ok(id)
+}
+/// Resolve one data-plane issue, e.g. `healthy` after clean evaluations.
+pub(crate) async fn resolve_data_plane_issue(
+    db: &mut SqliteConnection,
+    id: &str,
+    reason: &str,
+) -> Result<()> {
+    let mut issue = match db::record(db, "issue", id).await {
+        Ok(v) => v,
+        Err(e) if e.status == axum::http::StatusCode::NOT_FOUND => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if issue["resolved"] != true {
+        resolve(&mut issue, reason)?;
+        db::update(db, "issue", &issue).await?;
+    }
+    Ok(())
+}
+/// Resolve a device's open data-plane issues for every version except `keep`.
+pub(crate) async fn resolve_data_plane(
+    db: &mut SqliteConnection,
+    device_id: &str,
+    keep: Option<&str>,
+    reason: &str,
+) -> Result<()> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT data FROM records WHERE kind='issue' AND json_extract(data,'$.device_id')=? AND COALESCE(json_type(data,'$.resolved')='true',0)=0 AND COALESCE(json_extract(data,'$.code'),'') GLOB 'DATA_PLANE_*' AND json_extract(data,'$.desired_version_id') IS NOT ?")
+        .bind(device_id)
+        .bind(keep)
+        .fetch_all(&mut *db)
+        .await?;
+    for row in rows {
+        let mut issue = db::parse(&row)?;
+        resolve(&mut issue, reason)?;
         db::update(db, "issue", &issue).await?;
     }
     Ok(())
@@ -224,6 +331,10 @@ fn title_sql() -> String {
     let mut sql = format!("CASE {CODE}");
     for code in crate::configuration_attempt::CODES {
         let title = crate::configuration_attempt::title(code).replace('\'', "''");
+        sql.push_str(&format!(" WHEN '{code}' THEN '{title}'"));
+    }
+    for code in crate::data_plane::CODES {
+        let title = crate::data_plane::generic_title(code).replace('\'', "''");
         sql.push_str(&format!(" WHEN '{code}' THEN '{title}'"));
     }
     sql.push_str(" END");
@@ -253,7 +364,7 @@ fn issue_object(q: &mut QueryBuilder<'_, Sqlite>) {
         'configuration_name',CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,240) ELSE NULL END,\
         'deployment_id',CASE WHEN json_type(i.data,'$.deployment_id')='text' THEN substr(json_extract(i.data,'$.deployment_id'),1,128) ELSE NULL END,\
         'resolved',json(CASE WHEN json_type(i.data,'$.resolved')='true' THEN 'true' ELSE 'false' END),\
-        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
+        'resolved_reason',CASE WHEN json_type(i.data,'$.resolved')='true' THEN CASE WHEN json_extract(i.data,'$.resolved_reason') IN ('verified','unassigned','healthy','superseded','unmonitored') THEN json_extract(i.data,'$.resolved_reason') ELSE 'verified' END ELSE NULL END,\
         'resolved_at',").push(timestamp("json_extract(i.data,'$.resolved_at')")).push(",\
         'revision',CASE WHEN json_type(i.data,'$.revision')='integer' AND json_extract(i.data,'$.revision') BETWEEN 1 AND 9007199254740991 THEN json_extract(i.data,'$.revision') ELSE 1 END,\
         'acknowledged',json(CASE WHEN json_type(i.data,'$.acknowledged')='true' THEN 'true' ELSE 'false' END),\
@@ -270,6 +381,20 @@ fn render(mut issue: Value) -> Value {
     let code = issue["code"].as_str().unwrap_or("APPLY_FAILED").to_owned();
     let diagnostics = crate::configuration_attempt::diagnostics(&issue["diagnostics"])
         .unwrap_or_else(|_| json!([]));
+    if crate::data_plane::is_data_plane(&code) {
+        let first = &diagnostics[0];
+        let component = first["component_id"]
+            .as_str()
+            .filter(|_| code != crate::data_plane::STALLED);
+        issue["title"] = json!(crate::data_plane::title(&code, component));
+        issue["message"] = json!(
+            first["message"]
+                .as_str()
+                .unwrap_or("The device's numbers show this version isn't delivering events.")
+        );
+        issue["diagnostics"] = diagnostics;
+        return issue;
+    }
     issue["title"] = json!(crate::configuration_attempt::title(&code));
     issue["message"] = json!(crate::configuration_attempt::summary(&code, &diagnostics));
     issue["diagnostics"] = diagnostics;

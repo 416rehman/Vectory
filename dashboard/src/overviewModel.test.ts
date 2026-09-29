@@ -11,6 +11,11 @@ import {
 } from "./overviewModel";
 
 const now = Date.parse("2026-09-29T03:00:00.000Z");
+const delivery = {
+  code: "DATA_PLANE_SINK_ERRORS",
+  component_id: "archive",
+  title: "archive can't deliver events",
+};
 const at = (secondsAgo: number) =>
   new Date(now - secondsAgo * 1000).toISOString();
 
@@ -27,11 +32,17 @@ describe("fleet health buckets", () => {
       { status: "paused", sync_paused: true, pause_acknowledged: false },
       { status: "unmanaged" },
       { status: "revoked" },
+      {
+        status: "verified",
+        desired_version_id: "v2",
+        data_plane: { version_id: "v2", issues: [delivery] },
+      },
     ];
     const { counts, total } = healthCounts(devices);
-    expect(total).toBe(9);
+    expect(total).toBe(10);
     expect(counts).toEqual({
       applied: 2,
+      degraded: 1,
       updating: 1,
       check: 1,
       failed: 2,
@@ -40,6 +51,26 @@ describe("fleet health buckets", () => {
       unmanaged: 1,
     });
     expect(healthBucket({ status: "revoked" })).toBeNull();
+  });
+
+  it("reads a verified device with an open delivery issue as degraded", () => {
+    const device = {
+      status: "verified",
+      desired_version_id: "v2",
+      data_plane: { version_id: "v2", issues: [delivery] },
+    };
+    expect(healthBucket(device)).toBe("degraded");
+    // Measured on another version, or not applied: not a current problem.
+    expect(healthBucket({ ...device, desired_version_id: "v3" })).toBe(
+      "applied",
+    );
+    expect(healthBucket({ ...device, status: "applying" })).toBe("updating");
+    expect(
+      healthBucket({
+        ...device,
+        data_plane: { version_id: "v2", issues: [] },
+      }),
+    ).toBe("applied");
   });
 
   it("never reads a new, unknown state as healthy", () => {
