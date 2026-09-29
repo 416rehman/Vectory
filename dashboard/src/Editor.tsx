@@ -1278,18 +1278,31 @@ export default function Editor({
     };
     window.addEventListener("beforeunload", unload);
     const navigate = (event: Event) => {
+      if (publishActive.current) {
+        event.preventDefault();
+        return;
+      }
+      const unresolved = saveUncertain.current || saveNeedsReload.current,
+        unapplied =
+          importedCodeDirty.current || pendingSchemaFields.current.size > 0;
+      if (!dirty && !unresolved && !unapplied) return;
+      // Edits that are in the draft are kept in this browser and offered back
+      // the next time the pipeline opens, so leaving needs no question. Only
+      // what cannot be kept is asked about.
+      if (dirty && !unresolved && !unapplied && keepEditsForLater()) {
+        notify(
+          "Unsaved changes are kept in this browser. Open this pipeline again to restore them.",
+        );
+        return;
+      }
       if (
-        publishActive.current ||
-        ((dirty ||
-          importedCodeDirty.current ||
-          pendingSchemaFields.current.size ||
-          saveUncertain.current ||
-          saveNeedsReload.current) &&
-          !confirm(
-            saveUncertain.current || saveNeedsReload.current
-              ? "Leave this editor? A draft save is unresolved. It may still change the server draft."
+        !confirm(
+          unresolved
+            ? "Leave this editor? A draft save is unresolved. It may still change the server draft."
+            : unapplied
+              ? "Leave this editor? Code or field edits you haven't applied will be lost."
               : "Leave this editor? Unsaved changes may be lost.",
-          ))
+        )
       )
         event.preventDefault();
     };
@@ -2745,24 +2758,31 @@ export default function Editor({
   }, []);
   // Unsaved edits live in this browser until saved or discarded. While an
   // earlier copy awaits Restore or Discard it is not overwritten.
+  const recoveryOpen = useRef(false);
+  recoveryOpen.current = !!recovery;
+  /** Write the draft now; false when it could not or must not be kept. */
+  function keepEditsForLater() {
+    const current = latest.current;
+    if (!current.doc || !editable || recoveryOpen.current) return false;
+    return storeRecoveryDraft(user.id, id, {
+      revision: current.doc.revision,
+      config: current.config,
+      variables: current.variables,
+      positions: Object.fromEntries(
+        current.nodes.map((node: { id: string; position: unknown }) => [
+          node.id,
+          node.position,
+        ]),
+      ) as RecoveryDraft["positions"],
+    });
+  }
   useEffect(() => {
     if (!doc || !editable || recovery) return;
     if (!dirty) {
       clearRecoveryDraft(user.id, id);
       return;
     }
-    const timer = window.setTimeout(
-      () =>
-        storeRecoveryDraft(user.id, id, {
-          revision: doc.revision,
-          config,
-          variables,
-          positions: Object.fromEntries(
-            nodes.map((node) => [node.id, node.position]),
-          ),
-        }),
-      800,
-    );
+    const timer = window.setTimeout(keepEditsForLater, 800);
     return () => window.clearTimeout(timer);
   }, [dirty, config, variables, nodes, doc?.revision, editable, recovery]);
   function restoreRecovery() {
@@ -4101,16 +4121,21 @@ export default function Editor({
                   }}
                 />
               )}
-              <IconButton
-                icon={Settings2}
-                label="Pipeline settings"
+              <button
+                type="button"
+                className="icon-button editor-settings-button"
+                aria-label="Pipeline settings"
+                title="Pipeline settings"
                 onClick={() =>
                   tool(() => {
                     setGlobalsSection("general");
                     setGlobalsOpen(true);
                   })
                 }
-              />
+              >
+                <Settings2 size={16} aria-hidden="true" />
+                <span aria-hidden="true">Settings</span>
+              </button>
             </div>
             <div className="editor-header-actions" inert={busy}>
               <details
@@ -4145,6 +4170,71 @@ export default function Editor({
                       Add monitoring
                     </button>
                   )}
+                  {can(user, "edit") && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        onClick={() => void openPipelineAction("duplicate")}
+                      >
+                        <Copy size={16} aria-hidden="true" />
+                        Duplicate pipeline
+                      </button>
+                      <button
+                        onClick={() =>
+                          void openPipelineAction(
+                            doc.archived ? "unarchive" : "archive",
+                          )
+                        }
+                      >
+                        {doc.archived ? (
+                          <ArchiveRestore size={16} aria-hidden="true" />
+                        ) : (
+                          <Archive size={16} aria-hidden="true" />
+                        )}
+                        {doc.archived
+                          ? "Unarchive pipeline"
+                          : "Archive pipeline"}
+                      </button>
+                    </>
+                  )}
+                  {editable && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        disabled={!stack.current.length}
+                        onClick={() => tool(() => undo())}
+                      >
+                        <Undo2 size={16} aria-hidden="true" />
+                        Undo last change
+                      </button>
+                      <button
+                        disabled={!future.current.length}
+                        onClick={() => tool(() => undo(true))}
+                      >
+                        <Redo2 size={16} aria-hidden="true" />
+                        Redo last change
+                      </button>
+                      <hr className="editor-tools-divider" />
+                      <button
+                        onClick={() => tool(() => fileRef.current?.click())}
+                      >
+                        <Upload size={16} aria-hidden="true" />
+                        Import configuration file
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => tool(exportConfiguration)}>
+                    <Download size={16} aria-hidden="true" />
+                    Export configuration
+                  </button>
+                  {(can(user, "operate") || can(user, "edit")) && (
+                    <>
+                      <hr className="editor-tools-divider" />
+                      <p className="editor-tools-heading">
+                        Requests from this browser
+                      </p>
+                    </>
+                  )}
                   {can(user, "operate") && (
                     <button
                       onClick={() => {
@@ -4175,64 +4265,6 @@ export default function Editor({
                       Your pipeline requests
                     </button>
                   )}
-                  {can(user, "edit") && (
-                    <>
-                      <button
-                        onClick={() => void openPipelineAction("duplicate")}
-                      >
-                        <Copy size={16} aria-hidden="true" />
-                        Duplicate pipeline
-                      </button>
-                      <button
-                        onClick={() =>
-                          void openPipelineAction(
-                            doc.archived ? "unarchive" : "archive",
-                          )
-                        }
-                      >
-                        {doc.archived ? (
-                          <ArchiveRestore size={16} aria-hidden="true" />
-                        ) : (
-                          <Archive size={16} aria-hidden="true" />
-                        )}
-                        {doc.archived
-                          ? "Unarchive pipeline"
-                          : "Archive pipeline"}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() =>
-                      tool(() => {
-                        setGlobalsSection("general");
-                        setGlobalsOpen(true);
-                      })
-                    }
-                  >
-                    <Settings2 size={16} aria-hidden="true" />
-                    Pipeline settings
-                  </button>
-                  {editable && (
-                    <button
-                      disabled={!future.current.length}
-                      onClick={() => tool(() => undo(true))}
-                    >
-                      <Redo2 size={16} aria-hidden="true" />
-                      Redo last change
-                    </button>
-                  )}
-                  {editable && (
-                    <button
-                      onClick={() => tool(() => fileRef.current?.click())}
-                    >
-                      <Upload size={16} aria-hidden="true" />
-                      Import configuration file
-                    </button>
-                  )}
-                  <button onClick={() => tool(exportConfiguration)}>
-                    <Download size={16} aria-hidden="true" />
-                    Export configuration
-                  </button>
                 </div>
               </details>
               {saveIndicator}

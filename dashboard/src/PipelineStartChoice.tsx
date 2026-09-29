@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ClipboardPaste, FileUp } from "lucide-react";
 import type { Config } from "./api";
 import { Button } from "./ui";
@@ -100,6 +100,12 @@ export default function PipelineStartChoice({
 }) {
   const file = useRef<HTMLInputElement>(null);
   const needsId = useId();
+  const needsBox = useRef<HTMLDivElement>(null);
+  // Choosing a template brings what it needs into view, not below the fold.
+  useEffect(() => {
+    if (value !== "empty")
+      needsBox.current?.scrollIntoView?.({ block: "nearest" });
+  }, [value]);
   const pasteId = useId();
   const [pasting, setPasting] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -235,7 +241,7 @@ export default function PipelineStartChoice({
         )}
       </div>
       {chosen && (
-        <div className="pipeline-start-needs" id={needsId}>
+        <div className="pipeline-start-needs" id={needsId} ref={needsBox}>
           <strong>You&apos;ll need</strong>
           <ul>
             {chosen.needs.map((need) => (

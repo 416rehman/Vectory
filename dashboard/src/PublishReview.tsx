@@ -12,8 +12,10 @@ import ProblemText from "./ProblemText";
 import { displayLabel, type Kind } from "./catalog";
 import type { CheckStatus, Problem } from "./pipelineProblems";
 import {
+  groupChanges,
   programDiff,
   reviewChanges,
+  sectionCount,
   type ComponentChange,
 } from "./publishReview";
 import "./publish-review.css";
@@ -37,6 +39,32 @@ const changeWords: Record<ComponentChange["change"], string> = {
 /** Refusals that mean the checker could not run, not that the draft is wrong. */
 const checkerDown = (code: string) =>
   code === "CAPABILITY_DENIED" || code === "WORKER_BUSY";
+
+function ChangeRow({ component }: { component: ComponentChange }) {
+  return (
+    <li>
+      <div className="publish-change-row">
+        <span className="publish-change-kind" data-change={component.change}>
+          {changeWords[component.change]}
+        </span>
+        <code>{component.id}</code>
+        <span className="publish-change-detail">
+          {describe(component)}
+          {component.change !== "changed" && component.type && (
+            <code className="publish-change-type">{component.type}</code>
+          )}
+        </span>
+      </div>
+      {component.change === "changed" &&
+        component.programs.map((program) => (
+          <details key={program.path} className="publish-program">
+            <summary>{program.label}</summary>
+            <ProgramDiff before={program.before} after={program.after} />
+          </details>
+        ))}
+    </li>
+  );
+}
 
 function describe(component: ComponentChange) {
   if (component.change !== "changed")
@@ -120,6 +148,10 @@ export default function PublishReview({
   );
   const Icon = statusIcons[status];
   const errors = problems.filter((problem) => problem.severity === "error");
+  const rows = useMemo(
+    () => groupChanges(review.components),
+    [review.components],
+  );
   const empty =
     !review.components.length && !review.settings.length && !review.tests;
   return (
@@ -195,37 +227,38 @@ export default function PublishReview({
           </p>
         ) : (
           <ul>
-            {review.components.map((component) => (
-              <li key={`${component.section}:${component.id}`}>
-                <div className="publish-change-row">
-                  <span
-                    className="publish-change-kind"
-                    data-change={component.change}
-                  >
-                    {changeWords[component.change]}
-                  </span>
-                  <code>{component.id}</code>
-                  <span className="publish-change-detail">
-                    {describe(component)}
-                    {component.change !== "changed" && component.type && (
-                      <code className="publish-change-type">
-                        {component.type}
-                      </code>
-                    )}
-                  </span>
-                </div>
-                {component.change === "changed" &&
-                  component.programs.map((program) => (
-                    <details key={program.path} className="publish-program">
-                      <summary>{program.label}</summary>
-                      <ProgramDiff
-                        before={program.before}
-                        after={program.after}
-                      />
-                    </details>
-                  ))}
-              </li>
-            ))}
+            {rows.map((row) =>
+              row.kind === "step" ? (
+                <ChangeRow
+                  key={`${row.component.section}:${row.component.id}`}
+                  component={row.component}
+                />
+              ) : (
+                <li key={`${row.change}:${row.section}`}>
+                  <details className="publish-group">
+                    <summary className="publish-change-row">
+                      <span
+                        className="publish-change-kind"
+                        data-change={row.change}
+                      >
+                        {changeWords[row.change]}
+                      </span>
+                      <span className="publish-change-detail">
+                        {sectionCount(row.section, row.components.length)}
+                      </span>
+                    </summary>
+                    <ul>
+                      {row.components.map((component) => (
+                        <ChangeRow
+                          key={`${component.section}:${component.id}`}
+                          component={component}
+                        />
+                      ))}
+                    </ul>
+                  </details>
+                </li>
+              ),
+            )}
             {review.settings.length > 0 && (
               <li>
                 <div className="publish-change-row">

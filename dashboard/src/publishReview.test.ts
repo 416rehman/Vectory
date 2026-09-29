@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   deviceReach,
+  groupChanges,
+  sectionCount,
   programDiff,
   reachLabel,
   reviewChanges,
@@ -185,5 +187,33 @@ describe("publish review", () => {
         ),
       ),
     ).toBe("Assigned to 1 device (v1) · all verified running.");
+  });
+});
+
+describe("publish review for large pipelines", () => {
+  const many = Object.fromEntries(
+    Array.from({ length: 36 }, (_, index) => [`s${index}`, { type: "file" }]),
+  );
+  it("folds a long run of added steps into one counted row", () => {
+    const draft = {
+      sources: many,
+      transforms: { parse: { type: "remap", inputs: ["s0"], source: "." } },
+      sinks: { out: { type: "console", inputs: ["parse"] } },
+    };
+    const rows = groupChanges(reviewChanges(null, draft).components);
+    expect(rows.map((row) => row.kind)).toEqual(["group", "step", "step"]);
+    const group = rows[0];
+    expect(group.kind === "group" && group.components).toHaveLength(36);
+    expect(sectionCount("sources", 36)).toBe("36 sources");
+    expect(sectionCount("sinks", 1)).toBe("1 destination");
+  });
+
+  it("keeps changed steps and short runs as their own rows", () => {
+    const before = { sources: { a: { type: "file" } } };
+    const after = {
+      sources: { a: { type: "file", include: ["/x"] }, b: { type: "file" } },
+    };
+    const rows = groupChanges(reviewChanges(before, after).components);
+    expect(rows.map((row) => row.kind)).toEqual(["step", "step"]);
   });
 });

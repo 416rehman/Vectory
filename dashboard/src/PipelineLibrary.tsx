@@ -35,6 +35,7 @@ import {
   useResource,
 } from "./ui";
 import PipelineStartChoice, { type StartImport } from "./PipelineStartChoice";
+import { pipelineTemplates } from "./pipelineTemplates";
 import PipelineStatus from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
@@ -170,6 +171,7 @@ export default function PipelineLibrary({
   }, [correctingPage, lastPage]);
   const [open, setOpen] = useState(false),
     [name, setName] = useState(""),
+    [nameEdited, setNameEdited] = useState(false),
     [description, setDescription] = useState(""),
     [template, setTemplate] = useState("empty"),
     [imported, setImported] = useState<StartImport | null>(null),
@@ -205,12 +207,24 @@ export default function PipelineLibrary({
     }
     setNotice(null);
     setName("");
+    setNameEdited(false);
     setDescription("");
     setTemplate("empty");
     setImported(null);
     setNameError("");
     setFormError("");
     setOpen(true);
+  }
+  // The name follows what you start from until you type your own.
+  function chooseStart(id: string) {
+    setTemplate(id);
+    if (!nameEdited)
+      setName(pipelineTemplates.find((item) => item.id === id)?.title ?? "");
+  }
+  function importStart(value: StartImport | null) {
+    setImported(value);
+    if (!nameEdited && value?.config && !value.name.startsWith("Pasted "))
+      setName(value.name.replace(/\.(?:ya?ml|json|toml)$/i, ""));
   }
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -633,10 +647,7 @@ export default function PipelineLibrary({
             {unresolved && !notice && !busy && (
               <ErrorBox message="Review the saved pipeline requests before creating another pipeline." />
             )}
-            <Field
-              label="Pipeline name"
-              hint="Required. Enter a name to create a draft; you can rename it later."
-            >
+            <Field label="Pipeline name" hint="You can rename it later.">
               <input
                 ref={nameInput}
                 required
@@ -646,6 +657,7 @@ export default function PipelineLibrary({
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);
+                  setNameEdited(true);
                   setNameError("");
                 }}
                 aria-invalid={!!nameError}
@@ -666,8 +678,8 @@ export default function PipelineLibrary({
               value={template}
               disabled={busy || !!notice || unresolved}
               imported={imported}
-              onChange={setTemplate}
-              onImport={setImported}
+              onChange={chooseStart}
+              onImport={importStart}
             />
             <Field label="Description (optional)">
               <textarea

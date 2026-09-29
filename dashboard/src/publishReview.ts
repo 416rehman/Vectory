@@ -237,6 +237,62 @@ export function reviewChanges(
   return { components, settings, tests };
 }
 
+export type ChangeGroup =
+  | { kind: "step"; component: ComponentChange }
+  | {
+      kind: "group";
+      change: "added" | "removed";
+      section: string;
+      components: ComponentChange[];
+    };
+
+/**
+ * The review's rows. Steps that changed always get their own row; a long run
+ * of added or removed steps in one section folds into a single row with a
+ * count ("36 sources added") that opens on demand.
+ */
+export function groupChanges(
+  components: readonly ComponentChange[],
+  threshold = 8,
+): ChangeGroup[] {
+  const runs = new Map<string, ComponentChange[]>();
+  for (const component of components)
+    if (component.change !== "changed") {
+      const key = `${component.change}:${component.section}`;
+      runs.set(key, [...(runs.get(key) ?? []), component]);
+    }
+  const rows: ChangeGroup[] = [];
+  const emitted = new Set<string>();
+  for (const component of components) {
+    const key = `${component.change}:${component.section}`;
+    const run = runs.get(key);
+    if (component.change === "changed" || !run || run.length <= threshold)
+      rows.push({ kind: "step", component });
+    else if (!emitted.has(key)) {
+      emitted.add(key);
+      rows.push({
+        kind: "group",
+        change: component.change,
+        section: component.section,
+        components: run,
+      });
+    }
+  }
+  return rows;
+}
+
+const SECTION_NOUNS: Record<string, [string, string]> = {
+  sources: ["source", "sources"],
+  transforms: ["transform", "transforms"],
+  sinks: ["destination", "destinations"],
+  enrichment_tables: ["enrichment table", "enrichment tables"],
+};
+/** "36 sources", "1 destination". */
+export function sectionCount(section: string, count: number) {
+  const [one, many] = SECTION_NOUNS[section] ?? ["step", "steps"];
+  return `${count} ${count === 1 ? one : many}`;
+}
+
 export type DiffLine = { kind: "same" | "added" | "removed"; text: string };
 
 /** Line diff of two programs; unchanged runs longer than `context` * 2 fold. */

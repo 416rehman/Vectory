@@ -127,6 +127,24 @@
   min-width: 0;
   margin-left: auto;
 }
+/* Settings reads as a word where there is room, an icon where there is not. */
+.editor-toolbar .editor-settings-button {
+  width: auto;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+@media (max-width: 1099px) {
+  .editor-toolbar .editor-settings-button {
+    width: 32px;
+    padding: 0;
+  }
+  .editor-toolbar .editor-settings-button > span {
+    display: none;
+  }
+}
 .editor-toolbar-secondary {
   display: flex;
   align-items: center;
