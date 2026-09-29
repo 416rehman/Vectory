@@ -361,18 +361,14 @@ a.overview-kpi-tile:focus-visible {
   font-weight: var(--weight-semibold);
   color: var(--text);
 }
+/* The agent's reason is a sentence: plain text, not a code box. */
 .overview-attention-reason {
   margin-top: var(--space-1) !important;
-  padding: var(--space-1) var(--space-2);
   color: var(--text);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;

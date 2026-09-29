@@ -269,6 +269,53 @@ export function checklist(state: ChecklistState): ChecklistStep[] {
 export const countLabel = (count: number, word: string, many = `${word}s`) =>
   `${count.toLocaleString()} ${count === 1 ? word : many}`;
 
+/** One Needs-you row: a device group, possibly with the rollout it stopped. */
+export type NeedsYouRow<G, R> =
+  | { kind: "group"; group: G; rollout: R | null }
+  | { kind: "rollout"; rollout: R };
+/**
+ * Needs you, one row per problem, most urgent first: devices losing data
+ * (not delivering), then failed applies, then rollouts that stopped, then
+ * everything else in the server's order. A device group and the stopped
+ * rollout its devices share read as one row. Dismissed rollouts are left out;
+ * device problems can't be dismissed while they last.
+ */
+export function needsYouRows<
+  G extends { cause: string; deployment_id?: string | null },
+  R extends { key: string; deployment: { id: string } },
+>(groups: G[], rollouts: R[], dismissed: ReadonlySet<string>) {
+  const open = rollouts.filter((rollout) => !dismissed.has(rollout.key));
+  const merged = new Set<R>();
+  const withRollout = (group: G): NeedsYouRow<G, R> => {
+    const id = group.deployment_id?.toLowerCase();
+    const rollout =
+      open.find(
+        (candidate) =>
+          !merged.has(candidate) &&
+          candidate.deployment.id.toLowerCase() === id,
+      ) || null;
+    if (rollout) merged.add(rollout);
+    return { kind: "group", group, rollout };
+  };
+  const urgent = [
+    ...groups.filter((group) => group.cause === "degraded"),
+    ...groups.filter((group) => group.cause === "failed"),
+  ].map(withRollout);
+  return [
+    ...urgent,
+    ...open
+      .filter((rollout) => !merged.has(rollout))
+      .map((rollout): NeedsYouRow<G, R> => ({ kind: "rollout", rollout })),
+    ...groups
+      .filter((group) => group.cause !== "degraded" && group.cause !== "failed")
+      .map((group): NeedsYouRow<G, R> => ({
+        kind: "group",
+        group,
+        rollout: null,
+      })),
+  ];
+}
+
 /** A rate for display: "0", "0.42", "4.9", "1,284", "12.3K". */
 export function formatRate(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0";

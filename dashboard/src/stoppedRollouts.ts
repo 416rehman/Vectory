@@ -1,12 +1,17 @@
 import type { DeploymentSummary } from "./api";
 import { progressSegments } from "./deploymentStatus";
 
-/** A rollout that stopped, or was rolled back, and still deserves a look. */
+/** A rollout that stopped by itself and still deserves a look. */
 export type StoppedRollout = {
   deployment: DeploymentSummary;
-  kind: "stopped" | "rolled_back";
+  /** Identifies this stop: a later failure of the same rollout is new. */
+  key: string;
   title: string;
   detail: string;
+  /** "The rollout stopped; 2 devices never received v3." */
+  consequence: string;
+  /** Devices it released, so a rollback can be named after the one it covers. */
+  released: number;
   at: string;
 };
 
@@ -22,13 +27,14 @@ function plural(count: number, one: string, many = `${one}s`) {
 }
 
 /**
- * Failed rollouts that still hold devices back, and rollbacks of the last day,
- * newest first. A failed rollout whose devices all verified since, or that a
- * newer version replaced everywhere, no longer needs anyone.
+ * Rollouts that stopped by themselves in the last day and still hold devices
+ * back, newest first. A rolled-back rollout is resolved: its rollback shows
+ * under Rollouts while it runs and in Recent changes after. A failed rollout
+ * whose devices all verified since, or that a newer version replaced
+ * everywhere, no longer needs anyone.
  */
 export function stoppedRollouts(
   failed: DeploymentSummary[],
-  rolledBack: DeploymentSummary[],
   now = Date.now(),
 ): StoppedRollout[] {
   const recent = (value: string | null | undefined) => {
@@ -48,14 +54,22 @@ export function stoppedRollouts(
         segment.count,
       ]),
     );
+    const waiting = d.state_counts.pending || 0;
+    const version = d.policy
+      ? "these settings"
+      : d.version_number
+        ? `v${d.version_number}`
+        : "this version";
     items.push({
       deployment: d,
-      kind: "stopped",
+      key: `${d.id.toLowerCase()}:${d.status}:${d.failed_at || ""}`,
       at,
       title:
         d.failure_reason === "incompatible"
           ? `${name(d)} stopped: a device became incompatible`
-          : `${name(d)} stopped after ${counts.failed === 1 ? "a failure" : "failures"}`,
+          : d.failure_reason === "data_plane"
+            ? `${name(d)} stopped: a device isn't delivering`
+            : `${name(d)} stopped after ${counts.failed === 1 ? "a failure" : "failures"}`,
       detail:
         [
           counts.failed ? `${counts.failed} failed` : "",
@@ -64,17 +78,52 @@ export function stoppedRollouts(
         ]
           .filter(Boolean)
           .join(" · ") || plural(current, "device"),
-    });
-  }
-  for (const d of rolledBack) {
-    if (!d.rolled_back_by || !recent(d.rolled_back_at)) continue;
-    items.push({
-      deployment: d,
-      kind: "rolled_back",
-      at: d.rolled_back_at!,
-      title: `${name(d)} was rolled back${d.rolled_back_to_version ? ` to v${d.rolled_back_to_version}` : ""}`,
-      detail: "Fix the pipeline and publish a new version to try again.",
+      consequence: waiting
+        ? `The rollout stopped; ${plural(waiting, "device")} never received ${version}.`
+        : "The rollout stopped.",
+      released: Math.max(0, current - waiting),
     });
   }
   return items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
+// Dismissed stopped rollouts, per person, in this browser only. Keyed by the
+// stop, so the same rollout failing again comes back.
+const MAX_DISMISSED = 200;
+const dismissalStore = (userId: string) =>
+  `vectory-needs-you-dismissed:${JSON.stringify(userId)}`;
+export function readDismissed(userId: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(dismissalStore(userId));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed
+            .filter(
+              (value): value is string =>
+                typeof value === "string" && value.length <= 200,
+            )
+            .slice(-MAX_DISMISSED)
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+/** Remembers a dismissal; without storage it lasts until the page reloads. */
+export function dismissStoppedRollout(
+  userId: string,
+  key: string,
+  current: Set<string>,
+): Set<string> {
+  const next = new Set([...readDismissed(userId), ...current, key]);
+  try {
+    localStorage.setItem(
+      dismissalStore(userId),
+      JSON.stringify([...next].slice(-MAX_DISMISSED)),
+    );
+  } catch {
+    // Storage is unavailable: the dismissal holds for this view only.
+  }
+  return next;
 }
