@@ -56,15 +56,17 @@ pub fn is_data_plane(code: &str) -> bool {
     CODES.contains(&code)
 }
 
-/// Plain-language title. It names the component when there is one.
+/// Plain-language title (at most 120 characters). It names the component
+/// when there is one.
 pub fn title(code: &str, component: Option<&str>) -> String {
-    match (code, component) {
+    let title = match (code, component) {
         (STALLED, _) => "The pipeline stopped delivering".into(),
         (SINK_ERRORS, Some(id)) => format!("{id} can't deliver events"),
         (BUFFER, Some(id)) => format!("{id}'s buffer is filling up"),
         (ERROR_DROPS, Some(id)) => format!("{id} is dropping events"),
         _ => generic_title(code).into(),
-    }
+    };
+    bounded(title, 120)
 }
 /// The title without a component, for search and grouped lists.
 pub fn generic_title(code: &str) -> &'static str {
@@ -722,5 +724,9 @@ mod tests {
             "The pipeline stopped delivering"
         );
         assert_eq!(title(BUFFER, None), "A buffer is filling up");
+        assert_eq!(
+            title(SINK_ERRORS, Some(&"x".repeat(100))).chars().count(),
+            120
+        );
     }
 }

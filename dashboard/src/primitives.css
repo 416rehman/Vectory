@@ -547,6 +547,9 @@
 [data-bucket="applied"] {
   --bucket: var(--mark-success);
 }
+[data-bucket="degraded"] {
+  --bucket: var(--mark-warning);
+}
 [data-bucket="updating"] {
   --bucket: var(--mark-info);
 }
@@ -571,6 +574,14 @@
   height: 100%;
   border-radius: 2px;
   background: var(--bucket, var(--mark-empty));
+}
+/* Degraded shares amber with "Check required"; stripes keep them apart. */
+.health-bar-segment[data-bucket="degraded"] {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--bucket) 0 3px,
+    color-mix(in srgb, var(--bucket) 45%, transparent) 3px 6px
+  );
 }
 
 /* Icon + text labels in tabs (section tabs and in-page tab lists). */

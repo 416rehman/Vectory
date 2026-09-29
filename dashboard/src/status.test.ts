@@ -4,6 +4,8 @@ import {
   applyStates,
   auditOutcomes,
   connectionState,
+  dataPlaneCodes,
+  dataPlaneIssues,
   deploymentStatuses,
   deviceDisplayStatus,
   deviceStatuses,
@@ -81,6 +83,38 @@ describe("status language", () => {
     // Targets also carry the agent's reported apply progress.
     for (const value of enumOf("HeartbeatRequest", "apply_state"))
       expect(Object.hasOwn(targetStates, value), value).toBe(true);
+  });
+
+  it("knows every data-plane issue code the server opens", () => {
+    const codes = [
+      ...rust("data_plane.rs").matchAll(/"(DATA_PLANE_[A-Z_]+)"/g),
+    ].map((match) => match[1]);
+    expect(new Set(codes)).toEqual(new Set(dataPlaneCodes));
+  });
+
+  it("shows an applied device that isn't delivering as degraded", () => {
+    const issue = { code: "DATA_PLANE_STALLED", title: "Stopped" };
+    const device = {
+      status: "verified",
+      desired_version_id: "v2",
+      data_plane: { version_id: "v2", issues: [issue] },
+    };
+    expect(deviceDisplayStatus(device)).toBe("degraded");
+    expect(deviceStatuses.degraded.label).toBe("Degraded");
+    expect(dataPlaneIssues(device)).toEqual([issue]);
+    // Old measurements, other states and missing summaries never degrade.
+    expect(
+      deviceDisplayStatus({
+        ...device,
+        data_plane: { version_id: "v1", issues: [issue] },
+      }),
+    ).toBe("verified");
+    expect(deviceDisplayStatus({ ...device, status: "offline" })).toBe(
+      "offline",
+    );
+    expect(deviceDisplayStatus({ ...device, data_plane: null })).toBe(
+      "verified",
+    );
   });
 
   it("gives every entry a label, tone, icon and one-line description", () => {

@@ -101,9 +101,11 @@ export function describeDeployment(d: Lineage): DeploymentDisplay {
     ? `Replaced on ${replaced.reduce((sum, entry) => sum + entry.device_count, 0)} ${replaced.reduce((sum, entry) => sum + entry.device_count, 0) === 1 ? "device" : "devices"} by ${version(latest.version_number)}`
     : d.status === "failed" && d.failure_reason === "threshold"
       ? "Stopped after device failures"
-      : d.status === "failed" && d.failure_reason === "incompatible"
-        ? "A device became incompatible"
-        : null;
+      : d.status === "failed" && d.failure_reason === "data_plane"
+        ? "Stopped: a device isn't delivering"
+        : d.status === "failed" && d.failure_reason === "incompatible"
+          ? "A device became incompatible"
+          : null;
   return {
     label: lifecycleLabels[d.status] || d.status.replaceAll("_", " "),
     tone: lifecycleTones[d.status] || "neutral",
@@ -128,6 +130,7 @@ const targetLabels: Record<string, string> = {
   incompatible: "Incompatible",
   failed: "Failed",
   blocked: "Blocked",
+  degraded: "Not delivering",
   removed: "No longer targeted",
   revoked: "Revoked",
 };
@@ -143,6 +146,7 @@ const targetTones: Record<string, StatusTone> = {
   incompatible: "danger",
   failed: "danger",
   blocked: "danger",
+  degraded: "warning",
   pending: "neutral",
   removed: "neutral",
   revoked: "neutral",
@@ -193,7 +197,12 @@ const segmentStates: [ProgressSegment["key"], string, string[]][] = [
   ],
   ["waiting", "Waiting for check-in", ["desired"]],
   ["queued", "Not released", ["pending"]],
-  ["failed", "Failed", ["failed", "rolled_back", "incompatible", "blocked"]],
+  // Degraded (applied, not delivering) counts against the failure threshold.
+  [
+    "failed",
+    "Failed",
+    ["failed", "rolled_back", "incompatible", "blocked", "degraded"],
+  ],
 ];
 /**
  * Stacked progress from persisted target states. Only verified_applied counts
