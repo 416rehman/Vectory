@@ -157,7 +157,7 @@ Drop a UTF-8 `.json`, `.yaml`, `.yml` or `.toml` file (up to 1 MiB) onto the gra
 Devices receive JSON. Comments and formatting from an imported file aren't kept. TOML can't express `null`, so Vectory refuses a conversion that would lose one; use JSON or YAML for those.
 
 > [!WARNING]
-> Never paste passwords, tokens or keys into a pipeline. Use a [secret reference](resources.md#keep-credentials-on-the-device) instead.
+> Never paste passwords, tokens or keys into a pipeline, even in imported files. Use a [device secret](resources.md#keep-credentials-on-the-device), such as `vectory-secret:DD_API_KEY`, in the credential field. Vectory refuses to save or publish plain text there.
 
 ## Validate, test, publish
 
