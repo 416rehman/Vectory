@@ -231,6 +231,7 @@ function ColumnFilter({
                       }}
                     >
                       <span>{option.label}</span>
+                      {option.count !== undefined && " "}
                       {option.count !== undefined && (
                         <span className="data-table-filter-count">
                           {option.count.toLocaleString()}
@@ -318,7 +319,8 @@ export function DataTable<T>({
   onSortChange?: (sort: TableSort | null) => void;
   manualSorting?: boolean;
   pagination?: TablePagination;
-  onRowClick?: (row: T, event: React.MouseEvent<HTMLTableRowElement>) => void;
+  /** Rows (and mobile cards) run this when clicked outside their own controls. */
+  onRowClick?: (row: T, event: React.MouseEvent<HTMLElement>) => void;
   /** Rows open this route when clicked outside their own controls. */
   rowHref?: (row: T) => string | null | undefined;
   rowClassName?: string | ((row: T) => string);
@@ -444,14 +446,13 @@ export function DataTable<T>({
                 <li
                   key={rowKey(row, index)}
                   className="data-list-item"
-                  data-interactive={card.href ? "" : undefined}
+                  data-interactive={card.href || onRowClick ? "" : undefined}
                   onClick={(event) => {
-                    if (
-                      !card.href ||
-                      (event.target as Element).closest(interactiveSelector)
-                    )
+                    if ((event.target as Element).closest(interactiveSelector))
                       return;
-                    window.location.hash = card.href.replace(/^#/, "");
+                    if (onRowClick) return onRowClick(row, event);
+                    if (card.href)
+                      window.location.hash = card.href.replace(/^#/, "");
                   }}
                 >
                   {card.leading}
@@ -474,7 +475,7 @@ export function DataTable<T>({
                   {card.status && (
                     <div className="data-list-status">{card.status}</div>
                   )}
-                  {card.href && (
+                  {(card.href || onRowClick) && (
                     <ChevronRight
                       className="data-list-chevron"
                       size={16}

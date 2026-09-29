@@ -758,7 +758,7 @@ function FleetHealth({ live }: { live: Device[] }) {
                     data-bucket={bucket}
                   >
                     <Icon size={14} aria-hidden="true" />
-                    <span>{healthLabels[bucket]}</span>
+                    <span>{healthLabels[bucket]}</span>{" "}
                     <strong>{value.toLocaleString()}</strong>
                   </a>
                 </li>

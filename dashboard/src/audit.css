@@ -84,14 +84,14 @@
   gap: var(--space-2);
   min-width: 0;
 }
-.audit-table .audit-event-title {
+.audit-event-title {
   flex-shrink: 0;
   color: var(--text);
   font-weight: var(--weight-semibold);
   text-decoration: none;
 }
-.audit-table .audit-event-title:hover,
-.audit-table .audit-event-title:focus-visible {
+.audit-event-title:hover,
+.audit-event-title:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
