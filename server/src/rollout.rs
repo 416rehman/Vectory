@@ -2332,7 +2332,7 @@ pub async fn tick(s: &State) -> Result<()> {
             if late < 0 {
                 continue;
             }
-            if late > 3600 {
+            if late > crate::schedule::late_start_seconds(&s.settings) as i64 {
                 d["status"] = json!("missed");
                 db::update(&mut tx, "deployment", &d).await?;
                 db::audit(
