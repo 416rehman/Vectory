@@ -1,5 +1,5 @@
 import type { Config } from "./api";
-import { catalog, outputPorts, type Kind } from "./catalog";
+import { catalog, displayLabel, outputPorts, type Kind } from "./catalog";
 
 export const PIPELINE_NODE_WIDTH = 300;
 // Heights include the outer border; primary handles align with the header divider.
@@ -21,37 +21,6 @@ export type ComponentContext = {
 const labels = new Map(
   catalog.map((entry) => [`${entry.kind}:${entry.type}`, entry.label]),
 );
-const titles: Record<string, string> = {
-  aws_s3: "Amazon S3",
-  aws_cloudwatch_logs: "CloudWatch Logs",
-  aws_cloudwatch_metrics: "CloudWatch Metrics",
-  aws_kinesis_firehose: "Amazon Data Firehose",
-  aws_kinesis_streams: "Amazon Kinesis",
-  datadog_agent: "Datadog Agent",
-  datadog_logs: "Datadog Logs",
-  datadog_metrics: "Datadog Metrics",
-  datadog_traces: "Datadog Traces",
-  datadog_events: "Datadog Events",
-  gcp_cloud_storage: "Google Cloud Storage",
-  gcp_pubsub: "Google Cloud Pub/Sub",
-  kafka: "Apache Kafka",
-  opentelemetry: "OpenTelemetry",
-  kubernetes_logs: "Kubernetes Logs",
-  docker_logs: "Docker Logs",
-  remap: "Remap",
-  route: "Route",
-  exclusive_route: "Exclusive route",
-  sample: "Sample",
-  filter: "Filter",
-  http_server: "HTTP Server",
-  http_client: "HTTP Client",
-  splunk_hec_logs: "Splunk HEC Logs",
-  splunk_hec_metrics: "Splunk HEC Metrics",
-  file: "Log files",
-  demo_logs: "Demo logs",
-  console: "Console",
-  blackhole: "Discard events",
-};
 export function componentTitle(
   type: string,
   kind: Kind,
@@ -59,13 +28,7 @@ export function componentTitle(
 ): string {
   if (type === "memory" && context.enrichmentTable)
     return context.implicitSource ? "Memory table export" : "Memory table";
-  if (type === "file" && kind === "sinks") return "File output";
-  return (
-    (Object.hasOwn(titles, type) ? titles[type] : undefined) ||
-    labels.get(`${kind}:${type}`) ||
-    type ||
-    "Component"
-  );
+  return labels.get(`${kind}:${type}`) || displayLabel(type, kind);
 }
 function text(value: unknown): string | undefined {
   if (typeof value !== "string") return;

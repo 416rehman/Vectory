@@ -15,7 +15,11 @@ import {
   sameConfiguration,
   componentSchema,
   vectorSchema,
+  defaultComponentId,
+  displayLabel,
+  REMAP_STARTER,
 } from "./catalog";
+import { componentTitle } from "./pipelineNodeModel";
 import {
   resolveSchema,
   setSchemaProperty,
@@ -223,24 +227,26 @@ describe("guided pipeline editing", () => {
       item("console"),
       suggestedInput(source.config),
     );
-    expect(destination.config.sinks.console.inputs).toEqual([source.id]);
+    expect(source.id).toBe("demo");
+    expect(destination.id).toBe("console_out");
+    expect(destination.config.sinks.console_out.inputs).toEqual([source.id]);
     expect(pipelineIssues(destination.config)).toEqual([]);
   });
   it("inserts a transformation, orders it before its consumer, and bridges removal", () => {
     const initial = structuredClone(starter);
     initial.transforms.enrich.future_field = { keep: true };
     const inserted = addConnectedComponent(initial, item("filter"), "demo");
-    expect(inserted.config.transforms.filter.inputs).toEqual(["demo"]);
-    expect(inserted.config.transforms.enrich.inputs).toEqual(["filter"]);
+    expect(inserted.config.transforms.keep.inputs).toEqual(["demo"]);
+    expect(inserted.config.transforms.enrich.inputs).toEqual(["keep"]);
     expect(orderedStepIds(inserted.config, "transforms")).toEqual([
-      "filter",
+      "keep",
       "enrich",
     ]);
     expect(inserted.config.transforms.enrich.future_field).toEqual({
       keep: true,
     });
     expect(initial.transforms.enrich.inputs).toEqual(["demo"]);
-    expect(removePipelineStep(inserted.config, "filter")).toEqual(initial);
+    expect(removePipelineStep(inserted.config, "keep")).toEqual(initial);
   });
   it("inserts into only the selected named branch and asks when outputs are ambiguous", () => {
     const config = {
@@ -263,8 +269,8 @@ describe("guided pipeline editing", () => {
       item("remap"),
       "branch.errors",
     );
-    expect(inserted.config.transforms.remap.inputs).toEqual(["branch.errors"]);
-    expect(inserted.config.sinks.errors.inputs).toEqual(["remap"]);
+    expect(inserted.config.transforms.parse.inputs).toEqual(["branch.errors"]);
+    expect(inserted.config.sinks.errors.inputs).toEqual(["parse"]);
     expect(inserted.config.sinks.other.inputs).toEqual(["branch.other"]);
     expect(validateGraph(inserted.config)).toEqual([]);
     const removedBranch = removePipelineStep(config, "branch");
@@ -274,20 +280,21 @@ describe("guided pipeline editing", () => {
   it("generates unique IDs and joins a new source to the existing unambiguous flow", () => {
     const added = addConnectedComponent(starter, item("demo_logs"));
     const again = addConnectedComponent(added.config, item("demo_logs"));
-    expect(again.id).toBe("demo_logs_2");
+    expect(added.id).toBe("demo_2");
+    expect(again.id).toBe("demo_3");
     expect(again.config.transforms.enrich.inputs).toEqual([
       "demo",
-      "demo_logs",
-      "demo_logs_2",
+      "demo_2",
+      "demo_3",
     ]);
     expect(validateGraph(again.config)).toEqual([]);
   });
   it("expands a newly inserted route into valid named connections", () => {
     const added = addConnectedComponent(starter, item("route"), "enrich");
     expect(added.config.sinks.output.inputs).toEqual([
-      "route.errors",
-      "route.other",
-      "route._unmatched",
+      "by_condition.errors",
+      "by_condition.other",
+      "by_condition._unmatched",
     ]);
     expect(validateGraph(added.config)).toEqual([]);
   });
@@ -301,7 +308,7 @@ describe("guided pipeline editing", () => {
       "other",
     ]);
     expect(selected.config.sinks.output.inputs).toEqual(["enrich"]);
-    expect(selected.config.sinks.other.inputs).toEqual(["filter"]);
+    expect(selected.config.sinks.other.inputs).toEqual(["keep"]);
     expect(validateGraph(selected.config)).toEqual([]);
   });
   it("does not silently fan an additional source into multiple independent roots", () => {
@@ -334,13 +341,13 @@ describe("guided pipeline editing", () => {
       item("http"),
       "enrich",
     ).config;
-    delete config.sinks.http.uri;
+    delete config.sinks.http_out.uri;
     expect(pipelineIssues(config)).toContainEqual({
-      id: "http",
-      message: "http: Enter uri.",
+      id: "http_out",
+      message: "http_out: Enter uri.",
     });
-    config.sinks.http.uri = "https://logs.example.test";
-    config.sinks.http.auth = {
+    config.sinks.http_out.uri = "https://logs.example.test";
+    config.sinks.http_out.auth = {
       strategy: "bearer",
       token: "plaintext-not-a-reference",
     };
@@ -349,18 +356,18 @@ describe("guided pipeline editing", () => {
         issue.message.includes("secret reference"),
       ),
     ).toBe(true);
-    config.sinks.http.auth.token = "vectory-secret:INGEST_TOKEN";
+    config.sinks.http_out.auth.token = "vectory-secret:INGEST_TOKEN";
     expect(pipelineIssues(config)).toEqual([]);
     for (const reference of [
       "SECRET[host.token]",
       "${INGEST_TOKEN}",
       "$INGEST_TOKEN",
     ]) {
-      config.sinks.http.auth.token = reference;
+      config.sinks.http_out.auth.token = reference;
       expect(pipelineIssues(config)).toEqual([]);
-      expect(config.sinks.http.auth.token).toBe(reference);
+      expect(config.sinks.http_out.auth.token).toBe(reference);
     }
-    config.sinks.http.auth.token = "vectory-secret:wrong name";
+    config.sinks.http_out.auth.token = "vectory-secret:wrong name";
     expect(
       pipelineIssues(config).some((issue) =>
         issue.message.includes("secret reference"),
@@ -621,6 +628,43 @@ describe("pinned schema-backed component catalog", () => {
       pipelineIssues({
         provider: { type: "http", url: "http://127.0.0.1:9000/config" },
       }),
+    ).toEqual([]);
+  });
+});
+
+describe("one name per component", () => {
+  it("is the same on the node card, picker, inspector and review", () => {
+    for (const [kind, type, label] of [
+      ["transforms", "remap", "Remap"],
+      ["transforms", "route", "Route"],
+      ["sinks", "aws_s3", "Amazon S3"],
+      ["sinks", "console", "Console"],
+      ["sources", "demo_logs", "Demo logs"],
+      ["sinks", "blackhole", "Discard events"],
+      ["sources", "file", "Log files"],
+      ["sinks", "file", "File output"],
+    ] as const) {
+      const entry = catalog.find((c) => c.kind === kind && c.type === type);
+      expect(entry?.label).toBe(label);
+      expect(componentTitle(type, kind)).toBe(label);
+      expect(displayLabel(type, kind)).toBe(label);
+    }
+  });
+  it("names new steps by role, never reusing an ID", () => {
+    expect(defaultComponentId("transforms", "remap", new Set())).toBe("parse");
+    expect(
+      defaultComponentId("transforms", "remap", new Set(["parse", "parse_2"])),
+    ).toBe("parse_3");
+    expect(defaultComponentId("sinks", "aws_s3", new Set())).toBe("archive");
+    expect(defaultComponentId("transforms", "dedupe", new Set())).toBe(
+      "dedupe",
+    );
+  });
+  it("starts a remap with comments only", () => {
+    expect(
+      REMAP_STARTER.split("\n").filter(
+        (line) => line.trim() && !line.startsWith("#"),
+      ),
     ).toEqual([]);
   });
 });
