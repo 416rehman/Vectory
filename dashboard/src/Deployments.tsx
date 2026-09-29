@@ -150,7 +150,8 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
   const failed =
     progressSegments(d.state_counts).find((s) => s.key === "failed")?.count ||
     0;
-  const current = d.target_count - (d.state_counts.removed || 0);
+  const removed = d.state_counts.removed || 0;
+  const current = d.target_count - removed;
   const replaced = d.replaced_by || [];
   const moved = replaced.reduce((sum, entry) => sum + entry.device_count, 0);
   const latest = replaced[replaced.length - 1];
@@ -160,7 +161,7 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
         <span className="control-muted">
           {moved
             ? `${moved} ${moved === 1 ? "device" : "devices"} moved to ${latest?.version_number ? `v${latest.version_number}` : "a newer version"}`
-            : "No devices now"}
+            : `${removed} ${removed === 1 ? "device" : "devices"} no longer targeted`}
         </span>
       </div>
     );
@@ -1055,6 +1056,18 @@ function RolloutPage({
     [updatedAt, setUpdatedAt] = useState<number | null>(null),
     [clockOffset, setClockOffset] = useState(0);
   const assignmentReturnFocus = useRef<HTMLElement | null>(null);
+  // The rollout is a page, not a dialog: a dialog opened from it hands focus
+  // back to the control that opened it.
+  const actionReturnFocus = useRef<HTMLElement | null>(null);
+  function rememberOpener() {
+    const active = document.activeElement;
+    actionReturnFocus.current =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+  }
+  function openRetry(scope: RolloutFailure | null) {
+    rememberOpener();
+    setRetryScope(scope);
+  }
   const [deviceSearch, setDeviceSearch] = useState("");
   const [deviceQuery, setDeviceQuery] = useState<DeviceResultsQuery>({
     search: "",
@@ -1154,6 +1167,7 @@ function RolloutPage({
         return;
       }
     }
+    rememberOpener();
     setActionError("");
     setBlockedByCanary(false);
     setRollbackPreview(null);
@@ -1511,7 +1525,7 @@ function RolloutPage({
                       <Button
                         icon={RotateCcw}
                         disabled={locked}
-                        onClick={() => setRetryScope(null)}
+                        onClick={() => openRetry(null)}
                       >
                         Retry failed ({failedCount})
                       </Button>
@@ -1652,7 +1666,7 @@ function RolloutPage({
                       <strong>
                         {deployment.verified_count} of {currentTargets}
                       </strong>{" "}
-                      devices verified
+                      {currentTargets === 1 ? "device" : "devices"} verified
                       {deployment.rolled_back_by ? " before the rollback" : ""}
                     </p>
                     <span className="control-muted">
@@ -1677,9 +1691,9 @@ function RolloutPage({
                   <p className="control-muted deployment-membership-note">
                     {deployment.state_counts.removed} earlier{" "}
                     {deployment.state_counts.removed === 1
-                      ? "device is"
-                      : "devices are"}{" "}
-                    no longer targeted and stay in history.
+                      ? "device is no longer targeted and stays"
+                      : "devices are no longer targeted and stay"}{" "}
+                    in history.
                   </p>
                 )}
             </section>
@@ -1729,7 +1743,7 @@ function RolloutPage({
                 navigate={navigate}
                 onRetry={
                   operate && deployment.version_id
-                    ? (failure) => setRetryScope(failure)
+                    ? (failure) => openRetry(failure)
                     : undefined
                 }
               />
@@ -1806,6 +1820,7 @@ function RolloutPage({
           rollbackRejected={rollbackRejected}
           onRollbackChange={rollbackReviewChanged}
           label={actionLabel}
+          returnFocusRef={actionReturnFocus}
           onClose={closeAction}
           onConfirm={perform}
           onRemove={() => removeAssignment(null)}
@@ -1815,6 +1830,7 @@ function RolloutPage({
         <DeploymentRetry
           deployment={deployment}
           scope={retryScope}
+          returnFocusRef={actionReturnFocus}
           onClose={() => setRetryScope(undefined)}
           onDone={(message) => void changed(message)}
         />
@@ -1945,6 +1961,7 @@ function ActionDialog({
   rollbackRejected,
   onRollbackChange,
   label,
+  returnFocusRef,
   onClose,
   onConfirm,
   onRemove,
@@ -1963,6 +1980,7 @@ function ActionDialog({
   rollbackRejected: boolean;
   onRollbackChange(value: RollbackPreview | null): void;
   label(name: string): string;
+  returnFocusRef: React.RefObject<HTMLElement | null>;
   onClose(): void;
   onConfirm(): void;
   onRemove(): void;
@@ -1976,6 +1994,7 @@ function ActionDialog({
     <Modal
       open
       onClose={onClose}
+      returnFocusRef={returnFocusRef}
       title={rollback ? "Review rollback" : label(action)}
       wide={rollback}
       className={rollback ? "rollback-review-modal" : ""}
