@@ -563,7 +563,13 @@ async fn migration_from_pre_registry_retains_existing_templates_without_inventin
     assert_eq!(snapshot(&s).await, before);
     let (status, all) = call(&app, "GET", "/api/v1/policies", Value::Null, &c, "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(all, json!([legacy]));
+    // Stored templates are retained exactly; attribution fields are additive.
+    assert_eq!(all.as_array().unwrap().len(), 1);
+    for key in ["id", "name", "policy", "created_at"] {
+        assert_eq!(all[0][key], legacy[key], "{key}");
+    }
+    assert_eq!(all[0]["applied_device_count"], 0);
+    assert_eq!(all[0]["revision"], 0);
     let (_, page) = call(
         &app,
         "GET",
