@@ -190,24 +190,20 @@ async fn delivery(
     db: &mut SqliteConnection,
     ids: &std::collections::BTreeSet<String>,
 ) -> Result<std::collections::BTreeMap<String, (Value, Value, Option<String>)>> {
-    let mut out = std::collections::BTreeMap::new();
-    for id in ids {
-        let row: Option<(String, String, Option<String>)> = sqlx::query_as(&format!(
-            "SELECT {},{},substr(d.name,1,240) FROM devices d WHERE d.id=?",
-            crate::assignment_removal::CONFIG,
-            crate::assignment_removal::POLICY
-        ))
-        .bind(id)
-        .fetch_optional(&mut *db)
-        .await?;
-        if let Some((configuration, policy, name)) = row {
-            out.insert(
-                id.clone(),
-                (db::parse(&configuration)?, db::parse(&policy)?, name),
-            );
-        }
-    }
-    Ok(out)
+    // One read for every changed device; the preview holds the writer lock.
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT d.id,{},{},substr(d.name,1,240) FROM devices d WHERE d.id IN (SELECT value FROM json_each(?))",
+        crate::assignment_removal::CONFIG,
+        crate::assignment_removal::POLICY
+    ))
+    .bind(json!(ids).to_string())
+    .fetch_all(&mut *db)
+    .await?;
+    rows.into_iter()
+        .map(|(id, configuration, policy, name)| {
+            Ok((id, (db::parse(&configuration)?, db::parse(&policy)?, name)))
+        })
+        .collect()
 }
 async fn simulate_membership(
     db: &mut SqliteConnection,
