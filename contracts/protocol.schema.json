@@ -2946,7 +2946,55 @@
             }
           ]
         },
+        "events_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "errors": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors_per_minute": {
           "anyOf": [
             {
               "type": "number",
@@ -3006,12 +3054,84 @@
             }
           ]
         },
+        "discarded_intentional": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "discarded_error": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filtered_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "buffer_bytes": {
           "anyOf": [
             {
               "type": "number",
               "minimum": 0,
               "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "buffer_events": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "buffer_utilization": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
             },
             {
               "type": "null"
@@ -3032,7 +3152,50 @@
                 "type": "string",
                 "maxLength": 100
               },
+              "kind": {
+                "enum": [
+                  "source",
+                  "transform",
+                  "sink"
+                ]
+              },
               "events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "received_events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "received_bytes_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_bytes_per_second": {
                 "anyOf": [
                   {
                     "type": "number",
@@ -3056,7 +3219,67 @@
                   }
                 ]
               },
+              "errors_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "discarded_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "discarded_intentional": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "discarded_error": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "filtered_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dropped_per_minute": {
                 "anyOf": [
                   {
                     "type": "number",
@@ -3079,12 +3302,98 @@
                     "type": "null"
                   }
                 ]
+              },
+              "buffer_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_max_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_max_bytes": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "latency_mean_seconds": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_utilization": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "utilization": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_by_output": {
+                "type": "object",
+                "maxProperties": 16,
+                "propertyNames": {
+                  "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+                },
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000000000
+                },
+                "description": "Events per second sent on each named output (route/remap outputs); `_default` is the unnamed output."
               }
             },
             "required": [
               "id"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "One component in the latest sample. events_per_second is the sent rate. errors and discarded_* are cumulative counters since Vector started; *_per_minute and *_per_second are rates over the agent sampling window. discarded_intentional counts filter/sample drops (expected); discarded_error counts drops caused by errors. Missing values are unavailable, never zero."
           }
         }
       },
@@ -3100,10 +3409,53 @@
           "type": "string",
           "format": "uuid"
         },
+        "range": {
+          "enum": [
+            "15m",
+            "1h",
+            "2h",
+            "6h",
+            "24h",
+            "7d",
+            "30d"
+          ]
+        },
+        "step_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
         "samples": {
           "type": "array",
+          "maxItems": 360,
           "items": {
-            "$ref": "#/$defs/Telemetry"
+            "allOf": [
+              {
+                "$ref": "#/$defs/Telemetry"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "bucket": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "samples": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            ]
           }
         }
       },
@@ -6646,6 +6998,1218 @@
         "expected_generation"
       ],
       "additionalProperties": false
+    },
+    "TelemetrySummary": {
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "range": {
+          "enum": [
+            "15m",
+            "1h",
+            "2h",
+            "6h",
+            "24h",
+            "7d",
+            "30d"
+          ]
+        },
+        "step_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "devices_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_reporting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_metrics_disabled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_without_metrics_endpoint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fresh_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "newest_sample_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filtered_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "buffer_utilization_max": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "events_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "events_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "errors_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "filtered_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dropped_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "events_in_per_second",
+            "events_out_per_second",
+            "bytes_in_per_second",
+            "bytes_out_per_second",
+            "errors_per_minute",
+            "filtered_per_minute",
+            "dropped_per_minute"
+          ],
+          "additionalProperties": false,
+          "description": "Number of fresh device samples that reported each total. Compare with devices_reporting to state partial coverage."
+        },
+        "series": {
+          "type": "array",
+          "maxItems": 360,
+          "items": {
+            "type": "object",
+            "properties": {
+              "bucket": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "devices_reporting": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "events_in_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "events_out_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errors_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dropped_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_utilization_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "bucket",
+              "at",
+              "devices_reporting",
+              "events_in_per_second",
+              "events_out_per_second",
+              "errors_per_minute",
+              "dropped_per_minute",
+              "buffer_utilization_max"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "generated_at",
+        "range",
+        "step_seconds",
+        "from",
+        "devices_total",
+        "devices_reporting",
+        "devices_metrics_disabled",
+        "devices_without_metrics_endpoint",
+        "fresh_seconds",
+        "newest_sample_at",
+        "events_in_per_second",
+        "events_out_per_second",
+        "bytes_in_per_second",
+        "bytes_out_per_second",
+        "errors_per_minute",
+        "filtered_per_minute",
+        "dropped_per_minute",
+        "buffer_utilization_max",
+        "coverage",
+        "series"
+      ],
+      "additionalProperties": false,
+      "description": "Fleet totals from each non-revoked device's latest sample when it is fresh (at most max(180 s, three check-ins) old), plus a downsampled series (per-device mean within each step, summed across devices). A total no fresh device reported is null, never zero."
+    },
+    "VersionTelemetry": {
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "devices_running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_reporting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Devices whose fresh samples are included."
+        },
+        "oldest_sample_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "newest_sample_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filtered_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "events_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "events_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "errors_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "filtered_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dropped_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "events_in_per_second",
+            "events_out_per_second",
+            "bytes_in_per_second",
+            "bytes_out_per_second",
+            "errors_per_minute",
+            "filtered_per_minute",
+            "dropped_per_minute"
+          ],
+          "additionalProperties": false,
+          "description": "Number of fresh device samples that reported each total. Compare with devices_reporting to state partial coverage."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "source",
+                      "transform",
+                      "sink"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "devices_reporting": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "received_events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "received_bytes_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_bytes_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errors_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "filtered_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dropped_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_bytes": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_utilization_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "utilization_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "latency_mean_seconds_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_by_output": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "maxProperties": 16,
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+                    },
+                    "additionalProperties": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1000000000000000
+                    },
+                    "description": "Events per second sent on each named output (route/remap outputs); `_default` is the unnamed output."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "type",
+              "devices_reporting",
+              "received_events_per_second",
+              "sent_events_per_second",
+              "received_bytes_per_second",
+              "sent_bytes_per_second",
+              "errors_per_minute",
+              "filtered_per_minute",
+              "dropped_per_minute",
+              "buffer_events",
+              "buffer_bytes",
+              "buffer_utilization_max",
+              "utilization_max",
+              "latency_mean_seconds_max",
+              "sent_by_output"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version_number": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "generated_at",
+        "devices_running",
+        "devices_reporting",
+        "device_ids",
+        "oldest_sample_at",
+        "newest_sample_at",
+        "events_in_per_second",
+        "events_out_per_second",
+        "bytes_in_per_second",
+        "bytes_out_per_second",
+        "errors_per_minute",
+        "filtered_per_minute",
+        "dropped_per_minute",
+        "coverage",
+        "components",
+        "version_id",
+        "configuration_id",
+        "version_number"
+      ],
+      "additionalProperties": false,
+      "description": "Per-component rates summed across devices verified to be running this exact version (last verified candidate whose digest still matches the managed file) with fresh samples. Rates sum; *_max fields keep the worst device."
+    },
+    "ConfigurationTelemetry": {
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "devices_running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "devices_reporting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": "Devices whose fresh samples are included."
+        },
+        "oldest_sample_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "newest_sample_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_in_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes_out_per_second": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filtered_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped_per_minute": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "events_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "events_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_in_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes_out_per_second": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "errors_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "filtered_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dropped_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "events_in_per_second",
+            "events_out_per_second",
+            "bytes_in_per_second",
+            "bytes_out_per_second",
+            "errors_per_minute",
+            "filtered_per_minute",
+            "dropped_per_minute"
+          ],
+          "additionalProperties": false,
+          "description": "Number of fresh device samples that reported each total. Compare with devices_reporting to state partial coverage."
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "source",
+                      "transform",
+                      "sink"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "devices_reporting": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "received_events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_events_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "received_bytes_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_bytes_per_second": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errors_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "filtered_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dropped_per_minute": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_events": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_bytes": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "buffer_utilization_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "utilization_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "latency_mean_seconds_max": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1000000000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sent_by_output": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "maxProperties": 16,
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z0-9_.-]{1,100}$"
+                    },
+                    "additionalProperties": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1000000000000000
+                    },
+                    "description": "Events per second sent on each named output (route/remap outputs); `_default` is the unnamed output."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "type",
+              "devices_reporting",
+              "received_events_per_second",
+              "sent_events_per_second",
+              "received_bytes_per_second",
+              "sent_bytes_per_second",
+              "errors_per_minute",
+              "filtered_per_minute",
+              "dropped_per_minute",
+              "buffer_events",
+              "buffer_bytes",
+              "buffer_utilization_max",
+              "utilization_max",
+              "latency_mean_seconds_max",
+              "sent_by_output"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "configuration_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "version_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "version_number": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "devices_running": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "devices_reporting": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "version_id",
+              "version_number",
+              "devices_running",
+              "devices_reporting"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "generated_at",
+        "devices_running",
+        "devices_reporting",
+        "device_ids",
+        "oldest_sample_at",
+        "newest_sample_at",
+        "events_in_per_second",
+        "events_out_per_second",
+        "bytes_in_per_second",
+        "bytes_out_per_second",
+        "errors_per_minute",
+        "filtered_per_minute",
+        "dropped_per_minute",
+        "coverage",
+        "components",
+        "configuration_id",
+        "versions"
+      ],
+      "additionalProperties": false,
+      "description": "The VersionTelemetry aggregate across every version of one pipeline, with a per-version coverage breakdown (newest version first)."
     }
   }
 }
