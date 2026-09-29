@@ -509,6 +509,24 @@ async fn channels_are_for_administrators_with_csrf() {
             "notification.channel.delete"
         ]
     );
+    // The audit log names the channel as it was called at the time.
+    let history = ok(
+        &f,
+        "GET",
+        "/api/v1/audit/history?family=notification&sort=created_at&direction=asc",
+        Value::Null,
+    )
+    .await;
+    let names: Vec<&str> = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["target_name"].as_str().unwrap_or("(none)"))
+        .collect();
+    assert_eq!(
+        names,
+        [created["name"].as_str().unwrap(), "Renamed", "Renamed"]
+    );
 }
 
 /// A writer that keeps everything logged while it is the default subscriber.
@@ -628,6 +646,16 @@ async fn secrets_never_leave_the_server() {
     )
     .await;
     assert!(details["details"]["summary"].is_string(), "{details}");
+    // A refused test is a failure in the audit log's own words.
+    let tests: Vec<&Value> = audit["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["action"] == "notification.channel.test")
+        .collect();
+    assert_eq!(tests.len(), 1, "{audit}");
+    assert_eq!(tests[0]["outcome"], "failed");
+    assert_eq!(tests[0]["target_name"], "Kept");
 }
 
 /* ---------- Where a channel may send ---------- */
@@ -1867,6 +1895,7 @@ async fn detection_thresholds_are_bounded_audited_and_drive_evaluation() {
     )
     .await;
     assert_eq!(audit["total"], 1);
+    assert_eq!(audit["items"][0]["target_name"], "Detection thresholds");
     let detail = ok(
         &f,
         "GET",
@@ -1879,7 +1908,7 @@ async fn detection_thresholds_are_bounded_audited_and_drive_evaluation() {
     .await;
     assert_eq!(
         detail["details"]["summary"],
-        "Failing destination: 1 failed requests a minute → 20 failed requests a minute. Full buffer: 95% → 90%."
+        "Failing destination: 1 failed request a minute → 20 failed requests a minute. Full buffer: 95% → 90%."
     );
     // Twelve failed requests a minute no longer count as failing.
     let fleet = deployed(&f).await;

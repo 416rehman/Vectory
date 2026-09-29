@@ -279,7 +279,7 @@ fn base(details: bool) -> String {
             SELECT s.sequence,s.created_at AS order_time,substr(r.id,1,128) AS id,
                 COALESCE({},'unknown') AS actor_id,COALESCE({},'unknown') AS action,
                 COALESCE({},'') AS target,COALESCE({},'unknown') AS outcome,
-                {} AS explicit_device,{} AS request_id,{} AS created_at {extras}
+                {} AS explicit_device,{} AS request_id,{} AS created_at,{} AS detail_name {extras}
             FROM audit_sequence s CROSS JOIN records r ON r.kind='audit' AND r.id=s.audit_id
         ), classified AS (
             SELECT raw.*,
@@ -314,7 +314,9 @@ fn base(details: bool) -> String {
                     CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
                     CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
                     CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
-                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END) AS target_name,
+                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END,
+                    CASE WHEN a.action LIKE 'notification.channel.%' THEN a.detail_name
+                         WHEN a.action='detection.update' THEN 'Detection thresholds' END) AS target_name,
                 CASE WHEN length(a.explicit_device)=36 THEN a.explicit_device
                      WHEN a.action='deployment.release' AND {a_compound} THEN substr(a.target,38,36)
                      WHEN a.target_kind='device' AND length(a.linked_target)=36 THEN a.linked_target
@@ -343,7 +345,9 @@ fn base(details: bool) -> String {
             text("details.device_id", 128)
         ),
         text("request_id", 128),
-        timestamp("s.created_at")
+        timestamp("s.created_at"),
+        // Notification channels are named in their own audit details.
+        text("details.name", 120)
     )
 }
 fn filter(q: &mut QueryBuilder<'_, Sqlite>, f: &Filters, cutoff: Option<i64>) {

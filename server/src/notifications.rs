@@ -1221,8 +1221,9 @@ pub async fn test(
         &actor,
         "notification.channel.test",
         &id,
+        // The audit log's own words: the summary says what the receiver did.
         if outcome.delivered {
-            "delivered"
+            "success"
         } else {
             "failed"
         },
