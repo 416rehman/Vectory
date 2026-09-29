@@ -18,10 +18,11 @@ const bundle = await build({
       const pending=[],intervals=new Map();let nextTimer=0;
       window.setInterval=(callback,ms)=>{const id=++nextTimer;intervals.set(id,{callback,ms});return id;};
       window.clearInterval=(id)=>intervals.delete(id);
-      window.fetch=(url,options)=>new Promise((resolve)=>pending.push({url,signal:options?.signal,resolve}));
+      window.fetch=(url,options)=>new Promise((resolve,reject)=>pending.push({url,signal:options?.signal,resolve,reject}));
       const fixture=window.fixture={pending,poll:()=>{for(const timer of intervals.values())timer.callback();},
         timers:()=>[...intervals.values()].map(timer=>timer.ms),
-        respond:(index,value,status=200)=>pending[index].resolve(new Response(JSON.stringify(value),{status}))};
+        respond:(index,value,status=200)=>pending[index].resolve(new Response(JSON.stringify(value),{status})),
+        offline:(index)=>pending[index].reject(new TypeError('Failed to fetch'))};
       function App(){
         const [resource,setResource]=useState('/test/A'),[refresh,setRefresh]=useState(0),[interval,setPollInterval]=useState(undefined);
         const result=useResource(resource,'empty:'+resource,refresh,{interval});
@@ -150,10 +151,19 @@ try {
   await slow.evaluate(() => window.fixture.respond(6, {id:'version-1',name:'again'}));
   await slow.waitForFunction(() => JSON.parse(document.querySelector('output').textContent).data?.name === 'again');
   assert.equal((await state()).error, '');
+
+  // A browser network failure reads as a sentence people can act on, and the
+  // last good record stays on screen.
+  await slow.evaluate(() => window.fixture.poll());
+  await slow.evaluate(() => window.fixture.offline(7));
+  await slow.waitForFunction(() => JSON.parse(document.querySelector('output').textContent).error !== '');
+  const offline = await state();
+  assert.equal(offline.error, "Vectory didn't answer. It may be restarting, or the network is down.", 'a network failure is never shown as "Failed to fetch"');
+  assert.equal(offline.data?.name, 'again', 'a failed poll keeps the last good record');
   await slow.close();
 
   assert.deepEqual(errors, []);
-  const evidence = {timestamp:new Date().toISOString(),passed:true,scope:'Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data',checks:['initial load','newest same-path response wins over delayed error','path change hides prior data','late old-path response cannot overwrite new resource','null path resets data and stops polling','unmount invalidates pending work and disables saved reload/poll','a background tick while a read is in flight starts no second request','an interval change reschedules the poll without a read; interval 0 never polls','a refresh bump replaces the in-flight read and keeps loaded data without a loading flash','IDENTITY_MISMATCH drops the displayed record until a matching read']};
+  const evidence = {timestamp:new Date().toISOString(),passed:true,scope:'Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data',checks:['initial load','newest same-path response wins over delayed error','path change hides prior data','late old-path response cannot overwrite new resource','null path resets data and stops polling','unmount invalidates pending work and disables saved reload/poll','a background tick while a read is in flight starts no second request','an interval change reschedules the poll without a read; interval 0 never polls','a refresh bump replaces the in-flight read and keeps loaded data without a loading flash','IDENTITY_MISMATCH drops the displayed record until a matching read','a browser network failure reads as a sentence and keeps the last good record']};
   const file = path.resolve(process.env.VECTORY_RESOURCE_RACE_EVIDENCE || path.join(root, 'docs/evidence/resource-race.json'));
   await fs.mkdir(path.dirname(file), {recursive:true});
   await fs.writeFile(file, JSON.stringify(evidence,null,2)+'\n');
