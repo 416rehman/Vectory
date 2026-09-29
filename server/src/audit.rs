@@ -231,7 +231,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -260,7 +260,8 @@ fn base(details: bool) -> String {
             text("details.agent_arch", 64),
             text("details.agent_version", 64),
             text("details.configuration_mode", 16),
-            text("details.client_address", 64)
+            text("details.client_address", 64),
+            text("details.summary", 500)
         )
     } else {
         String::new()
@@ -558,6 +559,13 @@ fn details(v: &Value, extra: &Value) -> Value {
             "enrollment_tokens_to_revoke",
             "mfa_recovery_codes",
         ],
+        // Written by notifications and detection: a name and a change summary
+        // built from secret-free settings (never a URL path or credential).
+        "notification.channel.create"
+        | "notification.channel.update"
+        | "notification.channel.delete"
+        | "notification.channel.test" => &["name", "summary"],
+        "detection.update" => &["summary"],
         // Written by the enrollment endpoint from bounded, secret-free fields.
         "device.enroll" => &[
             "reason_code",
