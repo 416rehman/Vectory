@@ -293,8 +293,7 @@ async fn enroll_inner(
             .bind(existing)
             .execute(&mut *tx)
             .await?;
-        crate::groups::remove_device(&mut tx, existing).await?;
-        crate::rollout::retire_persistent_targets(&mut tx, existing).await?;
+        crate::device_revocation::retire(&mut tx, existing).await?;
     } else if recovery {
         return Err(refused("RECOVERY_TARGET_MISSING", token_ref));
     }

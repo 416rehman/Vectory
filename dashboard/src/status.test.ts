@@ -23,6 +23,7 @@ import {
   targetLabel,
 } from "./deploymentStatus";
 import { auditOutcomeLabel } from "./auditModel";
+import { IssueSchema } from "./api";
 
 const repository = new URL("../../", import.meta.url);
 const protocol = JSON.parse(
@@ -56,6 +57,17 @@ describe("status language", () => {
       for (const value of values)
         expect(Object.hasOwn(domain, value), `${name}: ${value}`).toBe(true);
     }
+  });
+
+  it("reads every issue resolution reason in the contract", () => {
+    const reasons: string[] =
+      definitions.Issue.properties.resolved_reason.anyOf[0].enum;
+    expect(reasons).toContain("revoked");
+    for (const reason of reasons)
+      expect(
+        IssueSchema.shape.resolved_reason.safeParse(reason).success,
+        reason,
+      ).toBe(true);
   });
 
   it("covers every device status the server derives", () => {

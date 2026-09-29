@@ -2110,6 +2110,11 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{recovery}");
+    // The old identity has an open issue that it can never resolve itself.
+    let stranded = db::hash(format!("{old}:stranded"));
+    let mut conn = s.pool.acquire().await.unwrap();
+    db::insert(&mut conn, "issue", &json!({"id":stranded,"device_id":old,"code":"VALIDATION_FAILED","stage":"validate","count":1,"reports":1,"first_seen":db::now(),"last_seen":db::now(),"resolved":false,"revision":1})).await.unwrap();
+    drop(conn);
     let replacement = rcgen::KeyPair::generate().unwrap();
     let mut retry = request;
     retry["token"] = recovery["token"].clone();
@@ -2165,6 +2170,16 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
             .await
             .unwrap();
     assert_eq!(creds, 0);
+    let (_, issue, _) = call(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/issues/{stranded}"),
+        Value::Null,
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(issue["resolved_reason"], "revoked", "{issue}");
     let (_, groups, _) = call(app, "GET", "/api/v1/groups", Value::Null, &cookie, "").await;
     assert!(groups[0]["device_ids"].as_array().unwrap().is_empty());
 }

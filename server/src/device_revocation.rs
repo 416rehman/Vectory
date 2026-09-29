@@ -25,6 +25,25 @@ async fn revoked(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<bool> {
 fn receipt(id: &str, revoked: bool) -> Value {
     json!({"device_id":id,"revocation_status":true,"revoked":revoked})
 }
+/// Everything that follows a device identity's revocation, whether an
+/// operator revoked it or an identity recovery replaced it: it leaves its
+/// groups and persistent assignments, and since it never checks in again,
+/// nothing it reported can resolve on its own, so its open issues close as
+/// `revoked` and its delivery state goes.
+pub(crate) async fn retire(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
+    crate::groups::remove_device(tx, id).await?;
+    crate::rollout::retire_persistent_targets(tx, id).await?;
+    crate::issues::resolve_device(tx, id, "revoked").await?;
+    sqlx::query("DELETE FROM data_plane_state WHERE device_id=?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE devices SET data=json_remove(data,'$.data_plane') WHERE id=? AND json_type(data,'$.data_plane') IS NOT NULL")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
+}
 pub async fn status(
     AppState(s): AppState<State>,
     h: HeaderMap,
@@ -70,8 +89,7 @@ pub async fn post(
             .bind(&source)
             .execute(&mut *tx)
             .await?;
-        crate::groups::remove_device(&mut tx, &source).await?;
-        crate::rollout::retire_persistent_targets(&mut tx, &source).await?;
+        retire(&mut tx, &source).await?;
         db::audit(
             &mut tx,
             api::text(&actor, "id"),
