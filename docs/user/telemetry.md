@@ -18,19 +18,18 @@ Open [**Devices**](/#/devices) and select a device.
 
 A pipeline and agent settings can come from different deployments with different priorities. When something is unknown, the page says so; it never guesses an assignment.
 
-**No pipeline** doesn't mean Vector is stopped. A device that kept its existing workload runs it until you deploy a version. A new device with no configuration waits without starting Vector. Use **Deploy a pipeline** to deploy one.
+**Running** says what the device runs. A new device reads **Nothing yet. Vector starts when you deploy a pipeline.** A device that kept its existing workload reads **A local configuration adopted at setup (SHA-256 …) keeps running until you deploy.** After a device's first version fails to start, it reads **Nothing running: Vector stopped after v1 failed to start.** Use **Deploy a pipeline** to deploy one.
 
 ## Enable real metrics
 
-Vectory reads metrics from a Prometheus exporter in your own pipeline. It never inserts components by itself.
+Vectory reads metrics from a Prometheus exporter in your own pipeline. It never inserts components by itself. The synthetic example (**Try a synthetic example**) already includes it.
 
 <!-- steps -->
 1. In the editor, open **Actions** and choose **Add monitoring**. It adds an `internal_metrics` source and a `prometheus_exporter` sink on `127.0.0.1:9598` (the next free port if that one is taken), without changing your other steps.
-2. On restricted devices, allow the listener: add `127.0.0.1:9598` to `allowed_listen_addresses` in the device's [allowances](installation.md#configure-restricted-allowances).
-3. Publish and deploy the pipeline.
-4. Open the device's **Operational metrics**. Numbers appear within two check-ins: rates need two samples.
+2. Publish and deploy the pipeline. Restricted devices run this exporter without a listener allowance (see below).
+3. Open the device's **Operational metrics**. Numbers appear within two check-ins: rates need two samples.
 
-The agent finds a loopback exporter in the running configuration by itself. The fragment it looks for is:
+The agent finds a loopback exporter in the running configuration by itself; nothing changes on the host. The fragment it looks for is:
 
 ```json
 {
@@ -48,6 +47,8 @@ The agent finds a loopback exporter in the running configuration by itself. The 
 ```
 
 Keep the exporter on a loopback IP. Metrics also need **Collect operational metrics** on in the device's agent settings, which is the default.
+
+In restricted mode, this is the one listener a pipeline may open without an entry in `allowed_listen_addresses`: a `prometheus_exporter` on a loopback IP literal (such as `127.0.0.1:9598` or `[::1]:9598`) whose inputs are all `internal_metrics` sources. Only one such exporter is exempt. Any other listener, an exporter on another address, or one fed by other sources still needs its [allowance](installation.md#configure-restricted-allowances).
 
 Metrics are bounded operational numbers. They never include event contents.
 
@@ -93,6 +94,8 @@ Applied means Vector runs the version. Delivery is a separate question, so Vecto
 - **Stalled:** events arrive, but less than 1% is delivered and a sink is struggling.
 - **Buffer filling:** a buffer is over 80% full and rising, or over 95% full.
 - **Error drops:** a component drops at least one event a minute because of errors.
+
+Without metrics, Vectory can't measure delivery: the device page reads **Delivery health: not measured. Add monitoring**, the Overview's **On desired version** tile says so, and **Needs you** says "Nothing is failing that Vectory can measure" rather than "Nothing is failing". Vector's own log is then the only evidence: when a sink logs failed requests (`error_type=request_failed`) in two check-ins in a row, the same **Sink errors** issue opens, its message ending "measured from Vector's log (no metrics)". It closes after three checks in which the log shows no new failures. A quiet log doesn't prove that events arrive, so add monitoring to know.
 
 A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. A sink counts as recovered only when its buffer is seen low or it sends events again: silence isn't recovery. If you turn metrics off for a device, its delivery issues close as **unmonitored**, because Vectory can no longer check. Meanwhile the device reads **Degraded**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
 

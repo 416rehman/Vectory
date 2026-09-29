@@ -9,7 +9,7 @@ Install the Vectory agent on a host that runs Vector 0.58 (any patch release, su
 ## Before you start
 
 - **Vector 0.58.x** is installed on the host (`vector --version`). Vectory never installs or upgrades Vector. The official [packages and archives](https://vector.dev/download/) all work.
-- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
+- **An enrollment token.** **Add device** creates one with the install command. It's shown once, works for one enrollment and expires after 1 hour. Change both under **Advanced**. **Start over**, next to **Copy token**, revokes it when you don't need it; one you leave unused is listed with **Revoke it** when you come back. Tokens from **Manage enrollment tokens** default to 24 hours and any number of devices.
 - **Network:** the host can reach `https://<your-server>:8443`. The host needs no inbound ports.
 - **Administrator rights** on the host (`sudo`, or an elevated PowerShell on Windows) to install the agent and register its service.
 
@@ -92,7 +92,7 @@ The installer and `vectory setup` then:
 2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in the mode you chose on **Add device**.
 4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
-5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one.
+5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one. A host without a service manager, such as most containers, WSL and Alpine with OpenRC, has nothing to register: setup checks in once, prints `[!!] Service` with the exact command that starts the agent, and exits with code 3, because the agent isn't running yet. See [Keep the agent running](#keep-the-agent-running).
 
 The token is never part of the URL or the installer script. The installer contains only public values: your server's address, its certificate fingerprint and the agents' checksums.
 
@@ -205,11 +205,12 @@ A new restricted installation can't read files, reach destinations or open liste
 {
   "allowed_file_roots": ["/var/log/nginx", "/var/lib/vectory-data"],
   "allowed_network_hosts": ["logs.example.net:443"],
-  "allowed_listen_addresses": ["127.0.0.1:9598"]
+  "allowed_listen_addresses": ["0.0.0.0:1514"]
 }
 ```
 
 - File roots are absolute paths. Destinations and listeners are exact `host:port` pairs.
+- The monitoring exporter that **Add monitoring** adds needs no entry. See [Enable real metrics](telemetry.md#enable-real-metrics).
 - Save the file as UTF-8 without a byte-order mark, with no comments and no duplicate names. On Windows, double each backslash: `"C:\\ProgramData\\VectoryData"`.
 - The file replaces all three lists. Keep every entry the device still needs; `{}` removes them all.
 - Allowances don't create folders, grant operating-system permissions or turn on full mode.
@@ -225,6 +226,19 @@ A new restricted installation can't read files, reach destinations or open liste
 The installer registers a service: systemd on Linux, launchd on macOS, and the Service Control Manager on Windows. The service starts at boot and restarts the agent if it stops.
 
 To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Closing the terminal does the same. Stopping or restarting the service drains Vector the same way.
+
+### Hosts without a service manager
+
+Containers, WSL and Alpine (OpenRC) usually have no systemd for the agent. There, setup still installs and enrolls the agent and checks in once, then stops and says so:
+
+```text
+[!!] Service      No supported service manager here (systemd isn't running in this container), so the agent stopped after its first check-in.
+                  Keep it running with your own supervisor: /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent
+```
+
+It exits with code 3, and **Add device** reads "*name* checked in once, but nothing keeps its agent running". Run that exact command under whatever keeps processes running on the host: the container's entrypoint, supervisord, or a service you write for OpenRC. The device shows as connected when it checks in again. Until then it goes offline after three check-in intervals.
+
+`--service none` says you'll run the agent yourself: setup registers nothing, prints the same command, and exits with code 0. `--create-user` has no effect without a service, and setup says so: the agent runs as whoever starts it.
 
 - The service records the agent's path when you register it, so keep the binary at a stable location.
 - On Linux and macOS the service runs as an unprivileged account. Registration hands the state and managed-configuration folders to that account. Make sure it can also read your CA file and everything your pipelines use.
