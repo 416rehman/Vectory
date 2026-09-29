@@ -165,7 +165,8 @@ sudo vectory logs --follow
 | --- | --- |
 | `--lines N` | How many recent lines to print. Default 100. |
 | `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
-| `--raw` | Print Vector's JSON log lines unchanged. `--json` does the same. |
+| `--raw` | Print the log file's lines unchanged. |
+| `--json` | Print one JSON object per line: Vector's records as they are, and the agent's own notes with the same `timestamp`, `target` and `message` keys. |
 
 ## pause and resume
 

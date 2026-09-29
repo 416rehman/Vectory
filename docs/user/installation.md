@@ -224,7 +224,7 @@ A new restricted installation can't read files, reach destinations or open liste
 
 The installer registers a service: systemd on Linux, launchd on macOS, and the Service Control Manager on Windows. The service starts at boot and restarts the agent if it stops.
 
-To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Stopping or restarting the service drains Vector the same way.
+To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Closing the terminal does the same. Stopping or restarting the service drains Vector the same way.
 
 - The service records the agent's path when you register it, so keep the binary at a stable location.
 - On Linux and macOS the service runs as an unprivileged account. Registration hands the state and managed-configuration folders to that account. Make sure it can also read your CA file and everything your pipelines use.
