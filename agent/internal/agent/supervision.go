@@ -102,6 +102,11 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 			if err := s.check(ctx, e); err != nil {
 				report(err.Error())
 			}
+			// A retry asked for on this host doesn't wait for the next
+			// scheduled check-in.
+			if _, err := os.Lstat(filepath.Join(e.Dir, retryRequestName)); err == nil {
+				return true
+			}
 		}
 	}
 }

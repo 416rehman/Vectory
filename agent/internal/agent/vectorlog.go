@@ -216,6 +216,23 @@ func (l *vectorLog) note(title string, output []byte) {
 	}
 }
 
+// NoteLocally records a host operator's change in the agent's local log, so
+// `vectory logs` shows who changed what and when: a local audit trail. It
+// appends to a log the agent already created and never creates one, which
+// would give the file to this account instead of the service's.
+func NoteLocally(dir, title string) {
+	path := filepath.Join(dir, vectorLogName)
+	if SafePath(path) != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = io.WriteString(f, "[vectory "+time.Now().UTC().Format(time.RFC3339)+"] "+safeText(title, vectorLogMaxLine)+"\n")
+}
+
 func (l *vectorLog) close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

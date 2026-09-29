@@ -28,6 +28,20 @@ type InstallOptions struct {
 	// Host runtime settings; an empty data directory restores the automatic choice.
 	VectorDataDir           *string
 	GracefulShutdownSeconds *int
+	// AddAllowances adds entries to the current allowance lists and never
+	// removes one (vectory allow); CapabilityPolicy replaces them instead.
+	AddAllowances *CapabilityPolicy
+}
+
+// mergeAllowances adds each entry that isn't there yet, in order.
+func mergeAllowances(current, add []string) []string {
+	out := slices.Clone(current)
+	for _, value := range add {
+		if !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func ReadInstallPolicy(path string) (*CapabilityPolicy, error) {
@@ -105,6 +119,17 @@ func (options InstallOptions) validate() error {
 			return err
 		}
 	}
+	if options.AddAllowances != nil {
+		if options.CapabilityPolicy != nil {
+			return errors.New("choose either a complete capability policy or allowances to add, not both")
+		}
+		if options.AddAllowances.FullVectorConfig {
+			return errors.New("allowances never grant full mode")
+		}
+		if err := validateInstallPolicy(*options.AddAllowances); err != nil {
+			return err
+		}
+	}
 	if err := validateMetricsChange(options.MetricsURL, options.ClearMetricsURL); err != nil {
 		return err
 	}
@@ -129,6 +154,11 @@ func (options InstallOptions) compose(current Settings) Settings {
 		current.CapabilityPolicy.AllowedFileRoots = slices.Clone(options.CapabilityPolicy.AllowedFileRoots)
 		current.CapabilityPolicy.AllowedNetworkHosts = slices.Clone(options.CapabilityPolicy.AllowedNetworkHosts)
 		current.CapabilityPolicy.AllowedListenAddresses = slices.Clone(options.CapabilityPolicy.AllowedListenAddresses)
+	}
+	if add := options.AddAllowances; add != nil {
+		current.CapabilityPolicy.AllowedFileRoots = mergeAllowances(current.CapabilityPolicy.AllowedFileRoots, add.AllowedFileRoots)
+		current.CapabilityPolicy.AllowedNetworkHosts = mergeAllowances(current.CapabilityPolicy.AllowedNetworkHosts, add.AllowedNetworkHosts)
+		current.CapabilityPolicy.AllowedListenAddresses = mergeAllowances(current.CapabilityPolicy.AllowedListenAddresses, add.AllowedListenAddresses)
 	}
 	if options.FullVectorConfig != nil {
 		current.CapabilityPolicy.FullVectorConfig = *options.FullVectorConfig
@@ -261,6 +291,12 @@ func installWithOptionsAndState(ctx context.Context, dir string, options Install
 		next := options.compose(doc.value)
 		if err = ctx.Err(); err != nil {
 			return err
+		}
+		policy := next.CapabilityPolicy
+		for _, list := range [][]string{policy.AllowedFileRoots, policy.AllowedNetworkHosts, policy.AllowedListenAddresses} {
+			if len(list) > 1024 {
+				return errors.New("capability allowance list exceeds 1024 entries")
+			}
 		}
 		if capabilityChanged(doc.value.CapabilityPolicy, next.CapabilityPolicy) {
 			return commitSettingsWithRetryReset(dir, doc, next)

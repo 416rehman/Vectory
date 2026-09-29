@@ -412,7 +412,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.rollbackWith(ctx, m.Generation, "Effective configuration activation could not be verified", j.ConfigurationAttempt, e.diagnoseFailure(err, data))
+		return e.rollbackWith(ctx, m.Generation, "Vector didn't confirm it runs this version", j.ConfigurationAttempt, e.diagnoseFailure(err, data))
 	}
 	if e.actual() != effectiveSHA {
 		return e.rollback(ctx, m.Generation, "Managed content changed during activation", j.ConfigurationAttempt)
@@ -527,7 +527,7 @@ func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, atte
 		return fail("ROLLBACK_FAILED", "Restored configuration validation failed", e.diagnoseFailure(err, b)...)
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return fail("ROLLBACK_FAILED", "Restored Vector activation could not be verified", e.diagnoseFailure(err, b)...)
+		return fail("ROLLBACK_FAILED", "Vector didn't confirm it runs the restored configuration", e.diagnoseFailure(err, b)...)
 	}
 	e.State.ActualSHA256 = e.State.LastGoodSHA256
 	e.State.ApplyState = "rolled_back"
@@ -698,15 +698,37 @@ func interruptedCheckIn(ctx context.Context, err error) bool {
 // check-in since the last success, with the latest reason. Only network
 // failures count, never a check-in interrupted by stopping the agent.
 func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message string) {
-	if _, network := AsConnectionError(err); !network || interruptedCheckIn(ctx, err) {
+	ce, network := AsConnectionError(err)
+	if !network || interruptedCheckIn(ctx, err) {
 		return
 	}
-	failure := CheckInFailure{Since: e.now(), Message: message}
+	failure := CheckInFailure{Since: e.now(), Message: message, Code: ce.Code}
 	if previous := e.State.CheckInFailure; previous != nil {
 		failure.Since = previous.Since
 	}
 	e.State.CheckInFailure = &failure
 	_ = e.save()
+}
+
+// takeQueuedRetry answers `vectory retry` run while this agent holds the
+// lock: it lifts the hold on the failed version, as the stopped-agent retry
+// does, so the next reconciliation tries it again. It reports whether a
+// failed version was waiting.
+func (e *Engine) takeQueuedRetry() bool {
+	path := filepath.Join(e.Dir, retryRequestName)
+	if _, err := os.Lstat(path); err != nil {
+		return false
+	}
+	held := e.State.FailedGeneration != nil || e.State.FailedEffectiveSHA256 != ""
+	e.State.FailedGeneration = nil
+	e.State.FailedEffectiveSHA256 = ""
+	if held && e.save() != nil {
+		return false
+	}
+	if os.Remove(path) == nil {
+		_ = syncDir(e.Dir)
+	}
+	return held
 }
 
 // runOptions change how Run reports itself. serviceManager overrides what the
@@ -715,11 +737,18 @@ func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message st
 type runOptions struct {
 	once           bool
 	serviceManager string
+	// verbose also logs every check-in (vectory run --verbose).
+	verbose bool
 }
 
 // Run runs the agent: continuously, or for one complete check-in.
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
 	return runWith(ctx, dir, runOptions{once: once}, report)
+}
+
+// RunVerbose runs the agent continuously and logs every check-in too.
+func RunVerbose(ctx context.Context, dir string, report func(string)) error {
+	return runWith(ctx, dir, runOptions{verbose: true}, report)
 }
 
 // RunWindowsService runs the agent as the Windows service.
@@ -754,10 +783,15 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		}
 	}()
 	defer func() {
-		if e.Driver.Alive() {
+		alive := e.Driver.Alive()
+		if alive {
 			report(fmt.Sprintf("Stopping Vector: it finishes in-flight events for up to %d s.", e.Settings.gracefulShutdownSeconds()))
 		}
-		_ = e.Driver.Stop()
+		started := time.Now()
+		stopped := e.Driver.Stop()
+		if alive {
+			report(stoppedLine(time.Since(started), e.Settings.gracefulShutdownSeconds(), stopped))
+		}
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"
 			e.State.Error = &Issue{Code: "PROCESS_STOPPED", Stage: "observation", Message: "The agent supervisor stopped; restart the service to re-establish activation"}
@@ -769,7 +803,11 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		report(err.Error())
 	} else if err = e.StartExisting(ctx); err != nil {
 		report(err.Error())
+	} else if line := startupLine(e.State, e.Driver.Alive()); line != "" {
+		report(line)
 	}
+	// The outcome already true at start isn't news; each new one is said once.
+	announced, _ := outcomeLine(e.State)
 	if e.Settings.VectorVersion == "" {
 		// Adopted before the version was recorded: report what the binary says.
 		if version, err := ProbeVector(ctx, e.Settings); err == nil {
@@ -785,6 +823,9 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		}
 		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
 		known := slices.Clone(e.State.ServerFeatures)
+		if e.takeQueuedRetry() {
+			report("Retry requested on this host: trying the failed version again.")
+		}
 		err = supervisor.poll(ctx, e, report)
 		switch {
 		case err != nil && ctx.Err() != nil:
@@ -795,16 +836,32 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 			return nil
 		case err != nil:
 			failures++
+			// A version that failed to apply is said once, in the words of
+			// its diagnostic; a failed check-in is said as a connection problem.
+			if _, network := AsConnectionError(err); !network {
+				if key, line := outcomeLine(e.State); key != "" && key != announced {
+					announced = key
+					report(line)
+					break
+				}
+			}
 			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
 			report(message)
 			e.recordCheckInFailure(ctx, err, message)
 		default:
 			failures = 0
-			if e.State.CheckInFailure != nil {
+			if failure := e.State.CheckInFailure; failure != nil {
+				report(fmt.Sprintf("Reconnected to %s after %s.", e.Settings.Server, preciseDuration(e.now().Sub(failure.Since))))
 				e.State.CheckInFailure = nil
 				_ = e.save()
 			}
-			report("heartbeat: " + e.State.ApplyState)
+			if key, line := outcomeLine(e.State); key != "" && key != announced {
+				announced = key
+				report(line)
+			}
+			if options.verbose {
+				report("Checked in: " + applyStateLabels[e.State.ApplyState] + ".")
+			}
 		}
 		if once {
 			// A first check-in learns which fields the server accepts. A

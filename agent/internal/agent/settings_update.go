@@ -311,6 +311,28 @@ func commitSettingsWithRetryReset(dir string, doc *settingsDocument, next Settin
 	return nil
 }
 
+// retryRequestName marks a retry asked for on this host while the agent ran;
+// the running agent takes it at its next loop (see Engine.takeQueuedRetry).
+const retryRequestName = "retry-requested"
+
+// QueueRetry leaves a retry request for the running agent, which holds the
+// agent lock. Like the local pause, it only takes the lifecycle guard, so it
+// never races a purge of the state directory.
+func QueueRetry(dir string) error {
+	releaseLifecycle, err := lockLifecycle(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseLifecycle()
+	if err := checkNoPendingPurge(dir); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(filepath.Join(dir, "state.json")); err != nil || !info.Mode().IsRegular() {
+		return errors.New("retry requires existing agent state")
+	}
+	return AtomicWrite(filepath.Join(dir, retryRequestName), []byte("retry requested on this host\n"))
+}
+
 // Retry is explicit local maintenance, not a runtime reconciliation state save.
 func Retry(dir string) error {
 	unlock, err := lockSettingsMaintenance(dir)
@@ -323,5 +345,12 @@ func Retry(dir string) error {
 		return err
 	}
 	defer state.close()
-	return state.commit()
+	if err = state.commit(); err != nil {
+		return err
+	}
+	// A request queued while the agent ran is answered by this reset.
+	if err = os.Remove(filepath.Join(dir, retryRequestName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

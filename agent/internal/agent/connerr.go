@@ -44,10 +44,20 @@ type ConnectionError struct {
 }
 
 func (e *ConnectionError) Error() string {
-	if e.Fix == "" {
+	switch {
+	case e.Fix == "":
 		return e.Message
+	case strings.Contains(e.Message, "\n"):
+		// A message with aligned lines (fingerprints) keeps them whole.
+		return e.Message + "\n" + e.Fix
 	}
 	return e.Message + " " + e.Fix
+}
+
+// IndentLines indents every line after the first by width spaces, so a
+// message with several lines stays aligned under its first line.
+func IndentLines(text string, width int) string {
+	return strings.ReplaceAll(text, "\n", "\n"+strings.Repeat(" ", width))
 }
 
 func (e *ConnectionError) Unwrap() error { return e.cause }
@@ -76,14 +86,41 @@ func Fingerprint(sum []byte) string {
 	return strings.Join(parts, ":")
 }
 
-// ShortFingerprint keeps the first and last two bytes for visual comparison.
-// It is deliberately too short to paste as a pin.
+// ShortFingerprint keeps the first and last two bytes for a confirmation line.
+// It is deliberately too short to paste as a pin; comparisons print the full
+// fingerprint (FingerprintMismatch).
 func ShortFingerprint(sum []byte) string {
 	full := Fingerprint(sum)
 	if len(sum) < 6 {
 		return full
 	}
 	return full[:5] + ":...:" + full[len(full)-5:]
+}
+
+// FingerprintMismatch prints two fingerprints in full on aligned lines, the
+// way Add device shows them, and names the first byte where they differ:
+//
+//	expected 3F:DD:…:34:05:…
+//	received 3F:DD:…:34:95:…  (first difference at byte 16)
+func FingerprintMismatch(expected, received []byte) string {
+	first := 0
+	for first < len(expected) && first < len(received) && expected[first] == received[first] {
+		first++
+	}
+	return fmt.Sprintf("expected %s\nreceived %s  (first difference at byte %d)", Fingerprint(expected), Fingerprint(received), first+1)
+}
+
+// FingerprintRows prints a fingerprint whole, in rows of eight pairs as Add
+// device lays it out, for comparing by eye. It is deliberately not one value
+// to paste as a pin: a certificate this host was merely sent is trusted only
+// through the fingerprint the dashboard shows (no trust on first use).
+func FingerprintRows(sum []byte, indent string) string {
+	pairs := strings.Split(Fingerprint(sum), ":")
+	rows := make([]string, 0, (len(pairs)+7)/8)
+	for i := 0; i < len(pairs); i += 8 {
+		rows = append(rows, indent+strings.Join(pairs[i:min(i+8, len(pairs))], ":"))
+	}
+	return strings.Join(rows, "\n")
 }
 
 func certificateSHA256(c *x509.Certificate) []byte {
@@ -200,7 +237,7 @@ func classifyCertificate(target *url.URL, err error, presented []*x509.Certifica
 		e.Message = fmt.Sprintf("The server's certificate is issued by %s, which this host doesn't trust.", issuer)
 		e.Fix = "Copy the command from Add device in the dashboard: it pins the server's CA with --ca-sha256. Or pass --ca-file with your CA certificate."
 		if len(presented) > 0 {
-			e.Fix += fmt.Sprintf(" (The certificate this host received has SHA-256 %s; compare it with Add device.)", ShortFingerprint(certificateSHA256(presented[len(presented)-1])))
+			e.Fix += "\nTo check that this address is your server, compare the SHA-256 of the top certificate it sent with the full fingerprint on Add device, row by row:\n" + FingerprintRows(certificateSHA256(presented[len(presented)-1]), "  ")
 		}
 	case errors.As(err, &hostname):
 		e.Code = "TLS_HOSTNAME_MISMATCH"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -40,6 +41,26 @@ func CheckInstalled(dir string) error {
 	return &NotInstalledError{StateDir: dir, Legacy: legacy}
 }
 
+// RunCommandFor runs this agent in the foreground for dir, by this
+// executable's absolute path: an agent installed with --install-dir is often
+// not the vectory that PATH finds.
+func RunCommandFor(dir string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "vectory"
+	} else if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	command := quoteArg(exe) + " run"
+	if filepath.Clean(dir) != filepath.Clean(DefaultPaths().StateDir) {
+		command += " --state-dir " + quoteArg(dir)
+	}
+	if runtime.GOOS == "windows" {
+		return command
+	}
+	return "sudo " + command
+}
+
 // StatusView gathers everything status shows, read-only.
 type StatusView struct {
 	StateDir    string
@@ -49,7 +70,8 @@ type StatusView struct {
 	CertExpiry  time.Time
 	Pending     *PendingEnrollment
 	Service     ServiceInfo
-	Foreground  bool
+	Foreground  bool       // an agent runs without a service manager...
+	Owner       *LockOwner // ...as this process, when it recorded itself
 	LocalPaused bool
 	ActualSHA   string
 	Drift       bool
@@ -90,6 +112,9 @@ func ReadStatus(ctx context.Context, dir string) (*StatusView, error) {
 		v.Service = ServiceInfo{Manager: v.Service.Manager, Name: v.Service.Name}
 	}
 	v.Foreground = !v.Service.Running() && agentLockHeld(dir)
+	if v.Foreground {
+		v.Owner = readLockOwner(dir)
+	}
 	now := time.Now()
 	v.Delivery = recentDeliveryProblem(dir, s.ManagedConfig, now)
 	v.Next = v.nextStep(now)
@@ -131,7 +156,7 @@ func (v *StatusView) nextStep(now time.Time) string {
 	case v.Service.Installed && !v.Service.Running():
 		return "Start the agent: sudo vectory service-start"
 	case !v.running():
-		return "Start the agent: sudo vectory run --state-dir " + dir + " (or register a service with vectory setup)."
+		return "Start the agent: " + RunCommandFor(v.StateDir) + " (or register a service with vectory setup)."
 	case v.LocalPaused:
 		return "Configuration sync is paused on this host. Resume it with: sudo vectory resume --state-dir " + dir
 	case v.State.LastHeartbeat == nil:
@@ -158,7 +183,7 @@ var applyStateLabels = map[string]string{
 	"downloaded":           "downloaded",
 	"validated":            "validated",
 	"written":              "applying",
-	"reload_requested":     "restarting Vector",
+	"reload_requested":     "loading in Vector",
 	"verified_applied":     "applied and verified",
 	"verification_unknown": "applied, activation unconfirmed",
 	"failed":               "failed",
@@ -226,7 +251,18 @@ func RenderStatus(v *StatusView, now time.Time) string {
 			server += " · no check-in yet"
 		}
 		if failure := v.checkInFailure(); failure != nil {
-			server += " · not answering since " + failure.Since.Local().Format("2006-01-02 15:04:05 MST")
+			since := failure.Since.Local().Format("2006-01-02 15:04:05 MST")
+			switch {
+			// The server answers, but refuses this agent's credential: every
+			// such refusal is the same 401, and only an expired credential is
+			// known here, so anything else is the device's revocation.
+			case failure.Code == "CREDENTIAL_REJECTED" && !v.CertExpiry.IsZero() && now.After(v.CertExpiry):
+				server += " · the server no longer accepts this agent (its credential expired " + v.CertExpiry.Local().Format("Jan 2 15:04") + ") since " + since
+			case failure.Code == "CREDENTIAL_REJECTED":
+				server += " · the server no longer accepts this agent (revoked) since " + since
+			default:
+				server += " · not answering since " + since
+			}
 		}
 		if !v.CertExpiry.IsZero() && v.CertExpiry.Sub(now) < 72*time.Hour {
 			server += " · credential expires " + v.CertExpiry.Local().Format("Jan 2 15:04")
@@ -251,8 +287,10 @@ func RenderStatus(v *StatusView, now time.Time) string {
 			state = "stopped"
 		}
 		row("Service", v.Service.Name+" "+state)
+	case v.Foreground && v.Owner != nil:
+		row("Service", fmt.Sprintf("none · vectory %s is running (pid %d), not as a service", v.Owner.Command, v.Owner.PID))
 	case v.Foreground:
-		row("Service", "none · the agent is running in the foreground")
+		row("Service", "none · the agent is running, not as a service")
 	default:
 		row("Service", "not registered · the agent isn't running")
 	}

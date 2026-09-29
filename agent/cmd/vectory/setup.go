@@ -24,12 +24,15 @@ Ctrl-C during the wait for the check-in leaves the service running (exit 130).
 Without a service manager (a container, WSL, Alpine's OpenRC), setup checks
 in once and exits 3, because nothing keeps the agent running: run it under
 your own supervisor with the command setup prints, and pass --service none
-to say you will.`,
+to say you will. Copy the whole command from Add device: it carries your
+server's CA certificate for curl (vectory-ca.pem). Never use curl -k, which
+turns certificate checks off; pass --cacert with your CA instead.`,
 	examples: []string{
-		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh",
+		"curl -fsSL --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
 		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
 		"sudo sh vectory-install.sh --create-user",
-		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 1F3C...9AB0 --create-user",
+		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> --create-user",
+		"sudo vectory setup --server https://vectory.example.com:8443 --ca-file /etc/vectory/server-ca.pem",
 		"sudo vectory setup --server https://vectory.example.com:8443 --token-file /run/secrets/vectory-token --service none",
 		"sudo vectory setup --server https://vectory.example.com:8443 --dry-run",
 	},
@@ -127,7 +130,13 @@ func defineSetup(c *cli) func() int {
 			fmt.Fprintf(c.stdout, "Vectory agent setup %s%s\n", agent.Version, map[bool]string{true: " (dry run: nothing will change)"}[*dryRun])
 			options.Progress = func(step agent.SetupStep) { printStep(c.stdout, step, color) }
 		}
-		options.Token = func() (string, error) {
+		options.Token = func() (token string, err error) {
+			// A short or mangled paste never reaches the server.
+			defer func() {
+				if err == nil {
+					err = agent.CheckEnrollmentToken(token)
+				}
+			}()
 			switch {
 			case *tokenStdin:
 				return readToken(os.Stdin)
@@ -191,9 +200,10 @@ func printStep(w io.Writer, step agent.SetupStep, color bool) {
 	if color {
 		mark = stepColors[step.Status] + mark + "\x1b[0m"
 	}
-	fmt.Fprintf(w, "%s %-12s %s\n", mark, step.Label, step.Detail)
+	// Continuation lines (a fingerprint comparison) stay under the detail.
+	fmt.Fprintf(w, "%s %-12s %s\n", mark, step.Label, agent.IndentLines(step.Detail, 18))
 	if step.Fix != "" {
-		fix := "     " + strings.Repeat(" ", 13) + step.Fix
+		fix := "     " + strings.Repeat(" ", 13) + agent.IndentLines(step.Fix, 18)
 		if color {
 			fix = "\x1b[2m" + fix + "\x1b[0m"
 		}
