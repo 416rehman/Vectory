@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
         releases_dir: data.join("releases"),
         instance_name: "Vectory".into(),
         validation_url: None,
+        ..Default::default()
     };
     let state = vectory_server::initialize(settings).await?;
     match args[2].as_str() {

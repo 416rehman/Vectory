@@ -54,6 +54,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, Actor) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Issue tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

@@ -439,7 +439,15 @@ async fn synthetic_vrl(
     let public = if value["valid"] == true {
         json!({"valid":true,"output":value.get("output").cloned().unwrap_or(Value::Null),"errors":[]})
     } else {
-        json!({"valid":false,"output":null,"errors":["VRL compilation or synthetic execution failed. Review the program and sample."]})
+        // The worker's diagnostic describes the caller's own synthetic program;
+        // accept only bounded plain text and render it as text in the dashboard.
+        let diagnostic = value["diagnostic"]
+            .as_str()
+            .filter(|d| {
+                d.len() <= 4096 && d.chars().all(|c| c == '\n' || c == '\t' || !c.is_control())
+            })
+            .map(str::to_owned);
+        json!({"valid":false,"output":null,"errors":["VRL compilation or synthetic execution failed. Review the program and sample."],"diagnostic":diagnostic})
     };
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
@@ -614,6 +622,7 @@ pub async fn detail(
             let bytes = tokio::fs::read(s.settings.releases_dir.join(&id))
                 .await
                 .map_err(|_| ApiError::missing())?;
+            // Hash the exact bytes being served; the listing cache is only an index.
             if db::hash(&bytes) != text(metadata, "sha256") {
                 return Err(ApiError::conflict("Release integrity check failed"));
             }
@@ -1181,10 +1190,7 @@ async fn releases(s: &State) -> Result<Vec<Value>> {
         {
             continue;
         }
-        let content = tokio::fs::read(&path)
-            .await
-            .map_err(|_| ApiError::missing())?;
-        if db::hash(content) != text(&e, "sha256") {
+        if release_digest(s, &path, name, &meta).await.as_deref() != Some(text(&e, "sha256")) {
             continue;
         }
         e["url"] = json!(format!("/api/v1/releases/{name}"));
@@ -1192,6 +1198,46 @@ async fn releases(s: &State) -> Result<Vec<Value>> {
         out.push(e)
     }
     Ok(out)
+}
+/// SHA-256 of a release file, recomputed only when its length or modification
+/// time changes, so listing the catalog does not reread every binary.
+async fn release_digest(
+    s: &State,
+    path: &std::path::Path,
+    name: &str,
+    meta: &std::fs::Metadata,
+) -> Option<String> {
+    let key = (meta.len(), meta.modified().ok()?);
+    if let Some((len, modified, sha)) = s.release_hashes.lock().ok()?.get(name)
+        && (*len, *modified) == key
+    {
+        return Some(sha.clone());
+    }
+    let path = path.to_owned();
+    let sha = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let mut file = std::fs::File::open(&path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; 1 << 16];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Ok(hex::encode(hasher.finalize()))
+    })
+    .await
+    .ok()?
+    .ok()?;
+    let mut cache = s.release_hashes.lock().ok()?;
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.insert(name.to_owned(), (key.0, key.1, sha.clone()));
+    Some(sha)
 }
 async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(

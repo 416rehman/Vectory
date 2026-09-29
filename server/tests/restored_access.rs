@@ -73,6 +73,7 @@ fn settings(directory: &Path) -> Settings {
         releases_dir: directory.join("releases"),
         instance_name: "Restored-access test".into(),
         validation_url: None,
+        ..Default::default()
     }
 }
 

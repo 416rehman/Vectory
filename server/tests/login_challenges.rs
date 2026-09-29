@@ -56,6 +56,7 @@ async fn fixture() -> Fixture {
         releases_dir: temp.path().join("releases"),
         instance_name: "Tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -438,6 +439,7 @@ async fn unread_auth_bodies_recover_only_through_current_cookie_without_replayin
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated unread authentication bodies".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

@@ -10,6 +10,8 @@ pub struct ApiError {
     pub status: StatusCode,
     pub code: &'static str,
     pub message: String,
+    /// Seconds a throttled client should wait; 429 responses default to 60.
+    pub retry_after: Option<u64>,
 }
 pub type Result<T> = std::result::Result<T, ApiError>;
 impl ApiError {
@@ -18,6 +20,13 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            retry_after: None,
+        }
+    }
+    pub fn throttled(code: &'static str, message: impl Into<String>, seconds: u64) -> Self {
+        Self {
+            retry_after: Some(seconds.max(1)),
+            ..Self::new(StatusCode::TOO_MANY_REQUESTS, code, message)
         }
     }
     pub fn invalid(message: impl Into<String>) -> Self {
@@ -56,9 +65,10 @@ impl IntoResponse for ApiError {
         )
             .into_response();
         if status == StatusCode::TOO_MANY_REQUESTS {
-            response
-                .headers_mut()
-                .insert("retry-after", axum::http::HeaderValue::from_static("60"));
+            response.headers_mut().insert(
+                "retry-after",
+                axum::http::HeaderValue::from(self.retry_after.unwrap_or(60)),
+            );
         }
         response
     }

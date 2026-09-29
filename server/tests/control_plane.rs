@@ -1101,6 +1101,7 @@ async fn state() -> (tempfile::TempDir, State) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Test".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -2563,7 +2564,7 @@ async fn authenticated_fleet_limiter_is_independent_of_anonymous_key_pressure() 
         )
         .unwrap();
     }
-    for i in 0..4096 {
+    for i in 0..vectory_server::ANONYMOUS_LIMIT_KEYS {
         s.limit(
             format!("login:unknown-{i}"),
             8,

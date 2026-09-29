@@ -262,6 +262,7 @@ async fn fixture() -> (
         releases_dir: temp.path().join("releases"),
         instance_name: "Synthetic compatibility fixture".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

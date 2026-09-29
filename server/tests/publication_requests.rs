@@ -45,6 +45,7 @@ async fn fixture(url: Option<String>) -> (tempfile::TempDir, State, Router, Iden
         releases_dir: temp.path().join("releases"),
         instance_name: "Publication recovery fixture".into(),
         validation_url: url,
+        ..Default::default()
     })
     .await
     .unwrap();

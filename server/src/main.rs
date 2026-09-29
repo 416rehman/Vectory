@@ -117,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         ),
         instance_name: env_or("VECTORY_INSTANCE_NAME", "Vectory"),
         validation_url,
+        trust_proxy_headers: env_or("VECTORY_TRUST_PROXY_HEADERS", "false") == "true",
     };
     let state = initialize(settings).await?;
     let scheduler = state.clone();
@@ -133,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     let listener = tokio::net::TcpListener::bind(&web_addr).await?;
-    let app = api::router(state.clone());
+    let app =
+        api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
         tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state,&agent_addr,&cert,&key)=>{result?},_=tokio::signal::ctrl_c()=>{}}

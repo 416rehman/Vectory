@@ -339,6 +339,7 @@ mod tests {
             releases_dir: temp.path().join("releases"),
             instance_name: "Test".into(),
             validation_url: None,
+            ..Default::default()
         })
         .await
         .unwrap();
