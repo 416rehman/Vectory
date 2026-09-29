@@ -61,7 +61,11 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
   let field = "id";
   let resource = "device details";
   if (method === "GET") {
-    match = route.match(/^\/devices\/([^/]+)(\/telemetry)?$/);
+    // The inventory is a list, not the device with ID "inventory".
+    match =
+      route === "/devices/inventory"
+        ? null
+        : route.match(/^\/devices\/([^/]+)(\/telemetry)?$/);
     if (match?.[2]) {
       field = "device_id";
       resource = "device metrics";
@@ -616,6 +620,8 @@ export type Device = {
   running_version?: (VersionLabel & { generation?: number }) | null;
   /** Data-plane health measured on the running version (newer servers). */
   data_plane?: DataPlaneSummary | null;
+  /** `GET /devices/{id}?include=groups` only: its groups by name, at most 100. */
+  groups?: DeviceGroups;
 };
 export type VersionLabel = {
   id: string;
@@ -630,6 +636,8 @@ export type Group = {
   device_ids: string[];
   revision?: number;
   request_id?: string;
+  /** Group lists from newer servers. */
+  member_count?: number;
 };
 export const GroupSchema = z
   .object({
@@ -933,6 +941,8 @@ export type DeploymentSummary = Omit<
   target_count: number;
   verified_count: number;
   state_counts: Record<string, number>;
+  /** Applied but not delivering (newer servers); state_counts keeps them as applied. */
+  degraded?: number;
   canary_gate?: unknown;
   created_by_name?: string | null;
   policy_id?: string | null;
@@ -1704,8 +1714,189 @@ export const PipelineLibraryPageSchema = z.object({
 });
 export type PipelineSummary = z.infer<typeof PipelineSummarySchema>;
 export type PipelineLibraryPage = z.infer<typeof PipelineLibraryPageSchema>;
+
+/* Fleet-scale reads: paged devices, member-free groups, the Overview's fleet numbers. */
+const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const rate = z.number().nonnegative().nullable();
+export const GroupRefSchema = z.object({ id: z.string(), name: z.string() });
+const groupRefs = (limit: number) =>
+  z.object({ total: count, items: z.array(GroupRefSchema).max(limit) });
+export type DeviceGroups = z.infer<ReturnType<typeof groupRefs>>;
+/** The Devices page's status filter values (healthBucket), plus revoked. */
+export const inventoryStatuses = [
+  "applied",
+  "degraded",
+  "updating",
+  "check",
+  "failed",
+  "offline",
+  "paused",
+  "unmanaged",
+  "revoked",
+] as const;
+/** Quick views; `not_on_desired` is the page's "drift". */
+export const inventoryViews = [
+  "failing",
+  "not_on_desired",
+  "offline",
+  "paused",
+  "no_telemetry",
+] as const;
+export const DeviceInventoryCountsSchema = z.object({
+  status: z.object(
+    Object.fromEntries(inventoryStatuses.map((s) => [s, count])) as Record<
+      (typeof inventoryStatuses)[number],
+      typeof count
+    >,
+  ),
+  views: z.object(
+    Object.fromEntries(inventoryViews.map((v) => [v, count])) as Record<
+      (typeof inventoryViews)[number],
+      typeof count
+    >,
+  ),
+});
+export const DeviceInventoryPageSchema = z.object({
+  items: z.array(DeviceSchema).max(100),
+  total: count,
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(100),
+  counts: DeviceInventoryCountsSchema,
+  device_groups: z.record(z.string(), groupRefs(10)),
+});
+export const DeviceInventoryIdsSchema = z.object({
+  ids: z.array(z.string()).max(10000),
+  total: count,
+  truncated: z.boolean(),
+});
+export type DeviceInventoryCounts = z.infer<typeof DeviceInventoryCountsSchema>;
+export type DeviceInventoryPage = z.infer<typeof DeviceInventoryPageSchema>;
+export type DeviceInventoryIds = z.infer<typeof DeviceInventoryIdsSchema>;
+/** `GET /groups?slim=1` rows: the group without device_ids. */
+export const GroupSummarySchema = GroupSchema.omit({ device_ids: true }).extend(
+  { member_count: count },
+);
+export const GroupMemberPageSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string().nullable(),
+        status: z.string(),
+      }),
+    )
+    .max(100),
+  total: count,
+  page: z.number().int().positive(),
+  page_size: z.number().int().min(1).max(100),
+});
+export type GroupSummary = z.infer<typeof GroupSummarySchema>;
+export type GroupMemberPage = z.infer<typeof GroupMemberPageSchema>;
+export const OverviewCountsSchema = z.object({
+  total: count,
+  health: z.object(
+    Object.fromEntries(
+      inventoryStatuses.slice(0, 8).map((s) => [s, count]),
+    ) as Record<
+      Exclude<(typeof inventoryStatuses)[number], "revoked">,
+      typeof count
+    >,
+  ),
+  connection: z.object({ online: count, offline: count, never: count }),
+  checked_in: count,
+  waiting_device: z.object({ id: z.string(), name: z.string() }).nullable(),
+  telemetry: z.object({
+    eligible: count,
+    reporting: count,
+    stale: count,
+    disabled: count,
+    events_in_per_second: rate,
+    events_in_devices: count,
+    events_out_per_second: rate,
+    events_out_devices: count,
+    errors: rate,
+    errors_per_minute: rate,
+    newest_sample_at: z.string().nullable(),
+  }),
+});
+export const OverviewAttentionDeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  cause: z.enum([
+    "degraded",
+    "failed",
+    "rolled_back",
+    "check_required",
+    "offline",
+  ]),
+  status: z.string(),
+  reason: z.string().nullable(),
+  title: z.string().nullable(),
+  fix: z.string().nullable(),
+  code: z.string().nullable(),
+  component_id: z.string().nullable(),
+  since: z.string().nullable(),
+  version_id: z.string().nullable(),
+  version_number: z.number().int().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+});
+export const OverviewBusyDeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  events_in_per_second: z.number().nonnegative(),
+  events_out_per_second: rate,
+});
+export const OverviewRunningSchema = z.object({
+  configuration_id: z.string(),
+  configuration_name: z.string().nullable(),
+  version_id: z.string(),
+  version: z.number().int().nullable(),
+  device_count: count,
+  devices_reporting: count,
+  groups: z
+    .array(z.object({ id: z.string(), name: z.string(), device_count: count }))
+    .max(3),
+  more_groups: count,
+  events_in_per_second: rate,
+  events_out_per_second: rate,
+  state: z.enum(["running", "canary", "not_delivering"]),
+  not_delivering: count,
+  canary: z
+    .object({
+      deployment_id: z.string(),
+      phase: z.enum(["observing", "measuring", "waiting"]),
+      device_count: count,
+      device_names: z.array(z.string()).max(5),
+    })
+    .nullable(),
+});
+/** What `GET /overview` adds for a fleet; `slim=1` also leaves `devices` out. */
+export const OverviewFleetSchema = z.object({
+  counts: OverviewCountsSchema,
+  attention_devices: z.array(OverviewAttentionDeviceSchema).max(20),
+  attention_devices_total: count,
+  busiest: z.array(OverviewBusyDeviceSchema).max(5),
+  running: z.array(OverviewRunningSchema).max(20),
+  running_total: count,
+});
+export type OverviewCounts = z.infer<typeof OverviewCountsSchema>;
+export type OverviewAttentionDevice = z.infer<
+  typeof OverviewAttentionDeviceSchema
+>;
+export type OverviewBusyDevice = z.infer<typeof OverviewBusyDeviceSchema>;
+export type OverviewRunning = z.infer<typeof OverviewRunningSchema>;
+export type OverviewFleet = z.infer<typeof OverviewFleetSchema>;
+
 function responseSchema(path: string, method: string): z.ZodType | undefined {
+  const slim = /(?:^|&)slim=(?:1|true)(?:&|$)/.test(path.split("?")[1] || "");
   path = path.split("?")[0];
+  if (method === "GET") {
+    if (path === "/devices/inventory") return DeviceInventoryPageSchema;
+    if (path === "/devices/inventory/ids") return DeviceInventoryIdsSchema;
+    if (/^\/groups\/[^/]+\/members$/.test(path)) return GroupMemberPageSchema;
+    if (path === "/groups" && slim) return z.array(GroupSummarySchema);
+  }
   if (path === "/policies/requests" && method === "GET")
     return PolicyRequestPageSchema;
   if (/^\/policies\/requests\/[^/]+$/.test(path) && method === "GET")
