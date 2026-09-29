@@ -453,7 +453,7 @@ try {
       await load({ document: bufferDocument(true) });
       fixture.validationError = true;
       await runCheck("unavailable");
-      await expect(tip()).toContainText("Synthetic validator unavailable");
+      await expect(tip()).toContainText("checker isn't reachable");
       expect(fixture.validations).toHaveLength(1);
       fixture.validationError = false;
       await runCheck("partial");
