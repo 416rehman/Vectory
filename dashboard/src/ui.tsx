@@ -19,6 +19,7 @@ import {
   Ban,
   CalendarClock,
   CalendarX,
+  Check,
   ChevronRight,
   CircleCheck,
   CircleDot,
@@ -27,6 +28,7 @@ import {
   CirclePlus,
   CircleX,
   Clock3,
+  Copy,
   Eye,
   Info,
   LoaderCircle,
@@ -368,6 +370,89 @@ export function IconButton({
     </Tooltip>
   ) : (
     button
+  );
+}
+
+/* ---------- Copy ---------- */
+
+/**
+ * The one copy action: the label turns into a confirmation, a status line
+ * tells screen readers, and a refusal (no clipboard access) is said out loud
+ * and, unless the caller shows its own fallback, written next to the button.
+ */
+export function CopyButton({
+  text,
+  label = "Copy",
+  copiedLabel = "Copied",
+  copiedMessage,
+  failedMessage = "Copy isn't available here. Select the text to copy it.",
+  variant = "secondary compact",
+  ariaLabel,
+  onCopied,
+  onFailed,
+}: {
+  /** Read when the button is pressed, so it can reflect the latest value. */
+  text: string | (() => string);
+  label?: string;
+  copiedLabel?: string;
+  /** What assistive tech hears after a copy; defaults to the label plus a period. */
+  copiedMessage?: string;
+  /** Empty when the caller shows its own selectable fallback (onFailed). */
+  failedMessage?: string;
+  variant?: string;
+  /** A name that says what is copied, when the visible label cannot. */
+  ariaLabel?: string;
+  onCopied?: () => void;
+  onFailed?: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <>
+      <button
+        type="button"
+        className={`button ${variant} copy-button`}
+        aria-label={ariaLabel}
+        onClick={async () => {
+          clearTimeout(timer.current);
+          let next: "copied" | "failed" = "copied";
+          try {
+            await navigator.clipboard.writeText(
+              typeof text === "function" ? text() : text,
+            );
+          } catch {
+            next = "failed";
+          }
+          setState(next);
+          if (next === "copied") onCopied?.();
+          else onFailed?.();
+          timer.current = setTimeout(
+            () => setState("idle"),
+            next === "copied" ? 2400 : 8000,
+          );
+        }}
+      >
+        {state === "copied" ? (
+          <Check size={15} aria-hidden="true" />
+        ) : (
+          <Copy size={15} aria-hidden="true" />
+        )}
+        {state === "copied" ? copiedLabel : label}
+      </button>
+      <span
+        className={
+          state === "failed" && failedMessage ? "copy-note" : "sr-only"
+        }
+        role="status"
+      >
+        {state === "copied"
+          ? (copiedMessage ?? `${copiedLabel}.`)
+          : state === "failed"
+            ? failedMessage
+            : ""}
+      </span>
+    </>
   );
 }
 

@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ArrowRight,
-  Copy,
-  Download,
-  ExternalLink,
-  ScrollText,
-} from "lucide-react";
+import { ArrowRight, Download, ExternalLink, ScrollText } from "lucide-react";
 import {
   api,
   post,
@@ -30,6 +24,7 @@ import {
   StatusBadge,
   useResource,
   type FilterChip,
+  CopyButton,
 } from "./ui";
 import {
   auditActions,
@@ -770,42 +765,30 @@ function keepListRoute(query: AuditQuery) {
 }
 
 function AuditPermalink({ route }: { route: string }) {
-  const [state, setState] = useState<"idle" | "copying" | "copied" | "manual">(
-    "idle",
-  );
+  const [manual, setManual] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
   const url = new URL(window.location.href);
   url.search = "";
   url.hash = `#/${route}`;
   const link = url.href;
   useEffect(() => {
-    if (state === "manual") {
+    if (manual) {
       input.current?.focus();
       input.current?.select();
     }
-  }, [state]);
-  async function copy() {
-    setState("copying");
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error();
-      await navigator.clipboard.writeText(link);
-      setState("copied");
-    } catch {
-      setState("manual");
-    }
-  }
+  }, [manual]);
   return (
     <div className="audit-permalink">
       <div className="audit-actions">
-        <Button
-          variant="secondary compact"
-          icon={Copy}
-          busy={state === "copying"}
-          onClick={copy}
-          aria-label="Copy event link"
-        >
-          {state === "copied" ? "Copied" : "Copy link"}
-        </Button>
+        <CopyButton
+          text={link}
+          label="Copy link"
+          ariaLabel="Copy event link"
+          copiedMessage="Event link copied."
+          failedMessage=""
+          onCopied={() => setManual(false)}
+          onFailed={() => setManual(true)}
+        />
         <a href={link} target="_blank" rel="noopener noreferrer">
           Open in new tab{" "}
           <ExternalLink
@@ -815,7 +798,7 @@ function AuditPermalink({ route }: { route: string }) {
           />
         </a>
       </div>
-      {state === "manual" && (
+      {manual && (
         <label className="audit-link-fallback">
           Event link
           <input ref={input} readOnly value={link} />
@@ -824,9 +807,6 @@ function AuditPermalink({ route }: { route: string }) {
           </span>
         </label>
       )}
-      <span className="sr-only" role="status">
-        {state === "copied" ? "Event link copied." : ""}
-      </span>
     </div>
   );
 }

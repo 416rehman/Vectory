@@ -31,15 +31,11 @@ import {
   sameAccountActionContext,
   type AccountActionContext,
 } from "./accountActionSession";
-import {
-  PasswordField,
-  Unconfirmed,
-  formatAgo,
-  formatExpiry,
-} from "./authControls";
+import { PasswordField, Unconfirmed, formatExpiry } from "./authControls";
 import { passwordIssue } from "./passwordStrength";
 import { describeAgent } from "./userAgent";
 import { Button, Modal, Spinner, useResource } from "./ui";
+import { relativeTime } from "./time";
 import "./account.css";
 import type { Notify } from "./toast";
 
@@ -555,14 +551,14 @@ export function AccountActions({
                       session.current
                         ? `Signed in until ${formatExpiry(session.expires_at)}`
                         : session.last_seen_at
-                          ? `Active ${formatAgo(session.last_seen_at)}`
+                          ? `Active ${relativeTime(session.last_seen_at)}`
                           : null,
                       session.client_address &&
                       session.client_address !== "unknown"
                         ? session.client_address
                         : null,
                       !session.current && session.created_at
-                        ? `signed in ${formatAgo(session.created_at)}`
+                        ? `signed in ${relativeTime(session.created_at)}`
                         : null,
                     ]
                       .filter(Boolean)
@@ -579,7 +575,7 @@ export function AccountActions({
                     variant="ghost compact"
                     busy={revoking === session.id}
                     disabled={!!revoking}
-                    aria-label={`Sign out ${agent.label}${session.last_seen_at ? `, active ${formatAgo(session.last_seen_at)}` : ""}`}
+                    aria-label={`Sign out ${agent.label}${session.last_seen_at ? `, active ${relativeTime(session.last_seen_at)}` : ""}`}
                     onClick={() => void revokeOne(session)}
                   >
                     Sign out

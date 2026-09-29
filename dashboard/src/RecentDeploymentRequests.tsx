@@ -16,16 +16,15 @@ import {
   Modal,
   Pagination,
   RefreshButton,
+  StatusBadge,
 } from "./ui";
 import "./deployment-recovery.css";
 
 export default function RecentDeploymentRequests({
   onClose,
-  statusLabel,
   returnFocusRef,
 }: {
   onClose(): void;
-  statusLabel(state: string): string;
   returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   const [operation, setOperation] = useState("all"),
@@ -174,12 +173,10 @@ export default function RecentDeploymentRequests({
               sortable: false,
               cell: (row) =>
                 row.deployment_status ? (
-                  <span
-                    className="control-status"
-                    data-state={row.deployment_status}
-                  >
-                    {statusLabel(row.deployment_status)}
-                  </span>
+                  <StatusBadge
+                    domain="deployment"
+                    value={row.deployment_status}
+                  />
                 ) : (
                   <span className="control-muted">Unavailable</span>
                 ),

@@ -264,14 +264,6 @@ export function NotFound({ onSearch }: { onSearch: () => void }) {
   );
 }
 
-const roleNames: Record<User["role"], string> = {
-  viewer: "Viewer",
-  editor: "Editor",
-  operator: "Operator",
-  admin: "Administrator",
-};
-export const roleName = (role: User["role"]) => roleNames[role] ?? role;
-
 /** The page frame while a lazy page loads, so the header doesn't jump. */
 export function PageSkeleton({
   title,

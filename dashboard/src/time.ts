@@ -5,13 +5,18 @@ const parse = (value?: string | number | null) => {
   return Number.isFinite(time) ? time : null;
 };
 
-/** "just now", "12s ago", "4m ago", "3h ago", "2d ago". */
+/**
+ * "just now", "12s ago", "4m ago", "3h ago", "2d ago". The one relative-time
+ * format in the app; `missing` is what a time that isn't there reads as
+ * ("never", or "Never" at the start of a cell).
+ */
 export function relativeTime(
   value?: string | number | null,
   now = Date.now(),
+  missing = "never",
 ): string {
   const time = parse(value);
-  if (time === null) return "never";
+  if (time === null) return missing;
   const seconds = Math.max(0, Math.round((now - time) / 1000));
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;

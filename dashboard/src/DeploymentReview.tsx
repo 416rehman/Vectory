@@ -1,15 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
-import {
-  Bird,
-  CalendarClock,
-  Check,
-  Clock,
-  Copy,
-  ExternalLink,
-  Rocket,
-} from "lucide-react";
+import { Bird, CalendarClock, Clock, ExternalLink, Rocket } from "lucide-react";
 
-import { Button, StatusBadge } from "./ui";
+import { Button, CopyButton, StatusBadge } from "./ui";
 import { deploymentRoute } from "./deploymentRouting";
 import type { StatusIcon, StatusTone } from "./status";
 import {
@@ -470,28 +462,12 @@ export function ConflictTable({
 
 /** Copies details for support; the page never shows raw JSON. */
 export function CopyDetails({ text }: { text: () => string }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   return (
-    <Button
+    <CopyButton
+      text={text}
+      label="Copy technical details"
+      failedMessage="Copy unavailable in this browser"
       variant="ghost compact"
-      icon={state === "copied" ? Check : Copy}
-      onClick={async () => {
-        try {
-          if (!navigator.clipboard?.writeText)
-            throw Error("Clipboard unavailable");
-          await navigator.clipboard.writeText(text());
-          setState("copied");
-          setTimeout(() => setState("idle"), 2000);
-        } catch {
-          setState("failed");
-        }
-      }}
-    >
-      {state === "copied"
-        ? "Copied"
-        : state === "failed"
-          ? "Copy unavailable in this browser"
-          : "Copy technical details"}
-    </Button>
+    />
   );
 }
