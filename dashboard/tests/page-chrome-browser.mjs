@@ -60,7 +60,7 @@ const user = {
   enabled: true,
   revision: 1,
 };
-async function open(width = 1440, colorScheme = "light") {
+async function open(width = 1440, colorScheme = "light", answers = {}) {
   const context = await browser.newContext({
     viewport: { width, height: 900 },
     colorScheme,
@@ -79,6 +79,7 @@ async function open(width = 1440, colorScheme = "light") {
       return reply({ initialized: true, version: "synthetic" });
     if (path === "/session")
       return reply({ user, csrf_token: "synthetic-csrf" });
+    if (path in answers) return reply(answers[path]);
     return reply(
       { error: { code: "UNAVAILABLE", message: "Synthetic unavailable" } },
       503,
@@ -206,6 +207,46 @@ try {
     await context.close();
   }
   results.push("Dialogs return focus to the button that opened them");
+  {
+    // A very long name wraps in the header of the dialog it opens and never
+    // pushes the close button off a phone or widens the page.
+    const long = `synthetic-group-${"x".repeat(75)}`;
+    const { context, page } = await open(375, "light", {
+      "/groups": [
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          name: long,
+          description: "Synthetic group",
+          device_ids: [],
+          revision: 1,
+        },
+      ],
+      "/devices": [],
+    });
+    await page.goto(`${origin}#/groups`);
+    await page.getByRole("button", { name: long, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    const close = dialog.getByRole("button", {
+      name: "Close dialog",
+      exact: true,
+    });
+    await expect(close).toBeVisible();
+    const fit = await page.evaluate(() => {
+      const box = document.querySelector('[role="dialog"]');
+      const button = box.querySelector('button[aria-label="Close dialog"]');
+      return {
+        page: document.documentElement.scrollWidth,
+        dialog: box.scrollWidth - box.clientWidth,
+        closeRight: button.getBoundingClientRect().right,
+      };
+    });
+    expect(fit.page, "page width").toBeLessThanOrEqual(375);
+    expect(fit.dialog, "dialog sideways overflow").toBeLessThanOrEqual(1);
+    expect(fit.closeRight, "close button in view").toBeLessThanOrEqual(375);
+    await context.close();
+  }
+  results.push("A very long name wraps in a dialog header on a phone");
 } catch (error) {
   failure = error;
 } finally {
