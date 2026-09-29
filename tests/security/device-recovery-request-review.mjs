@@ -77,7 +77,7 @@ async function nameBounds(dialog,name,view,width,theme){
  const result=await dialog.evaluate((dialog,name)=>{const nodes=[],walker=document.createTreeWalker(dialog,NodeFilter.SHOW_TEXT);while(walker.nextNode()){const node=walker.currentNode;if(!node.textContent.includes(name))continue;const scope=node.parentElement.closest('.modal-header > div,.modal-body'),bound=scope.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(node);for(const rect of range.getClientRects())nodes.push({left:rect.left,right:rect.right,scope_left:bound.left,scope_right:bound.right});}return nodes;},name);
  expect(result.length).toBeGreaterThan(0);for(const rect of result){expect(rect.left).toBeGreaterThanOrEqual(rect.scope_left-1);expect(rect.right).toBeLessThanOrEqual(rect.scope_right+1);}report.geometry.push({width,theme,view,name_fragments:result});
 }
-async function group(name,fn){if(process.env.VECTORY_DEVICE_RECOVERY_ONLY&&!process.env.VECTORY_DEVICE_RECOVERY_ONLY.split(',').some(x=>name.startsWith(x)))return;const start=Date.now();await fn();report.groups.push({name,passed:true,duration_ms:Date.now()-start});await writeFile(resolve(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('PASS '+name);}
+async function group(name,fn){if(process.env.VECTORY_DEVICE_RECOVERY_ONLY&&!process.env.VECTORY_DEVICE_RECOVERY_ONLY.split(',').some(x=>name.startsWith(x+'.')))return;const start=Date.now();await fn();report.groups.push({name,passed:true,duration_ms:Date.now()-start});await writeFile(resolve(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('PASS '+name);}
 let failure;
 try{
  report.source_sha256=await hashes();

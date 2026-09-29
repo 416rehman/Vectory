@@ -62,7 +62,7 @@ async function fixture({width=899,theme='light',name=device.name,actor=user(),in
  return{context,page,state,expand,open,reminder,session,release,close};
 }
 async function accelerate(f,method=null){await f.page.evaluate(({path,method})=>{window.fixture.accelerate=true;if(method){window.fixture.bodyPath=path;window.fixture.bodyMethod=method;}},{path:`/api/v1/devices/${device.id}${method==='POST'?'/revoke':'/revocation'}`,method});}
-async function group(name,fn){if(process.env.VECTORY_DEVICE_REVOCATION_ONLY&&!process.env.VECTORY_DEVICE_REVOCATION_ONLY.split(',').some(x=>name.startsWith(x)))return;const start=Date.now();await fn();report.groups.push({name,passed:true,duration_ms:Date.now()-start});await writeFile(resolve(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('PASS '+name);}
+async function group(name,fn){if(process.env.VECTORY_DEVICE_REVOCATION_ONLY&&!process.env.VECTORY_DEVICE_REVOCATION_ONLY.split(',').some(x=>name.startsWith(x+'.')))return;const start=Date.now();await fn();report.groups.push({name,passed:true,duration_ms:Date.now()-start});await writeFile(resolve(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('PASS '+name);}
 const review=f=>f.page.getByRole('dialog',{name:'Revoke device access',exact:true}),confirmed=f=>f.page.getByRole('dialog',{name:'Device access revoked',exact:true});
 const confirmButton=f=>review(f).getByRole('button',{name:'Revoke identity',exact:true});
 async function ready(f){await f.open();await expect(confirmButton(f)).toBeEnabled();}
