@@ -62,6 +62,7 @@ import {
   ChevronDown,
   MessageSquareText,
   Activity,
+  Radio,
 } from "lucide-react";
 import {
   api,
@@ -158,7 +159,7 @@ import ConfigurationImportDialog, {
   type ConfigurationImport,
 } from "./ConfigurationImportDialog";
 import "./editor.css";
-import PipelineNode, { ComponentIcon } from "./PipelineNode";
+import PipelineNode, { ComponentIcon, componentTitle } from "./PipelineNode";
 import PipelineCheckButton from "./PipelineCheckButton";
 import ProblemsPanel from "./ProblemsPanel";
 import {
@@ -178,6 +179,24 @@ import {
 } from "./pipelineProblems";
 import { vrlValue, withVrlValue } from "./PipelineSettings";
 import { upstreamOf } from "./sampleUpstream";
+import {
+  edgeRate,
+  formatRate,
+  liveSummary,
+  nodeLive,
+  type PipelineTelemetry,
+} from "./liveGraph";
+
+const LIVE_KEY = "vectory.editor.live";
+const readLiveSetting = () => {
+  try {
+    return localStorage.getItem(LIVE_KEY) === "on";
+  } catch {
+    return false;
+  }
+};
+/** How often live numbers refresh: about one agent check-in. */
+const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
 import { draftSummary } from "./draftSummary";
 import {
@@ -433,6 +452,11 @@ export default function Editor({
     [customComponentJSON, setCustomComponentJSON] =
       useState('{\n  "type": ""\n}'),
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
+    [live, setLive] = useState(readLiveSetting),
+    [telemetry, setTelemetry] = useState<{
+      data: PipelineTelemetry | null;
+      error: string;
+    } | null>(null),
     [publishedVersionStatus, setPublishedVersionStatus] = useState<
       "loading" | "ready" | "failed"
     >("loading"),
@@ -990,6 +1014,57 @@ export default function Editor({
     setAutoCheck(value);
     writeAutoCheck(value);
   }
+  // Live numbers for the versions devices run, refreshed about once per
+  // check-in while the canvas is visible.
+  const liveAvailable = !!publishedVersion;
+  const liveOn = live && liveAvailable && view === "canvas";
+  useEffect(() => {
+    if (!liveOn) return;
+    let alive = true,
+      timer = 0;
+    const controller = new AbortController();
+    const load = async () => {
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(load, LIVE_REFRESH_MS);
+        return;
+      }
+      try {
+        const data = await api<PipelineTelemetry>(
+          `/configurations/${id}/telemetry`,
+          { signal: controller.signal },
+        );
+        if (alive) setTelemetry({ data, error: "" });
+      } catch (failure) {
+        if (alive)
+          setTelemetry((previous) => ({
+            data: previous?.data ?? null,
+            error: (failure as Error).message,
+          }));
+      }
+      if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS);
+    };
+    void load();
+    return () => {
+      alive = false;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [liveOn, id]);
+  function toggleLive() {
+    const next = !live;
+    setLive(next);
+    if (!next) setTelemetry(null);
+    try {
+      localStorage.setItem(LIVE_KEY, next ? "on" : "off");
+    } catch {
+      /* the choice lasts for this visit */
+    }
+  }
+  const liveData = liveOn ? (telemetry?.data ?? null) : null;
+  const liveStatus =
+    liveOn && telemetry?.data
+      ? liveSummary(telemetry.data, publishedVersion?.number ?? null)
+      : null;
   const toolsRef = useRef<HTMLDetailsElement>(null);
   useDismissibleDetails(toolsRef);
   const handledDestination = useRef("");
@@ -3244,11 +3319,17 @@ export default function Editor({
       outputs = ports?.outputs || [],
       isSelected = node.id === selected || !!node.selected,
       menuOpen = graphMenu?.kind === "node" && graphMenu.id === node.id,
-      warning = connectivity.get(node.id);
+      warning = connectivity.get(node.id),
+      reading =
+        liveOn && !node.data.enrichmentTable
+          ? nodeLive(liveData, node.id)
+          : undefined;
+    const liveKey = reading === undefined ? "" : JSON.stringify(reading);
     return cachedFlowObject(
       `node:${node.id}`,
       [
         node,
+        liveKey,
         highlight,
         isSelected,
         problem.hasIssue,
@@ -3264,6 +3345,14 @@ export default function Editor({
       ],
       () => ({
         ...node,
+        ariaLabel: `${componentTitle(
+          String(node.data.component?.type || ""),
+          node.data.kind,
+          {
+            enrichmentTable: node.data.enrichmentTable,
+            implicitSource: node.data.implicitSource,
+          },
+        )} ${node.id}${problem.hasIssue ? ", has problems" : ""}`,
         domAttributes: {
           ...node.domAttributes,
           "data-connection-highlight": highlight,
@@ -3272,6 +3361,7 @@ export default function Editor({
         data: {
           ...node.data,
           ...problem,
+          live: reading,
           connectivityWarning: warning,
           editable: editable && !busy,
           openMenu: stableHandlers(`node:${node.id}`).menu,
@@ -3290,14 +3380,17 @@ export default function Editor({
         : "dimmed"
       : undefined;
     const category = nodeKinds.get(edge.source) || "transforms";
+    const rate = liveOn
+      ? edgeRate(liveData, edge.source, edge.sourceHandle || "output")
+      : undefined;
     return cachedFlowObject(
       `edge:${edge.id}`,
-      [edge, highlight, category, editable, connectionStyle],
+      [edge, highlight, category, editable, connectionStyle, rate],
       () => ({
         ...edge,
         type: "pipeline",
         className: "pipeline-connection",
-        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}`,
+        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${formatRate(rate)} events`}`,
         domAttributes: {
           ...edge.domAttributes,
           "data-connection-highlight": highlight,
@@ -3306,6 +3399,7 @@ export default function Editor({
         data: {
           editable,
           connectionStyle,
+          liveRate: rate,
           connectionHighlight: highlight,
           onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
           openMenu: stableHandlers(`edge:${edge.id}`).menu,
@@ -4307,6 +4401,59 @@ export default function Editor({
                         <Blocks size={18} aria-hidden="true" />
                         <span>Add component</span>
                       </button>
+                    </Panel>
+                  )}
+                  {liveAvailable && !connectionGesture && (
+                    <Panel position="top-right" className="editor-live-panel">
+                      <button
+                        type="button"
+                        className="editor-live-toggle"
+                        aria-pressed={liveOn}
+                        onClick={toggleLive}
+                        title={
+                          liveOn
+                            ? "Hide live numbers"
+                            : "Show events per second from devices running this pipeline"
+                        }
+                      >
+                        <Radio size={15} aria-hidden="true" />
+                        Live
+                      </button>
+                      {liveOn && (
+                        <div
+                          className="editor-live-status"
+                          role="status"
+                          data-tone={
+                            telemetry?.error && !telemetry.data
+                              ? "error"
+                              : (liveStatus?.tone ?? "loading")
+                          }
+                        >
+                          <span>
+                            {!telemetry
+                              ? "Loading live numbers…"
+                              : telemetry.error && !telemetry.data
+                                ? `Live numbers are unavailable: ${telemetry.error}`
+                                : liveStatus?.message}
+                          </span>
+                          {liveStatus?.suggestMonitoring && editable && (
+                            <button
+                              type="button"
+                              onClick={() => tool(addMonitoring)}
+                            >
+                              <Activity size={13} aria-hidden="true" />
+                              Add monitoring
+                            </button>
+                          )}
+                          {liveStatus &&
+                            liveStatus.tone !== "empty" &&
+                            !publishedDraft && (
+                              <small>
+                                Your draft has changes that aren&apos;t running.
+                              </small>
+                            )}
+                        </div>
+                      )}
                     </Panel>
                   )}
                   <Panel

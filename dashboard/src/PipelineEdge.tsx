@@ -11,7 +11,9 @@ import {
   getConnectionPath,
   normalizeConnectionStyle,
 } from "./connectionStyle";
+import { edgeWidth, formatRate } from "./liveGraph";
 import "./pipeline-edge.css";
+import "./live-graph.css";
 
 function PipelineEdge(props: EdgeProps) {
   const connectionStyle = normalizeConnectionStyle(props.data?.connectionStyle);
@@ -22,16 +24,38 @@ function PipelineEdge(props: EdgeProps) {
   const openMenu = props.data?.openMenu as
     | ((position: { x: number; y: number }, opener: HTMLElement) => void)
     | undefined;
+  // Live: undefined when off, null when no device reports this output.
+  const rate = props.data?.liveRate as number | null | undefined;
+  const live = rate !== undefined;
   return (
     <>
       <BaseEdge
         id={props.id}
         path={path}
         data-connection-style={connectionStyle}
+        className={
+          live ? (rate ? "pipeline-edge-flowing" : "pipeline-edge-idle") : ""
+        }
         markerEnd={props.markerEnd}
-        style={props.style}
+        style={
+          live ? { ...props.style, strokeWidth: edgeWidth(rate) } : props.style
+        }
         interactionWidth={26}
       />
+      {live && !props.selected && (
+        <EdgeLabelRenderer>
+          <span
+            className="pipeline-edge-rate"
+            data-empty={rate === null || undefined}
+            aria-hidden="true"
+            style={{
+              transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+            }}
+          >
+            {rate === null ? "no data" : formatRate(rate)}
+          </span>
+        </EdgeLabelRenderer>
+      )}
       {props.selected && props.data?.editable === true && (
         <g
           className="pipeline-edge-endpoints"
