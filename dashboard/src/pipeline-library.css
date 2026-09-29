@@ -442,3 +442,10 @@
     animation: none;
   }
 }
+
+/* The create dialog's start options while their file downloads. */
+.pipeline-start-loading {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-3);
+}

@@ -105,7 +105,7 @@ import {
   Modal,
   Spinner,
 } from "./ui";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 
 import PipelineSettings from "./PipelineSettings";
 import PipelineGlobals from "./PipelineGlobals";

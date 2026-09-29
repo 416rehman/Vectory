@@ -28,7 +28,7 @@ import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
-import TargetDialog from "./TargetDialog";
+import TargetDialog from "./LazyTargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
 import DeviceRevocation from "./DeviceAccessRevocation";

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -32,10 +32,10 @@ import {
   PageHeader,
   IconButton,
   SearchBox,
+  Skeleton,
   useResource,
 } from "./ui";
-import PipelineStartChoice, { type StartImport } from "./PipelineStartChoice";
-import { pipelineTemplates } from "./pipelineTemplates";
+import type { StartImport } from "./PipelineStartChoice";
 import PipelineStatus from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
@@ -54,8 +54,16 @@ import {
   type PipelineDestination,
 } from "./pipelineDestination";
 import { useCommand } from "./commands";
+import { ChunkBoundary } from "./PageBoundary";
+import { loadPage } from "./pageLoading";
 import "./pipeline-library.css";
 import type { Notify } from "./toast";
+
+// The create dialog's start options (templates, import) download when the
+// dialog is about to open: on hover or focus of Create, or when it opens.
+const loadStartChoice = () => import("./PipelineStartChoice");
+const PipelineStartChoice = lazy(() => loadPage(loadStartChoice));
+const prefetchStartChoice = () => void loadStartChoice().catch(() => {});
 
 export type PipelineLibraryQuery = {
   search: string;
@@ -199,6 +207,7 @@ export default function PipelineLibrary({
   );
   function beginCreate(trigger: HTMLButtonElement | null) {
     if (active.current) return;
+    prefetchStartChoice();
     createOpener.current = trigger;
     if (unresolved) {
       recoveryRef.current?.openSaved(
@@ -217,10 +226,9 @@ export default function PipelineLibrary({
     setOpen(true);
   }
   // The name follows what you start from until you type your own.
-  function chooseStart(id: string) {
+  function chooseStart(id: string, templateName: string) {
     setTemplate(id);
-    if (!nameEdited)
-      setName(pipelineTemplates.find((item) => item.id === id)?.title ?? "");
+    if (!nameEdited) setName(templateName);
   }
   function importStart(value: StartImport | null) {
     setImported(value);
@@ -353,6 +361,8 @@ export default function PipelineLibrary({
         {can(user, "edit") && (
           <Button
             icon={Plus}
+            onPointerEnter={prefetchStartChoice}
+            onFocus={prefetchStartChoice}
             onClick={(event) => beginCreate(event.currentTarget)}
           >
             {unresolved ? "Review saved requests" : "Create pipeline"}
@@ -485,7 +495,11 @@ export default function PipelineLibrary({
                     Clear search
                   </Button>
                 ) : query.state === "active" && can(user, "edit") ? (
-                  <Button onClick={(event) => beginCreate(event.currentTarget)}>
+                  <Button
+                    onPointerEnter={prefetchStartChoice}
+                    onFocus={prefetchStartChoice}
+                    onClick={(event) => beginCreate(event.currentTarget)}
+                  >
                     {unresolved ? "Review saved requests" : "Create pipeline"}
                   </Button>
                 ) : null}
@@ -676,13 +690,21 @@ export default function PipelineLibrary({
                 {nameError}
               </p>
             )}
-            <PipelineStartChoice
-              value={template}
-              disabled={busy || !!notice || unresolved}
-              imported={imported}
-              onChange={chooseStart}
-              onImport={importStart}
-            />
+            <ChunkBoundary
+              fallback={() => (
+                <ErrorBox message="The ways to start didn’t load. Check your connection, then reload the page." />
+              )}
+            >
+              <Suspense fallback={<StartChoiceSkeleton />}>
+                <PipelineStartChoice
+                  value={template}
+                  disabled={busy || !!notice || unresolved}
+                  imported={imported}
+                  onChange={chooseStart}
+                  onImport={importStart}
+                />
+              </Suspense>
+            </ChunkBoundary>
             <Field label="Description (optional)">
               <textarea
                 rows={2}
@@ -717,6 +739,21 @@ export default function PipelineLibrary({
           </div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+/** The start options' shape while their file downloads. */
+function StartChoiceSkeleton() {
+  return (
+    <div className="pipeline-start-loading" aria-busy="true">
+      <span className="sr-only" role="status">
+        Loading the ways to start…
+      </span>
+      <Skeleton width={180} height={14} />
+      {[0, 1, 2].map((index) => (
+        <Skeleton key={index} width="100%" height={52} radius={10} />
+      ))}
     </div>
   );
 }

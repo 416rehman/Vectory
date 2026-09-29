@@ -340,7 +340,7 @@ const server = await createServer({
       },
       load(id) {
         if (id === virtual)
-          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Fleet.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:${JSON.stringify(user)},navigate:path=>{window.location.hash='/'+path}})));`;
+          return `import React from 'react';import{createRoot}from'react-dom/client';import{Overview}from'/src/Overview.tsx';import'/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement('main',{className:'page-content'},React.createElement(Overview,{user:${JSON.stringify(user)},navigate:path=>{window.location.hash='/'+path}})));`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (req, res, next) => {

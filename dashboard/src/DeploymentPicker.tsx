@@ -8,7 +8,7 @@ import {
   type Version,
 } from "./api";
 import { Button, ErrorBox, Modal, SearchBox, Spinner, useResource } from "./ui";
-import TargetDialog from "./TargetDialog";
+import TargetDialog, { prefetchTargetDialog } from "./LazyTargetDialog";
 import { relativeTime } from "./time";
 
 type VersionItem = {
@@ -53,6 +53,8 @@ export default function DeploymentPicker({
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
+    // Choosing a version always leads to the deploy dialog: fetch it now.
+    prefetchTargetDialog();
     return () => {
       mounted.current = false;
     };
