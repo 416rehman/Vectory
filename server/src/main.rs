@@ -1,8 +1,54 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use vectory_server::{Settings, api, device, initialize, install, notifier, rollout};
+use vectory_server::{Settings, api, device, initialize, install, notifier, rollout, wake};
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
+/// Agent wake-ups: `VECTORY_AGENT_WAKE_LIMIT` parked waits at once (default
+/// 20,000; 0 turns them off and agents only poll).
+fn wake_options(value: Option<String>) -> anyhow::Result<wake::Options> {
+    let mut options = wake::Options::default();
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        options.limit = value
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|limit| *limit <= 100_000)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VECTORY_AGENT_WAKE_LIMIT must be a whole number from 0 (off) to 100000"
+                )
+            })?;
+    }
+    Ok(options)
+}
+
+/// Ctrl-C, or SIGTERM from a service manager or `docker stop`.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Answers every parked wait (`changed:false`) and gives the answers a moment
+/// to leave, so agents fall back to their schedule instead of seeing a reset.
+async fn release_waits(state: &vectory_server::State) {
+    let answered = state.wake.close();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while state.wake.parked() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    if answered > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tracing::info!(answered, "answered parked agent waits before stopping");
+    }
 }
 
 /// An optional public origin from the environment, normalized, or an error
@@ -162,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
         agent_port,
         agent_certificate_pem,
         outbound: Default::default(),
+        wake: wake_options(env::var("VECTORY_AGENT_WAKE_LIMIT").ok())?,
     };
     let state = initialize(settings).await?;
     tracing::info!(
@@ -173,7 +220,8 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         for tick in 0u64.. {
             interval.tick().await;
-            if let Err(e) = rollout::tick(&scheduler).await {
+            // A released wave wakes its agents once the tick has committed.
+            if let Err(e) = wake::changes(&scheduler, rollout::tick(&scheduler)).await {
                 tracing::error!(
                     code = e.code,
                     "scheduler transaction failed; last valid desired state retained"
@@ -197,15 +245,13 @@ async fn main() -> anyhow::Result<()> {
         api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
-        tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state,&agent_addr,&cert,&key)=>{result?},_=tokio::signal::ctrl_c()=>{}}
+        tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state.clone(),&agent_addr,&cert,&key)=>{result?},_=shutdown_signal()=>{release_waits(&state).await}}
     } else {
         tracing::warn!(
             "Explicit development mode: agent listener disabled without TLS certificate and key"
         );
         axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
+            .with_graceful_shutdown(shutdown_signal())
             .await?;
     }
     Ok(())
@@ -213,7 +259,25 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_agent_bind_address, check_http_bind_address, validation_url_for_mode};
+    use super::{
+        check_agent_bind_address, check_http_bind_address, validation_url_for_mode, wake_options,
+    };
+
+    #[test]
+    fn wake_limit_defaults_and_bounds() {
+        let default = wake_options(None).unwrap();
+        assert_eq!(
+            (default.limit, default.hold),
+            (20_000, std::time::Duration::from_secs(25))
+        );
+        assert_eq!(wake_options(Some(" ".into())).unwrap().limit, 20_000);
+        assert_eq!(wake_options(Some("0".into())).unwrap().limit, 0);
+        assert_eq!(wake_options(Some(" 5000 ".into())).unwrap().limit, 5000);
+        for value in ["-1", "100001", "many", "1e4"] {
+            let error = wake_options(Some(value.into())).unwrap_err();
+            assert!(error.to_string().contains("VECTORY_AGENT_WAKE_LIMIT"));
+        }
+    }
 
     #[test]
     fn production_requires_configured_isolated_validator() {
