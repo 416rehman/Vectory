@@ -21,7 +21,6 @@ Build the server first (`cargo build --manifest-path server/Cargo.toml --bin vec
 | `audit-order-review.mjs` | Durable audit chronology and migration boundaries. | `VECTORY_AUDIT_ORDER_SERVER` | `VECTORY_AUDIT_ORDER_EVIDENCE` | dashboard job |
 | `audit-review.mjs` | Bounded audit queries and the private snapshot export lifecycle. | `VECTORY_AUDIT_SERVER` | `VECTORY_AUDIT_EVIDENCE` | dashboard job |
 | `protocol_test.go` | Adversarial TLS and protocol checks on a native server with an ephemeral CA: `VECTORY_SECURITY_SERVER=$PWD/server/target/debug/vectory-server go test -v tests/security/protocol_test.go`. Skips without the variable. | `VECTORY_SECURITY_SERVER` | none | server job |
-| `test_backup.py` | `deploy/backup.py`: a live WAL backup restores the database and keys with the generation intact, and a tampered backup is rejected. `python3 -m unittest discover -s tests/security -p 'test_*.py' -v` | none | none | operational job |
 
 The default server is `server/target/debug/vectory-server` (with `.exe` on Windows). Add or change a projected field in the server and `library-review.mjs`, `deployment-history-review.mjs` or `issue-review.mjs` fails until its allowlist lists the new field; that is deliberate. When you add a field, add its type, its maximum length and a marker-based assertion that no secret can reach it, not only its name.
 
@@ -49,6 +48,15 @@ Four reviews of the device page and its dialogs, run against the real app under 
 | `device-recovery-request-review.mjs` | Authorize device recovery shows a token once, keeps an exact cancellation identity through lost replies, reloads and storage failures, and never resends creation (17 groups). | `VECTORY_DEVICE_RECOVERY_ONLY`, `VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT` | 16 of 17: group 16 fails, see below |
 
 The two failing groups are a real defect, not stale expectations. With a 90-character unbroken device name the page scrolls sideways at 899 px wide (`scrollWidth` 910, and 900 for an 89-character name) and far more at 375 px, because the breadcrumb's `<nav>` is a flex item without `min-width: 0` and so never shrinks to the ellipsis that `.page-breadcrumb [aria-current="page"]` already provides. Reproduce with `VECTORY_DEVICE_REVOCATION_ONLY=15 node tests/security/device-revocation-review.mjs`. Add the four reviews to the dashboard job (with `working-directory: .` and their output variables under `artifacts/`) once that is fixed. Rerun them after any change to `DeviceDetail.tsx`, `TargetDialog.tsx` or the recovery dialogs: they name buttons, dialogs and copy exactly.
+
+## Python unit tests (operational job)
+
+`python3 -m unittest discover -s tests/security -p 'test_*.py' -v` runs every `test_*.py` here. They read source and use temporary state; they start no server.
+
+| Script | What it proves |
+| --- | --- |
+| `test_backup.py` | `deploy/backup.py`: a live WAL backup restores the database and keys with the generation intact, and a tampered backup is rejected. |
+| `test_vrl_function_lists.py` | The server and the agent agree on which VRL functions reach outside an event (the server requires a full-mode device for them, the agent's restricted mode refuses them). Added on the integration branch. |
 
 ## Helper
 
