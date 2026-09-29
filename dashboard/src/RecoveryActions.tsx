@@ -60,14 +60,12 @@ export function DeviceRetryAction(props: DeviceRecoveryProps) {
 export function DeviceIdentityRecovery({
   device,
   user,
-  onDone,
 }: DeviceRecoveryProps) {
   return (
     <DeviceRecoveryAuthorization
       key={`${user.id}:${user.role}:${device.id}:${device.name}`}
       device={device}
       user={user}
-      onDone={onDone}
     />
   );
 }

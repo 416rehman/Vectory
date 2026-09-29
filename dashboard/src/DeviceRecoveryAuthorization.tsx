@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Download, KeyRound } from "lucide-react";
+import { Download, KeyRound } from "lucide-react";
 import {
   api,
   can,
@@ -9,7 +9,7 @@ import {
   type Device,
   type User,
 } from "./api";
-import { Button, ErrorBox, Modal } from "./ui";
+import { Button, CopyButton, ErrorBox, Modal } from "./ui";
 import DocLink from "./DocLink";
 import {
   DeviceRecoveryCreateResultSchema,
@@ -39,11 +39,9 @@ type Active = { controller: AbortController; epoch: number };
 export default function DeviceRecoveryAuthorization({
   device,
   user,
-  onDone,
 }: {
   device: Device;
   user: User;
-  onDone(message: string): void;
 }) {
   const { operations, errors } = useDeviceRecoveryRequests(user.id, device.id);
   const [review, setReview] = useState(false);
@@ -71,8 +69,6 @@ export default function DeviceRecoveryAuthorization({
   const context = JSON.stringify([user.id, user.role, device.id, device.name]);
   const owner = useRef(context);
   owner.current = context;
-  const notify = useRef(onDone);
-  notify.current = onDone;
   const allowed = () =>
     mounted.current && owner.current === context && can(user, "admin");
   const current = (request: Active) =>
@@ -347,19 +343,10 @@ export default function DeviceRecoveryAuthorization({
     setError("");
     setShowSecret(true);
   }
-  async function copy() {
-    if (!allowed() || !ready) return;
-    const epoch = getSessionEpoch();
-    try {
-      await navigator.clipboard.writeText(ready.token);
-      if (allowed() && epoch === getSessionEpoch())
-        notify.current("Recovery token copied.");
-    } catch {
-      if (allowed() && epoch === getSessionEpoch())
-        setError(
-          "Select and copy the token manually; clipboard access is unavailable.",
-        );
-    }
+  /** The token for Copy; throws once this page may no longer show it. */
+  function secret() {
+    if (!allowed() || !ready) throw Error("The token is no longer shown here.");
+    return ready.token;
   }
   if (!visible) return null;
   return (
@@ -638,13 +625,11 @@ export default function DeviceRecoveryAuthorization({
             <code>{ready?.token}</code>
           </div>
           <div className="control-inline-actions control-section-space">
-            <Button
-              variant="secondary compact"
-              icon={Copy}
-              onClick={() => void copy()}
-            >
-              Copy token
-            </Button>
+            <CopyButton
+              text={secret}
+              label="Copy token"
+              failedMessage="Copy isn't available here. Select the token to copy it."
+            />
             <Button
               variant="secondary compact"
               icon={Download}

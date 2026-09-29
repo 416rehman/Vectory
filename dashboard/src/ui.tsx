@@ -467,6 +467,52 @@ export function CopyButton({
   );
 }
 
+/**
+ * When the clipboard refuses a copy that has no button of its own (the
+ * canvas copies steps from its toolbar or a shortcut), the text waits here,
+ * selected, for the person to copy it themselves.
+ */
+export function CopyFallbackDialog({
+  text,
+  label,
+  subject,
+  onClose,
+}: {
+  text: string;
+  /** Names the text field, e.g. "Vector YAML for 2 steps". */
+  label: string;
+  /** What the text is, as the sentence's subject: "The YAML". */
+  subject: string;
+  onClose: () => void;
+}) {
+  const keys = isMacPlatform() ? "⌘C" : "Ctrl+C";
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Couldn’t copy"
+      description={`This browser blocks clipboard access on this address. ${subject} is selected below. Press ${keys} to copy it.`}
+      className="copy-fallback"
+    >
+      <div className="modal-body">
+        <textarea
+          className="copy-fallback-text"
+          readOnly
+          spellCheck={false}
+          value={text}
+          rows={Math.min(14, Math.max(4, text.split("\n").length))}
+          aria-label={label}
+          data-autofocus
+          onFocus={(event) => event.currentTarget.select()}
+        />
+      </div>
+      <div className="modal-footer">
+        <Button onClick={onClose}>Done</Button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ---------- Keyboard hints ---------- */
 
 export function isMacPlatform() {

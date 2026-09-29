@@ -579,6 +579,11 @@ try {
       expect(yaml).toContain("branch:");
       expect(yaml).toContain("sample:");
       expect(yaml).not.toContain("output:");
+      await expect(
+        page
+          .locator(".toast-item")
+          .filter({ hasText: "Copied 2 steps as Vector YAML." }),
+      ).toHaveAttribute("data-tone", "success");
       // Ctrl+V pastes them next to the originals, reading the same source.
       await node("branch").focus();
       await page.keyboard.press("ControlOrMeta+v");
@@ -601,6 +606,61 @@ try {
       await expect(page.locator(".react-flow__node")).toHaveCount(7);
       await page.keyboard.press("ControlOrMeta+z");
       await expect(page.locator(".react-flow__node")).toHaveCount(9);
+    },
+  );
+
+  await check(
+    "Copy YAML says Copied only when the browser copied; otherwise it hands over the YAML selected",
+    async () => {
+      for (const mode of ["refused", "missing"]) {
+        await load();
+        // A plain-HTTP address has no clipboard API; a denied permission rejects.
+        await page.evaluate((mode) => {
+          Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value:
+              mode === "missing"
+                ? undefined
+                : {
+                    writeText: () =>
+                      Promise.reject(
+                        new DOMException("Synthetic denial", "NotAllowedError"),
+                      ),
+                  },
+          });
+        }, mode);
+        await node("branch").click();
+        await node("sample").click({ modifiers: ["Control"] });
+        const toolbar = page.getByRole("toolbar", { name: "Selected steps" });
+        await toolbar.getByRole("button", { name: "Copy YAML" }).click();
+        const dialog = page.getByRole("dialog", { name: "Couldn’t copy" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText(
+          "This browser blocks clipboard access on this address. The YAML is selected below.",
+        );
+        const text = dialog.getByRole("textbox", {
+          name: "Vector YAML for 2 steps",
+        });
+        await expect(text).toBeFocused();
+        const selection = await text.evaluate((field) => ({
+          value: field.value,
+          start: field.selectionStart,
+          end: field.selectionEnd,
+          readOnly: field.readOnly,
+        }));
+        expect(selection.value).toContain("branch:");
+        expect(selection.value).toContain("sample:");
+        expect(selection.readOnly).toBe(true);
+        expect([selection.start, selection.end]).toEqual([
+          0,
+          selection.value.length,
+        ]);
+        await expect(
+          page.locator(".toast-item").filter({ hasText: "Copied" }),
+        ).toHaveCount(0);
+        await dialog.getByRole("button", { name: "Done", exact: true }).click();
+        await expect(dialog).toHaveCount(0);
+      }
     },
   );
 
@@ -783,7 +843,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(12);
+  expect(results).toHaveLength(13);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {
