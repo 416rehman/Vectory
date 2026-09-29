@@ -906,6 +906,70 @@ async fn activity_links_use_existing_typed_identity_and_immutable_pipeline_paren
 }
 
 #[tokio::test]
+async fn deployment_events_are_named_after_what_they_deployed() {
+    let (_temp, s, app, a) = fixture().await;
+    let config = db::id();
+    let version = db::id();
+    let policy = db::id();
+    let (pipeline_rollout, saved_settings, adhoc_settings) = (db::id(), db::id(), db::id());
+    let device = db::id();
+    add_device(&s, &device, "edge-fra-01").await;
+    insert(
+        &s,
+        "configuration",
+        &json!({"id":config,"name":"Edge syslog processing"}),
+    )
+    .await;
+    insert(
+        &s,
+        "version",
+        &json!({"id":version,"configuration_id":config,"number":3}),
+    )
+    .await;
+    insert(&s, "policy", &json!({"id":policy,"name":"Maintenance"})).await;
+    insert(
+        &s,
+        "deployment",
+        &json!({"id":pipeline_rollout,"version_id":version,"status":"failed"}),
+    )
+    .await;
+    insert(&s,"deployment",&json!({"id":saved_settings,"policy_id":policy,"policy":{"heartbeat_seconds":15,"sync_paused":true,"telemetry_enabled":true},"status":"completed"})).await;
+    insert(&s,"deployment",&json!({"id":adhoc_settings,"policy":{"heartbeat_seconds":15,"sync_paused":false,"telemetry_enabled":true},"status":"completed"})).await;
+    let rows = [
+        ("deployment.create", pipeline_rollout.clone()),
+        ("deployment.release", format!("{pipeline_rollout}:{device}")),
+        ("deployment.create", saved_settings.clone()),
+        ("deployment.create", adhoc_settings.clone()),
+    ];
+    for (n, (action, target)) in rows.iter().enumerate() {
+        let mut value = event(n, &a.id, target);
+        value["action"] = json!(action);
+        value["outcome"] = json!("success");
+        insert(&s, "audit", &value).await;
+    }
+    let history = get(&app, "/api/v1/audit/history?page_size=50", &a).await;
+    let mut names: Vec<&str> = history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["target_name"].as_str().unwrap_or(""))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "Agent settings",
+            "Agent settings: Maintenance",
+            "Edge syslog processing v3",
+            "Edge syslog processing v3",
+        ]
+    );
+    // Searching for the pipeline finds its rollouts, not only pipeline edits.
+    let found = get(&app, "/api/v1/audit/history?search=edge%20syslog", &a).await;
+    assert_eq!(found["total"], 2);
+}
+
+#[tokio::test]
 async fn scope_separates_sign_in_activity_from_changes() {
     let (_temp, s, app, admin) = fixture().await;
     let mut tx = s.pool.begin().await.unwrap();

@@ -6231,6 +6231,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "configuration_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "configuration_name": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 120
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -18437,6 +18452,18 @@
               }
             ],
             "description": "First sanitized diagnostic the agent reported for this exact candidate, when available."
+          },
+          "failure_stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z_]{1,32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Apply stage the agent reported for this exact candidate's failure (for example validation, reload or rollback), when available. Omitted by older servers."
           },
           "check_in_seconds": {
             "anyOf": [

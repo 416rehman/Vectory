@@ -310,7 +310,10 @@ fn base(details: bool) -> String {
                 COALESCE(substr(tu.name,1,120),substr(td.name,1,256),
                     CASE WHEN json_type(c.data,'$.name')='text' THEN substr(json_extract(c.data,'$.name'),1,120) END,
                     CASE WHEN json_type(other.data,'$.name')='text' THEN substr(json_extract(other.data,'$.name'),1,120) END,
-                    CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END) AS target_name,
+                    CASE WHEN json_type(et.data,'$.name')='text' THEN substr(json_extract(et.data,'$.name'),1,120) END,
+                    CASE WHEN json_type(dc.data,'$.name')='text' THEN substr(json_extract(dc.data,'$.name'),1,120)||CASE WHEN json_type(dv.data,'$.number')='integer' THEN ' v'||json_extract(dv.data,'$.number') ELSE '' END END,
+                    CASE WHEN json_type(dp.data,'$.name')='text' THEN 'Agent settings: '||substr(json_extract(dp.data,'$.name'),1,100) END,
+                    CASE WHEN a.target_kind='deployment' AND json_type(other.data,'$.policy')='object' THEN 'Agent settings' END) AS target_name,
                 CASE WHEN length(a.explicit_device)=36 THEN a.explicit_device
                      WHEN a.action='deployment.release' AND {a_compound} THEN substr(a.target,38,36)
                      WHEN a.target_kind='device' AND length(a.linked_target)=36 THEN a.linked_target
@@ -323,6 +326,9 @@ fn base(details: bool) -> String {
             LEFT JOIN records c ON c.kind='configuration' AND c.id={configuration_target}
             LEFT JOIN records other ON other.kind=a.target_kind AND other.id=a.linked_target
             LEFT JOIN enrollment_tokens et ON a.target_kind='token' AND et.id=a.linked_target
+            LEFT JOIN records dv ON a.target_kind='deployment' AND dv.kind='version' AND dv.id=json_extract(other.data,'$.version_id')
+            LEFT JOIN records dc ON a.target_kind='deployment' AND dc.kind='configuration' AND dc.id=json_extract(dv.data,'$.configuration_id')
+            LEFT JOIN records dp ON a.target_kind='deployment' AND dp.kind='policy' AND dp.id=json_extract(other.data,'$.policy_id')
         )",
         text("actor", 128),
         text("action", 128),
