@@ -17,7 +17,8 @@ import {
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
-import { api, APIError, can, type Audit, type Device, type User } from "./api";
+import { api, APIError, type Audit, type Device, type User } from "./api";
+import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import { runCommand } from "./commands";
@@ -242,7 +243,7 @@ export function Overview({
     null,
   );
   const summary = useTelemetrySummary(!!data && live.length > 0, interval);
-  const operate = can(user, "operate");
+  const operate = roleAllows(user, "operate");
   const now = Date.now();
   const steps = data
     ? checklist({
@@ -440,8 +441,8 @@ function Checklist({
 }) {
   const done = steps.filter((step) => step.done).length;
   const current = steps.find((step) => !step.done)?.id;
-  const operate = can(user, "operate"),
-    edit = can(user, "edit");
+  const operate = roleAllows(user, "operate"),
+    edit = roleAllows(user, "edit");
   const waiting = live.find((device) => !device.last_seen);
   const checkedIn = live.filter((device) => !!device.last_seen).length;
   const applied = data.devices_on_desired ?? 0;
@@ -572,7 +573,7 @@ function Checklist({
           );
         })}
       </ol>
-      {!can(user, "operate") && !can(user, "edit") && (
+      {!roleAllows(user, "operate") && !roleAllows(user, "edit") && (
         <p className="overview-checklist-note">
           Viewers can follow progress here. An operator or editor completes
           these steps.
@@ -942,7 +943,8 @@ function NeedsYou({
                   </p>
                 </div>
                 <div className="overview-attention-actions">
-                  {group.cause === "unmanaged" && can(user, "operate") ? (
+                  {group.cause === "unmanaged" &&
+                  roleAllows(user, "operate") ? (
                     <a
                       className="button secondary compact"
                       href="#/configurations"
@@ -1130,7 +1132,7 @@ function Rollouts({
       ) : (
         <div className="overview-empty-row">
           <p>No rollouts in progress.</p>
-          {can(user, "operate") && (
+          {roleAllows(user, "operate") && (
             <a className="overview-inline-link" href="#/configurations">
               Deploy a pipeline
             </a>

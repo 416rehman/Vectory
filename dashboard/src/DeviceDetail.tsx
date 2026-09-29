@@ -13,7 +13,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  can,
   type AuditHistoryPage,
   type Configuration,
   type Device,
@@ -23,6 +22,7 @@ import {
   type User,
   type Version,
 } from "./api";
+import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
 import AgentUpgrade from "./AgentUpgrade";
@@ -568,7 +568,8 @@ export default function DeviceDetail({
   const applying = device?.status === "applying";
   useEffect(() => setFast(!!applying), [applying]);
   const [policy, setPolicy] = useState<Policy | null>(null);
-  const canReviewPolicy = can(user, "operate") && device?.status !== "revoked";
+  const canReviewPolicy =
+    roleAllows(user, "operate") && device?.status !== "revoked";
   useEffect(() => {
     if (!device || !canReviewPolicy) setPolicy(null);
   }, [device, canReviewPolicy]);
@@ -694,7 +695,7 @@ export default function DeviceDetail({
     version.data?.configuration_id ||
     device.desired_version?.configuration_id ||
     null;
-  const operate = can(user, "operate");
+  const operate = roleAllows(user, "operate");
   const labels = Object.entries(device.labels || {});
   return (
     <div className="device-page">
@@ -1031,7 +1032,7 @@ export default function DeviceDetail({
               </p>
             ) : null}
           </section>
-          {(operate || can(user, "admin")) && (
+          {(operate || roleAllows(user, "admin")) && (
             <Disclosure
               summary="Sync, recovery and access"
               className="device-disclosure device-manage"

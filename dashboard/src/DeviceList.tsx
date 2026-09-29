@@ -9,7 +9,8 @@ import {
   Server,
   type LucideIcon,
 } from "lucide-react";
-import { can, type Device, type Group, type Policy, type User } from "./api";
+import { type Device, type Group, type Policy, type User } from "./api";
+import { roleAllows } from "./roleAccess";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import { sortTableRows } from "./dataTableModel";
 import {
@@ -128,7 +129,7 @@ export default function DeviceList({
   const [query, update, reset] = useHashQuery(listDefaults);
   const [selected, setSelected] = useState<string[]>([]);
   const [policy, setPolicy] = useState<Policy | null>(null);
-  const operate = can(user, "operate");
+  const operate = roleAllows(user, "operate");
   const now = Date.now();
   const view = isDeviceView(query.view) ? (query.view as DeviceView) : "";
   const memberships = useMemo(() => groupsByDevice(groups.data), [groups.data]);
