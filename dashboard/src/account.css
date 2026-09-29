@@ -1,10 +1,7 @@
 /* People & security: your account, workspace access and their dialogs. */
-.account-page {
-  display: grid;
-  gap: 20px;
-}
-.account-page > .control-card + .control-card {
-  margin-top: 0;
+/* The page header keeps the shared spacing; only the body sections stack. */
+.account-page > :where(:not(.page-context, .page-heading, .page-tabs)) + * {
+  margin-top: 20px;
 }
 
 /* Your account */
