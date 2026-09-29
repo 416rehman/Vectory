@@ -32,6 +32,15 @@ describe("pipeline templates", () => {
     expect(s3.encoding.codec).toBe("json");
   });
 
+  it("ships the synthetic example with exactly the monitoring pair Add monitoring makes", () => {
+    const example = pipelineTemplate("synthetic-demo")!.config;
+    expect(withMonitoring(example)).toBeNull();
+    const bare = structuredClone(example);
+    delete bare.sources[MONITORING_SOURCE];
+    delete bare.sinks[MONITORING_SINK];
+    expect(withMonitoring(bare)).toEqual(example);
+  });
+
   it("adds monitoring without touching existing steps", () => {
     const base = structuredClone(pipelineTemplate("syslog-loki")!.config);
     const next = withMonitoring(base)!;

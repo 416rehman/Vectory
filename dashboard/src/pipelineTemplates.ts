@@ -19,10 +19,16 @@ export const pipelineTemplates: readonly PipelineTemplate[] = [
   {
     id: "synthetic-demo",
     title: "Synthetic demo",
-    summary: "Generated logs → add fields → console",
+    summary: "Generated logs → add fields → console, with monitoring",
     needs: ["Nothing. It runs anywhere and sends no data off the device."],
+    // With Vectory's monitoring pair (see withMonitoring): delivery health
+    // is measured from the first deploy, and restricted mode runs this
+    // loopback exporter without a host allowance.
     config: {
-      sources: { demo: { type: "demo_logs", format: "json", interval: 1 } },
+      sources: {
+        demo: { type: "demo_logs", format: "json", interval: 1 },
+        vectory_internal_metrics: { type: "internal_metrics" },
+      },
       transforms: {
         enrich: {
           type: "remap",
@@ -36,6 +42,11 @@ export const pipelineTemplates: readonly PipelineTemplate[] = [
           inputs: ["enrich"],
           encoding: { codec: "json" },
           target: "stderr",
+        },
+        vectory_metrics_exporter: {
+          type: "prometheus_exporter",
+          inputs: ["vectory_internal_metrics"],
+          address: "127.0.0.1:9598",
         },
       },
     },
