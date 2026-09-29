@@ -494,6 +494,19 @@ a.device-version-name:hover {
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
+.device-delivery-unmeasured {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.device-delivery-unmeasured svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
 .device-pipeline .control-inline-actions,
 .device-pipeline .control-section-space {
   margin-top: var(--space-3);

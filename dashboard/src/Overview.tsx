@@ -36,20 +36,25 @@ import {
 import {
   checklist,
   countLabel,
+  deliveryUnmeasured,
   fleetTelemetry,
   formatRate,
   healthCounts,
   healthLabels,
   completeSeries,
   healthOrder,
+  monitoringTarget,
   niceCeiling,
   present,
+  quietSummary,
   rolloutProgress,
+  unmanagedDetail,
   type ChecklistStep,
   type FleetDeviceRate,
   type HealthBucket,
   type RolloutProgress,
 } from "./overviewModel";
+import { pipelineRoute } from "./SelectedDevice";
 import {
   activityTone,
   describeActivity,
@@ -641,6 +646,8 @@ function KpiTiles({
     data.devices_on_desired ??
     live.filter((device) => device.status === "verified").length;
   const unmanaged = total - managed;
+  // Applied devices without metrics: nothing says their events arrive.
+  const unmeasured = deliveryUnmeasured(live);
   const paused = (data.rollouts || []).filter(
     (r) => r.status === "paused",
   ).length;
@@ -702,6 +709,9 @@ function KpiTiles({
               : `${(managed - onDesired).toLocaleString()} not yet verified`}
           {managed > 0 && unmanaged > 0
             ? ` · ${unmanaged.toLocaleString()} without a pipeline`
+            : ""}
+          {unmeasured > 0
+            ? ` · Delivery health: not measured${unmeasured < onDesired ? ` on ${countLabel(unmeasured, "device")}` : ""}`
             : ""}
         </span>
       </a>
@@ -855,7 +865,12 @@ function pipelineName(group: {
     ? `${group.configuration_name} v${group.version_number}`
     : group.configuration_name;
 }
-function attentionCopy(group: AttentionGroup, now: number) {
+function attentionCopy(
+  group: AttentionGroup,
+  now: number,
+  /** What runs on devices without a pipeline (unmanagedDetail). */
+  unmanaged: string,
+) {
   const devices = countLabel(group.count, "device");
   const pipeline = pipelineName(group);
   const since = group.since ? Date.parse(group.since) : NaN;
@@ -913,7 +928,7 @@ function attentionCopy(group: AttentionGroup, now: number) {
     case "unmanaged":
       return {
         title: `${devices} without a pipeline`,
-        detail: "Existing local workloads keep running until you deploy one.",
+        detail: unmanaged,
       };
   }
 }
@@ -953,10 +968,16 @@ function NeedsYou({
   ]
     .filter(Boolean)
     .join(", ");
+  const unmanaged = unmanagedDetail(live);
   return (
     <Card
       title="Needs you"
-      subtitle={summary || (groups.length ? "Nothing is failing" : undefined)}
+      subtitle={
+        summary ||
+        (groups.length
+          ? quietSummary(deliveryUnmeasured(live, now))
+          : undefined)
+      }
       className="needs-you"
       action={
         data.issues_open > 0 ? (
@@ -969,7 +990,7 @@ function NeedsYou({
           <StoppedRolloutItems items={stopped} />
           {groups.map((group) => {
             const Icon = severityIcons[group.cause];
-            const { title, detail } = attentionCopy(group, now)!;
+            const { title, detail } = attentionCopy(group, now, unmanaged)!;
             const bucket = causeBucket[group.cause];
             const filter = new URLSearchParams();
             if (bucket) filter.set("status", bucket);
@@ -1269,6 +1290,7 @@ function FleetThroughput({
           stale={local.stale}
           disabled={summary?.metricsDisabled ?? local.disabled}
           withoutEndpoint={summary?.withoutEndpoint ?? null}
+          target={monitoringTarget(live, now)}
         />
       ) : (
         <>
@@ -1357,10 +1379,13 @@ function MetricsHowTo({
   stale,
   disabled,
   withoutEndpoint,
+  target,
 }: {
   stale: number;
   disabled: number;
   withoutEndpoint: number | null;
+  /** The pipeline most devices without metrics run. */
+  target: { id: string; name: string } | null;
 }) {
   const reasons = [
     stale &&
@@ -1368,7 +1393,7 @@ function MetricsHowTo({
     disabled &&
       `${countLabel(disabled, "device")} ${disabled === 1 ? "has" : "have"} metrics turned off in Agent settings.`,
     withoutEndpoint &&
-      `${countLabel(withoutEndpoint, "agent")} ${withoutEndpoint === 1 ? "has" : "have"} no metrics endpoint configured.`,
+      `${countLabel(withoutEndpoint, "device")} ${withoutEndpoint === 1 ? "runs a pipeline" : "run pipelines"} without a metrics exporter.`,
   ].filter(Boolean) as string[];
   return (
     <div className="overview-throughput-howto">
@@ -1384,23 +1409,33 @@ function MetricsHowTo({
         </p>
         <ol>
           <li>
-            Add an <code>internal_metrics</code> source and a{" "}
-            <code>prometheus_exporter</code> sink on <code>127.0.0.1:9598</code>{" "}
-            to the pipeline.
+            Add monitoring to the pipeline: an <code>internal_metrics</code>{" "}
+            source feeding a <code>prometheus_exporter</code> on{" "}
+            <code>127.0.0.1:9598</code>.
           </li>
           <li>
-            Point the agent at it with{" "}
-            <code>
-              vectory configure-metrics --metrics-url
-              http://127.0.0.1:9598/metrics
-            </code>
-            .
+            Deploy the new version. The agent finds the exporter by itself;
+            nothing changes on the host.
           </li>
-          <li>
-            Turn on <strong>Collect operational metrics</strong> in{" "}
-            <a href="#/policies">Agent settings</a>.
-          </li>
+          {disabled > 0 && (
+            <li>
+              Turn on <strong>Collect operational metrics</strong> in{" "}
+              <a href="#/policies">Agent settings</a>.
+            </li>
+          )}
         </ol>
+        {target && (
+          <a
+            className="button secondary compact"
+            href={`#/${pipelineRoute(target.id, undefined, { panel: "tools" })}`}
+          >
+            Add monitoring to {target.name}
+          </a>
+        )}
+        <p>
+          An exporter elsewhere? Point the agent at it with{" "}
+          <code>vectory configure-metrics --metrics-url URL</code>.
+        </p>
         <DocLink topic="telemetry" section="enable-real-metrics">
           Enable metrics step by step
         </DocLink>
