@@ -42,7 +42,7 @@ services:
     networks: [private, validation]
     depends_on:
       validator:
-        condition: service_started
+        condition: service_healthy
   validator:
     build:
       context: ..
@@ -60,6 +60,18 @@ services:
     pids_limit: 64
     environment:
       VECTORY_VALIDATOR_ISOLATED: "true"
+    # GET /health answers only after the validator has confirmed the pinned
+    # Vector. The image has bash and grep but no curl.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /health HTTP/1.0\r\n\r\n' >&3 && grep -q '"status":"ok"' <&3
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     networks: [validation]
   proxy:
     image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
