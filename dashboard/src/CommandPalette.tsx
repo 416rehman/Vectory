@@ -268,7 +268,8 @@ export default function CommandPalette({
         key: "action:create-pipeline",
         kind: "action",
         title: "Create pipeline",
-        subtitle: "Start a draft from a blank canvas",
+        subtitle:
+          "Start from a template, a blank canvas or an existing Vector config",
         keywords: "new pipeline configuration draft",
         icon: Plus,
         run: () => runCommand("pipeline.create", "configurations"),

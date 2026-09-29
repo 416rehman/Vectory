@@ -4,6 +4,7 @@
 // numbers, minimap, and the inspector fixes (Esc, sample tester width).
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -688,6 +689,62 @@ try {
   });
 
   await check(
+    "Find says when it shows 8 of more matches and announces a miss",
+    async () => {
+      const document = baseDocument();
+      document.config.sources = Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [
+          `source_${String(index).padStart(2, "0")}`,
+          { type: "demo_logs", format: "json" },
+        ]),
+      );
+      document.config.transforms = {};
+      document.config.sinks = {
+        output: { type: "blackhole", inputs: ["source_*"] },
+      };
+      await load({ document });
+      await node("output").click();
+      await inspector().locator("h2").click();
+      await page.keyboard.press("ControlOrMeta+f");
+      const find = page.getByRole("combobox", { name: "Find a step" });
+      const search = page.getByRole("search");
+      const matches = search.getByRole("option");
+      const status = search.getByRole("status");
+      await find.fill("source");
+      await expect(matches).toHaveCount(8);
+      await expect(status).toHaveText(
+        "Showing 8 of 12 steps. Keep typing to narrow the list.",
+      );
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (theme) => (document.documentElement.dataset.theme = theme),
+          theme,
+        );
+        await search.screenshot({
+          path: resolve(output, `find-capped-${theme}.png`),
+        });
+      }
+      await page.evaluate(
+        () => (document.documentElement.dataset.theme = "light"),
+      );
+      await find.fill("source_1");
+      await expect(matches).toHaveCount(2);
+      await expect(status).toHaveText("");
+      await find.fill("zzz");
+      await expect(search.getByRole("listbox")).toHaveCount(0);
+      await expect(find).toHaveAttribute("aria-expanded", "false");
+      await expect(status).toHaveText("No step matches “zzz”.");
+      await search.screenshot({ path: resolve(output, "find-miss.png") });
+      const audit = await new AxeBuilder({ page })
+        .include(".canvas-find")
+        .analyze();
+      expect(audit.violations.map((violation) => violation.id)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(find).toHaveCount(0);
+    },
+  );
+
+  await check(
     "wildcard inputs draw dashed edges with a pattern chip and only warn when nothing matches",
     async () => {
       const document = baseDocument();
@@ -843,7 +900,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(13);
+  expect(results).toHaveLength(14);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {
