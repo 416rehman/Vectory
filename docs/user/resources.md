@@ -126,7 +126,7 @@ This sets `.owner = "platform"`. In a real pipeline, look up a field from the ev
 
 ## Test transformations
 
-Tests prove that a transform does what you expect, using events you supply. In [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**. Each test is listed as passed or failed; a failed test shows Vector's reason and the events the step produced. To start a test from a sample, run the sample in the VRL editor and choose **Save as test**.
+Tests prove that a transform does what you expect, using events you supply. In [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests), choose **Run pipeline tests**. Each test is listed as passed or failed; a failed test shows Vector's reason and the events the step produced. Vector reads every test before it runs the first, so a test it can't read or build (a misspelled setting, an unknown step name, no expected output) stops them all: that test shows Vector's reason and the others are marked **Not run**. To start a test from a sample, run the sample in the VRL editor and choose **Save as test**.
 
 This test belongs to the [complete example](pipelines.md#try-a-complete-example), whose `normalize` transform sets `.service`:
 

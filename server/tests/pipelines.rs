@@ -727,6 +727,37 @@ async fn public_validation_and_test_routes_forward_only_sanitized_diagnostics() 
     );
     assert!(!tested.to_string().contains(hostile));
 
+    // Vector reports only the test it could not read. The other one is still
+    // listed, as not run, and counted.
+    let mut two_tests = with_tests.clone();
+    two_tests["tests"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"other","inputs":[],"outputs":[]}));
+    let (status, partial) = call(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config":two_tests}),
+        Some(&actor),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{partial}");
+    assert_eq!(partial["tests_run"], true);
+    assert_eq!(
+        partial["tests"],
+        json!([
+            {"name":"synthetic","passed":false,"message":"assertion failed"},
+            {"name":"other","passed":false,"not_run":true,"message":"Vector did not run this test."}
+        ])
+    );
+    assert_eq!(partial["output"], "0 of 2 tests passed.");
+    assert!(
+        partial["errors"]
+            .to_string()
+            .contains("1 of 2 pipeline tests failed; 1 did not run.")
+    );
+
     let (status, empty) = call(
         &app,
         "POST",

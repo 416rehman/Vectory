@@ -8383,6 +8383,10 @@
         "passed": {
           "type": "boolean"
         },
+        "not_run": {
+          "type": "boolean",
+          "description": "True when Vector did not run this test, for example because another test could not be read or built. Such a test never passes."
+        },
         "message": {
           "type": "string",
           "maxLength": 600

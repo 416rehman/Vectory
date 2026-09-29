@@ -768,3 +768,80 @@ async fn a_test_that_cannot_be_built_is_never_reported_as_a_pass() {
     }
     child.kill().await.ok();
 }
+
+#[tokio::test]
+async fn tests_vector_refuses_to_run_are_never_reported_as_a_pass() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; refused tests unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    let base = |tests: serde_json::Value| {
+        json!({"config": {
+            "sources": {"web": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"parse": {"type": "remap", "inputs": ["web"], "source": ".seen = true"}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["parse"]}},
+            "tests": tests,
+        }})
+    };
+    let good = json!({"name": "good",
+        "inputs": [{"insert_at": "parse", "type": "log", "log_fields": {"message": "hi"}}],
+        "outputs": [{"extract_from": "parse", "conditions": [{"type": "vrl", "source": ".seen == true"}]}]});
+
+    // A misspelled test setting: Vector exits 78 after "Running tests" and runs nothing.
+    let typo = json!({"name": "typo",
+        "inputs": [{"insert_at": "parse", "type": "log", "log_fieldz": {"message": "hi"}}],
+        "outputs": [{"extract_from": "parse", "conditions": [{"type": "vrl", "source": ".seen == true"}]}]});
+    let refused = post(&client, &url, "tests", base(json!([good.clone(), typo]))).await;
+    assert_eq!(refused["tests_run"], true, "{refused}");
+    let tests = refused["tests"].as_array().unwrap();
+    assert_eq!(tests.len(), 1, "{refused}");
+    assert_eq!(tests[0]["name"], "typo");
+    assert_eq!(tests[0]["passed"], false);
+    let message = tests[0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Vector can't read this test: inputs[0].log_fieldz"),
+        "{message}"
+    );
+    assert!(message.contains("unknown field"), "{message}");
+
+    // A condition Vector cannot match to any of its kinds.
+    let condition = json!({"name": "cond",
+        "inputs": [{"insert_at": "parse", "type": "log", "log_fields": {"message": "hi"}}],
+        "outputs": [{"extract_from": "parse", "conditions": [{"type": "vrl", "sourse": ".seen == true"}]}]});
+    let refused = post(&client, &url, "tests", base(json!([condition]))).await;
+    assert_eq!(refused["tests_run"], true, "{refused}");
+    assert_eq!(refused["tests"][0]["name"], "cond");
+    assert_eq!(refused["tests"][0]["passed"], false);
+    assert!(
+        refused["tests"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("conditions[0]")
+    );
+
+    // A test without any expectation is read but cannot be built.
+    let empty = json!({"name": "expects nothing",
+        "inputs": [{"insert_at": "parse", "type": "log", "log_fields": {"message": "hi"}}]});
+    let refused = post(&client, &url, "tests", base(json!([empty]))).await;
+    assert_eq!(refused["tests_run"], true, "{refused}");
+    assert_eq!(refused["tests"][0]["passed"], false, "{refused}");
+    assert!(
+        refused["tests"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("outputs"),
+        "{refused}"
+    );
+
+    // Tests that run are unaffected: one passes, one fails on its own merits.
+    let wrong = json!({"name": "wrong",
+        "inputs": [{"insert_at": "parse", "type": "log", "log_fields": {"message": "hi"}}],
+        "outputs": [{"extract_from": "parse", "conditions": [{"type": "vrl", "source": ".seen == false"}]}]});
+    let ran = post(&client, &url, "tests", base(json!([good, wrong]))).await;
+    assert_eq!(ran["tests_run"], true, "{ran}");
+    assert_eq!(ran["tests"][0]["passed"], true, "{ran}");
+    assert_eq!(ran["tests"][1]["passed"], false, "{ran}");
+    assert_eq!(ran["diagnostics"], json!([]), "{ran}");
+    child.kill().await.ok();
+}

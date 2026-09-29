@@ -1663,6 +1663,33 @@ fn sanitize_tests(value: &Value) -> Option<Vec<Value>> {
         .collect()
 }
 
+/// Every configured test gets a result, in the configured order. Vector runs
+/// nothing when one test cannot be read or built, and a worker can drop a
+/// result, so a test without one is reported as not run, never left out of
+/// the count.
+fn complete_results(config: &Value, reported: Vec<Value>) -> Vec<Value> {
+    let mut remaining: Vec<Option<Value>> = reported.into_iter().map(Some).collect();
+    let mut ordered = Vec::new();
+    for (index, test) in config["tests"].as_array().into_iter().flatten().enumerate() {
+        let name =
+            crate::vector_diagnostics::plain_text(test["name"].as_str().unwrap_or("").as_bytes());
+        let name = match name.trim() {
+            "" => format!("Test {}", index + 1),
+            named => crate::vector_diagnostics::bounded(named, 240),
+        };
+        let found = remaining
+            .iter_mut()
+            .find(|result| result.as_ref().is_some_and(|r| r["name"] == json!(name)))
+            .and_then(Option::take);
+        ordered.push(found.unwrap_or_else(|| {
+            json!({"name":name,"passed":false,"not_run":true,"message":"Vector did not run this test."})
+        }));
+    }
+    ordered.extend(remaining.into_iter().flatten());
+    ordered.truncate(100);
+    ordered
+}
+
 /// `POST /api/v1/configurations/test`: run the draft's native `tests` with
 /// `vector test` in the isolated worker and report every test's result.
 pub async fn pipeline_tests(
@@ -1755,16 +1782,29 @@ pub async fn pipeline_tests(
         Some((tests_run, tests, diagnostics, placeholders))
     })();
     let (tests_run, tests, native, placeholders) = parsed.ok_or_else(unavailable)?;
+    let tests = if tests_run {
+        complete_results(config, tests)
+    } else {
+        tests
+    };
     let mut diagnostics: Vec<Diagnostic> = native.iter().map(Diagnostic::from_json).collect();
-    let failed = tests.iter().filter(|t| t["passed"] == false).count();
-    if tests_run && failed > 0 {
+    let not_run = tests.iter().filter(|t| t["not_run"] == true).count();
+    let failed = tests
+        .iter()
+        .filter(|t| t["passed"] == false && t["not_run"] != true)
+        .count();
+    if tests_run && failed + not_run > 0 {
+        let total = tests.len();
         diagnostics.push(Diagnostic {
             section: Some("tests".into()),
             code: Some("test_failed".into()),
-            ..Diagnostic::error(format!(
-                "{failed} of {} pipeline tests failed.",
-                tests.len()
-            ))
+            ..Diagnostic::error(match (failed, not_run) {
+                (failed, 0) => format!("{failed} of {total} pipeline tests failed."),
+                (0, not_run) => format!("{not_run} of {total} pipeline tests did not run."),
+                (failed, not_run) => {
+                    format!("{failed} of {total} pipeline tests failed; {not_run} did not run.")
+                }
+            })
         });
     } else if !tests_run && !diagnostics.iter().any(|d| d.severity == "error") {
         diagnostics.push(Diagnostic::error(
@@ -2936,6 +2976,46 @@ mod tests {
         assert_eq!(clean["vector_validated"], true);
         assert_eq!(clean["deferred"], false);
         assert_eq!(clean["warnings"], json!([]));
+    }
+
+    #[test]
+    fn every_configured_test_has_a_result_and_none_is_left_out_of_the_count() {
+        let config =
+            json!({"tests": [{"name": "first"}, {"name": "second"}, {}, {"name": "first"}]});
+        // Vector reported only the test it could not read.
+        let broken =
+            json!({"name":"second","passed":false,"message":"Vector can't read this test: x"});
+        let results = complete_results(&config, vec![broken.clone()]);
+        let names: Vec<&str> = results
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["first", "second", "Test 3", "first"]);
+        assert_eq!(results[1], broken);
+        for index in [0, 2, 3] {
+            assert_eq!(results[index]["passed"], false, "{results:?}");
+            assert_eq!(results[index]["not_run"], true, "{results:?}");
+            assert_eq!(results[index]["message"], "Vector did not run this test.");
+        }
+        // Results Vector reported are kept in the configured order, one per test.
+        let passed = |name: &str| json!({"name":name,"passed":true});
+        let all = complete_results(
+            &config,
+            vec![
+                passed("first"),
+                passed("second"),
+                passed("Test 3"),
+                passed("first"),
+            ],
+        );
+        assert!(
+            all.iter()
+                .all(|r| r["passed"] == true && r.get("not_run").is_none())
+        );
+        // A result for a name that is not configured is still shown, after the configured ones.
+        let stray = complete_results(&config, vec![passed("stray")]);
+        assert_eq!(stray.len(), 5);
+        assert_eq!(stray[4]["name"], "stray");
     }
 
     #[test]

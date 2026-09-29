@@ -30,7 +30,7 @@ describe("pipeline test headline", () => {
     );
     expect(
       testHeadline({ valid: false, errors: ["x"], tests_run: false }),
-    ).toBe("Vector couldn't load this pipeline to run its tests");
+    ).toBe("Vector couldn't run these tests");
     expect(testHeadline({ valid: false, errors: ["x"] })).toBe(
       "Pipeline tests failed",
     );
@@ -55,6 +55,34 @@ describe("pipeline test headline", () => {
     expect(
       deferralNote({ valid: true, errors: [], tests: [test(true)] }),
     ).toBeNull();
+  });
+
+  it("says so when Vector stopped before it ran a test", () => {
+    const skipped = { name: "b", passed: false, not_run: true };
+    expect(
+      testHeadline({
+        valid: false,
+        errors: [],
+        tests_run: true,
+        tests: [{ name: "a", passed: false }, skipped],
+      }),
+    ).toBe("Vector couldn't run these tests");
+    expect(
+      testHeadline({
+        valid: false,
+        errors: [],
+        tests_run: true,
+        tests: [skipped, { ...skipped, name: "c" }],
+      }),
+    ).toBe("Vector couldn't run these tests");
+    expect(
+      testHeadline({
+        valid: false,
+        errors: [],
+        tests_run: true,
+        tests: [test(true), skipped],
+      }),
+    ).toBe("1 of 2 tests passed; 1 didn't run");
   });
 
   it("does not say tests passed when Vector reported none for a pipeline that has some", () => {

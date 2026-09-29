@@ -19,7 +19,7 @@
   border-radius: var(--ed-radius-sm);
   background: var(--surface);
 }
-.pipeline-test-list > li:not([data-passed]) {
+.pipeline-test-list > li:not([data-passed], [data-not-run]) {
   border-color: var(--ed-danger-line);
 }
 .pipeline-test-name {
@@ -34,6 +34,14 @@
 }
 .pipeline-test-list > li[data-passed] .pipeline-test-name svg {
   color: var(--ed-success, var(--muted));
+}
+.pipeline-test-list > li[data-not-run] .pipeline-test-name svg {
+  color: var(--muted);
+}
+.pipeline-test-skipped {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
 }
 .pipeline-test-list details {
   margin: 6px 0 0 23px;
