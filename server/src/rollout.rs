@@ -425,9 +425,9 @@ fn compatibility_problems(
     needs_full_mode: bool,
 ) -> [Option<(&'static str, &'static str)>; 2] {
     [
-        (text(device, "vector_version") != crate::validation::VECTOR_VERSION).then_some((
+        (!crate::validation::vector_compatible(text(device, "vector_version"))).then_some((
             "VECTOR_VERSION_INCOMPATIBLE",
-            "The selected device does not report the required Vector 0.58.0 version. Review its local Vector installation before deploying.",
+            "The selected device does not report a Vector 0.58.x version. Review its local Vector installation before deploying.",
         )),
         (needs_full_mode && device["configuration_mode"] != "full").then_some((
             "FULL_VECTOR_MODE_REQUIRED",

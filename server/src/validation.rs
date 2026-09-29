@@ -6,6 +6,23 @@ use std::{
 };
 
 pub const VECTOR_VERSION: &str = "0.58.0";
+/// Devices may run any patch release of the pinned minor version: Vector
+/// patch releases fix bugs without changing configuration.
+pub const VECTOR_SERIES: &str = "0.58";
+
+/// Whether a device-reported Vector version is a patch release of the pinned
+/// series: `0.58.0`, `0.58.3`, optionally `v`-prefixed or with build details
+/// after a space (`0.58.1 (x86_64-unknown-linux-gnu 0f0e3d1 2026-05-01)`).
+pub fn vector_compatible(reported: &str) -> bool {
+    let version = reported.split_whitespace().next().unwrap_or("");
+    let version = version.strip_prefix('v').unwrap_or(version);
+    version
+        .strip_prefix(VECTOR_SERIES)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|patch| {
+            !patch.is_empty() && patch.len() <= 4 && patch.bytes().all(|b| b.is_ascii_digit())
+        })
+}
 
 pub fn is_native_secret_reference(text: &str) -> bool {
     let text = text
@@ -2177,6 +2194,31 @@ pub fn validate(config: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn devices_may_run_any_patch_release_of_the_pinned_series() {
+        for ok in [
+            "0.58.0",
+            "0.58.1",
+            "v0.58.12",
+            "0.58.2 (x86_64-unknown-linux-gnu 0f0e3d1 2026-05-01)",
+        ] {
+            assert!(vector_compatible(ok), "{ok}");
+        }
+        for refused in [
+            "",
+            "0.58",
+            "0.58.",
+            "0.57.0",
+            "0.59.0",
+            "0.580.0",
+            "0.58.x",
+            "0.58.1-rc1",
+            "1.58.0",
+        ] {
+            assert!(!vector_compatible(refused), "{refused}");
+        }
+    }
+
     #[test]
     fn event_types_follow_transforms_that_keep_them() {
         let mismatch = |config: &Value| {
