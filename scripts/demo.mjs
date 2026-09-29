@@ -19,6 +19,8 @@ const preview = process.env.VECTORY_PREVIEW_DIR || path.join(local, "preview");
 const demoRoot = process.env.VECTORY_DEMO_DIR || path.join(local, "demo");
 const web = `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}`;
 const agentServer = `https://localhost:${process.env.VECTORY_PREVIEW_AGENT_PORT || 8443}`;
+// Each demo agent scrapes its own loopback metrics exporter on metricsBase + index.
+const metricsBase = Number(process.env.VECTORY_DEMO_METRICS_PORT || 19600);
 const VECTOR_VERSION = "0.58.0";
 const args = process.argv.slice(2);
 const agentCount = Math.min(
@@ -208,7 +210,7 @@ async function startAgent(agent, vector, api, token, name, index) {
   const state = path.join(home, "state");
   const managed = path.join(home, "config", "managed.json");
   const data = path.join(home, "vector-data");
-  const metricsPort = 19600 + index;
+  const metricsPort = metricsBase + index;
   const pidFile = path.join(home, "agent.pid");
   const priorPid = Number(await fs.readFile(pidFile, "utf8").catch(() => ""));
   if (priorPid) {
@@ -312,7 +314,7 @@ function demoPipeline(format) {
 async function main() {
   if (args.includes("--stop")) return stopDemo();
   if (!["linux", "darwin"].includes(process.platform))
-    fail("Use docs/LOCAL-DEMO.md on Windows; this script supports Linux and macOS.");
+    fail("This script supports Linux and macOS. On Windows, see docs/dev/DEVELOPMENT.md#windows-powershell.");
   const agent = await ensureBuilds();
   const vector = await ensureVector();
   say("Starting the loopback preview…");

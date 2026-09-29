@@ -80,6 +80,6 @@ The validator container (`vector-validator`) reads these.
 | `VECTORY_PREVIEW_VALIDATOR_PORT` | `8081` | Validator port on 127.0.0.1. |
 | `VECTORY_PREVIEW_VECTOR` | First `.local/tools/*/bin/vector` | Vector binary for the preview's validator. Without one, checks are structural only. |
 
-The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `node scripts/demo.mjs` uses the same preview variables, plus `VECTORY_DEMO_DIR` (default `.local/demo`) for its agents.
+The preview also honors `VECTORY_RELEASES_DIR` and `VECTORY_INSTANCE_NAME`. `node scripts/demo.mjs` uses the same preview variables, plus `VECTORY_DEMO_DIR` (default `.local/demo`) for its agents and `VECTORY_DEMO_METRICS_PORT` (default `19600`), the first loopback port its agents' metrics exporters use.
 
 `VECTORY_REQUEST_FIXTURES` is read only by the server's own tests, which then print query plans prefixed with `VECTORY_REQUEST_PLAN`. It has no effect on a running server.
