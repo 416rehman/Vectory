@@ -362,6 +362,31 @@
   justify-items: start;
   gap: 4px;
 }
+.target-left-behind {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.target-left-behind input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+}
+.target-left-behind > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.target-left-behind strong {
+  font-weight: 600;
+}
+.target-left-behind small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
 .target-conflicts-rule {
   margin: 0;
   color: var(--muted);

@@ -761,10 +761,15 @@ const operations = () =>
       .filter(([key]) => key.startsWith("vectory:deployment-operation:"))
       .map(([key, value]) => ({ key, value: JSON.parse(value) })),
   );
-async function beginRollback() {
+// Roll back lives in the header's Stop rollout / Roll back or remove menu.
+async function chooseRollBack() {
   await details()
-    .getByRole("button", { name: "Roll back", exact: true })
+    .getByRole("button", { name: /^(Stop rollout|Roll back or remove)$/ })
     .click();
+  await page.getByRole("menuitem", { name: "Roll back", exact: true }).click();
+}
+async function beginRollback() {
+  await chooseRollBack();
   await expect(rollbackConfirm()).toBeVisible();
 }
 async function sendRollback() {
@@ -1400,7 +1405,7 @@ try {
         }
       }
       await load({ storageBlocked: true });
-      await details().getByRole("button", { name: "Roll back", exact: true }).click();
+      await chooseRollBack();
       await expect(page.getByRole("dialog", { name: "Review saved deployment reminder" })).toContainText(
         "Browser storage is unavailable",
       );
@@ -1586,8 +1591,14 @@ try {
       await preview();
       state.createMode = "heldBody";
       state.lookupMode = "failed";
+      // Synthetic alpha's own settings outrank these: sending says it stays.
       await page
-        .getByRole("button", { name: "Apply settings", exact: true })
+        .getByRole("checkbox", {
+          name: /^Synthetic alpha keeps its current agent settings \(priority 200\)/,
+        })
+        .check();
+      await page
+        .getByRole("button", { name: "Apply to 1 of 2 devices", exact: true })
         .click();
       await expect.poll(() => state.bodyHolds.length).toBe(1);
       await page.clock.fastForward(30_050);
