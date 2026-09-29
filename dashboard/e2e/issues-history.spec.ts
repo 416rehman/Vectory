@@ -33,14 +33,20 @@ test("issues group by version and reason, keep a bounded exact-identity list, cl
     "href",
     "/help/troubleshooting/#a-pipeline-is-rejected-or-rolled-back",
   );
-  const status = page.getByRole("group", { name: "Issue status", exact: true });
-  const layout = page.getByRole("group", { name: "Issue layout", exact: true });
+  const status = page.getByRole("radiogroup", {
+    name: "Issue status",
+    exact: true,
+  });
+  const layout = page.getByRole("radiogroup", {
+    name: "Issue layout",
+    exact: true,
+  });
   const listResponse = page.waitForResponse(
     (response) =>
       response.url().includes("/issues/history?") &&
       new URL(response.url()).searchParams.get("state") === "open",
   );
-  await layout.getByRole("button", { name: "All issues", exact: true }).click();
+  await layout.getByRole("radio", { name: "All issues", exact: true }).click();
   const history = await (await listResponse).json();
   expect(history.page_size).toBe(12);
   await expect(
@@ -53,7 +59,7 @@ test("issues group by version and reason, keep a bounded exact-identity list, cl
       response.url().includes("/issues/history?") &&
       new URL(response.url()).searchParams.get("state") === "all",
   );
-  await status.getByRole("button", { name: "All", exact: true }).click();
+  await status.getByRole("radio", { name: "All", exact: true }).click();
   const all = await (await allResponse).json();
   await expect(
     page.locator(".issue-table tbody tr:has(.issue-summary)"),
@@ -68,7 +74,10 @@ test("issues group by version and reason, keep a bounded exact-identity list, cl
       `#/devices/${issue.device_id}`,
     );
     if (issue.disposition === "acknowledged")
-      await expect(row.locator(".badge")).toHaveClass(/neutral/);
+      await expect(row.locator(".status-badge")).toHaveAttribute(
+        "data-tone",
+        "neutral",
+      );
     // Live and retired devices can be decided on; resolved issues and
     // devices that no longer exist cannot.
     if (issue.resolved || issue.device_revoked === null)

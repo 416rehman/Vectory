@@ -189,8 +189,10 @@ export default function Issues({
     opener.current = target;
     setDialog({ kind, issue });
   }
+  // Rows from before a failed refresh stay readable, but nothing acts on them.
+  const stale = !!active.error;
   const actions = (issue: Issue) => (
-    <IssueActions issue={issue} user={user} onAct={act} />
+    <IssueActions issue={issue} user={user} onAct={act} stale={stale} />
   );
   const columns: TableColumn<Issue>[] = [
     {
@@ -533,9 +535,11 @@ function IssueActions({
   issue,
   user,
   onAct,
+  stale = false,
 }: {
   issue: Issue;
   user: User;
+  stale?: boolean;
   onAct: (
     kind: Dialog["kind"],
     issue: Issue,
@@ -549,6 +553,7 @@ function IssueActions({
         <Button
           variant="secondary compact"
           aria-label={`Retry on device ${issue.device_name || ""}`.trim()}
+          disabled={stale}
           onClick={(event) => onAct("retry", issue, event.currentTarget)}
         >
           Retry on device
@@ -557,6 +562,7 @@ function IssueActions({
       <Button
         variant="ghost compact"
         aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
+        disabled={stale}
         onClick={(event) => onAct("disposition", issue, event.currentTarget)}
       >
         {issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"}
