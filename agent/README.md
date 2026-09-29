@@ -61,7 +61,7 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 
 ## Local secrets
 
-- Only an exact `vectory-secret:NAME` value in `auth.user`, `auth.password` or `auth.token` of `http`, `loki` or `elasticsearch` sinks is resolved, in both modes.
+- Only an exact `vectory-secret:NAME` value at a credential field of the agent's own generated table (`secret_fields_generated.go`: every Vector `SensitiveString` field plus reviewed credentials, per component type) is resolved, in both modes. The server never chooses the fields. Heartbeats report bound names, never paths or values.
 - The bindings file is strict JSON: one object, UTF-8 without a BOM, at most 2 MiB and 64 names, absolute paths only, no duplicates or trailing data. It replaces all bindings; `{}` clears them.
 - Each secret file must be regular, single-link and private to the agent's account or an administrator, at most 16 KiB of UTF-8 without NUL. Unix reads it with no-follow, descriptor-relative traversal; Windows pins handles and checks the owner, access list and final path.
 - In full mode, values containing `$VAR`, `${`, `$$` or `SECRET[` are refused so Vector's own interpolation can't reinterpret them.

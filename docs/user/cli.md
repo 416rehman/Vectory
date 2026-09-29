@@ -203,7 +203,7 @@ sudo vectory configure-metrics --clear-metrics-url
 
 ## configure-secrets
 
-Map `vectory-secret:NAME` references to private files on this host. Run it with the agent stopped.
+Map `vectory-secret:NAME` references to private files on this host. Run it with the agent stopped. Any credential field of a pipeline can reference a bound name.
 
 ```sh
 sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json
@@ -213,7 +213,7 @@ sudo vectory configure-secrets --secret-files /etc/vectory/secret-bindings.json
 | --- | --- |
 | `--secret-files PATH` | JSON object of names to absolute file paths. Replaces all bindings; `{}` removes them. |
 
-See [Keep credentials on the device](resources.md#keep-credentials-on-the-device) for the file rules.
+At each check-in the agent reports the bound names, never the files or values, so the device page can show which ones a version still needs. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device) for the file rules.
 
 ## re-adopt
 

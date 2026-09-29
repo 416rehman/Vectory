@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -345,6 +346,30 @@ func TestSecretFailureNamesTheFieldOfAnyComponent(t *testing.T) {
 	}
 	if encoded, _ := json.Marshal(got); bytes.Contains(encoded, []byte(dir)) || bytes.Contains(encoded, []byte("hec-token")) {
 		t.Fatalf("diagnostic leaked a path or value: %s", encoded)
+	}
+}
+
+// The dashboard tells operators to bind a missing name and wait for the next
+// check-in: the same signed manifest then applies without a retry command.
+func TestBindingAMissingSecretLetsTheNextCheckInApply(t *testing.T) {
+	e, m, d, p := secretFixture(t)
+	e.Settings.SecretFiles = map[string]string{}
+	ctx := context.Background()
+	if err := e.Reconcile(ctx, m); err == nil {
+		t.Fatal("a pipeline with an unbound secret was applied")
+	}
+	requireAttempt(t, e, m, "failed", "SECRET_RESOLUTION_FAILED")
+	if d.starts != 0 || e.State.ReportedGeneration != 1 {
+		t.Fatal("a failed secret resolution touched the running workload")
+	}
+	// configure-secrets while the agent is stopped, then the next check-in.
+	e.Settings.SecretFiles = map[string]string{"API_TOKEN": p}
+	if err := e.Reconcile(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	requireAttempt(t, e, m, "verified_applied", "")
+	if d.starts != 1 || e.State.ReportedGeneration != m.Generation || e.State.AppliedTemplateSHA256 != m.Desired.SHA256 {
+		t.Fatalf("bound secret not applied: starts=%d state=%+v", d.starts, e.State)
 	}
 }
 

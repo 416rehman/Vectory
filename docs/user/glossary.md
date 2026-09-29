@@ -70,7 +70,7 @@ See [Deploy and roll back](deployments.md) for the workflow and [Read the apply 
 | **Allowances** | The files, destinations and listeners a restricted device approves locally. |
 | **Agent settings** | Check-in interval, configuration sync and metrics collection, deployed to devices. They can't change a device's mode or allowances. |
 | **Local pause** | A pause set on the host with `vectory pause`. Only the host can clear it. |
-| **Local secret binding** | A `vectory-secret:NAME` reference the agent fills from a private file on the device. |
+| **Device secret** | A `vectory-secret:NAME` reference in a credential field. The agent fills it from a private file bound on the device with `configure-secrets`. [Use one](resources.md#keep-credentials-on-the-device). |
 | **Secret provider** | A Vector backend that looks up credentials by name. Full mode only. |
 | **Revocation** | Permanently blocking a device identity. |
 | **Identity recovery** | Replacing a lost device identity with a new one, authorized by an administrator. |
