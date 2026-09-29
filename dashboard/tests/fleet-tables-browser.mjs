@@ -1,7 +1,7 @@
 // Actual fleet/settings/review components; all HTTP is intercepted synthetic data.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";

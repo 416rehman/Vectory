@@ -1,7 +1,7 @@
 // Actual App/Groups recovery; all HTTP uses explicitly synthetic isolated state.
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import AxeBuilder from "./axe.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
