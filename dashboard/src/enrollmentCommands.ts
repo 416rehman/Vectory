@@ -180,6 +180,27 @@ export function setupCommand(
     : continued("sudo vectory setup", args);
 }
 
+/**
+ * The command that keeps the agent running without a service, as setup
+ * prints it: the agent where this page's command put it (the installer's
+ * directory, or wherever an agent copied to the host is on PATH) and its
+ * state directory.
+ */
+export function runCommand(
+  install: Pick<AgentInstall, "default_install_dir">,
+  choices: Pick<SetupChoices, "os" | "stateDir">,
+  installed: boolean,
+) {
+  const stateDir =
+    choices.stateDir.trim() || platformDefaults(choices.os).stateDir;
+  if (choices.os === "windows")
+    return `.\\vectory.exe run --state-dir ${quote(stateDir, "windows")}`;
+  const agent = installed
+    ? `${(install.default_install_dir || "/usr/local/bin").replace(/\/+$/, "")}/vectory`
+    : "vectory";
+  return `sudo ${agent} run --state-dir ${quote(stateDir, choices.os)}`;
+}
+
 /** Windows: verify the downloaded agent, then run setup from an elevated shell. */
 export function windowsCommand(
   install: AgentInstall,

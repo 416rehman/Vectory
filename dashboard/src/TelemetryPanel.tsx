@@ -305,6 +305,17 @@ const exporterFragment = `"sources": {
   }
 }`;
 
+/**
+ * Whether an agent of this version finds the running pipeline's exporter by
+ * itself and reports how it reads metrics: every agent from 0.1 on does.
+ * Null when the version doesn't say (not reported, or not a release number).
+ */
+export function agentFindsExporter(version?: string | null): boolean | null {
+  const match = /^v?(\d+)\.(\d+)\.\d+/.exec(version || "");
+  if (!match) return null;
+  return Number(match[1]) > 0 || Number(match[2]) >= 1;
+}
+
 /** Why a device reports no metrics, one check per line, with the fix. */
 export function MetricsDiagnosis({ device }: { device: Device }) {
   const runtime = device.host_runtime;
@@ -322,14 +333,23 @@ export function MetricsDiagnosis({ device }: { device: Device }) {
         : "Turn on metrics in an agent settings deployment for this device.",
     },
   ];
+  // A missing report is not an old agent: only its version says that.
   if (!runtime)
-    checks.push({
-      ok: null,
-      label:
-        "This agent version reads metrics only from a URL configured on the host",
-      detail:
-        "Update the agent so it finds the pipeline's exporter automatically, or run vectory configure-metrics on the device.",
-    });
+    checks.push(
+      agentFindsExporter(device.agent_version) === false
+        ? {
+            ok: null,
+            label:
+              "This agent version reads metrics only from a URL configured on the host",
+            detail:
+              "Update the agent so it finds the pipeline's exporter automatically, or run vectory configure-metrics on the device.",
+          }
+        : {
+            ok: null,
+            label: "The agent hasn't reported how it reads metrics yet",
+            detail: `It reports that with its next check-in while it runs (every ${heartbeat} seconds).`,
+          },
+    );
   else if (source === "none")
     checks.push({
       ok: false,

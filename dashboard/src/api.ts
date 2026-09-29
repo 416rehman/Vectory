@@ -624,6 +624,13 @@ export type Device = {
   running_version?: (VersionLabel & { generation?: number }) | null;
   /** Data-plane health measured on the running version (newer servers). */
   data_plane?: DataPlaneSummary | null;
+  /**
+   * What keeps the agent running: a service manager, or none (after setup's
+   * single check-in, nothing until the operator runs it). Newer agents.
+   */
+  service_manager?: "systemd" | "launchd" | "windows" | "none";
+  /** Whether Vector runs, from the latest check-in; absent when unknown. */
+  vector_running?: boolean;
 };
 export type VersionLabel = {
   id: string;

@@ -20,6 +20,9 @@ type EnrollmentOptions struct {
 	CAFile              *string
 	CASHA256            string
 	Recover             bool
+	// ServiceManager is what setup registered to keep the agent running
+	// (systemd, launchd, windows or none); empty when enroll runs alone.
+	ServiceManager string
 }
 
 // OpenEnrollmentTokenFile pins and verifies the local file before the CLI
@@ -298,7 +301,7 @@ func EnrollWithOptions(ctx context.Context, dir string, options EnrollmentOption
 	if options.Recover {
 		err = recoverEnrollmentPrepared(ctx, dir, s, token, client)
 	} else {
-		err = enrollPrepared(ctx, dir, s, token, client)
+		err = enrollPreparedAs(ctx, dir, s, token, client, options.ServiceManager)
 	}
 	return enrollmentFailure(err)
 }

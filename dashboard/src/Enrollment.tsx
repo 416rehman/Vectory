@@ -8,7 +8,9 @@ import {
   EyeOff,
   Laptop,
   Monitor,
+  RotateCcw,
   Server,
+  TriangleAlert,
   XCircle,
 } from "lucide-react";
 import { DataTable } from "./DataTable";
@@ -52,6 +54,7 @@ import {
   installerCommand,
   platformDefaults,
   releaseFor,
+  runCommand,
   setupCommand,
   windowsCommand,
   type HostOS,
@@ -59,7 +62,17 @@ import {
   type ServiceChoice,
   type SetupChoices,
 } from "./enrollmentCommands";
-import { describeAgent, progress, refusal } from "./enrollmentActivity";
+import {
+  describeAgent,
+  progress,
+  refusal,
+  supervision,
+  unsupervisedLine,
+} from "./enrollmentActivity";
+import {
+  resolveTokenRequests,
+  useTokenRequests,
+} from "./enrollmentTokenRequests";
 import "./control.css";
 import "./enrollment-page.css";
 import type { Notify } from "./toast";
@@ -119,9 +132,14 @@ const idle: Watch = {
 
 /**
  * Polls enrollment activity and the inventory every two seconds while a
- * command waits for its device. A poll never overlaps a slower one.
+ * command waits for its device (more slowly while a connected agent waits to
+ * be started). A poll never overlaps a slower one.
  */
-function useEnrollmentWatch(command: Command | null, active: boolean) {
+function useEnrollmentWatch(
+  command: Command | null,
+  active: boolean,
+  interval = 2000,
+) {
   const [watch, setWatch] = useState<Watch>(idle);
   const tokenId = command?.tokenId,
     since = command?.since;
@@ -180,13 +198,13 @@ function useEnrollmentWatch(command: Command | null, active: boolean) {
       }
     };
     void tick();
-    const timer = window.setInterval(() => void tick(), 2000);
+    const timer = window.setInterval(() => void tick(), interval);
     return () => {
       stopped = true;
       window.clearInterval(timer);
       running?.abort();
     };
-  }, [tokenId, since, active]);
+  }, [tokenId, since, active, interval]);
   return watch;
 }
 
@@ -333,6 +351,7 @@ export function Enrollment({
   const details = useResource<unknown>("/agent-install", null);
   const tokens = useResource<Token[]>("/tokens", []);
   const devices = useResource<Device[]>("/devices", []);
+  const savedRequests = useTokenRequests(user.id).operations;
   const parsed = useMemo(
     () =>
       details.data === null ? null : AgentInstallSchema.safeParse(details.data),
@@ -376,9 +395,17 @@ export function Enrollment({
   const [focusCommand, setFocusCommand] = useState(false);
   const commandFocused = useCallback(() => setFocusCommand(false), []);
   const [finished, setFinished] = useState<string | null>(null);
+  // When the device was first seen checked in: setup's own check-in when
+  // no service keeps its agent running.
+  const [firstCheckIn, setFirstCheckIn] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [baseline, setBaseline] = useState<Set<string> | null>(null);
   const [tokenOpen, setTokenOpen] = useState(false);
+  // What earlier install commands enrolled, said once when their reminders go.
+  const [notes, setNotes] = useState<string[]>([]);
+  const [startingOver, setStartingOver] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [startOverError, setStartOverError] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [fleet, setFleet] = useState({
     name: "",
@@ -459,9 +486,16 @@ export function Enrollment({
   const commandToken = command
     ? tokens.data.find((token) => token.id === command.tokenId)
     : undefined;
+  const [watchSlowly, setWatchSlowly] = useState(false);
   const watching =
-    !!command && finished !== command.tokenId && baseline !== null;
-  const watch = useEnrollmentWatch(command, watching);
+    !!command &&
+    baseline !== null &&
+    (finished !== command.tokenId || watchSlowly);
+  const watch = useEnrollmentWatch(
+    command,
+    watching,
+    watchSlowly ? 5000 : 2000,
+  );
   const state =
     command && baseline
       ? progress(
@@ -472,14 +506,25 @@ export function Enrollment({
           trimmedName,
         )
       : null;
+  // A device whose agent nothing keeps running checked in only from setup;
+  // keep watching (more slowly) for the check-in that shows it runs.
+  const kept =
+    state?.checkedIn && state.device
+      ? supervision(
+          state.device,
+          firstCheckIn || state.device.last_seen || null,
+        )
+      : null;
+  useEffect(() => setWatchSlowly(kept === "unsupervised"), [kept]);
   const reloadTokens = tokens.reload;
   useEffect(() => {
     // The token did its job once the device checked in: drop the in-page copy.
     if (!command || !state?.checkedIn || finished === command.tokenId) return;
     setFinished(command.tokenId);
+    setFirstCheckIn(state.device?.last_seen || null);
     tokenFlow.current?.finish();
     void reloadTokens();
-  }, [command, state?.checkedIn, finished, reloadTokens]);
+  }, [command, state?.checkedIn, state?.device, finished, reloadTokens]);
 
   async function copy(value: string, what = "Command") {
     try {
@@ -554,11 +599,34 @@ export function Enrollment({
       void revokeTokens([command.tokenId]);
     setCommand(null);
     setFinished(null);
+    setFirstCheckIn(null);
     setShown(false);
     setName("");
     setBaseline(null);
     void devices.reload();
     void tokens.reload();
+  }
+  /** Revoke the displayed command's token, then offer a fresh command. */
+  async function confirmStartOver() {
+    setRestarting(true);
+    setStartOverError("");
+    try {
+      await tokenFlow.current?.startOver();
+      setStartingOver(false);
+      setCommand(null);
+      setFinished(null);
+      setFirstCheckIn(null);
+      setShown(false);
+      setBaseline(null);
+      void devices.reload();
+      notify("The command's token is revoked. Create a new command.", {
+        tone: "success",
+      });
+    } catch (failure) {
+      setStartOverError((failure as Error).message);
+    } finally {
+      setRestarting(false);
+    }
   }
   async function createFleetToken(event: React.FormEvent) {
     event.preventDefault();
@@ -589,12 +657,36 @@ export function Enrollment({
     (!install.downloads_enabled ||
       platformBuilds.length === 0 ||
       (os === "windows" ? !winRelease : !installCommand));
+  // How to start an agent nothing keeps running: where this page's command
+  // put it (the installer's directory, or on PATH next to a copied agent).
+  const agentRun = install
+    ? runCommand(install, choices, !!installCommand && !noDownload)
+    : "";
+  const unsupervised =
+    state?.device && agentRun
+      ? unsupervisedLine(
+          state.device.name,
+          agentRun,
+          os,
+          choices.service === "none",
+        )
+      : null;
+  // Saved requests whose command was shown and whose token nobody used fold
+  // into the "wasn't used" line; the token flow drops the finished ones.
+  const tokenList =
+    tokens.error || tokens.updatedAt === null ? null : tokens.data;
+  const reminded = new Set(
+    resolveTokenRequests(savedRequests, tokenList).flatMap((resolution) =>
+      resolution.kind === "unused" ? [resolution.token.id] : [],
+    ),
+  );
   const unusedTokens = tokens.data.filter(
     (token) =>
       tokenStatus(token) === "Available" &&
       token.uses === 0 &&
-      token.created_by?.id === user.id &&
-      /install command/i.test(token.name) &&
+      (reminded.has(token.id) ||
+        (token.created_by?.id === user.id &&
+          /install command/i.test(token.name))) &&
       token.id !== command?.tokenId,
   );
   const parsedHistory = EnrollmentActivitySchema.safeParse(history.data);
@@ -627,12 +719,18 @@ export function Enrollment({
           ref={tokenFlow}
           user={user}
           notify={notify}
+          tokens={tokenList}
           onChange={() => void tokens.reload()}
           onState={(waiting, isBlocked) => {
             setBusy(waiting);
             setBlocked(isBlocked);
           }}
           onReady={setSecret}
+          onSettled={(note) =>
+            setNotes((previous) =>
+              previous.includes(note) ? previous : [...previous, note],
+            )
+          }
         />
         {(details.error || (parsed && !parsed.success)) && (
           <ErrorBox
@@ -976,6 +1074,11 @@ export function Enrollment({
                             : "Check the highlighted settings under Advanced."}
                   </span>
                 )}
+                {ready && blocked && !busy && operate && (
+                  <span className="control-muted" role="status">
+                    Check the saved token request at the top of the page first.
+                  </span>
+                )}
               </div>
               {operate && unusedTokens.length > 0 && (
                 <p className="control-muted enroll-unused">
@@ -985,7 +1088,7 @@ export function Enrollment({
                   <button
                     type="button"
                     className="enroll-text-button"
-                    disabled={revokingUnused || busy || blocked}
+                    disabled={revokingUnused || busy}
                     onClick={async () => {
                       setRevokingUnused(true);
                       const count = await revokeTokens(
@@ -1014,7 +1117,7 @@ export function Enrollment({
             <div className="control-note">
               <p>
                 {state?.checkedIn
-                  ? "The device connected, so this page no longer keeps its token."
+                  ? "The device enrolled and checked in, so this page no longer keeps its token."
                   : "This page no longer holds the token for this command. If it may be exposed, revoke it under Manage enrollment tokens."}
               </p>
               {!state?.checkedIn && (
@@ -1118,11 +1221,24 @@ export function Enrollment({
                 >
                   Copy token
                 </Button>
+                {operate && (
+                  <Button
+                    variant="ghost compact"
+                    icon={RotateCcw}
+                    disabled={busy}
+                    onClick={() => {
+                      setStartOverError("");
+                      setStartingOver(true);
+                    }}
+                  >
+                    Start over
+                  </Button>
+                )}
               </div>
               <p className="control-muted enroll-secret-hint">
                 Paste it when setup asks. This page keeps it only until the
-                device connects or you leave. Starting over revokes it if no
-                device used it.
+                device connects or you leave. Start over revokes it, so no
+                device can use this command.
               </p>
               {problem && !install.certificate?.publicly_trusted && (
                 <div className="control-note">{problem}</div>
@@ -1194,9 +1310,25 @@ export function Enrollment({
         >
           <h2 id="enroll-watch">3. Watch it connect</h2>
           {!command ? (
-            <p className="control-muted">
-              The device shows up here as it enrolls and checks in.
-            </p>
+            <>
+              {notes.length > 0 && (
+                <ol className="enroll-timeline enroll-earlier">
+                  {notes.map((note) => (
+                    <li key={note} data-outcome="success">
+                      <CheckCircle2 size={16} aria-hidden="true" />
+                      <span>
+                        <strong>{note}</strong>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <p className="control-muted">
+                {notes.length
+                  ? "The next device shows up here as it enrolls and checks in."
+                  : "The device shows up here as it enrolls and checks in."}
+              </p>
+            </>
           ) : (
             <div aria-live="polite">
               <ol className="enroll-timeline">
@@ -1263,6 +1395,30 @@ export function Enrollment({
                     <CheckCircle2 size={16} aria-hidden="true" />
                     <span>
                       <strong>First check-in</strong>
+                      <small>
+                        {clock(firstCheckIn || state.device.last_seen)}
+                      </small>
+                    </span>
+                  </li>
+                )}
+                {kept === "unsupervised" && unsupervised && (
+                  <li data-outcome="warning">
+                    <TriangleAlert size={16} aria-hidden="true" />
+                    <span>
+                      <strong>{unsupervised.title}</strong>
+                      <small>
+                        {unsupervised.before}
+                        <code>{unsupervised.command}</code>
+                        {unsupervised.after}
+                      </small>
+                    </span>
+                  </li>
+                )}
+                {kept === "running" && state?.device && (
+                  <li data-outcome="success">
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                    <span>
+                      <strong>Checked in again</strong>
                       <small>{clock(state.device.last_seen)}</small>
                     </span>
                   </li>
@@ -1303,12 +1459,47 @@ export function Enrollment({
                   </Button>
                 </div>
               )}
-              {state?.checkedIn && state.device && (
+              {state?.checkedIn && state.device && kept === "unsupervised" && (
+                <div className="enroll-success" data-tone="warning">
+                  <h3>Start {state.device.name}&apos;s agent</h3>
+                  <p>
+                    Run this on the host and keep it running, for example from a
+                    container&apos;s entrypoint or your process supervisor:
+                  </p>
+                  <CommandBlock
+                    command={agentRun}
+                    label="Run command"
+                    onCopy={(value) => void copy(value)}
+                  />
+                  <p>
+                    {state.device.name} shows as connected here when its agent
+                    checks in again.
+                  </p>
+                  <div className="enroll-actions">
+                    <Button
+                      variant="secondary"
+                      onClick={() => navigate(`devices/${state.device!.id}`)}
+                    >
+                      Open device
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={blocked || busy}
+                      onClick={addAnother}
+                    >
+                      Add another device
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {state?.checkedIn && state.device && kept !== "unsupervised" && (
                 <div className="enroll-success">
                   <h3>{state.device.name} is connected</h3>
                   <p>
                     No pipeline is assigned yet. Any Vector already running on
                     the host is left alone.
+                    {kept === "running" &&
+                      " No service manager runs its agent, so keep it under your own supervisor."}
                   </p>
                   {(state.device.configuration_mode || "restricted") !==
                     choices.mode && (
@@ -1590,6 +1781,39 @@ export function Enrollment({
             </Button>
           </div>
         </form>
+      </Modal>
+      <Modal
+        open={startingOver && !!current}
+        onClose={() => !restarting && setStartingOver(false)}
+        title="Start over?"
+        description="Revokes this command's token, so no device can enroll with it."
+      >
+        <div className="modal-body">
+          {startOverError && <ErrorBox message={startOverError} />}
+          <p>
+            {state?.device
+              ? `${state.device.name} already enrolled with this command and stays connected. `
+              : ""}
+            You can create a new command right after. The revocation is recorded
+            in the audit log.
+          </p>
+        </div>
+        <div className="modal-footer">
+          <Button
+            variant="secondary"
+            disabled={restarting}
+            onClick={() => setStartingOver(false)}
+          >
+            Keep this command
+          </Button>
+          <Button
+            variant="danger"
+            busy={restarting}
+            onClick={() => void confirmStartOver()}
+          >
+            Revoke and start over
+          </Button>
+        </div>
       </Modal>
     </div>
   );

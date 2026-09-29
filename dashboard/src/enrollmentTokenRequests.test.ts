@@ -6,11 +6,16 @@ import {
   beginTokenRequest,
   checkTokenCreation,
   checkTokenStatus,
+  confirmTokenRequest,
   dismissTokenRequestIssue,
+  enrollmentNote,
   finishTokenRequest,
   readTokenRequests,
+  resolveTokenRequests,
+  statusOutcome,
   subscribeTokenRequests,
   tokenRequestAvailable,
+  type ListedToken,
   type TokenCreateInput,
   type TokenRequestOperation,
 } from "./enrollmentTokenRequests";
@@ -569,5 +574,209 @@ describe("correlated enrollment token responses", () => {
         recovery_name: "node-1",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("stored requests resolved against the token list", () => {
+  // Local wall-clock times, so the sentences read the same in any time zone.
+  const now = new Date(2026, 8, 29, 17, 20).valueOf();
+  const at = (hour: number, minute: number, day = 29) =>
+    new Date(2026, 8, day, hour, minute).toISOString();
+  const plain = (text: string | null | undefined) => text?.replace(/ /g, " ");
+  const listed = (patch: Partial<ListedToken> = {}): ListedToken => ({
+    id: other,
+    name: "r16-full install command",
+    expires_at: at(18, 14),
+    uses: 0,
+    max_uses: 1,
+    revoked: false,
+    devices: [],
+    device_count: 0,
+    ...patch,
+  });
+  const enrolled = listed({
+    uses: 1,
+    last_used_at: at(17, 15),
+    device_count: 1,
+    devices: [{ name: "r16-full", enrolled_at: at(17, 15) }],
+  });
+  function confirmedRequest() {
+    const op = beginTokenRequest(actor, input);
+    return confirmTokenRequest(op, { id: other });
+  }
+
+  it("records the token a displayed command created, without its secret, and never blocks another request", () => {
+    const op = beginTokenRequest(actor, input);
+    checkTokenCreation(op, receipt(op.id));
+    const shown = confirmTokenRequest(op, { id: other });
+    expect(shown.token_id).toBe(other);
+    expect(shown.confirmed_at).toBeTruthy();
+    expect(tokenRequestAvailable(op)).toBe(false);
+    expect(tokenRequestAvailable(shown)).toBe(true);
+    expect(storage.getItem(key(op))).not.toContain("synthetic-one-time-secret");
+    expect(readTokenRequests(actor).operations).toEqual([shown]);
+    const next = beginTokenRequest(actor, { ...input, name: "Another" });
+    expect(readTokenRequests(actor).operations.map((item) => item.id)).toEqual(
+      expect.arrayContaining([shown.id, next.id]),
+    );
+    // A confirmation naming another token is refused.
+    expect(() => confirmTokenRequest(shown, { id: actor })).toThrow();
+    expect(confirmTokenRequest(shown, { id: other })).toBe(shown);
+  });
+
+  it("keeps blocking a request whose response never arrived", () => {
+    beginTokenRequest(actor, input);
+    expect(() => beginTokenRequest(actor, input)).toThrow(
+      /saved token requests/,
+    );
+  });
+
+  it("refuses to confirm a reminder another tab changed", () => {
+    const op = beginTokenRequest(actor, input);
+    storage.values.set(
+      key(op),
+      JSON.stringify({ ...op, request: { ...op.request, name: "Peer" } }),
+    );
+    expect(() => confirmTokenRequest(op, { id: other })).toThrow(/storage/);
+  });
+
+  it("makes room by dropping the oldest confirmed reminders, never an unconfirmed one", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 29, 9, 0));
+    const first = confirmedRequest();
+    for (let i = 1; i < 10; i++) {
+      vi.setSystemTime(new Date(2026, 8, 29, 9, i));
+      confirmedRequest();
+    }
+    vi.useRealTimers();
+    expect(storage.length).toBe(10);
+    const fresh = beginTokenRequest(actor, input);
+    expect(storage.length).toBe(10);
+    expect(storage.getItem(key(first))).toBeNull();
+    expect(storage.getItem(key(fresh))).not.toBeNull();
+    expect(() => beginTokenRequest(actor, input)).toThrow(
+      /saved token requests/,
+    );
+  });
+
+  it("drops a used-up command silently and says once what it enrolled", () => {
+    const op = confirmedRequest();
+    const [resolution] = resolveTokenRequests([op], [enrolled], now);
+    expect(resolution.kind).toBe("finished");
+    expect(resolution.kind === "finished" && plain(resolution.note)).toBe(
+      "r16-full install command enrolled r16-full at 5:15 PM.",
+    );
+  });
+
+  it("drops a revoked or expired command, naming only what it enrolled", () => {
+    const op = confirmedRequest();
+    for (const token of [
+      listed({ revoked: true }),
+      listed({ expires_at: at(17, 0) }),
+    ]) {
+      const [resolution] = resolveTokenRequests([op], [token], now);
+      expect(resolution).toMatchObject({ kind: "finished", note: null });
+    }
+    const [revokedAfterUse] = resolveTokenRequests(
+      [op],
+      [{ ...enrolled, revoked: true, max_uses: 3 }],
+      now,
+    );
+    expect(
+      revokedAfterUse.kind === "finished" && plain(revokedAfterUse.note),
+    ).toBe("r16-full install command enrolled r16-full at 5:15 PM.");
+  });
+
+  it("counts a partly used token as done with and names what it enrolled", () => {
+    const op = confirmedRequest();
+    const [resolution] = resolveTokenRequests(
+      [op],
+      [
+        listed({
+          name: "Lab install command",
+          max_uses: 5,
+          uses: 4,
+          device_count: 4,
+          devices: [
+            { name: "lab-4", enrolled_at: at(9, 5, 28) },
+            { name: "lab-3", enrolled_at: at(9, 4, 28) },
+            { name: "lab-2", enrolled_at: at(9, 3, 28) },
+          ],
+        }),
+      ],
+      now,
+    );
+    expect(resolution.kind === "finished" && plain(resolution.note)).toBe(
+      "Lab install command enrolled lab-2, lab-3, lab-4 and 1 more on Sep 28 at 9:05 AM.",
+    );
+  });
+
+  it("folds an unused live command into the unused line", () => {
+    const op = confirmedRequest();
+    expect(resolveTokenRequests([op], [listed()], now)).toEqual([
+      { kind: "unused", operation: op, token: listed() },
+    ]);
+  });
+
+  it("keeps the record while the token list is loading, failed or lacks the token", () => {
+    const op = confirmedRequest();
+    expect(resolveTokenRequests([op], null, now)).toEqual([
+      { kind: "unresolved", operation: op },
+    ]);
+    expect(resolveTokenRequests([op], [], now)).toEqual([
+      { kind: "unresolved", operation: op },
+    ]);
+    expect(readTokenRequests(actor).operations).toEqual([op]);
+  });
+
+  it("leaves an unconfirmed request to its exact status check", () => {
+    const op = beginTokenRequest(actor, input);
+    expect(resolveTokenRequests([op], [enrolled], now)).toEqual([
+      { kind: "unconfirmed", operation: op },
+    ]);
+  });
+
+  it("reads an exact status: unknown, live, or finished when cancelled, used, revoked or expired", () => {
+    const status = (patch: object | null, state = "created") => ({
+      request_id: actor,
+      request_correlation: true as const,
+      found: true as const,
+      state: state as "created" | "cancelled",
+      record: patch && { ...record(), expires_at: at(18, 0), ...patch },
+    });
+    expect(
+      statusOutcome(
+        { request_id: actor, request_correlation: true, found: false },
+        now,
+      ),
+    ).toBe("unknown");
+    expect(statusOutcome(status({}), now)).toBe("live");
+    expect(statusOutcome(status({ uses: 3 }), now)).toBe("finished");
+    expect(statusOutcome(status({ uses: 1 }), now)).toBe("finished");
+    expect(statusOutcome(status({ revoked: true }), now)).toBe("finished");
+    expect(statusOutcome(status({ expires_at: at(17, 0) }), now)).toBe(
+      "finished",
+    );
+    expect(statusOutcome(status(null, "cancelled"), now)).toBe("finished");
+  });
+
+  it("says how many devices a receipt enrolled when it can't name them", () => {
+    expect(
+      plain(
+        enrollmentNote(
+          listed({ uses: 2, max_uses: null, devices: undefined }),
+          now,
+        ),
+      ),
+    ).toBe("r16-full install command enrolled 2 devices.");
+    expect(
+      plain(
+        enrollmentNote(
+          listed({ uses: 1, devices: undefined, last_used_at: at(17, 15) }),
+          now,
+        ),
+      ),
+    ).toBe("r16-full install command enrolled a device at 5:15 PM.");
+    expect(enrollmentNote(listed(), now)).toBeNull();
   });
 });

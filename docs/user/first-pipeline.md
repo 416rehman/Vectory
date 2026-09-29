@@ -14,13 +14,15 @@ Create a pipeline from the built-in synthetic example, publish it and deploy it 
 2. Name it `Hello Vectory` and choose **Try a synthetic example**.
 3. Choose **Create pipeline**.
 
-You should see three connected cards:
+You should see five cards in two chains:
 
 | Card | Component | What it does |
 | --- | --- | --- |
 | `demo` | `demo_logs` source | Generates one JSON log event per second. |
 | `enrich` | `remap` transform | Adds `environment` and `managed_by` fields with VRL. |
 | `output` | `console` sink | Writes each event to Vector's standard error. The agent discards it, so nothing is stored. |
+| `vectory_internal_metrics` | `internal_metrics` source | Vector's own metrics: events in and out, errors and buffers. |
+| `vectory_metrics_exporter` | `prometheus_exporter` sink | Serves those metrics on `127.0.0.1:9598`, where the agent reads them. This is what [**Add monitoring**](telemetry.md#enable-real-metrics) adds. |
 
 Select `enrich` to see its VRL program in the right-hand panel:
 
@@ -29,7 +31,7 @@ Select `enrich` to see its VRL program in the right-hand panel:
 .managed_by = "vectory"
 ```
 
-The example works in restricted mode. It reads no files and sends nothing over the network.
+The example works in restricted mode. It reads no files and sends nothing over the network. Its metrics exporter listens only on this host's loopback address, which restricted devices allow without a host approval.
 
 ## 2. Check it
 
@@ -70,7 +72,7 @@ flowchart LR
 | **Downloaded**, **Validated** | The device fetched the signed version and Vector accepted it on the host. |
 | **Applying**, **Restarting Vector** | The configuration is written and Vector is loading it. |
 | **Applied** | The agent verified Vector runs this version. |
-| **Failed** | Rejected or couldn't be applied; the previous configuration keeps running. |
+| **Failed** | Rejected or couldn't be applied. What ran before keeps running; if this was the device's first version, Vector isn't running. |
 | **Rolled back** | The new version failed to start; the agent restored the last working one. |
 | **Check required** | Applied, but the agent couldn't confirm what Vector runs. Look at the device before retrying. |
 
@@ -82,7 +84,7 @@ Vectory never stores your events. To confirm on the host that Vector runs the ne
 sudo vectory logs --follow
 ```
 
-Look for `Vector has started.` The console sink writes events to Vector's standard error, which the agent discards so event data never lands in a file. To watch data flow, [add monitoring](telemetry.md#enable-real-metrics) and open the device's **Operational metrics**.
+Look for `Vector has started.` The console sink writes events to Vector's standard error, which the agent discards so event data never lands in a file. To watch data flow, open the device's **Operational metrics**: the example's exporter feeds them within two check-ins. For your own pipelines, [add monitoring](telemetry.md#enable-real-metrics) the same way.
 
 ## 6. Change it and roll back
 

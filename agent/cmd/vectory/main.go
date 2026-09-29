@@ -24,12 +24,15 @@ func main() {
 }
 
 // Exit codes: 0 success, 1 the operation or a preflight check failed, 2 the
-// command line was invalid, 78 the agent isn't installed or enrolled (so a
-// service manager doesn't restart-loop it), 130 setup was interrupted.
+// command line was invalid, 3 setup finished but nothing keeps the agent
+// running (no service manager, and --service none wasn't passed), 78 the
+// agent isn't installed or enrolled (so a service manager doesn't
+// restart-loop it), 130 setup was interrupted.
 const (
 	exitOK          = 0
 	exitFailed      = 1
 	exitUsage       = 2
+	exitAttention   = 3
 	exitNotReady    = 78
 	exitInterrupted = 130
 )

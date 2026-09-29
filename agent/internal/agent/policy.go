@@ -7,7 +7,9 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -178,6 +180,7 @@ func (p CapabilityPolicy) Check(data []byte) error {
 	if p.FullVectorConfig {
 		return nil
 	}
+	exporter, exporterAddress := monitoringExporter(root)
 	for _, k := range sortedKeys(root) {
 		v := root[k]
 		switch k {
@@ -192,7 +195,11 @@ func (p CapabilityPolicy) Check(data []byte) error {
 					return errors.New("component must be an object")
 				}
 				typ, _ := c["type"].(string)
-				if e := p.component(k, typ, c); e != nil {
+				policy := p
+				if k == "sinks" && id == exporter {
+					policy.AllowedListenAddresses = append(slices.Clone(p.AllowedListenAddresses), exporterAddress)
+				}
+				if e := policy.component(k, typ, c); e != nil {
 					e.Section, e.ComponentID, e.ComponentType = k, id, typ
 					return e
 				}
@@ -235,6 +242,54 @@ func (p CapabilityPolicy) Check(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// monitoringExporter finds the one listener restricted mode allows without a
+// host allowance: Vectory's own monitoring path, a prometheus_exporter sink
+// on a loopback address whose inputs are all internal_metrics sources. It
+// serves Vector's own counters, never events, and only to this host, and it
+// is what the agent reads delivery health from. Only the first such sink (by
+// ID) qualifies; a second one, and anything else that listens, still needs
+// its allowance. Everything else in the exporter (TLS files, for example) is
+// checked as usual.
+func monitoringExporter(root map[string]any) (id, address string) {
+	sources, _ := root["sources"].(map[string]any)
+	sinks, _ := root["sinks"].(map[string]any)
+	internalMetrics := func(input any) bool {
+		name, _ := input.(string)
+		source, _ := sources[name].(map[string]any)
+		typ, _ := source["type"].(string)
+		return typ == "internal_metrics"
+	}
+	for _, id := range sortedKeys(sinks) {
+		sink, _ := sinks[id].(map[string]any)
+		typ, _ := sink["type"].(string)
+		address, _ := sink["address"].(string)
+		inputs, _ := sink["inputs"].([]any)
+		if typ != "prometheus_exporter" || !loopbackListener(address) || len(inputs) == 0 {
+			continue
+		}
+		fed := true
+		for _, input := range inputs {
+			fed = fed && internalMetrics(input)
+		}
+		if fed {
+			return id, address
+		}
+	}
+	return "", ""
+}
+
+// loopbackListener reports whether address is a loopback IP literal with an
+// explicit port, such as 127.0.0.1:9598 or [::1]:9598.
+func loopbackListener(address string) bool {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	number, err := strconv.Atoi(port)
+	ip := net.ParseIP(host)
+	return err == nil && number > 0 && number <= 65535 && ip != nil && ip.IsLoopback()
 }
 
 // component checks one component; the caller fills in its identity.

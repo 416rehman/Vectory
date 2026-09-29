@@ -171,6 +171,57 @@ function destination(value: string) {
     return null;
   }
 }
+/**
+ * Whether an address is a loopback IP literal with a port, such as
+ * 127.0.0.1:9598 or [::1]:9598 (as the agent decides it; a name like
+ * localhost is not one).
+ */
+export function loopbackListener(address: string) {
+  const match =
+    /^(?:\[([0-9a-fA-F:.]+)\]|(\d{1,3}(?:\.\d{1,3}){3})):(\d{1,5})$/.exec(
+      address,
+    );
+  if (!match || Number(match[3]) < 1 || Number(match[3]) > 65535) return false;
+  const ipv4 = (value: string) => {
+    const octets = value.split(".");
+    return (
+      octets.length === 4 &&
+      octets.every((octet) => /^(0|[1-9]\d{0,2})$/.test(octet) && +octet < 256)
+    );
+  };
+  if (match[2]) return ipv4(match[2]) && match[2].startsWith("127.");
+  const host = match[1].toLowerCase();
+  const mapped = /^::ffff:(.+)$/.exec(host);
+  if (mapped) return ipv4(mapped[1]) && mapped[1].startsWith("127.");
+  return /^(0{0,4}:){2,7}0{0,3}1$/.test(host) || host === "::1";
+}
+/**
+ * The loopback Prometheus exporter fed only by internal_metrics sources that
+ * restricted mode runs without a listener allowance: Vectory's monitoring
+ * pair (the first such sink by ID, as the agent picks it). Null when the
+ * pipeline has none.
+ */
+export function monitoringExporter(config: Record<string, unknown>) {
+  const sources = (config.sources as Record<string, any>) || {};
+  const sinks = (config.sinks as Record<string, any>) || {};
+  for (const id of Object.keys(sinks).sort()) {
+    const sink = sinks[id];
+    if (
+      sink?.type === "prometheus_exporter" &&
+      typeof sink.address === "string" &&
+      loopbackListener(sink.address) &&
+      Array.isArray(sink.inputs) &&
+      sink.inputs.length > 0 &&
+      sink.inputs.every(
+        (input: unknown) =>
+          typeof input === "string" &&
+          sources[input]?.type === "internal_metrics",
+      )
+    )
+      return id;
+  }
+  return null;
+}
 /** The directory to approve for a path: the part before any wildcard. */
 function fileRoot(path: string) {
   const wildcard = path.search(/[*?[]/);
@@ -214,12 +265,16 @@ export function hostApprovals(config: Record<string, unknown>): HostApprovals {
         fileRoots.add(fileRoot(value));
     }
   };
+  // Restricted mode runs the monitoring exporter without an allowance.
+  const exporter = monitoringExporter(config);
   for (const kind of ["sources", "transforms", "sinks"])
-    for (const component of Object.values(
+    for (const [id, component] of Object.entries(
       (config[kind] as Record<string, any>) || {},
     ))
       walk(
-        component,
+        kind === "sinks" && id === exporter
+          ? { ...component, address: undefined }
+          : component,
         kind,
         component?.type === "syslog" && component?.mode === "unix",
       );

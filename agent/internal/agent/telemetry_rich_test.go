@@ -131,7 +131,11 @@ func TestExporterDiscoveryIsLoopbackAndInternalMetricsOnly(t *testing.T) {
 		{"default address", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"]}}}`, "", "", full},
 		{"not vector metrics", `{"sources":{"logs":{"type":"demo_logs"}},"transforms":{"l2m":{"type":"log_to_metric","inputs":["logs"]}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["l2m"],"address":"127.0.0.1:9598"}}}`, "", "", full},
 		{"authenticated", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"],"address":"127.0.0.1:9598","auth":{"strategy":"basic"}}}}`, "", "", full},
-		{"restricted listener not allowed", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"],"address":"127.0.0.1:9700"}}}`, "", "", restricted},
+		// Vectory's monitoring exporter runs in restricted mode without an
+		// allowance, so the agent reads it; one fed through a transform
+		// still needs its listener approved.
+		{"restricted monitoring exporter", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"],"address":"127.0.0.1:9700"}}}`, "127.0.0.1:9700", "vector", restricted},
+		{"restricted listener not allowed", `{"sources":{"m":{"type":"internal_metrics"}},"transforms":{"f":{"type":"filter","inputs":["m"]}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["f"],"address":"127.0.0.1:9700"}}}`, "", "", restricted},
 		{"hostname", `{"sources":{"m":{"type":"internal_metrics"}},"sinks":{"prom":{"type":"prometheus_exporter","inputs":["m"],"address":"localhost:9598"}}}`, "", "", full},
 	}
 	for _, c := range cases {

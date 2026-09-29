@@ -93,7 +93,14 @@ try {
       (item) => item.severity === "error",
     );
     assert.deepEqual(local, [], `${template.id}: no local errors`);
-    for (const config of [template.config, withMonitoring(template.config)]) {
+    // The synthetic example already ships the monitoring pair.
+    const withPair = withMonitoring(template.config);
+    assert.equal(
+      withPair === null,
+      template.id === "synthetic-demo",
+      `${template.id}: Add monitoring applies exactly once`,
+    );
+    for (const config of [template.config, withPair].filter(Boolean)) {
       const monitored = config !== template.config;
       const result = await validate(
         config,

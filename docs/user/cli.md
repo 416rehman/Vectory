@@ -10,7 +10,7 @@ vectory <command> [flags]
 
 - Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments.
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
-- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `130` `setup` was interrupted with Ctrl-C.
+- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `3` `setup` finished but something needs you (on a host without a service manager, nothing keeps the agent running), `130` `setup` was interrupted with Ctrl-C.
 
 Run `vectory --help` for the command list, `vectory help <command>` for one command, and `vectory --version` for the version.
 
@@ -62,7 +62,7 @@ sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 FINGERP
 | `--capability-policy PATH` | Restricted-mode allowances. |
 | `--vector-binary PATH` | The Vector binary to adopt. Found automatically when omitted. |
 | `--managed-config PATH` | The one configuration file the agent manages. Defaults to the platform path above. |
-| `--service auto` | Service manager to register with: `auto`, `systemd`, `launchd`, `windows` or `none`. |
+| `--service auto` | Service manager to register with: `auto`, `systemd`, `launchd`, `windows` or `none`. `none` means you keep the agent running yourself. |
 | `--service-user NAME`, `--create-user` | Account the service runs as, and whether to create it. |
 | `--keep-existing-vector` | Continue even though another Vector is running. Setup leaves that Vector untouched. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
@@ -75,6 +75,8 @@ Before it asks for the token, `setup` checks that the service account can run Ve
 Run `setup` again after replacing the agent binary to upgrade: it restarts the service on the new build and waits for that build's first check-in, for example `vectory.service upgraded 0.1.0 → 0.2.0 · first check-in 1.2 s after restart`. Vector finishes its in-flight events before the old agent exits. On Windows, where a running agent can't be replaced, setup first checks that the service is registered for this agent, then stops it; if a later step fails, it starts the service again and says which build it runs.
 
 Ctrl-C while `setup` waits for the first check-in stops only the wait: the service keeps running, and `setup` exits with code `130`.
+
+Without a service manager (most containers, WSL, Alpine with OpenRC), `--service auto` has nothing to register. Setup checks in once with a full report, then prints `[!!] Service` with the reason and the exact command that keeps the agent running, such as `/usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, and exits with code `3`. With `--service none`, the same command is the plan, and setup exits with `0`. `--create-user` needs a service; without one, setup says it created no account. `--dry-run` shows the same **Service** row, and the agent path where the installer puts it.
 
 ## install
 
@@ -144,6 +146,16 @@ Show the device's identity, server, last check-in, pipeline and the next step.
 ```sh
 sudo vectory status
 ```
+
+When Vector's own log shows a sink failing requests in the last minute, `status` says so under **Vector**, and **Next** says what to check instead of "Nothing to do":
+
+```text
+Vector     0.58.0 at /usr/bin/vector · adopted binary unchanged
+           sink out: 27 errors in the last minute: Connection refused (127.0.0.1:8239) · see vectory logs
+Next       Check that 127.0.0.1:8239 is reachable from this host.
+```
+
+After a device's first version fails to start, **Next** says that Vector isn't running because there is nothing earlier to go back to, and to deploy a corrected version or retry. It never asks for host recovery then.
 
 ## doctor
 

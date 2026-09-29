@@ -198,6 +198,96 @@ export function fleetTelemetry(
   };
 }
 
+/** A device as far as delivery measurement and adopted workloads go. */
+type DeliveryDevice = {
+  status: string;
+  desired_version_id?: string | null;
+  desired_version?: {
+    configuration_id: string | null;
+    configuration_name: string | null;
+  } | null;
+  telemetry?: { sampled_at: string } | null;
+  actual_sha256?: string | null;
+  vector_running?: boolean;
+};
+/** Whether the agent sent a metrics sample in the last three minutes. */
+export function reportsMetrics(
+  device: Pick<DeliveryDevice, "telemetry">,
+  now = Date.now(),
+) {
+  const sampled = Date.parse(device.telemetry?.sampled_at || "");
+  return Number.isFinite(sampled) && now - sampled <= TELEMETRY_FRESH_MS;
+}
+/**
+ * Devices verified running their pipeline whose delivery isn't measured: no
+ * fresh metrics sample, so only Vector's log can show a failing sink and
+ * "Applied" says nothing about events arriving.
+ */
+export function deliveryUnmeasured(
+  devices: DeliveryDevice[],
+  now = Date.now(),
+) {
+  return devices.filter(
+    (device) => device.status === "verified" && !reportsMetrics(device, now),
+  ).length;
+}
+/** "Nothing is failing" only where Vectory measures delivery everywhere. */
+export function quietSummary(unmeasured: number) {
+  return unmeasured
+    ? "Nothing is failing that Vectory can measure"
+    : "Nothing is failing";
+}
+/**
+ * The pipeline most devices without metrics run, to offer "Add monitoring to
+ * <pipeline>"; null when none of them runs a named pipeline.
+ */
+export function monitoringTarget(devices: DeliveryDevice[], now = Date.now()) {
+  const tally = new Map<string, { id: string; name: string; count: number }>();
+  for (const device of devices) {
+    const pipeline = device.desired_version;
+    if (
+      device.status === "revoked" ||
+      reportsMetrics(device, now) ||
+      !pipeline?.configuration_id ||
+      !pipeline.configuration_name
+    )
+      continue;
+    const entry = tally.get(pipeline.configuration_id) || {
+      id: pipeline.configuration_id,
+      name: pipeline.configuration_name,
+      count: 0,
+    };
+    entry.count++;
+    tally.set(entry.id, entry);
+  }
+  return (
+    [...tally.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name),
+    )[0] || null
+  );
+}
+/**
+ * What runs on devices without a pipeline: a local configuration adopted at
+ * setup keeps running until a deployment replaces it; anywhere else Vector
+ * starts only with the first deployment.
+ */
+export function unmanagedDetail(devices: DeliveryDevice[]) {
+  const unmanaged = devices.filter(
+    (device) => device.status !== "revoked" && !device.desired_version_id,
+  );
+  const adopted = unmanaged.filter(
+    (device) => !!device.actual_sha256 && device.vector_running !== false,
+  ).length;
+  const one = unmanaged.length === 1;
+  if (!adopted)
+    return `Vector starts on ${one ? "it" : "them"} when you deploy a pipeline.`;
+  if (adopted === unmanaged.length)
+    return one
+      ? "A local configuration adopted at setup keeps running until you deploy one."
+      : "Local configurations adopted at setup keep running until you deploy one.";
+  return `${adopted.toLocaleString()} ${adopted === 1 ? "runs" : "run"} a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.`;
+}
+
 export type RolloutProgress = {
   total: number;
   verified: number;
