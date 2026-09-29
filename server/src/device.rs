@@ -34,7 +34,8 @@ pub fn router(s: State) -> Router {
         .route("/agent/v1/heartbeat", post(heartbeat))
         .route("/agent/v1/artifacts/{sha256}", get(artifact))
         .route("/agent/v1/renew", post(renew))
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(crate::api::MAX_REQUEST_BODY))
+        .layer(axum::middleware::from_fn(crate::api::reject_oversized))
         .layer(axum::middleware::from_fn_with_state(
             s.clone(),
             bounded_request,
