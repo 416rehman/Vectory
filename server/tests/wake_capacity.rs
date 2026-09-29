@@ -58,6 +58,7 @@ async fn ten_thousand_parked_waits_stay_small() {
         wake: wake::Options {
             limit: 20_000,
             hold: Duration::from_secs(600),
+            ..Default::default()
         },
         ..Default::default()
     })

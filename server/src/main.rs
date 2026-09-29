@@ -251,7 +251,9 @@ async fn main() -> anyhow::Result<()> {
             "Explicit development mode: agent listener disabled without TLS certificate and key"
         );
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
             .await?;
     }
     Ok(())

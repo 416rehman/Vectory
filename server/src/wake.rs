@@ -24,6 +24,11 @@
 //!   and answers those whose state really changed. A preview that rolls its
 //!   simulated changes back wakes nobody, and a burst of changes wakes each
 //!   waiter once.
+//! - Wake-ups are paced: up to `Options::burst` answer at once, then
+//!   `Options::rate` a second, oldest first, so an all-at-once rollout to a
+//!   large fleet can't send every agent's heartbeat to the writer at the same
+//!   moment. A queued wait still listens, and its agent's own schedule keeps
+//!   running, so pacing never delays a device past its next check-in.
 //! - The response head is sent at once and the one-line body when the answer
 //!   is known (at most `Options::hold` later), so the agent listener's request
 //!   deadline and slots bound only the authentication, and an agent's
@@ -45,12 +50,12 @@ use hyper::body::Frame;
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     task::{Context, Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Listed in the signed manifest's `features`: this server holds waits.
@@ -58,7 +63,9 @@ pub const FEATURE: &str = "wake";
 /// Seconds a refused wait should leave before the next one. The agent keeps
 /// checking in on its ordinary schedule meanwhile.
 const BUSY_RETRY_SECONDS: u64 = 60;
-const CLOSING_RETRY_SECONDS: u64 = 5;
+/// A stopping server: short, so the hint can't outlast a restart and keep an
+/// agent from waiting after its next check-in.
+const CLOSING_RETRY_SECONDS: u64 = 1;
 const MAX_SAFE: i64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Debug)]
@@ -68,12 +75,19 @@ pub struct Options {
     pub limit: usize,
     /// How long one wait is held before it answers `changed:false`.
     pub hold: Duration,
+    /// Wake-ups that go out at once before pacing starts.
+    pub burst: u32,
+    /// Wake-ups a second beyond the burst (each brings a heartbeat, and after
+    /// an apply a follow-up one).
+    pub rate: u32,
 }
 impl Default for Options {
     fn default() -> Self {
         Self {
             limit: 20_000,
             hold: Duration::from_secs(25),
+            burst: 100,
+            rate: 50,
         }
     }
 }
@@ -109,8 +123,16 @@ struct Inner {
     /// registered during a flush knows to read its device once more.
     sequence: u64,
     closed: bool,
-    /// Waits answered `changed:true` by a flush, for tests and capacity notes.
+    /// Waits answered `changed:true`, for tests and capacity notes.
     woken: u64,
+    /// Wake-ups owed but held back by pacing, oldest first. An entry whose
+    /// wait has gone or been replaced is skipped.
+    queue: VecDeque<(Arc<str>, u64)>,
+    /// Wake-ups that may go out now: a bucket of `burst`, refilled at `rate`.
+    tokens: f64,
+    refilled: Option<Instant>,
+    /// A task drains `queue`.
+    pacing: bool,
 }
 /// A parked wait: the generations the agent last accepted, its answer once
 /// known and the task to wake. Fixed size; the device key is the only
@@ -120,6 +142,8 @@ struct Waiter {
     generation: i64,
     policy_generation: i64,
     answer: Option<Answer>,
+    /// Owed `changed:true`, waiting for its turn in the pace.
+    queued: bool,
     waker: Option<Waker>,
 }
 enum Refusal {
@@ -167,8 +191,10 @@ impl Registry {
         self.enabled()
             .then(|| json!({"listening": self.listening(device)}))
     }
-    fn sequence(&self) -> u64 {
-        self.lock().sequence
+    /// The flush sequence (see `Inner::sequence`), or None once stopping.
+    fn sequence(&self) -> Option<u64> {
+        let inner = self.lock();
+        (!inner.closed).then_some(inner.sequence)
     }
     fn register(
         &self,
@@ -187,6 +213,7 @@ impl Registry {
             generation,
             policy_generation,
             answer: None,
+            queued: false,
             waker: None,
         };
         if let Some((key, _)) = inner.waiters.get_key_value(device) {
@@ -257,7 +284,7 @@ impl Registry {
             .iter()
             .filter_map(|device| {
                 let (key, waiter) = inner.waiters.get_key_value(device.as_str())?;
-                waiter.answer.is_none().then(|| {
+                (waiter.answer.is_none() && !waiter.queued).then(|| {
                     (
                         key.clone(),
                         waiter.ticket,
@@ -268,42 +295,122 @@ impl Registry {
             })
             .collect()
     }
-    fn answer(&self, device: &str, ticket: u64, answer: Answer) {
-        let mut inner = self.lock();
-        let Some(waiter) = inner.waiters.get_mut(device) else {
-            return;
+    fn refill(&self, inner: &mut Inner, now: Instant) {
+        let burst = f64::from(self.options.burst.max(1));
+        inner.tokens = match inner.refilled {
+            None => burst,
+            Some(at) => (inner.tokens
+                + now.duration_since(at).as_secs_f64() * f64::from(self.options.rate.max(1)))
+            .min(burst),
         };
-        if waiter.ticket != ticket || waiter.answer.is_some() {
-            return;
+        inner.refilled = Some(now);
+    }
+    /// Answers this wait `changed:true` now if the pace allows, else queues it.
+    /// Returns true when no task drains the queue yet and one must start.
+    fn wake(&self, device: &str, ticket: u64) -> bool {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        self.refill(inner, Instant::now());
+        let Some((key, _)) = inner.waiters.get_key_value(device) else {
+            return false;
+        };
+        let key = key.clone();
+        let now = inner.queue.is_empty() && inner.tokens >= 1.0;
+        let Some(waiter) = inner.waiters.get_mut(device) else {
+            return false;
+        };
+        if waiter.ticket != ticket || waiter.answer.is_some() || waiter.queued {
+            return false;
         }
-        waiter.answer = Some(answer);
+        if !now {
+            waiter.queued = true;
+            inner.queue.push_back((key, ticket));
+            return !std::mem::replace(&mut inner.pacing, true);
+        }
+        waiter.answer = Some(Answer::Changed);
         let waker = waiter.waker.take();
-        if answer == Answer::Changed {
-            inner.woken += 1;
-        }
-        drop(inner);
+        inner.tokens -= 1.0;
+        inner.woken += 1;
+        drop(guard);
         if let Some(waker) = waker {
             waker.wake();
         }
+        false
     }
-    /// Shutdown: every parked wait answers `changed:false` now, and new waits
-    /// are refused. Returns how many were answered.
+    /// One step of the pace: answers queued waits while tokens last. Returns
+    /// how long to sleep before the next step, or None once the queue is empty.
+    fn pace(&self) -> Option<Duration> {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        self.refill(inner, Instant::now());
+        let mut wakers = Vec::new();
+        while let Some((device, ticket)) = inner.queue.front().cloned() {
+            // Waits that went away or were replaced leave without a token.
+            let Some(waiter) = inner
+                .waiters
+                .get_mut(&*device)
+                .filter(|w| w.ticket == ticket && w.queued && w.answer.is_none())
+            else {
+                inner.queue.pop_front();
+                continue;
+            };
+            if inner.tokens < 1.0 {
+                break;
+            }
+            inner.queue.pop_front();
+            waiter.queued = false;
+            waiter.answer = Some(Answer::Changed);
+            wakers.extend(waiter.waker.take());
+            inner.tokens -= 1.0;
+            inner.woken += 1;
+        }
+        let next = if inner.queue.is_empty() {
+            inner.pacing = false;
+            None
+        } else {
+            let seconds = (1.0 - inner.tokens).max(0.0) / f64::from(self.options.rate.max(1));
+            Some(Duration::from_secs_f64(seconds).max(Duration::from_millis(1)))
+        };
+        drop(guard);
+        for waker in wakers {
+            waker.wake();
+        }
+        next
+    }
+    /// Shutdown: every parked wait answers `changed:false` now (queued ones
+    /// too: the server is going away), and new waits are refused. Returns how
+    /// many were answered.
     pub fn close(&self) -> usize {
-        let mut inner = self.lock();
+        let mut guard = self.lock();
+        let inner = &mut *guard;
         inner.closed = true;
+        inner.queue.clear();
         let (mut answered, mut wakers) = (0, Vec::new());
         for waiter in inner.waiters.values_mut() {
             if waiter.answer.is_none() {
                 waiter.answer = Some(Answer::Unchanged);
+                waiter.queued = false;
                 answered += 1;
                 wakers.extend(waiter.waker.take());
             }
         }
-        drop(inner);
+        drop(guard);
         for waker in wakers {
             waker.wake();
         }
         answered
+    }
+}
+
+/// Wakes this wait now or in its turn (see `Registry::wake`).
+fn wake(s: &State, device: &str, ticket: u64) {
+    if s.wake.wake(device, ticket) {
+        let s = s.clone();
+        tokio::spawn(async move {
+            while let Some(delay) = s.wake.pace() {
+                tokio::time::sleep(delay).await;
+            }
+        });
     }
 }
 
@@ -381,7 +488,7 @@ async fn flush(s: &State, mut devices: Vec<String>) {
             .get(&*device)
             .is_none_or(|&(g, p, revoked)| revoked || g != generation || p != policy_generation);
         if changed {
-            s.wake.answer(&device, ticket, Answer::Changed);
+            wake(s, &device, ticket);
         }
     }
 }
@@ -466,7 +573,14 @@ async fn wait_inner(s: &State, peer: &PeerCertificate, raw: Option<&str>) -> Res
     if !s.wake.enabled() {
         return Err(ApiError::missing());
     }
-    let sequence = s.wake.sequence();
+    // A stopping server refuses before reading anything: every agent whose
+    // wait it just answered may try once more.
+    let Some(sequence) = s.wake.sequence() else {
+        return Ok(busy(
+            "The server is stopping; check in on schedule",
+            CLOSING_RETRY_SECONDS,
+        ));
+    };
     let (device, generation, policy_generation) = identify(s, peer).await?;
     s.limit(
         format!("wait:{device}"),
@@ -476,9 +590,6 @@ async fn wait_inner(s: &State, peer: &PeerCertificate, raw: Option<&str>) -> Res
     let (accepted_generation, accepted_policy) = accepted(raw)?;
     let changed =
         |generation, policy| generation != accepted_generation || policy != accepted_policy;
-    if changed(generation, policy_generation) {
-        return Ok(answered(Answer::Changed));
-    }
     let (key, ticket) = match s
         .wake
         .register(&device, accepted_generation, accepted_policy)
@@ -492,20 +603,21 @@ async fn wait_inner(s: &State, peer: &PeerCertificate, raw: Option<&str>) -> Res
         }
         Err(Refusal::Closing) => {
             return Ok(busy(
-                "The server is restarting; check in on schedule",
+                "The server is stopping; check in on schedule",
                 CLOSING_RETRY_SECONDS,
             ));
         }
     };
-    if s.wake.sequence() != sequence {
+    // Generations the agent is behind on answer changed:true, at once or in
+    // their turn when many agents are being woken (see `Registry::wake`).
+    if changed(generation, policy_generation) {
+        wake(s, &device, ticket);
+    } else if s.wake.sequence() != Some(sequence) {
         // A flush ran while this wait authenticated, and may have looked for
         // the device before it registered: read it once more.
         match identify(s, peer).await {
             Ok((_, generation, policy)) if !changed(generation, policy) => {}
-            Ok(_) => {
-                s.wake.cancel(&device, ticket);
-                return Ok(answered(Answer::Changed));
-            }
+            Ok(_) => wake(s, &device, ticket),
             Err(error) => {
                 s.wake.cancel(&device, ticket);
                 return Err(error);
@@ -527,10 +639,6 @@ async fn wait_inner(s: &State, peer: &PeerCertificate, raw: Option<&str>) -> Res
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
-}
-
-fn answered(answer: Answer) -> Response {
-    json_response(StatusCode::OK, answer.body().to_vec())
 }
 
 /// The body of a parked wait: one JSON frame once the answer is known. The
@@ -626,7 +734,7 @@ mod tests {
     fn one_waiter_per_device_and_a_bounded_registry() {
         let registry = Registry::new(Options {
             limit: 2,
-            hold: Duration::from_secs(25),
+            ..Options::default()
         });
         let (older_count, older) = waker();
         let (key, first) = registry.register("a", 1, 1).ok().unwrap();
@@ -664,8 +772,8 @@ mod tests {
         let waiting = registry.waiting_among(&["a".into(), "missing".into()]);
         assert_eq!(waiting.len(), 1);
         assert_eq!((waiting[0].2, waiting[0].3), (4, 2));
-        registry.answer("a", ticket, Answer::Changed);
-        registry.answer("a", ticket, Answer::Changed);
+        assert!(!registry.wake("a", ticket));
+        assert!(!registry.wake("a", ticket));
         assert_eq!((woken(&count), registry.woken()), (1, 1));
         assert!(!registry.listening("a"));
         assert!(registry.waiting_among(&["a".into()]).is_empty());
@@ -688,5 +796,51 @@ mod tests {
             Err(Refusal::Closing)
         ));
         assert_eq!(registry.parked(), 0);
+    }
+
+    #[test]
+    fn wake_ups_beyond_the_burst_are_paced_oldest_first() {
+        let registry = Registry::new(Options {
+            burst: 2,
+            rate: 20,
+            ..Options::default()
+        });
+        let (count, waker) = waker();
+        let tickets: Vec<u64> = (0..5)
+            .map(|i| {
+                let (_, ticket) = registry.register(&format!("d{i}"), 0, 0).ok().unwrap();
+                assert!(registry.poll(&format!("d{i}"), ticket, &waker).is_pending());
+                ticket
+            })
+            .collect();
+        // The burst goes out at once; the third starts the pacer (only once).
+        assert!(!registry.wake("d0", tickets[0]));
+        assert!(!registry.wake("d1", tickets[1]));
+        assert!(registry.wake("d2", tickets[2]));
+        assert!(!registry.wake("d3", tickets[3]));
+        assert!(!registry.wake("d2", tickets[2]), "queued twice");
+        assert_eq!((woken(&count), registry.woken()), (2, 2));
+        // A queued wait still listens, and a flush no longer looks at it.
+        assert!(registry.listening("d2"));
+        assert!(registry.waiting_among(&["d2".into()]).is_empty());
+        // A queued wait whose agent went away is skipped without a token.
+        registry.cancel("d3", tickets[3]);
+        let delay = registry.pace().expect("the queue is not empty");
+        assert!(delay <= Duration::from_millis(60), "{delay:?}");
+        std::thread::sleep(delay);
+        assert_eq!(
+            registry.pace(),
+            None,
+            "d2 answered, d3 skipped: queue empty"
+        );
+        assert_eq!(registry.woken(), 3);
+        assert_eq!(
+            registry.poll("d2", tickets[2], &waker),
+            Poll::Ready(Answer::Changed)
+        );
+        // With the queue drained and tokens refilled, wake-ups go out at once.
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(!registry.wake("d4", tickets[4]));
+        assert_eq!(registry.woken(), 4);
     }
 }
