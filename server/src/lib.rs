@@ -161,7 +161,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         .max_connections(8)
         .connect_with(options)
         .await?;
-    sqlx::migrate!().run(&pool).await?;
+    db::migrate(&pool, &sqlx::migrate!()).await?;
     // A restart or point-in-time restore must never resume a password-verified
     // pre-session capability. The exclusive instance lock makes this safe.
     sqlx::query("DELETE FROM login_challenges")
