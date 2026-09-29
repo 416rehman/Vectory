@@ -1,0 +1,69 @@
+.enrollment-trust {
+  margin: 22px 0 26px;
+}
+.enrollment-trust > .field {
+  margin-bottom: 8px;
+}
+.enrollment-trust-purpose,
+.enrollment-certificate-retain {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.enrollment-certificate-file {
+  margin: 16px 0 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.enrollment-certificate-file .field {
+  margin-bottom: 8px;
+}
+.enrollment-certificate-retain {
+  margin-bottom: 0;
+}
+.enrollment-trust-help {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.enrollment-trust-help > summary {
+  width: fit-content;
+  padding: 6px 0;
+  color: var(--ink);
+  cursor: pointer;
+}
+.enrollment-trust-help > summary:hover {
+  color: var(--accent-ink);
+}
+.enrollment-trust-help > div {
+  padding: 0 0 8px;
+}
+.enrollment-trust-help ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+.enrollment-trust-help li + li {
+  margin-top: 8px;
+}
+.enrollment-trust-help code {
+  overflow-wrap: anywhere;
+}
+.enrollment-policy {
+  margin: 12px 0 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.enrollment-policy > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+.enrollment-policy .field {
+  margin-bottom: 8px;
+}

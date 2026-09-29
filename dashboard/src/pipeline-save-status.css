@@ -1,0 +1,36 @@
+.pipeline-save-status {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1.35;
+}
+.pipeline-save-status > svg {
+  flex: none;
+}
+.pipeline-save-status-label {
+  overflow-wrap: anywhere;
+}
+.pipeline-save-status[data-save-state="unsaved"],
+.pipeline-save-status[data-save-state="unapplied"] {
+  color: var(--ink);
+}
+.pipeline-save-status[data-save-state="failed"],
+.pipeline-save-status[data-save-state="conflict"],
+.pipeline-save-status[data-save-state="uncertain"] {
+  color: var(--danger);
+  font-weight: 550;
+}
+.pipeline-save-status-spinner {
+  animation: spin 1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-save-status-spinner {
+    animation: none;
+  }
+}

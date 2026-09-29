@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       attest:
-        description: 'Create GitHub provenance through the protected release environment (requires configured identity)'
+        description: "Create GitHub provenance through the protected release environment (requires configured identity)"
         type: boolean
         required: true
         default: false
@@ -14,10 +14,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            help-center/package-lock.json
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm ci
+        working-directory: help-center
+      - name: Build dashboard and bundled offline help
+        run: npm run build
+        working-directory: dashboard
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        with: {go-version: '1.26.8', cache-dependency-path: agent/go.sum}
+        with: { go-version: "1.26.8", cache-dependency-path: agent/go.sum }
       - run: go test ./...
         working-directory: agent
+      - name: Reject unsafe or incomplete release archives
+        run: python3 packaging/test_verify_release.py
       - run: python3 packaging/build-release.py
       - name: Check Linux ELF has no dynamic interpreter or dependencies
         run: |
@@ -35,7 +51,12 @@ jobs:
       - run: python3 packaging/record-source.py --out artifacts/releases/SOURCE-INPUTS.json
       - run: python3 packaging/verify-release.py artifacts/releases --refresh-checksums
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with: {name: unsigned-development-candidate, path: artifacts/releases, if-no-files-found: error}
+        with:
+          {
+            name: unsigned-development-candidate,
+            path: artifacts/releases,
+            if-no-files-found: error,
+          }
   attest:
     needs: unsigned-candidate
     if: ${{ inputs.attest }}
@@ -48,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with: {name: unsigned-development-candidate, path: artifacts/releases}
+        with: { name: unsigned-development-candidate, path: artifacts/releases }
       - run: python3 packaging/verify-release.py artifacts/releases
       - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:

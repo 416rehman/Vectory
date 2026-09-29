@@ -6,10 +6,10 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Request, State as AppState},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::{any, get, post},
+    response::{IntoResponse, Redirect, Response},
+    routing::{any, delete, get, post, put},
 };
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -18,19 +18,211 @@ use tower_http::services::{ServeDir, ServeFile};
 pub fn router(s: State) -> Router {
     let spa = ServeDir::new(&s.settings.dashboard_dir)
         .not_found_service(ServeFile::new(s.settings.dashboard_dir.join("index.html")));
+    // Keep the full URI so directory redirects retain the /help prefix. The
+    // dedicated fallback must never turn a missing help page into the app SPA.
+    let help = ServeDir::new(&s.settings.dashboard_dir).not_found_service(ServeFile::new(
+        s.settings.dashboard_dir.join("help/404.html"),
+    ));
     Router::new()
+        .route("/help", get(help_redirect))
+        .route_service("/help/", help.clone())
+        .route_service("/help/{*path}", help)
         .route("/api/v1/status", get(auth::status))
         .route("/api/v1/bootstrap", post(auth::bootstrap))
         .route("/api/v1/login", post(auth::login))
+        .route("/api/v1/login/mfa", post(crate::login_challenges::complete))
         .route("/api/v1/logout", post(auth::logout))
         .route("/api/v1/session", get(auth::session))
         .route("/api/v1/users", get(auth::users).post(auth::create_user))
+        .route(
+            "/api/v1/users/requests/{id}",
+            get(crate::user_requests::lookup),
+        )
+        .route(
+            "/api/v1/users/requests/{id}/cancel",
+            post(crate::user_requests::cancel),
+        )
+        .route("/api/v1/users/{id}", put(crate::accounts::edit))
+        .route(
+            "/api/v1/users/{id}/access-requests/{request_id}",
+            get(crate::access_requests::lookup),
+        )
+        .route(
+            "/api/v1/users/{id}/access-requests/{request_id}/cancel",
+            post(crate::access_requests::cancel),
+        )
+        .route(
+            "/api/v1/users/{id}/password-reset",
+            post(crate::accounts::issue_reset),
+        )
+        .route(
+            "/api/v1/users/{id}/password-reset/requests/{request_id}",
+            get(crate::reset_requests::lookup),
+        )
+        .route(
+            "/api/v1/users/{id}/password-reset/requests/{request_id}/cancel",
+            post(crate::reset_requests::cancel),
+        )
+        .route(
+            "/api/v1/account/password",
+            post(crate::accounts::change_password),
+        )
+        .route(
+            "/api/v1/account/revoke-sessions",
+            post(crate::accounts::revoke_sessions),
+        )
+        .route(
+            "/api/v1/password-reset",
+            post(crate::accounts::redeem_reset),
+        )
         .route("/api/v1/openapi.json", get(openapi))
+        .route("/api/v1/audit/history", get(crate::audit::history))
+        .route(
+            "/api/v1/audit/exports",
+            get(crate::audit_exports::list).post(crate::audit_exports::prepare),
+        )
+        .route(
+            "/api/v1/audit/exports/{id}",
+            delete(crate::audit_exports::discard),
+        )
+        .route(
+            "/api/v1/audit/exports/{id}/download",
+            get(crate::audit_exports::download),
+        )
+        .route("/api/v1/audit/{id}", get(crate::audit::detail))
+        .route("/api/v1/issues/history", get(crate::issues::history))
+        .route("/api/v1/issues/{id}", get(crate::issues::detail))
+        .route(
+            "/api/v1/issues/{id}/acknowledge",
+            post(crate::issues::acknowledge),
+        )
+        .route("/api/v1/issues/{id}/reopen", post(crate::issues::reopen))
         .route("/api/v1/mfa", get(crate::mfa::status))
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
+        .route(
+            "/api/v1/deployments/requests",
+            get(crate::deployment_requests::history),
+        )
+        .route(
+            "/api/v1/deployments/requests/{id}",
+            get(crate::deployment_requests::lookup),
+        )
+        .route(
+            "/api/v1/deployments/history",
+            get(crate::deployment_history::history),
+        )
+        .route(
+            "/api/v1/deployments/{id}/rollback-preview",
+            get(crate::rollback_review::get),
+        )
+        .route(
+            "/api/v1/deployments/{id}/unassign-preview",
+            post(crate::assignment_removal::post_preview),
+        )
+        .route(
+            "/api/v1/deployments/{id}/unassign",
+            post(crate::assignment_removal::post_commit),
+        )
+        .route(
+            "/api/v1/deployments/{id}/refresh-preview",
+            post(crate::scheduled_refresh::post_preview),
+        )
+        .route(
+            "/api/v1/deployments/{id}/refresh",
+            post(crate::scheduled_refresh::post_commit),
+        )
+        .route(
+            "/api/v1/deployments/{id}/summary",
+            get(crate::deployment_history::summary),
+        )
+        .route(
+            "/api/v1/deployments/{id}/targets",
+            get(crate::deployment_history::targets),
+        )
         .route("/api/v1/vrl/test", post(synthetic_vrl))
+        .route("/api/v1/configurations/test", post(pipeline_tests))
+        .route(
+            "/api/v1/configurations/library",
+            get(crate::pipeline_library::library),
+        )
+        .route(
+            "/api/v1/configurations/{id}/history",
+            get(crate::pipelines::history),
+        )
+        .route(
+            "/api/v1/configurations/{id}/revisions/{revision_id}",
+            get(crate::pipelines::revision_detail),
+        )
         .route("/api/v1/devices/{id}/telemetry", get(telemetry_history))
+        .route(
+            "/api/v1/devices/{id}/revoke",
+            post(crate::device_revocation::post),
+        )
+        .route(
+            "/api/v1/devices/{id}/revocation",
+            get(crate::device_revocation::status),
+        )
+        .route(
+            "/api/v1/devices/{id}/recover",
+            post(crate::device_recovery_requests::post),
+        )
+        .route(
+            "/api/v1/devices/{id}/recovery-requests/{key}",
+            get(crate::device_recovery_requests::lookup),
+        )
+        .route(
+            "/api/v1/devices/{id}/recovery-requests/{key}/cancel",
+            post(crate::device_recovery_requests::cancel),
+        )
+        .route(
+            "/api/v1/groups/requests",
+            get(crate::group_requests::history),
+        )
+        .route(
+            "/api/v1/groups/requests/{id}",
+            get(crate::group_requests::lookup),
+        )
+        .route(
+            "/api/v1/configurations/publish-requests",
+            get(crate::publication_requests::history),
+        )
+        .route(
+            "/api/v1/configurations/publish-requests/{id}",
+            get(crate::publication_requests::lookup),
+        )
+        .route(
+            "/api/v1/configurations/requests",
+            get(crate::pipeline_requests::history),
+        )
+        .route(
+            "/api/v1/configurations/requests/{id}",
+            get(crate::pipeline_requests::lookup),
+        )
+        .route(
+            "/api/v1/policies",
+            get(crate::policy_requests::list).post(crate::policy_requests::post),
+        )
+        .route(
+            "/api/v1/policies/requests",
+            get(crate::policy_requests::history),
+        )
+        .route(
+            "/api/v1/policies/requests/{id}",
+            get(crate::policy_requests::lookup),
+        )
+        .route(
+            "/api/v1/tokens",
+            get(crate::token_requests::list).post(crate::token_requests::post),
+        )
+        .route(
+            "/api/v1/tokens/requests/{id}",
+            get(crate::token_requests::lookup),
+        )
+        .route(
+            "/api/v1/tokens/requests/{id}/cancel",
+            post(crate::token_requests::cancel),
+        )
         .route("/api/v1/{collection}", get(list).post(create))
         .route("/api/v1/{collection}/{id}", get(detail).put(edit_group))
         .route(
@@ -43,6 +235,12 @@ pub fn router(s: State) -> Router {
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(s)
+}
+async fn help_redirect(uri: Uri) -> Redirect {
+    let location = uri
+        .query()
+        .map_or_else(|| "/help/".to_string(), |query| format!("/help/?{query}"));
+    Redirect::permanent(&location)
 }
 async fn telemetry_history(
     AppState(s): AppState<State>,
@@ -78,6 +276,94 @@ async fn openapi(AppState(s): AppState<State>, h: HeaderMap) -> Result<Response>
         include_str!("../../contracts/openapi.json"),
     )
         .into_response())
+}
+async fn pipeline_tests(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Json(input): Json<Value>,
+) -> Result<Json<Value>> {
+    let user = auth::authorize(&s, &h, &["editor"], true).await?;
+    s.limit(
+        format!("pipeline-tests:{}", text(&user, "id")),
+        20,
+        std::time::Duration::from_secs(60),
+    )?;
+    let mut checked = validation::validate(&input["config"]);
+    checked["tests_run"] = json!(false);
+    if checked["valid"] != true {
+        return Ok(Json(checked));
+    }
+    if validation::mark_device_deferred(&mut checked, &input["config"]) {
+        checked["valid"] = json!(false);
+        checked["deferred"] = json!(true);
+        checked["errors"] = json!([
+            "Run these tests on the device with its Vector platform and local resources. See the listed deferral reasons."
+        ]);
+        return Ok(Json(checked));
+    }
+    let unavailable = || {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CAPABILITY_DENIED",
+            "Isolated Vector pipeline test runner is unavailable",
+        )
+    };
+    let url = s.settings.validation_url.as_ref().ok_or_else(unavailable)?;
+    let _permit = s.validation_slots.try_acquire().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "RATE_LIMITED",
+            "Validation capacity busy; retry later",
+        )
+    })?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|_| unavailable())?;
+    let mut response = client
+        .post(format!("{}/tests", url.trim_end_matches('/')))
+        .json(&input)
+        .send()
+        .await
+        .map_err(|_| unavailable())?;
+    if !response.status().is_success() {
+        return Err(unavailable());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
+        if bytes.len() + chunk.len() > 65536 {
+            return Err(unavailable());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+    if !value["valid"].is_boolean()
+        || !value["tests_run"].is_boolean()
+        || !value["errors"].is_array()
+        || value["vector_version"] != validation::VECTOR_VERSION
+    {
+        return Err(unavailable());
+    }
+    let public = validation::public_pipeline_test_result(&input["config"], &value)
+        .ok_or_else(unavailable)?;
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
+    db::audit(
+        &mut tx,
+        text(&user, "id"),
+        "configuration.tests",
+        "",
+        if public["valid"] == true {
+            "success"
+        } else {
+            "failed"
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(public))
 }
 async fn synthetic_vrl(
     AppState(s): AppState<State>,
@@ -150,14 +436,20 @@ async fn synthetic_vrl(
     if !value["valid"].is_boolean() || !value["errors"].is_array() {
         return Err(ApiError::invalid("Invalid sample runner response"));
     }
+    let public = if value["valid"] == true {
+        json!({"valid":true,"output":value.get("output").cloned().unwrap_or(Value::Null),"errors":[]})
+    } else {
+        json!({"valid":false,"output":null,"errors":["VRL compilation or synthetic execution failed. Review the program and sample."]})
+    };
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
     db::audit(
         &mut tx,
         text(&user, "id"),
         "vrl.synthetic_test",
         "",
-        if value["valid"] == true {
+        if public["valid"] == true {
             "success"
         } else {
             "failed"
@@ -165,9 +457,15 @@ async fn synthetic_vrl(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(value))
+    Ok(Json(public))
 }
 pub async fn security_headers(request: Request, next: Next) -> Response {
+    let embedded_reference = request.method() == axum::http::Method::GET
+        && request.uri().path() == "/api-reference.html";
+    let help = matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) && request.uri().path().starts_with("/help/");
     let api =
         request.uri().path().starts_with("/api/") || request.uri().path().starts_with("/agent/");
     let request_id = db::id();
@@ -206,19 +504,34 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "x-frame-options",
+        HeaderValue::from_static(if embedded_reference {
+            "SAMEORIGIN"
+        } else {
+            "DENY"
+        }),
+    );
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     headers.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    headers.insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"));
+    headers.insert("content-security-policy", HeaderValue::from_static(if embedded_reference {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'"
+    } else if help {
+        // Pagefind compiles its bundled search WebAssembly. This does not
+        // permit JavaScript eval or inline scripts, and is isolated to help.
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+    } else {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+    }));
     if api {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     response
 }
-fn text<'a>(v: &'a Value, key: &str) -> &'a str {
+pub(crate) fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 pub async fn list(
@@ -242,9 +555,9 @@ pub async fn list(
         "devices" => json!(rollout::devices(&mut conn).await?),
         "deployments" => json!(rollout::deployments(&mut conn).await?),
         "configurations" => json!(db::records(&mut conn, "configuration").await?),
-        "groups" => json!(db::records(&mut conn, "group").await?),
+        "groups" => json!(crate::groups::list(&mut conn).await?),
         "policies" => json!(db::records(&mut conn, "policy").await?),
-        "issues" => json!(db::records(&mut conn, "issue").await?),
+        "issues" => json!(crate::issues::legacy(&mut conn).await?),
         "audit" => json!(audit_view(&mut conn).await?),
         "tokens" => {
             let rows = sqlx::query("SELECT data FROM enrollment_tokens ORDER BY id")
@@ -262,11 +575,14 @@ pub async fn list(
         }
         "overview" => {
             let devices = rollout::devices(&mut conn).await?;
-            let configurations = db::records(&mut conn, "configuration").await?;
+            let configurations: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM records WHERE kind='configuration'")
+                    .fetch_one(&mut *conn)
+                    .await?;
             let deployments = db::records(&mut conn, "deployment").await?;
-            let issues = db::records(&mut conn, "issue").await?;
-            let audit = audit_view(&mut conn).await?;
-            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations.len(),"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues.iter().filter(|i|i["resolved"]!=true).count(),"devices":devices,"recent_activity":audit.into_iter().take(20).collect::<Vec<_>>()})
+            let issues_open = crate::issues::open_count(&mut conn).await?;
+            let audit = recent_activity(&mut conn).await?;
+            json!({"devices_total":devices.len(),"devices_online":devices.iter().filter(|d|!matches!(text(d,"status"),"offline"|"revoked")).count(),"configurations_total":configurations,"deployments_active":deployments.iter().filter(|d|matches!(text(d,"status"),"active"|"paused")).count(),"issues_open":issues_open,"devices":devices,"recent_activity":audit})
         }
         _ => return Err(ApiError::missing()),
     };
@@ -286,6 +602,7 @@ pub async fn detail(
             .find(|d| d["id"] == id)
             .ok_or_else(ApiError::missing)?,
         "configurations" => db::record(&mut conn, "configuration", &id).await?,
+        "groups" => crate::groups::normalized(db::record(&mut conn, "group", &id).await?)?,
         "versions" => db::record(&mut conn, "version", &id).await?,
         "deployments" => rollout::deployment(&mut conn, &id).await?,
         "releases" => {
@@ -333,11 +650,7 @@ pub async fn history(
         _ => return Err(ApiError::missing()),
     };
     Ok(Json(json!(
-        db::records(&mut conn, kind)
-            .await?
-            .into_iter()
-            .filter(|v| v["configuration_id"] == id)
-            .collect::<Vec<_>>()
+        crate::pipelines::full_history(&mut conn, &id, kind).await?
     )))
 }
 pub async fn create(
@@ -346,7 +659,7 @@ pub async fn create(
     Path(collection): Path<String>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let actor = auth::authorize(
+    auth::authorize(
         &s,
         &h,
         if collection == "configurations" {
@@ -359,102 +672,46 @@ pub async fn create(
     .await?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(
+        &mut tx,
+        &h,
+        if collection == "configurations" {
+            &["editor"]
+        } else {
+            &["operator"]
+        },
+        true,
+    )
+    .await?;
     let out = match collection.as_str() {
-        "configurations" => {
-            let name = db::string(&v, "name", 120)?;
-            validate_draft(&v)?;
-            let record = json!({"id":db::id(),"name":name,"description":description(&v)?,"revision":1,"graph":v["graph"],"config":v["config"],"created_at":db::now(),"updated_at":db::now()});
-            db::insert(&mut tx, "configuration", &record).await?;
-            revision(&mut tx, &record, text(&actor, "name"), "Initial draft").await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "configuration.create",
-                text(&record, "id"),
-                "success",
-            )
-            .await?;
-            record
+        "configurations" => crate::pipeline_requests::execute(&mut tx, None, &v, &actor).await?,
+        "groups" => crate::group_requests::create(&mut tx, &v, text(&actor, "id")).await?,
+        "deployments" => {
+            crate::deployment_requests::create(&mut tx, &v, text(&actor, "id")).await?
         }
-        "groups" => {
-            let group = group(&mut tx, &v, None).await?;
-            db::insert(&mut tx, "group", &group).await?;
-            rollout::reconcile_membership(&mut tx).await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "group.create",
-                text(&group, "id"),
-                "success",
-            )
-            .await?;
-            group
-        }
-        "deployments" => rollout::create(&mut tx, &v, text(&actor, "id")).await?,
         "policies" => {
-            db::validate_policy(&v["policy"])?;
-            let p = json!({"id":db::id(),"name":db::string(&v,"name",120)?,"policy":v["policy"],"created_at":db::now()});
-            db::insert(&mut tx, "policy", &p).await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "policy.create",
-                text(&p, "id"),
-                "success",
-            )
-            .await?;
-            p
+            return Err(ApiError::invalid(
+                "Use the canonical saved-settings creation endpoint",
+            ));
         }
         "tokens" => {
-            let hours = v["expires_hours"]
-                .as_u64()
-                .filter(|h| (1..=720).contains(h))
-                .ok_or_else(|| ApiError::invalid("expires_hours must be 1..720"))?;
-            let max = v["max_uses"].as_u64();
-            if !v["max_uses"].is_null() && max.is_none_or(|n| n == 0 || n > 100000) {
-                return Err(ApiError::invalid("max_uses must be 1..100000"));
-            }
-            let prefix = v["name_prefix"].as_str().unwrap_or("");
-            if prefix.len() > 80
-                || !prefix
-                    .bytes()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-            {
-                return Err(ApiError::invalid(
-                    "name_prefix must use lowercase letters, digits or hyphens",
-                ));
-            }
-            let secret = auth::random_secret();
-            let record = json!({"id":db::id(),"name":db::string(&v,"name",120)?,"expires_at":(chrono::Utc::now()+chrono::Duration::hours(hours as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":max,"name_prefix":if prefix.is_empty(){Value::Null}else{json!(prefix)},"revoked":false,"created_at":db::now()});
-            sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
-                .bind(text(&record, "id"))
-                .bind(db::hash(&secret))
-                .bind(record.to_string())
-                .execute(&mut *tx)
-                .await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "token.create",
-                text(&record, "id"),
-                "success",
-            )
-            .await?;
-            json!({"token":secret,"record":record})
+            return Err(ApiError::invalid(
+                "Use the canonical token creation endpoint",
+            ));
         }
         _ => return Err(ApiError::missing()),
     };
     tx.commit().await?;
     Ok(Json(out))
 }
-fn description(v: &Value) -> Result<String> {
+pub(crate) fn description(v: &Value) -> Result<String> {
     let d = v["description"].as_str().unwrap_or("");
     if d.len() > 2000 {
         return Err(ApiError::invalid("Description is too long"));
     }
     Ok(d.into())
 }
-fn validate_draft(v: &Value) -> Result<()> {
+pub(crate) fn validate_draft(v: &Value) -> Result<()> {
     if !v["config"].is_object()
         || !v["graph"]["nodes"].is_array()
         || !v["graph"]["edges"].is_array()
@@ -468,6 +725,7 @@ fn validate_draft(v: &Value) -> Result<()> {
     {
         return Err(ApiError::invalid("Graph exceeds 1000 nodes or 5000 edges"));
     }
+    crate::variables::declarations(&v["config"], v.get("variables").unwrap_or(&json!([])))?;
     for field in ["config", "graph"] {
         let security = validation::validate(&v[field]);
         if security["errors"].as_array().unwrap().iter().any(|e| {
@@ -481,13 +739,18 @@ fn validate_draft(v: &Value) -> Result<()> {
     }
     Ok(())
 }
-async fn revision(
+pub(crate) async fn revision(
     conn: &mut sqlx::SqliteConnection,
     c: &Value,
-    author: &str,
+    actor: &Value,
     message: &str,
+    source: Option<Value>,
 ) -> Result<()> {
-    db::insert(conn,"revision",&json!({"id":db::id(),"configuration_id":c["id"],"revision":c["revision"],"graph":c["graph"],"config":c["config"],"message":message,"created_at":db::now(),"author":author})).await
+    let mut entry = json!({"id":db::id(),"configuration_id":c["id"],"revision":c["revision"],"name":c["name"],"description":c["description"],"graph":c["graph"],"config":c["config"],"variables":c.get("variables").cloned().unwrap_or_else(||json!([])),"message":message,"created_at":db::now(),"author":text(actor,"name"),"author_id":text(actor,"id"),"archived":c["archived"]==true});
+    if let Some(source) = source {
+        entry["source"] = source;
+    }
+    db::insert(conn, "revision", &entry).await
 }
 pub async fn draft(
     AppState(s): AppState<State>,
@@ -495,14 +758,16 @@ pub async fn draft(
     Path((collection, id, action)): Path<(String, String, String)>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let actor = auth::authorize(&s, &h, &["editor"], true).await?;
+    auth::authorize(&s, &h, &["editor"], true).await?;
     if collection != "configurations" || action != "draft" {
         return Err(ApiError::missing());
     }
     validate_draft(&v)?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(&mut tx, &h, &["editor"], true).await?;
     let mut c = db::record(&mut tx, "configuration", &id).await?;
+    crate::pipelines::ensure_editable(&c)?;
     if v["revision"].as_u64() != c["revision"].as_u64() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -510,16 +775,31 @@ pub async fn draft(
             "Draft changed; reload before saving",
         ));
     }
+    if v.get("name").is_some() {
+        c["name"] = json!(db::string(&v, "name", 120)?);
+    }
+    if v.get("description").is_some() {
+        if !v["description"].is_string() {
+            return Err(ApiError::invalid("Description must be text"));
+        }
+        c["description"] = json!(description(&v)?);
+    }
     c["revision"] = json!(c["revision"].as_u64().unwrap_or(0) + 1);
     c["graph"] = v["graph"].clone();
     c["config"] = v["config"].clone();
+    c["variables"] = crate::variables::declarations(
+        &c["config"],
+        v.get("variables")
+            .or_else(|| c.get("variables"))
+            .unwrap_or(&json!([])),
+    )?;
     c["updated_at"] = json!(db::now());
     let message = v["message"].as_str().unwrap_or("");
     if message.len() > 2000 {
         return Err(ApiError::invalid("Message is too long"));
     }
     db::update(&mut tx, "configuration", &c).await?;
-    revision(&mut tx, &c, text(&actor, "name"), message).await?;
+    revision(&mut tx, &c, &actor, message, None).await?;
     db::audit(
         &mut tx,
         text(&actor, "id"),
@@ -531,7 +811,11 @@ pub async fn draft(
     tx.commit().await?;
     Ok(Json(c))
 }
-async fn group(conn: &mut sqlx::SqliteConnection, v: &Value, id: Option<&str>) -> Result<Value> {
+pub(crate) async fn group(
+    conn: &mut sqlx::SqliteConnection,
+    v: &Value,
+    id: Option<&str>,
+) -> Result<Value> {
     let members = v["device_ids"]
         .as_array()
         .ok_or_else(|| ApiError::invalid("device_ids must be an array"))?;
@@ -541,7 +825,7 @@ async fn group(conn: &mut sqlx::SqliteConnection, v: &Value, id: Option<&str>) -
     let selector = json!({"device_ids":members,"group_ids":[],"exclude_ids":[]});
     let members = rollout::select(conn, &selector).await?;
     Ok(
-        json!({"id":id.map(str::to_owned).unwrap_or_else(db::id),"name":db::string(v,"name",120)?,"description":description(v)?,"device_ids":members,"created_at":db::now()}),
+        json!({"id":id.map(str::to_owned).unwrap_or_else(db::id),"name":db::string(v,"name",120)?,"description":description(v)?,"device_ids":members,"created_at":db::now(),"revision":1}),
     )
 }
 pub async fn edit_group(
@@ -550,18 +834,33 @@ pub async fn edit_group(
     Path((collection, id)): Path<(String, String)>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let actor = auth::authorize(&s, &h, &["operator"], true).await?;
+    auth::authorize(&s, &h, &["operator"], true).await?;
     if collection != "groups" {
         return Err(ApiError::missing());
     }
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     let previous = db::record(&mut tx, "group", &id).await?;
+    let next_revision = crate::groups::check_revision(&previous, &v)?;
     let mut g = group(&mut tx, &v, Some(&id)).await?;
     g["created_at"] = previous["created_at"].clone();
+    g["revision"] = json!(next_revision);
+    let memberships = rollout::persistent_memberships(&mut tx).await?;
     db::update(&mut tx, "group", &g).await?;
+    rollout::guard_membership_additions(&mut tx, &memberships).await?;
     rollout::reconcile_membership(&mut tx).await?;
-    db::audit(&mut tx, text(&actor, "id"), "group.update", &id, "success").await?;
+    db::insert(
+        &mut tx,
+        "audit",
+        &json!({
+            "id":db::id(),"actor":text(&actor,"id"),"action":"group.update",
+            "target":id,"outcome":"success","created_at":db::now(),
+            "previous_group_revision":crate::groups::revision(&previous)?,
+            "group_revision":next_revision
+        }),
+    )
+    .await?;
     tx.commit().await?;
     Ok(Json(g))
 }
@@ -571,15 +870,26 @@ pub async fn action(
     Path((collection, id, action)): Path<(String, String, String)>,
     body: Option<Json<Value>>,
 ) -> Result<Json<Value>> {
-    let role = if collection == "configurations" && action == "validate" {
-        "editor"
+    let roles: &[&str] = if collection == "configurations" && action == "validate" {
+        &["editor", "operator"]
+    } else if collection == "configurations"
+        && ["duplicate", "restore", "archive", "unarchive"].contains(&action.as_str())
+    {
+        &["editor"]
     } else if collection == "devices" && action == "recover" {
-        "admin"
+        &["admin"]
     } else {
-        "operator"
+        &["operator"]
     };
-    let actor = auth::authorize(&s, &h, &[role], true).await?;
+    auth::authorize(&s, &h, roles, true).await?;
     let v = body.map(|j| j.0).unwrap_or_else(|| json!({}));
+    if collection == "configurations" && action == "publish" {
+        if let Some(version) =
+            crate::publication_requests::before_validation(&s, &h, &id, &v).await?
+        {
+            return Ok(Json(version));
+        }
+    }
     let mut checked = None;
     if collection == "configurations" && (action == "validate" || action == "publish") {
         let mut conn = s.pool.acquire().await?;
@@ -588,6 +898,7 @@ pub async fn action(
         if action == "validate" {
             return Ok(Json(validation::validate_isolated(&s, &v["config"]).await?));
         }
+        crate::pipelines::ensure_editable(&configuration)?;
         if configuration["revision"] != v["revision"] {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
@@ -599,118 +910,178 @@ pub async fn action(
     }
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(&mut tx, &h, roles, true).await?;
     let out = match (collection.as_str(), action.as_str()) {
+        ("configurations", "duplicate") => {
+            crate::pipeline_requests::execute(&mut tx, Some(&id), &v, &actor).await?
+        }
+        ("configurations", "restore" | "archive" | "unarchive") => {
+            crate::pipelines::action(&mut tx, &id, &action, &v, &actor).await?
+        }
         ("configurations", "validate") => {
             db::record(&mut tx, "configuration", &id).await?;
             validation::validate(&v["config"])
         }
         ("configurations", "publish") => {
-            let c = db::record(&mut tx, "configuration", &id).await?;
-            if v["revision"].as_u64() != c["revision"].as_u64() {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    "STALE_REVISION",
-                    "Draft changed; review before publishing",
-                ));
+            if let Some(version) =
+                crate::publication_requests::replay(&mut tx, text(&actor, "id"), &id, &v).await?
+            {
+                version
+            } else {
+                let c = db::record(&mut tx, "configuration", &id).await?;
+                crate::pipelines::ensure_editable(&c)?;
+                if v["revision"].as_u64() != c["revision"].as_u64() {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "STALE_REVISION",
+                        "Draft changed; review before publishing",
+                    ));
+                }
+                let validation = checked.unwrap_or_else(|| validation::validate(&c["config"]));
+                if validation["valid"] != true {
+                    return Err(ApiError::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "VALIDATION_FAILED",
+                        validation["errors"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    ));
+                }
+                let artifact = validation::render(&c["config"])
+                    .map_err(|_| ApiError::invalid("Cannot render artifact"))?;
+                if artifact.len() > 1024 * 1024 {
+                    return Err(ApiError::invalid("Artifact exceeds 1 MiB"));
+                }
+                let number:i64=sqlx::query_scalar("SELECT COALESCE(MAX(CAST(json_extract(data,'$.number') AS INTEGER)),0)+1 FROM records WHERE kind='version' AND json_extract(data,'$.configuration_id')=?")
+                .bind(&id).fetch_one(&mut *tx).await?;
+                let message = v["message"].as_str().unwrap_or("");
+                if message.len() > 2000 {
+                    return Err(ApiError::invalid("Message is too long"));
+                }
+                let variables = crate::variables::declarations(
+                    &c["config"],
+                    c.get("variables").unwrap_or(&json!([])),
+                )?;
+                let mut version = json!({"id":db::id(),"configuration_id":id,"number":number,"graph":c["graph"],"config":c["config"],"variables":variables,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now(),"message":message,"author":text(&actor,"name"),"author_id":text(&actor,"id"),"source_revision":c["revision"],"validation":validation,"uses_local_secrets":validation::local_secret_references(&c["config"]).0});
+                db::insert(&mut tx, "version", &version).await?;
+                db::audit(
+                    &mut tx,
+                    text(&actor, "id"),
+                    "configuration.publish",
+                    text(&version, "id"),
+                    "success",
+                )
+                .await?;
+                crate::publication_requests::remember(
+                    &mut tx,
+                    text(&actor, "id"),
+                    &id,
+                    &v,
+                    &mut version,
+                )
+                .await?;
+                version
             }
-            let validation = checked.unwrap_or_else(|| validation::validate(&c["config"]));
-            if validation["valid"] != true {
-                return Err(ApiError::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "VALIDATION_FAILED",
-                    validation["errors"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                ));
-            }
-            let artifact = validation::render(&c["config"])
-                .map_err(|_| ApiError::invalid("Cannot render artifact"))?;
-            if artifact.len() > 1024 * 1024 {
-                return Err(ApiError::invalid("Artifact exceeds 1 MiB"));
-            }
-            let number = db::records(&mut tx, "version")
-                .await?
-                .iter()
-                .filter(|p| p["configuration_id"] == id)
-                .map(|p| p["number"].as_u64().unwrap_or(0))
-                .max()
-                .unwrap_or(0)
-                + 1;
-            let message = v["message"].as_str().unwrap_or("");
-            if message.len() > 2000 {
-                return Err(ApiError::invalid("Message is too long"));
-            }
-            let version = json!({"id":db::id(),"configuration_id":id,"number":number,"graph":c["graph"],"config":c["config"],"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now(),"message":message,"validation":validation,"uses_local_secrets":validation::local_secret_references(&c["config"]).0});
-            db::insert(&mut tx, "version", &version).await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "configuration.publish",
-                text(&version, "id"),
-                "success",
-            )
-            .await?;
-            version
         }
         ("devices", "revoke") => {
-            let found = sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await?;
-            if found.rows_affected() == 0 {
-                return Err(ApiError::missing());
-            }
-            sqlx::query("UPDATE credentials SET revoked=1 WHERE device_id=?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await?;
-            for mut group in db::records(&mut tx, "group").await? {
-                if let Some(a) = group["device_ids"].as_array_mut() {
-                    a.retain(|x| x != &id)
-                }
-                db::update(&mut tx, "group", &group).await?;
-            }
-            db::audit(&mut tx, text(&actor, "id"), "device.revoke", &id, "success").await?;
-            json!({"ok":true})
+            return Err(ApiError::invalid(
+                "Use the canonical device revocation endpoint",
+            ));
         }
         ("devices", "recover") => {
-            let row = sqlx::query("SELECT name FROM devices WHERE id=?")
-                .bind(&id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or_else(ApiError::missing)?;
-            let name: String = row.get("name");
-            if name.contains("#retired-") {
-                return Err(ApiError::conflict(
-                    "This identity has already been replaced",
-                ));
-            }
-            let secret = auth::random_secret();
-            let record = json!({"id":db::id(),"name":format!("Recovery for {name}"),"expires_at":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"uses":0,"max_uses":1,"name_prefix":Value::Null,"recovery_device_id":id,"recovery_name":name,"revoked":false,"created_at":db::now()});
-            sqlx::query("INSERT INTO enrollment_tokens(id,verifier,data) VALUES(?,?,?)")
-                .bind(text(&record, "id"))
-                .bind(db::hash(&secret))
-                .bind(record.to_string())
-                .execute(&mut *tx)
-                .await?;
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "device.recovery_authorize",
-                &id,
-                "success",
-            )
-            .await?;
-            json!({"token":secret,"record":record})
+            return Err(ApiError::invalid(
+                "Use the canonical device recovery authorization endpoint",
+            ));
         }
         ("devices", "retry") => {
+            let object = v
+                .as_object()
+                .ok_or_else(|| ApiError::invalid("Retry request must be an object"))?;
+            if object
+                .keys()
+                .any(|k| k != "expected_version_id" && k != "expected_generation")
+            {
+                return Err(ApiError::invalid("Unknown retry request field"));
+            }
+            let expected_version = v["expected_version_id"]
+                .as_str()
+                .ok_or_else(|| ApiError::invalid("expected_version_id must be a UUID"))?;
+            let parsed_version = uuid::Uuid::parse_str(expected_version)
+                .map_err(|_| ApiError::invalid("expected_version_id must be a UUID"))?;
+            if !parsed_version
+                .hyphenated()
+                .to_string()
+                .eq_ignore_ascii_case(expected_version)
+            {
+                return Err(ApiError::invalid(
+                    "expected_version_id must be a hyphenated UUID",
+                ));
+            }
+            let expected_generation = v["expected_generation"]
+                .as_i64()
+                .filter(|n| (1..=9_007_199_254_740_991).contains(n))
+                .ok_or_else(|| {
+                    ApiError::invalid("expected_generation must be a positive safe integer")
+                })?;
+            let row=sqlx::query("SELECT assignment_id,desired_version_id,desired_generation,revoked,data,policy FROM devices WHERE id=?").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+            let desired_version: Option<String> = row.get("desired_version_id");
+            let current_generation: i64 = row.get("desired_generation");
+            let data = db::parse(row.get("data"))?;
+            if row.get::<bool, _>("revoked") || desired_version.is_none() {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "DEVICE_NOT_RETRYABLE",
+                    "Only a currently managed, nonrevoked device can retry",
+                ));
+            }
+            if desired_version.as_deref() != Some(parsed_version.hyphenated().to_string().as_str())
+                || current_generation != expected_generation
+            {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "STALE_DEVICE_REVIEW",
+                    "The desired version or generation changed. Review the latest device before retrying",
+                ));
+            }
+            // reported_generation is the last verified generation, not the failed
+            // attempt. A failed new version legitimately leaves it behind desired.
+            if ![
+                "failed",
+                "rolled_back",
+                "verification_unknown",
+                "incompatible",
+                "drift",
+                "drift_detected",
+            ]
+            .contains(&text(&data, "apply_state"))
+            {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "DEVICE_NOT_RETRYABLE",
+                    "The device no longer reports a retryable failure. Review its latest state",
+                ));
+            }
+            let policy = db::parse(row.get("policy"))?;
+            if policy["sync_paused"] == true || data["local_paused"] == true {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "DEVICE_SYNC_PAUSED",
+                    "Resume synchronization and review the device before retrying",
+                ));
+            }
+            if current_generation >= 9_007_199_254_740_991 {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "DEVICE_NOT_RETRYABLE",
+                    "The device generation limit has been reached",
+                ));
+            }
             s.limit(format!("retry:{id}"), 1, std::time::Duration::from_secs(60))?;
-            let row=sqlx::query("SELECT assignment_id FROM devices WHERE id=? AND revoked=0 AND desired_version_id IS NOT NULL").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::conflict("Only a currently managed, nonrevoked device can retry"))?;
-            sqlx::query("UPDATE devices SET desired_generation=desired_generation+1 WHERE id=?")
+            sqlx::query("UPDATE devices SET desired_generation=desired_generation+1,data=json_set(data,'$.apply_state','desired') WHERE id=?")
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
@@ -720,9 +1091,9 @@ pub async fn action(
                     .fetch_one(&mut *tx)
                     .await?;
             if let Some(assignment) = row.get::<Option<String>, _>("assignment_id") {
-                sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=?").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?;
+                let changed=sqlx::query("UPDATE deployment_targets SET state='desired',generation=?,verified_at=NULL,error=NULL WHERE deployment_id=? AND device_id=? AND state<>'removed'").bind(generation).bind(&assignment).bind(&id).execute(&mut *tx).await?.rows_affected()>0;
                 let mut d = db::record(&mut tx, "deployment", &assignment).await?;
-                if d["status"] == "completed" {
+                if changed && d["status"] == "completed" {
                     d["status"] = json!("active");
                     d["observation_started_at"] = Value::Null;
                     db::update(&mut tx, "deployment", &d).await?;
@@ -751,82 +1122,13 @@ pub async fn action(
             db::audit(&mut tx, text(&actor, "id"), "token.revoke", &id, "success").await?;
             json!({"ok":true})
         }
-        ("deployments", "refresh-preview") => {
-            let mut deployment = db::record(&mut tx, "deployment", &id).await?;
-            if deployment["status"] != "scheduled" {
-                return Err(ApiError::conflict(
-                    "Only an unactivated schedule can refresh targets",
-                ));
-            }
-            deployment["scheduled_at"] = Value::Null;
-            rollout::preview(&mut tx, &deployment).await?
-        }
-        ("deployments", "unassign-preview") => {
-            let deployment = rollout::deployment(&mut tx, &id).await?;
-            let ids: std::collections::BTreeSet<String> = deployment["targets"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|t| t["device_id"].as_str().map(str::to_owned))
-                .collect();
-            rollout::action(&mut tx, &id, "unassign", text(&actor, "id")).await?;
-            let devices = rollout::devices(&mut tx)
-                .await?
-                .into_iter()
-                .filter(|d| ids.contains(text(d, "id")))
-                .collect::<Vec<_>>();
-            // Explicit rollback: a preview must never alter generations or append audit events.
-            tx.rollback().await?;
-            return Ok(Json(
-                json!({"devices":devices,"conflicts":[],"warnings":["Removing the last configuration assignment marks a device unmanaged while retaining its running Vector workload. Lower-priority released assignments may become effective."]}),
+        ("deployments", "unassign-preview" | "unassign" | "refresh-preview" | "refresh") => {
+            return Err(ApiError::invalid(
+                "Use the canonical reviewed deployment endpoint",
             ));
         }
-        ("deployments", "refresh") => {
-            let deployment = db::record(&mut tx, "deployment", &id).await?;
-            if deployment["status"] != "scheduled" {
-                return Err(ApiError::conflict(
-                    "Schedule activation already started or schedule is inactive",
-                ));
-            }
-            let selected = rollout::select(&mut tx, &deployment["selector"]).await?;
-            let expected = v["expected_device_ids"]
-                .as_array()
-                .ok_or_else(|| ApiError::invalid("Provide the reviewed expected_device_ids"))?
-                .iter()
-                .map(|id| {
-                    id.as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| ApiError::invalid("Invalid expected device ID"))
-                })
-                .collect::<Result<std::collections::BTreeSet<_>>>()?;
-            if expected != selected {
-                return Err(ApiError::conflict(
-                    "Group membership changed after preview; review again",
-                ));
-            }
-            if selected.is_empty() {
-                return Err(ApiError::invalid("Schedule must have at least one target"));
-            }
-            sqlx::query("DELETE FROM deployment_targets WHERE deployment_id=?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await?;
-            for target in selected {
-                sqlx::query("INSERT INTO deployment_targets(deployment_id,device_id) VALUES(?,?)")
-                    .bind(&id)
-                    .bind(target)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-            db::audit(
-                &mut tx,
-                text(&actor, "id"),
-                "deployment.refresh_targets",
-                &id,
-                "success",
-            )
-            .await?;
-            rollout::deployment(&mut tx, &id).await?
+        ("deployments", "rollback") => {
+            crate::deployment_requests::rollback(&mut tx, &id, &v, text(&actor, "id")).await?
         }
         ("deployments", _) => rollout::action(&mut tx, &id, &action, text(&actor, "id")).await?,
         _ => return Err(ApiError::missing()),
@@ -842,6 +1144,7 @@ pub async fn deployment_preview(
     auth::authorize(&s, &h, &["operator"], true).await?;
     let _guard = s.writer.lock().await;
     let mut tx = s.pool.begin().await?;
+    auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     Ok(Json(rollout::preview(&mut tx, &v).await?))
 }
 async fn releases(s: &State) -> Result<Vec<Value>> {
@@ -890,21 +1193,21 @@ async fn releases(s: &State) -> Result<Vec<Value>> {
     }
     Ok(out)
 }
+async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
+    Ok(crate::audit::rows(
+        conn,
+        &crate::audit::Filters::default(),
+        20,
+        0,
+        None,
+        None,
+        false,
+    )
+    .await?
+    .into_iter()
+    .map(|(value, _)| value)
+    .collect())
+}
 async fn audit_view(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
-    let mut names = std::collections::HashMap::<String, String>::new();
-    for row in sqlx::query("SELECT id,name FROM users UNION ALL SELECT id,name FROM devices")
-        .fetch_all(&mut *conn)
-        .await?
-    {
-        names.insert(row.get("id"), row.get("name"));
-    }
-    let mut entries = db::records(conn, "audit").await?;
-    for entry in &mut entries {
-        let actor = text(entry, "actor").to_owned();
-        entry["actor_id"] = json!(actor);
-        if let Some(name) = names.get(&actor) {
-            entry["actor"] = json!(name)
-        }
-    }
-    Ok(entries)
+    crate::audit::legacy(conn, i64::MAX).await
 }

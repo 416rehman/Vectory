@@ -1,0 +1,81 @@
+---
+interface Props { markdownURL: string }
+const { markdownURL } = Astro.props;
+---
+<vectory-page-actions data-markdown-url={markdownURL} data-pagefind-ignore>
+  <div class="help-page-actions">
+    <button type="button" class="help-page-copy" data-copy-page aria-label="Copy page as Markdown">
+      <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"/></svg>
+      <span data-copy-label>Copy as Markdown</span>
+    </button>
+    <a class="help-markdown-link" href={markdownURL}>View Markdown</a>
+  </div>
+  <p class="help-copy-status" data-copy-status role="status" aria-live="polite"></p>
+  <dialog class="help-copy-dialog" aria-labelledby="help-copy-title" aria-describedby="help-copy-description">
+    <div class="help-copy-dialog-header">
+      <h2 id="help-copy-title">Copy page as Markdown</h2>
+      <button type="button" data-close-copy class="help-copy-close" aria-label="Close Markdown copy dialog">Close</button>
+    </div>
+    <p id="help-copy-description">Clipboard access is unavailable. The complete page is selected below. Copy it using your keyboard or device menu, or download the Markdown file.</p>
+    <textarea readonly aria-label="Page Markdown" spellcheck="false"></textarea>
+    <div class="help-copy-dialog-actions">
+      <button type="button" data-select-markdown>Select Markdown</button>
+      <a href={markdownURL} download>Download Markdown</a>
+    </div>
+  </dialog>
+</vectory-page-actions>
+
+<script>
+  class VectoryPageActions extends HTMLElement {
+    connectedCallback() {
+      if (this.dataset.ready === 'true') return;
+      this.dataset.ready = 'true';
+      const button = this.querySelector<HTMLButtonElement>('[data-copy-page]')!;
+      const label = this.querySelector<HTMLElement>('[data-copy-label]')!;
+      const status = this.querySelector<HTMLElement>('[data-copy-status]')!;
+      const dialog = this.querySelector<HTMLDialogElement>('dialog')!;
+      const text = dialog.querySelector<HTMLTextAreaElement>('textarea')!;
+      const close = this.querySelector<HTMLButtonElement>('[data-close-copy]')!;
+      const select = this.querySelector<HTMLButtonElement>('[data-select-markdown]')!;
+      const markdownURL = new URL(this.dataset.markdownUrl!, location.origin);
+      let pending = false;
+      const selectText = () => { text.focus(); text.select(); };
+      const closeDialog = () => { dialog.close(); button.focus(); };
+      close.addEventListener('click', closeDialog);
+      select.addEventListener('click', selectText);
+      dialog.addEventListener('close', () => button.focus());
+      button.addEventListener('click', async () => {
+        if (pending) return;
+        pending = true;
+        button.disabled = true;
+        label.textContent = 'Copying…';
+        status.textContent = '';
+        try {
+          if (markdownURL.origin !== location.origin || !/^\/help\/_markdown\/[a-z-]+\.md$/.test(markdownURL.pathname)) throw Error('Invalid local Markdown path');
+          const response = await fetch(markdownURL, { credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10000) });
+          if (!response.ok || response.headers.get('content-type')?.includes('text/html') || Number(response.headers.get('content-length')) > 524288) throw Error('Markdown unavailable');
+          const markdown = await response.text();
+          if (markdown.length > 524288 || !/^#\s+\S/m.test(markdown)) throw Error('Invalid Markdown response');
+          try {
+            if (!navigator.clipboard?.writeText) throw Error('Clipboard unavailable');
+            await navigator.clipboard.writeText(markdown);
+            label.textContent = 'Copied';
+            status.textContent = 'Page Markdown copied.';
+          } catch {
+            label.textContent = 'Copy as Markdown';
+            text.value = markdown;
+            dialog.showModal();
+            selectText();
+          }
+        } catch {
+          label.textContent = 'Copy as Markdown';
+          status.textContent = "Could not load this page's Markdown. Try again or use View Markdown.";
+        } finally {
+          pending = false;
+          button.disabled = false;
+        }
+      });
+    }
+  }
+  if (!customElements.get('vectory-page-actions')) customElements.define('vectory-page-actions', VectoryPageActions);
+</script>

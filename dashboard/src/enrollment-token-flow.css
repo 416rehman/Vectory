@@ -1,0 +1,43 @@
+.enrollment-token-status {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.enrollment-token-status-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.enrollment-token-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+}
+.enrollment-token-request + .enrollment-token-request {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.enrollment-token-request strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.enrollment-token-request p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 4px 0 0;
+}
+.enrollment-token-request .button {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .enrollment-token-request {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+}

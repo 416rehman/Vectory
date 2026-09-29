@@ -1,0 +1,6 @@
+﻿Instrument Sans is bundled under the SIL Open Font License 1.1 (OFL.txt).
+Source: https://github.com/google/fonts/tree/main/ofl/instrumentsans
+Downloaded: 2026-09-26
+The upstream variable InstrumentSans[wdth,wght].ttf is losslessly compressed to WOFF2 with fontTools; no characters or axes removed.
+WOFF2 SHA-256: 007eb62d94ea921145bf1ee1b23b5f6a8e3f1b21bff4dec97abce029f952623e
+No remote font request is made by the application.

@@ -14,7 +14,10 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		os.Exit(VectorHost(os.Args[2], os.Args[3]))
+		if len(os.Args) != 5 {
+			os.Exit(2)
+		}
+		os.Exit(VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
 	}
 	os.Exit(m.Run())
 }

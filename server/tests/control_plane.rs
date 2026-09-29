@@ -9,6 +9,713 @@ use tower::ServiceExt;
 use vectory_server::{Settings, State, api, db, device, initialize, rollout};
 
 #[tokio::test]
+async fn rollback_at_priority_ceiling_replaces_only_original_binding_and_preserves_history() {
+    for priority in [100, 1_000_000] {
+        let (_temp, s) = state().await;
+        let ids = seed(&s, 2).await;
+        let (cookie, csrf) = admin(&s).await;
+        let app = api::router(s.clone());
+        let mut tx = s.pool.begin().await.unwrap();
+        rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+            .await
+            .unwrap();
+        let original = rollout::create(
+            &mut tx,
+            &request(&ids[..1], "version-b", priority, false),
+            "operator",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let path = format!(
+            "/api/v1/deployments/{}/rollback",
+            original["id"].as_str().unwrap()
+        );
+        let (status, rolled, _) = call(app.clone(), "POST", &path, json!({}), &cookie, &csrf).await;
+        assert_eq!(status, StatusCode::OK, "{rolled}");
+        assert_eq!(
+            rolled["priority"],
+            if priority == 1_000_000 {
+                priority
+            } else {
+                priority + 1
+            }
+        );
+        assert_eq!(rolled["version_id"], "version-a");
+        assert_eq!(rolled["targets"].as_array().unwrap().len(), 1);
+        assert_eq!(rolled["targets"][0]["device_id"], ids[0]);
+        let mut conn = s.pool.acquire().await.unwrap();
+        let old = rollout::deployment(&mut conn, original["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            old["status"],
+            if priority == 1_000_000 {
+                "unassigned"
+            } else {
+                "cancelled"
+            }
+        );
+        assert_eq!(
+            old["targets"], original["targets"],
+            "historical targets cannot be rewritten"
+        );
+        let device = rollout::devices(&mut conn).await.unwrap();
+        let touched = device.iter().find(|d| d["id"] == ids[0]).unwrap();
+        let untouched = device.iter().find(|d| d["id"] == ids[1]).unwrap();
+        assert_eq!(touched["desired_version_id"], "version-a");
+        assert_eq!(touched["desired_generation"], 3);
+        assert_eq!(untouched["desired_version_id"], "version-a");
+        assert_eq!(untouched["desired_generation"], 1);
+        if priority == 1_000_000 {
+            assert_eq!(
+                call(app, "POST", &path, json!({}), &cookie, &csrf).await.0,
+                StatusCode::CONFLICT
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn ceiling_rollback_conflict_or_late_failure_reverts_bindings_generations_and_audit() {
+    for late_failure in [false, true] {
+        let (_temp, s) = state().await;
+        let ids = seed(&s, 1).await;
+        let (cookie, csrf) = admin(&s).await;
+        let app = api::router(s.clone());
+        let mut tx = s.pool.begin().await.unwrap();
+        rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+            .await
+            .unwrap();
+        let original = rollout::create(
+            &mut tx,
+            &request(&ids, "version-b", 1_000_000, false),
+            "operator",
+        )
+        .await
+        .unwrap();
+        if late_failure {
+            sqlx::query("CREATE TRIGGER fail_rollback_audit BEFORE INSERT ON records WHEN NEW.kind='audit' AND json_extract(NEW.data,'$.action')='deployment.rollback' BEGIN SELECT RAISE(ABORT,'injected late failure'); END").execute(&mut *tx).await.unwrap();
+        } else {
+            rollout::create(
+                &mut tx,
+                &request(&ids, "version-b", 1_000_000, false),
+                "operator",
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let mut conn = s.pool.acquire().await.unwrap();
+        let before_deployments = rollout::deployments(&mut conn).await.unwrap();
+        let before_devices = rollout::devices(&mut conn).await.unwrap();
+        let before_audit = db::records(&mut conn, "audit").await.unwrap();
+        drop(conn);
+        let (status, _, _) = call(
+            app,
+            "POST",
+            &format!(
+                "/api/v1/deployments/{}/rollback",
+                original["id"].as_str().unwrap()
+            ),
+            json!({}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(
+            status,
+            if late_failure {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::CONFLICT
+            }
+        );
+        let mut conn = s.pool.acquire().await.unwrap();
+        assert_eq!(
+            rollout::deployments(&mut conn).await.unwrap(),
+            before_deployments
+        );
+        assert_eq!(rollout::devices(&mut conn).await.unwrap(), before_devices);
+        assert_eq!(db::records(&mut conn, "audit").await.unwrap(), before_audit);
+    }
+}
+
+#[tokio::test]
+async fn pipeline_details_share_draft_concurrency_and_preserve_config() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    let (_, created, _) = call(app.clone(), "POST", "/api/v1/configurations", json!({"name":"Before","description":"Original","config":pipeline(),"graph":{"nodes":[],"edges":[]}}), &cookie, &csrf).await;
+    let path = format!(
+        "/api/v1/configurations/{}/draft",
+        created["id"].as_str().unwrap()
+    );
+    let update = json!({"revision":created["revision"],"name":"After","description":"Renamed safely","config":created["config"],"graph":created["graph"]});
+    assert_eq!(
+        call(app.clone(), "PUT", &path, update.clone(), &cookie, "")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    for bad in [json!(""), json!("x".repeat(121)), json!(null)] {
+        let mut invalid = update.clone();
+        invalid["name"] = bad;
+        assert_eq!(
+            call(app.clone(), "PUT", &path, invalid, &cookie, &csrf)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let (status, saved, _) = call(app.clone(), "PUT", &path, update.clone(), &cookie, &csrf).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["name"], "After");
+    assert_eq!(saved["description"], "Renamed safely");
+    assert_eq!(saved["config"], created["config"]);
+    assert_eq!(
+        saved["revision"].as_u64(),
+        Some(created["revision"].as_u64().unwrap() + 1)
+    );
+    assert_eq!(
+        call(app.clone(), "PUT", &path, update, &cookie, &csrf)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (_, following, _) = call(
+        app,
+        "PUT",
+        &path,
+        json!({"revision":saved["revision"],"config":saved["config"],"graph":saved["graph"]}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(following["name"], "After");
+    assert_eq!(following["description"], "Renamed safely");
+}
+
+#[tokio::test]
+async fn credential_arrays_cannot_enter_draft_graph_or_immutable_history() {
+    let (_temp, state) = state().await;
+    let (cookie, csrf) = admin(&state).await;
+    let app = api::router(state.clone());
+    for (index, key) in ["valid_tokens", "access_keys"].iter().enumerate() {
+        let mut config = pipeline();
+        config["sources"]["credential_source"] =
+            json!({"type":"splunk_hec","address":"127.0.0.1:8088"});
+        config["sources"]["credential_source"][*key] =
+            json!(["${LOCAL_CREDENTIAL}", "SECRET[local.key]"]);
+        let payload = json!({"name":format!("Credential list {index}"),"description":"","config":config,"graph":{"nodes":[],"edges":[]}});
+        let (status, draft, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations",
+            payload.clone(),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{draft}");
+        let id = draft["id"].as_str().unwrap();
+        let secret = format!("SYNTHETIC_UNSTORABLE_CREDENTIAL_{index}");
+        let mut malicious = payload.clone();
+        malicious["config"]["sources"]["credential_source"][*key] =
+            json!(["${LOCAL_CREDENTIAL}", secret]);
+        assert_eq!(
+            call(
+                app.clone(),
+                "POST",
+                "/api/v1/configurations",
+                malicious.clone(),
+                &cookie,
+                &csrf
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        malicious["revision"] = draft["revision"].clone();
+        assert_eq!(
+            call(
+                app.clone(),
+                "PUT",
+                &format!("/api/v1/configurations/{id}/draft"),
+                malicious,
+                &cookie,
+                &csrf
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let mut graph_copy = payload.clone();
+        graph_copy["graph"]["nodes"] = json!([{"data":{(*key): [secret]}}]);
+        assert_eq!(
+            call(
+                app.clone(),
+                "POST",
+                "/api/v1/configurations",
+                graph_copy,
+                &cookie,
+                &csrf
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, version, _) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/configurations/{id}/publish"),
+            json!({"revision":draft["revision"],"message":"Native secret references"}),
+            &cookie,
+            &csrf,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{version}");
+        assert!(
+            version["artifact"]
+                .as_str()
+                .unwrap()
+                .contains("${LOCAL_CREDENTIAL}")
+        );
+        assert!(
+            version["artifact"]
+                .as_str()
+                .unwrap()
+                .contains("SECRET[local.key]")
+        );
+        let leaked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE data LIKE ?")
+            .bind(format!("%{secret}%"))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            leaked, 0,
+            "Synthetic credential must not enter any persisted record"
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_get_api_reference_permits_same_origin_embedding() {
+    let (_temp, s) = state().await;
+    let app = api::router(s);
+    for (method, path, allowed) in [
+        ("GET", "/api-reference.html", true),
+        ("GET", "/", false),
+        ("GET", "/api/v1/status", false),
+        ("POST", "/api-reference.html", false),
+        ("GET", "/api-reference.html/other", false),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()["x-frame-options"],
+            if allowed { "SAMEORIGIN" } else { "DENY" }
+        );
+        let csp = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains(if allowed {
+            "frame-ancestors 'self'"
+        } else {
+            "frame-ancestors 'none'"
+        }));
+        assert!(csp.contains("script-src 'self'"));
+        assert!(csp.contains("connect-src 'self'"));
+        assert!(!csp.contains("unsafe-eval"));
+    }
+}
+
+#[tokio::test]
+async fn device_effective_policy_is_current_read_only_and_pause_preserves_fields() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 1).await;
+    let (cookie, csrf) = admin(&s).await;
+    let app = api::router(s.clone());
+    let mut deployment = request(&ids, "version-a", 100, false);
+    deployment.as_object_mut().unwrap().remove("version_id");
+    deployment["policy"] =
+        json!({"heartbeat_seconds":420,"telemetry_enabled":false,"sync_paused":false});
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/deployments",
+            deployment.clone(),
+            &cookie,
+            &csrf
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, devices, _) = call(
+        app.clone(),
+        "GET",
+        "/api/v1/devices",
+        Value::Null,
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(devices[0]["effective_policy"], deployment["policy"]);
+    deployment["policy"] = devices[0]["effective_policy"].clone();
+    deployment["policy"]["sync_paused"] = json!(true);
+    deployment["priority"] = json!(101);
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/deployments",
+            deployment,
+            &cookie,
+            &csrf
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, device, _) = call(
+        app,
+        "GET",
+        &format!("/api/v1/devices/{}", ids[0]),
+        Value::Null,
+        &cookie,
+        "",
+    )
+    .await;
+    assert_eq!(
+        device["effective_policy"],
+        json!({"heartbeat_seconds":420,"telemetry_enabled":false,"sync_paused":true})
+    );
+}
+
+#[tokio::test]
+async fn configuration_mode_is_local_report_not_remote_policy() {
+    let (_temp, s) = state().await;
+    let (cookie, csrf) = admin(&s).await;
+    let app = api::router(s.clone());
+    let (_, token, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/tokens",
+        json!({"name":"Mode test","expires_hours":1}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    let key = rcgen::KeyPair::generate().unwrap();
+    let csr = rcgen::CertificateParams::default()
+        .serialize_request(&key)
+        .unwrap()
+        .pem()
+        .unwrap();
+    let mut enrollment = json!({"protocol_version":1,"request_id":"mode-test","token":token["token"],"name":"mode-device","csr_pem":csr,"os":"windows","arch":"amd64","agent_version":"test","vector_version":"0.58.0","configuration_mode":"invalid"});
+    assert_eq!(
+        call(
+            device::router(s.clone()),
+            "POST",
+            "/agent/v1/enroll",
+            enrollment.clone(),
+            "",
+            ""
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    enrollment["configuration_mode"] = json!("full");
+    let (status, credential, _) = call(
+        device::router(s.clone()),
+        "POST",
+        "/agent/v1/enroll",
+        enrollment,
+        "",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{credential}");
+    let id = credential["device_id"].as_str().unwrap();
+    let read = |state: State| async move {
+        let mut conn = state.pool.acquire().await.unwrap();
+        rollout::devices(&mut conn).await.unwrap()
+    };
+    assert_eq!(read(s.clone()).await[0]["configuration_mode"], "full");
+    let fingerprint: String =
+        sqlx::query_scalar("SELECT fingerprint FROM credentials WHERE device_id=?")
+            .bind(id)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    let agent =
+        device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(fingerprint))));
+    let mut heartbeat = json!({"protocol_version":1,"request_id":"mode-heartbeat","nonce":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","boot_id":"mode-boot","agent_version":"test","vector_version":"0.58.0","reported_generation":0,"policy_generation":0,"actual_sha256":"","apply_state":"unmanaged","local_paused":false,"remote_pause_acknowledged":false,"configuration_mode":"invalid"});
+    assert_eq!(
+        call(
+            agent.clone(),
+            "POST",
+            "/agent/v1/heartbeat",
+            heartbeat.clone(),
+            "",
+            ""
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(read(s.clone()).await[0]["configuration_mode"], "full");
+    heartbeat
+        .as_object_mut()
+        .unwrap()
+        .remove("configuration_mode");
+    assert_eq!(
+        call(
+            agent.clone(),
+            "POST",
+            "/agent/v1/heartbeat",
+            heartbeat.clone(),
+            "",
+            ""
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(read(s.clone()).await[0]["configuration_mode"], "restricted");
+    heartbeat["configuration_mode"] = json!("full");
+    assert_eq!(
+        call(agent, "POST", "/agent/v1/heartbeat", heartbeat, "", "")
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(read(s.clone()).await[0]["configuration_mode"], "full");
+    let policy = json!({"name":"Remote widening denied","policy":{"heartbeat_seconds":60,"sync_paused":false,"telemetry_enabled":true,"configuration_mode":"full"}});
+    assert_eq!(
+        call(app, "POST", "/api/v1/policies", policy, &cookie, &csrf)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn pipeline_validation_allows_publishers_without_granting_draft_writes() {
+    let (_temp, s) = state().await;
+    let (admin_cookie, admin_csrf) = admin(&s).await;
+    let app = api::router(s.clone());
+    let (created_status, created, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Role-checked validation","description":"","graph":{"nodes":[],"edges":[]},"config":pipeline()}),
+        &admin_cookie,
+        &admin_csrf,
+    )
+    .await;
+    assert_eq!(created_status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let check_path = format!("/api/v1/configurations/{id}/validate");
+    let draft_path = format!("/api/v1/configurations/{id}/draft");
+    let body = json!({"config":pipeline()});
+    assert_eq!(
+        call(app.clone(), "POST", &check_path, body.clone(), "", "")
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let mut sessions = vec![("admin", admin_cookie, admin_csrf)];
+    for role in ["viewer", "editor", "operator"] {
+        let email = format!("validation-{role}@example.test");
+        let (created_status, user, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/users",
+            json!({"email":email,"name":role,"role":role,"password":"another-long-password"}),
+            &sessions[0].1,
+            &sessions[0].2,
+        )
+        .await;
+        assert_eq!(created_status, StatusCode::OK, "{user}");
+        let (login_status, session, cookie) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/login",
+            json!({"email":email,"password":"another-long-password"}),
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(login_status, StatusCode::OK, "{session}");
+        sessions.push((role, cookie, session["csrf_token"].as_str().unwrap().into()));
+    }
+
+    let mut conn = s.pool.acquire().await.unwrap();
+    let before = db::record(&mut conn, "configuration", id).await.unwrap();
+    let revisions_before = db::records(&mut conn, "revision").await.unwrap();
+    let audits_before = db::records(&mut conn, "audit").await.unwrap();
+    drop(conn);
+
+    for (role, cookie, csrf) in &sessions {
+        assert_eq!(
+            call(
+                app.clone(),
+                "GET",
+                &format!("/api/v1/configurations/{id}"),
+                Value::Null,
+                cookie,
+                "",
+            )
+            .await
+            .0,
+            StatusCode::OK,
+            "{role} can read the pipeline"
+        );
+        let (status, result, _) =
+            call(app.clone(), "POST", &check_path, body.clone(), cookie, csrf).await;
+        if *role == "viewer" {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{role}: {result}");
+            assert_eq!(result["valid"], true, "{role}: {result}");
+        }
+    }
+    let (_, operator_cookie, operator_csrf) = &sessions[3];
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            &check_path,
+            body.clone(),
+            operator_cookie,
+            "",
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            app.clone(),
+            "PUT",
+            &draft_path,
+            json!({"revision":created["revision"],"config":pipeline(),"graph":{"nodes":[],"edges":[]},"message":"unauthorized"}),
+            operator_cookie,
+            operator_csrf,
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let mut conn = s.pool.acquire().await.unwrap();
+    assert_eq!(
+        db::record(&mut conn, "configuration", id).await.unwrap(),
+        before
+    );
+    assert_eq!(
+        db::records(&mut conn, "revision").await.unwrap(),
+        revisions_before
+    );
+    assert_eq!(
+        db::records(&mut conn, "audit").await.unwrap(),
+        audits_before
+    );
+}
+
+#[tokio::test]
+async fn pipeline_test_endpoint_requires_auth_csrf_and_isolated_execution() {
+    let (_temp, s) = state().await;
+    let (cookie, csrf) = admin(&s).await;
+    let app = api::router(s.clone());
+    let pure = json!({"config":{"sources":{"input":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}},"tests":[]}});
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations/test",
+            pure.clone(),
+            "",
+            ""
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations/test",
+            pure.clone(),
+            &cookie,
+            ""
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/configurations/test",
+            pure,
+            &cookie,
+            &csrf
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let provider = json!({"provider":{"type":"http","url":"${DEVICE_PROVIDER_URL}"}});
+    let (status, deferred, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config":provider}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deferred["valid"], false);
+    assert_eq!(deferred["tests_run"], false);
+    assert_eq!(deferred["deferred"], true);
+    let (_, draft, _) = call(app.clone(), "POST", "/api/v1/configurations", json!({"name":"Device provider","description":"","graph":{"nodes":[],"edges":[]},"config":provider}), &cookie, &csrf).await;
+    let (status, version, _) = call(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/configurations/{}/publish",
+            draft["id"].as_str().unwrap()
+        ),
+        json!({"revision":draft["revision"],"message":"Provider-only bundle"}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{version}");
+    assert_eq!(version["config"], provider);
+    assert_eq!(version["validation"]["vector_validated"], false);
+    assert_eq!(version["validation"]["deferred"], true);
+}
+
+#[tokio::test]
 async fn deployment_commit_rejects_membership_changed_since_concrete_preview() {
     let (_temp, s) = state().await;
     let ids = seed(&s, 2).await;
@@ -43,7 +750,7 @@ async fn deployment_commit_rejects_membership_changed_since_concrete_preview() {
             app.clone(),
             "PUT",
             &format!("/api/v1/groups/{}", group["id"].as_str().unwrap()),
-            json!({"name":"Reviewed group","device_ids":ids}),
+            json!({"name":"Reviewed group","device_ids":ids,"revision":group["revision"]}),
             &cookie,
             &csrf
         )
@@ -604,6 +1311,7 @@ async fn canary_requires_continuously_fresh_verified_observation() {
         .unwrap();
     let deployment = d["id"].as_str().unwrap().to_owned();
     sqlx::query("UPDATE deployment_targets SET state='verified_applied' WHERE deployment_id=? AND generation>0").bind(&deployment).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.reported_generation',desired_generation,'$.apply_state','verified_applied','$.actual_sha256',?) WHERE assignment_id=?").bind(db::hash("{}\n")).bind(&deployment).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
     rollout::tick(&s).await.unwrap();
     let mut tx = s.pool.begin().await.unwrap();
@@ -641,6 +1349,272 @@ async fn canary_requires_continuously_fresh_verified_observation() {
         1
     );
     assert!(d["observation_started_at"].is_null());
+}
+
+#[tokio::test]
+async fn scheduled_activation_rechecks_canary_overlap_without_partial_admission() {
+    for resource in ["configuration", "policy"] {
+        let (_temp, s) = state().await;
+        let ids = seed(&s, 4).await;
+        let mut tx = s.pool.begin().await.unwrap();
+        let mut planned = request(&ids[1..], "version-b", 200, false);
+        let mut canary_request = request(&ids[..2], "version-a", 100, true);
+        if resource == "policy" {
+            for (body, seconds) in [(&mut planned, 30), (&mut canary_request, 120)] {
+                body.as_object_mut().unwrap().remove("version_id");
+                body["policy"] = json!({"heartbeat_seconds":seconds,"sync_paused":false,"telemetry_enabled":true});
+            }
+        }
+        planned["scheduled_at"] =
+            json!((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        let scheduled = rollout::create(&mut tx, &planned, "operator")
+            .await
+            .unwrap();
+        let canary = rollout::create(&mut tx, &canary_request, "operator")
+            .await
+            .unwrap();
+        let before_devices = rollout::devices(&mut tx).await.unwrap();
+        let mut stored = db::record(&mut tx, "deployment", scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        stored["scheduled_at"] =
+            json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+        db::update(&mut tx, "deployment", &stored).await.unwrap();
+        tx.commit().await.unwrap();
+
+        rollout::tick(&s).await.unwrap();
+        rollout::tick(&s).await.unwrap();
+        let mut conn = s.pool.acquire().await.unwrap();
+        let failed = rollout::deployment(&mut conn, scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(failed["status"], "failed");
+        for target in failed["targets"].as_array().unwrap() {
+            assert_eq!(target["generation"], 0);
+            assert!(target["released_at"].is_null());
+            if target["device_id"] == ids[1] {
+                assert_eq!(target["state"], "blocked");
+                assert_eq!(
+                    target["error"],
+                    "Scheduled activation blocked by an active canary; pause or cancel it, then create a new reviewed deployment"
+                );
+            } else {
+                assert_eq!(target["state"], "pending");
+                assert!(target["error"].is_null());
+            }
+        }
+        assert_eq!(rollout::devices(&mut conn).await.unwrap(), before_devices);
+        assert_eq!(
+            rollout::deployment(&mut conn, canary["id"].as_str().unwrap())
+                .await
+                .unwrap(),
+            canary
+        );
+        let audits = db::records(&mut conn, "audit").await.unwrap();
+        assert_eq!(
+            audits
+                .iter()
+                .filter(|a| a["target"] == scheduled["id"]
+                    && a["action"] == "deployment.activate"
+                    && a["outcome"] == "blocked")
+                .count(),
+            1
+        );
+        assert!(!audits.iter().any(|a| {
+            a["action"] == "deployment.release"
+                && a["target"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with(scheduled["id"].as_str().unwrap())
+        }));
+    }
+}
+
+#[tokio::test]
+async fn scheduled_canary_does_not_block_itself_or_an_independent_resource() {
+    for with_other_resource in [false, true] {
+        let (_temp, s) = state().await;
+        let ids = seed(&s, 3).await;
+        let mut tx = s.pool.begin().await.unwrap();
+        let mut planned = request(&ids, "version-b", 200, true);
+        planned["scheduled_at"] =
+            json!((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        let scheduled = rollout::create(&mut tx, &planned, "operator")
+            .await
+            .unwrap();
+        if with_other_resource {
+            let mut other = request(&ids, "unused", 300, true);
+            other.as_object_mut().unwrap().remove("version_id");
+            other["policy"] =
+                json!({"heartbeat_seconds":120,"sync_paused":false,"telemetry_enabled":true});
+            rollout::create(&mut tx, &other, "operator").await.unwrap();
+        }
+        let mut stored = db::record(&mut tx, "deployment", scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        stored["scheduled_at"] =
+            json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+        db::update(&mut tx, "deployment", &stored).await.unwrap();
+        tx.commit().await.unwrap();
+        rollout::tick(&s).await.unwrap();
+        let mut conn = s.pool.acquire().await.unwrap();
+        let activated = rollout::deployment(&mut conn, scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(activated["status"], "active");
+        assert_eq!(
+            activated["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|t| t["generation"].as_i64().unwrap() > 0)
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn scheduled_activation_allows_nonoverlap_and_inactive_canaries() {
+    for scenario in ["nonoverlap", "paused", "completed"] {
+        let (_temp, s) = state().await;
+        let ids = seed(&s, 3).await;
+        let mut tx = s.pool.begin().await.unwrap();
+        let mut planned = request(&ids[..2], "version-b", 200, false);
+        planned["scheduled_at"] =
+            json!((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        let scheduled = rollout::create(&mut tx, &planned, "operator")
+            .await
+            .unwrap();
+        let canary = rollout::create(
+            &mut tx,
+            &request(
+                if scenario == "nonoverlap" {
+                    &ids[2..]
+                } else {
+                    &ids[..2]
+                },
+                "version-a",
+                100,
+                true,
+            ),
+            "operator",
+        )
+        .await
+        .unwrap();
+        if scenario == "paused" {
+            rollout::action(&mut tx, canary["id"].as_str().unwrap(), "pause", "operator")
+                .await
+                .unwrap();
+        } else if scenario == "completed" {
+            let mut stored = db::record(&mut tx, "deployment", canary["id"].as_str().unwrap())
+                .await
+                .unwrap();
+            stored["status"] = json!("completed");
+            db::update(&mut tx, "deployment", &stored).await.unwrap();
+        }
+        let mut stored = db::record(&mut tx, "deployment", scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        stored["scheduled_at"] =
+            json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+        db::update(&mut tx, "deployment", &stored).await.unwrap();
+        tx.commit().await.unwrap();
+        rollout::tick(&s).await.unwrap();
+        let mut conn = s.pool.acquire().await.unwrap();
+        let activated = rollout::deployment(&mut conn, scheduled["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(activated["status"], "active", "{scenario}");
+        assert!(
+            activated["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|t| t["generation"].as_i64().unwrap() > 0)
+        );
+    }
+}
+
+#[tokio::test]
+async fn due_overlapping_canary_schedules_serialize_in_one_tick() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 3).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    let mut scheduled_ids = Vec::new();
+    for (version, priority) in [("version-a", 100), ("version-b", 200)] {
+        let mut planned = request(&ids, version, priority, true);
+        planned["scheduled_at"] =
+            json!((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        let scheduled = rollout::create(&mut tx, &planned, "operator")
+            .await
+            .unwrap();
+        let id = scheduled["id"].as_str().unwrap();
+        scheduled_ids.push(id.to_owned());
+        let mut stored = db::record(&mut tx, "deployment", id).await.unwrap();
+        stored["scheduled_at"] =
+            json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+        db::update(&mut tx, "deployment", &stored).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    rollout::tick(&s).await.unwrap();
+    let mut conn = s.pool.acquire().await.unwrap();
+    let deployments = rollout::deployments(&mut conn).await.unwrap();
+    assert_eq!(
+        deployments
+            .iter()
+            .filter(|d| d["status"] == "active")
+            .count(),
+        1
+    );
+    assert_eq!(
+        deployments
+            .iter()
+            .filter(|d| d["status"] == "failed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        deployments
+            .iter()
+            .flat_map(|d| d["targets"].as_array().unwrap())
+            .filter(|t| t["generation"].as_i64().unwrap() > 0)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn scheduled_canary_block_failure_rolls_back_status_targets_and_audit() {
+    let (_temp, s) = state().await;
+    let ids = seed(&s, 3).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    let mut planned = request(&ids, "version-b", 200, false);
+    planned["scheduled_at"] = json!((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+    let scheduled = rollout::create(&mut tx, &planned, "operator")
+        .await
+        .unwrap();
+    rollout::create(&mut tx, &request(&ids, "version-a", 100, true), "operator")
+        .await
+        .unwrap();
+    let mut stored = db::record(&mut tx, "deployment", scheduled["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    stored["scheduled_at"] =
+        json!((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    db::update(&mut tx, "deployment", &stored).await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_block_audit BEFORE INSERT ON records WHEN NEW.kind='audit' AND json_extract(NEW.data,'$.action')='deployment.activate' AND json_extract(NEW.data,'$.outcome')='blocked' BEGIN SELECT RAISE(ABORT,'injected audit failure'); END").execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut conn = s.pool.acquire().await.unwrap();
+    let before = rollout::deployments(&mut conn).await.unwrap();
+    let devices = rollout::devices(&mut conn).await.unwrap();
+    let audits = db::records(&mut conn, "audit").await.unwrap();
+    drop(conn);
+    assert!(rollout::tick(&s).await.is_err());
+    let mut conn = s.pool.acquire().await.unwrap();
+    assert_eq!(rollout::deployments(&mut conn).await.unwrap(), before);
+    assert_eq!(rollout::devices(&mut conn).await.unwrap(), devices);
+    assert_eq!(db::records(&mut conn, "audit").await.unwrap(), audits);
 }
 
 #[tokio::test]
@@ -842,19 +1816,19 @@ async fn mfa_requires_second_factor_and_recovery_codes_are_single_use() {
     assert!(!encrypted.contains(&secret));
     assert!(s.keys.open_mfa("wrong-user", &encrypted).is_err());
     let credentials = json!({"email":"admin@example.test","password":"a-long-enough-password"});
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/api/v1/login",
-            credentials.clone(),
-            "",
-            ""
-        )
-        .await
-        .0,
-        StatusCode::UNAUTHORIZED
-    );
+    let (status, challenge, cookie) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/login",
+        credentials.clone(),
+        "",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(challenge["mfa_required"], true);
+    assert!(challenge.get("csrf_token").is_none());
+    assert!(cookie.is_empty());
     let mut replay = credentials.clone();
     replay["totp_code"] = json!(code);
     assert_eq!(
@@ -885,6 +1859,186 @@ async fn mfa_requires_second_factor_and_recovery_codes_are_single_use() {
     .await;
     assert_eq!(status, StatusCode::OK, "{disabled}");
     assert_eq!(disabled["enabled"], false);
+}
+
+#[tokio::test]
+async fn unread_mfa_receipts_leave_only_current_status_and_repeated_disable_has_new_effects() {
+    let (_temp, s) = state().await;
+    let app = api::router(s.clone());
+    let (cookie, csrf) = admin(&s).await;
+    let password = "a-long-enough-password";
+
+    // The first setup commits, but its one-time secret response is discarded.
+    let setup_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mfa/setup")
+        .header("content-type", "application/json")
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({"password": password}).to_string()))
+        .unwrap();
+    let unread_setup = app.clone().oneshot(setup_request).await.unwrap();
+    assert_eq!(unread_setup.status(), StatusCode::OK);
+    assert_eq!(unread_setup.headers()["cache-control"], "no-store");
+    drop(unread_setup);
+    assert_eq!(
+        call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
+            .await
+            .1,
+        json!({"enabled": false}),
+        "a pending setup is not a recoverable secret or enabled state"
+    );
+    let first_ciphertext: String = sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+
+    // A separately requested setup replaces the unread one; only this new
+    // response supplies a secret from which the person can verify a code.
+    let (status, setup, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/mfa/setup",
+        json!({"password": password}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let next_ciphertext: String = sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_ne!(first_ciphertext, next_ciphertext);
+    let generator = totp_rs::TOTP::from_url(setup["otpauth_url"].as_str().unwrap()).unwrap();
+    let confirmation = generator.generate_current().unwrap();
+
+    // Confirmation also commits without its body being read. The eight
+    // recovery codes are stored as verifiers only, never available from GET.
+    let confirm_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mfa/confirm")
+        .header("content-type", "application/json")
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from(json!({"code": confirmation}).to_string()))
+        .unwrap();
+    let unread_confirm = app.clone().oneshot(confirm_request).await.unwrap();
+    assert_eq!(unread_confirm.status(), StatusCode::OK);
+    drop(unread_confirm);
+    assert_eq!(
+        call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
+            .await
+            .1,
+        json!({"enabled": true})
+    );
+    let recovery_count: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(recovery_count, 8);
+    assert_eq!(
+        call(
+            app.clone(),
+            "POST",
+            "/api/v1/mfa/confirm",
+            json!({"code": confirmation}),
+            &cookie,
+            &csrf,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT,
+        "repeating confirmation cannot recover the original codes"
+    );
+
+    let next_step = chrono::Utc::now().timestamp() / 30 + 1;
+    let next_code = generator.generate((next_step * 30) as u64);
+    let (status, disabled, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/mfa/disable",
+        json!({"password": password, "code": next_code}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled, json!({"enabled": false}));
+    assert_eq!(
+        call(app.clone(), "GET", "/api/v1/mfa", Value::Null, &cookie, "")
+            .await
+            .1,
+        json!({"enabled": false})
+    );
+    let remaining_codes: i64 = sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining_codes, 0);
+
+    // A repeat with MFA already absent still commits a new audit and revokes
+    // sessions created since the first disable. It is not harmless replay.
+    let (status, sibling, sibling_cookie) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/login",
+        json!({"email": "admin@example.test", "password": password}),
+        "",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sibling}");
+    assert_eq!(
+        call(
+            app.clone(),
+            "GET",
+            "/api/v1/session",
+            Value::Null,
+            &sibling_cookie,
+            ""
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, repeated, _) = call(
+        app.clone(),
+        "POST",
+        "/api/v1/mfa/disable",
+        json!({"password": password, "code": "not-a-current-code"}),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repeated}");
+    assert_eq!(repeated, json!({"enabled": false}));
+    assert_eq!(
+        call(
+            app.clone(),
+            "GET",
+            "/api/v1/session",
+            Value::Null,
+            &sibling_cookie,
+            ""
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(app, "GET", "/api/v1/session", Value::Null, &cookie, "")
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let disable_audits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='mfa.disable' AND json_extract(data,'$.outcome')='success'",
+    )
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(disable_audits, 2);
 }
 
 #[tokio::test]
@@ -1017,23 +2171,38 @@ async fn authorized_recovery_retires_old_identity_without_inheriting_assignments
 #[tokio::test]
 async fn operator_retry_advances_generation_and_schedule_refresh_requires_review() {
     let (_temp, s) = state().await;
-    let ids = seed(&s, 2).await;
+    let old_ids = seed(&s, 2).await;
+    let ids = vec![db::id(), db::id()];
+    for (old, id) in old_ids.iter().zip(&ids) {
+        sqlx::query("UPDATE devices SET id=?,data=json_set(data,'$.id',?) WHERE id=?")
+            .bind(id)
+            .bind(id)
+            .bind(old)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
     let app = api::router(s.clone());
     let (cookie, csrf) = admin(&s).await;
     let mut tx = s.pool.begin().await.unwrap();
-    rollout::create(
-        &mut tx,
-        &request(&ids[..1], "version-a", 10, false),
-        "operator",
-    )
-    .await
-    .unwrap();
+    let version = "00000000-0000-4000-8000-000000000111";
+    let mut metadata = db::record(&mut tx, "version", "version-a").await.unwrap();
+    metadata["id"] = json!(version);
+    db::insert(&mut tx, "version", &metadata).await.unwrap();
+    rollout::create(&mut tx, &request(&ids[..1], version, 10, false), "operator")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
+    sqlx::query("UPDATE devices SET data=json_set(data,'$.apply_state','failed') WHERE id=?")
+        .bind(&ids[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
     let (status, retried, _) = call(
         app.clone(),
         "POST",
         &format!("/api/v1/devices/{}/retry", ids[0]),
-        json!({}),
+        json!({"expected_version_id":version,"expected_generation":1}),
         &cookie,
         &csrf,
     )
@@ -1045,13 +2214,13 @@ async fn operator_retry_advances_generation_and_schedule_refresh_requires_review
             app.clone(),
             "POST",
             &format!("/api/v1/devices/{}/retry", ids[0]),
-            json!({}),
+            json!({"expected_version_id":version,"expected_generation":1}),
             &cookie,
             &csrf
         )
         .await
         .0,
-        StatusCode::TOO_MANY_REQUESTS
+        StatusCode::CONFLICT
     );
     let (_, group, _) = call(
         app.clone(),
@@ -1076,11 +2245,23 @@ async fn operator_retry_advances_generation_and_schedule_refresh_requires_review
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{deployment}");
+    let (_, old_preview, _) = call(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/deployments/{}/refresh-preview",
+            deployment["id"].as_str().unwrap()
+        ),
+        json!({}),
+        &cookie,
+        &csrf,
+    )
+    .await;
     let (status, _, _) = call(
         app.clone(),
         "PUT",
         &format!("/api/v1/groups/{}", group["id"].as_str().unwrap()),
-        json!({"name":"Scheduled fleet","device_ids":ids}),
+        json!({"name":"Scheduled fleet","device_ids":ids,"revision":group["revision"]}),
         &cookie,
         &csrf,
     )
@@ -1095,7 +2276,7 @@ async fn operator_retry_advances_generation_and_schedule_refresh_requires_review
             app.clone(),
             "POST",
             &path,
-            json!({"expected_device_ids":[ids[0]]}),
+            json!({"review_token":old_preview["review_token"],"expected_device_ids":[ids[0]]}),
             &cookie,
             &csrf
         )
@@ -1103,11 +2284,23 @@ async fn operator_retry_advances_generation_and_schedule_refresh_requires_review
         .0,
         StatusCode::CONFLICT
     );
+    let (_, fresh_preview, _) = call(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/deployments/{}/refresh-preview",
+            deployment["id"].as_str().unwrap()
+        ),
+        json!({}),
+        &cookie,
+        &csrf,
+    )
+    .await;
     let (status, refreshed, _) = call(
         app,
         "POST",
         &path,
-        json!({"expected_device_ids":ids}),
+        json!({"review_token":fresh_preview["review_token"],"expected_device_ids":ids}),
         &cookie,
         &csrf,
     )
@@ -1119,11 +2312,22 @@ async fn operator_retry_advances_generation_and_schedule_refresh_requires_review
 #[tokio::test]
 async fn unassignment_preview_is_read_only_and_final_removal_keeps_reported_workload() {
     let (_temp, s) = state().await;
-    let ids = seed(&s, 1).await;
+    seed(&s, 1).await;
+    let ids = vec![db::id()];
+    let version = db::id();
+    sqlx::query("UPDATE devices SET id=?,data=json_set(data,'$.id',?) WHERE id='device-0'")
+        .bind(&ids[0])
+        .bind(&ids[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let mut connection = s.pool.acquire().await.unwrap();
+    db::insert(&mut connection,"version",&json!({"id":version,"configuration_id":db::id(),"number":1,"artifact":"{}\n","sha256":db::hash("{}\n"),"size":3,"created_at":db::now()})).await.unwrap();
+    drop(connection);
     let app = api::router(s.clone());
     let (cookie, csrf) = admin(&s).await;
     let mut tx = s.pool.begin().await.unwrap();
-    let d = rollout::create(&mut tx, &request(&ids, "version-a", 10, false), "operator")
+    let d = rollout::create(&mut tx, &request(&ids, &version, 10, false), "operator")
         .await
         .unwrap();
     sqlx::query("UPDATE devices SET data=json_set(data,'$.actual_sha256',?,'$.apply_state','verified_applied') WHERE id=?")
@@ -1140,7 +2344,8 @@ async fn unassignment_preview_is_read_only_and_final_removal_keeps_reported_work
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
-    assert!(preview["devices"][0]["desired_version_id"].is_null());
+    assert!(preview["devices"][0]["after"]["version_id"].is_null());
+    assert_eq!(preview["devices"][0]["effect"], "unmanaged");
     let generation: i64 = sqlx::query_scalar("SELECT desired_generation FROM devices")
         .fetch_one(&s.pool)
         .await
@@ -1150,7 +2355,7 @@ async fn unassignment_preview_is_read_only_and_final_removal_keeps_reported_work
         app.clone(),
         "POST",
         &format!("{base}/unassign"),
-        json!({}),
+        json!({"review_token":preview["review_token"]}),
         &cookie,
         &csrf,
     )

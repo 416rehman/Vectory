@@ -1,70 +1,128 @@
 {
   "vector_version": "0.58.0",
+  "schema_sha256": "750b3f954022601721b4d8cde077f4c9f6efe1a967cea0bff8e31e79e900f502",
+  "catalog_components": 128,
+  "agent_supported_types": 18,
+  "curated_fixture_count": 13,
+  "expanded_fixture_count": 3,
+  "native_fixture_tested_component_types": 17,
+  "untested_components": 111,
+  "limits": "Fixture results do not certify the remaining component types, platform availability, external endpoint integration, or agent activation. Device-local capability policy is unchanged.",
   "results": [
     {
+      "fixture_set": "curated",
+      "kind": "sources",
       "component": "demo_logs",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sources",
       "component": "file",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sources",
       "component": "syslog",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sources",
       "component": "http_server",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sources",
       "component": "opentelemetry",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "transforms",
       "component": "remap",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "transforms",
       "component": "filter",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "transforms",
       "component": "route",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "transforms",
       "component": "sample",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sinks",
       "component": "console",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sinks",
       "component": "http",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sinks",
       "component": "elasticsearch",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     },
     {
+      "fixture_set": "curated",
+      "kind": "sinks",
       "component": "loki",
       "valid": true,
-      "validation": "Vector 0.58.0 syntax/topology only; external endpoints are not contacted"
+      "validation": "Curated fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
+    },
+    {
+      "fixture_set": "expanded",
+      "kind": "sources",
+      "component": "kafka",
+      "valid": true,
+      "validation": "Representative generated-type fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
+    },
+    {
+      "fixture_set": "expanded",
+      "kind": "sinks",
+      "component": "aws_s3",
+      "valid": true,
+      "validation": "Representative generated-type fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
+    },
+    {
+      "fixture_set": "expanded",
+      "kind": "sources",
+      "component": "internal_metrics",
+      "also_components": [
+        "sinks/prometheus_exporter"
+      ],
+      "valid": true,
+      "validation": "Representative generated-type fixture only: pinned Windows Vector syntax/topology; no endpoint health or environment checks"
     }
   ]
 }

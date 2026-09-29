@@ -1,0 +1,177 @@
+.configuration-code-editor {
+  --cce-property: #235ca8;
+  --cce-string: #216441;
+  --cce-number: #845818;
+  --cce-keyword: #7440a3;
+  --cce-error: #b12d42;
+  --cce-warning: #89600d;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 6px);
+  background: var(--surface);
+  overflow: hidden;
+}
+[data-theme="dark"] .configuration-code-editor {
+  --cce-property: #a6c6ff;
+  --cce-string: #acd5b8;
+  --cce-number: #e2c287;
+  --cce-keyword: #d6b2ed;
+  --cce-error: #ff9fac;
+  --cce-warning: #e2c287;
+}
+.configuration-code-editor:focus-within {
+  border-color: var(--accent);
+}
+.configuration-code-editor-host {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+.configuration-code-editor .cm-editor {
+  height: 100%;
+  min-height: 320px;
+  color: var(--ink);
+  background: var(--surface);
+}
+.configuration-code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.configuration-code-editor .cm-scroller {
+  overflow: auto;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.configuration-code-editor .cm-content {
+  padding: 12px 0;
+  caret-color: var(--ink);
+}
+.configuration-code-editor .cm-line {
+  padding: 0 12px;
+}
+.configuration-code-editor .cm-gutters {
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--surface);
+}
+.configuration-code-editor .cm-gutterElement {
+  padding-top: 0;
+}
+.configuration-code-editor .cm-activeLine,
+.configuration-code-editor .cm-activeLineGutter {
+  background: var(--surface-hover);
+}
+.configuration-code-editor .cm-selectionBackground,
+.configuration-code-editor .cm-focused .cm-selectionBackground {
+  background: var(--accent-soft);
+}
+.configuration-code-editor .cm-content ::selection {
+  background: var(--accent-soft);
+}
+.configuration-code-editor .cm-cursor {
+  border-left-color: var(--ink);
+}
+.configuration-code-editor .cm-matchingBracket {
+  background: var(--accent-soft);
+  outline: 1px solid var(--line-strong);
+}
+.configuration-code-editor .cm-selectionMatch,
+.configuration-code-editor .cm-searchMatch {
+  background: var(--accent-soft);
+}
+.configuration-code-editor .cm-searchMatch-selected {
+  outline: 1px solid var(--accent);
+}
+.configuration-code-editor .cce-property {
+  color: var(--cce-property);
+}
+.configuration-code-editor .cce-string {
+  color: var(--cce-string);
+}
+.configuration-code-editor .cce-number {
+  color: var(--cce-number);
+}
+.configuration-code-editor .cce-keyword {
+  color: var(--cce-keyword);
+}
+.configuration-code-editor .cce-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+.configuration-code-editor .cce-punctuation {
+  color: var(--muted);
+}
+.configuration-code-editor .cce-invalid {
+  color: var(--cce-error);
+  text-decoration: underline wavy;
+}
+.configuration-code-editor .cm-panels,
+.configuration-code-editor .cm-tooltip {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 13px;
+}
+.configuration-code-editor .cm-panel.cm-search {
+  padding: 8px 12px;
+}
+.configuration-code-editor .cm-search input,
+.configuration-code-editor .cm-search button {
+  font: inherit;
+}
+.configuration-code-editor .cm-textfield {
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.configuration-code-editor .cm-button {
+  color: var(--ink);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 7px;
+}
+.configuration-code-editor .cm-foldPlaceholder {
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+.configuration-code-editor .cm-diagnostic-error {
+  border-left-color: var(--cce-error);
+}
+.configuration-code-editor .cm-diagnostic-warning {
+  border-left-color: var(--cce-warning);
+}
+.configuration-code-editor .cm-tooltip-lint {
+  max-width: min(420px, calc(100vw - 48px));
+}
+.configuration-code-editor[data-readonly] .cm-activeLine {
+  background: transparent;
+}
+.inspector-json-editor .configuration-code-editor,
+.inspector-json-editor .configuration-code-editor .cm-editor,
+.editor-component-json .configuration-code-editor,
+.editor-component-json .configuration-code-editor .cm-editor {
+  min-height: 180px;
+}
+.inspector-json-editor .cm-scroller,
+.editor-component-json .cm-scroller {
+  max-height: 360px;
+}
+@media (max-width: 600px) {
+  .configuration-code-editor .cm-scroller {
+    font-size: 12px;
+  }
+  .configuration-code-editor .cm-line {
+    padding: 0 8px;
+  }
+  .configuration-code-editor .cm-panel.cm-search {
+    padding: 6px;
+  }
+}

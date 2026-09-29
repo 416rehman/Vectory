@@ -9,10 +9,10 @@
   "transforms": {
     "process": {
       "type": "sample",
+      "rate": 10,
       "inputs": [
         "demo"
-      ],
-      "rate": 10
+      ]
     }
   },
   "sinks": {

@@ -100,12 +100,46 @@ async fn validate(
     State(worker): State<Arc<Worker>>,
     Json(input): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    run_configuration(worker, input, false).await
+}
+async fn pipeline_tests(
+    State(worker): State<Arc<Worker>>,
+    Json(input): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    run_configuration(worker, input, true).await
+}
+async fn run_configuration(
+    worker: Arc<Worker>,
+    input: Value,
+    tests: bool,
+) -> Result<Json<Value>, StatusCode> {
     let _permit = worker
         .slots
         .try_acquire()
         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
     let mut result = validation::validate(&input["config"]);
+    if tests {
+        result["tests_run"] = json!(false);
+    }
     if result["valid"] != true {
+        return Ok(Json(result));
+    }
+    let static_paths = !tests && validation::can_static_check_file_sink_paths(&input["config"]);
+    if !static_paths && validation::mark_device_deferred(&mut result, &input["config"]) {
+        result["deferred"] = json!(true);
+        if tests {
+            result["valid"] = json!(false);
+            result["errors"] = json!(["Run these tests on the device with its local resources."]);
+        }
+        return Ok(Json(result));
+    }
+    if tests
+        && input["config"]["tests"]
+            .as_array()
+            .is_none_or(|tests| tests.is_empty())
+    {
+        result["valid"] = json!(false);
+        result["errors"] = json!(["Add at least one Vector pipeline test before running tests."]);
         return Ok(Json(result));
     }
     let dir = tempfile::tempdir().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -118,7 +152,11 @@ async fn validate(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut command = tokio::process::Command::new(&worker.vector);
     command
-        .args(["validate", "--no-environment"])
+        .args(if tests {
+            ["test", "--config-json"]
+        } else {
+            ["validate", "--no-environment"]
+        })
         .arg(&path)
         .current_dir(dir.path())
         .env_clear()
@@ -146,30 +184,90 @@ async fn validate(
                 out_reader.read_to_end(&mut bytes),
                 err_reader.read_to_end(&mut err)
             )?;
-            Ok::<bool, std::io::Error>(bytes.len() <= 32768 && err.len() <= 32768)
+            Ok::<_, std::io::Error>((bytes, err))
         };
-        let (status, bounded) = tokio::try_join!(child.wait(), read)?;
-        Ok::<bool, std::io::Error>(status.success() && bounded)
+        let (status, (stdout, stderr)) = tokio::try_join!(child.wait(), read)?;
+        Ok::<_, std::io::Error>((status, stdout, stderr))
     };
-    let accepted = matches!(
-        tokio::time::timeout(Duration::from_secs(5), output).await,
-        Ok(Ok(true))
-    );
-    if !accepted {
+    let mut native_issue = Value::Null;
+    let completed = match tokio::time::timeout(Duration::from_secs(5), output).await {
+        Ok(Ok((status, stdout, stderr))) if stdout.len() <= 32768 && stderr.len() <= 32768 => {
+            Some((status, stdout, stderr))
+        }
+        Ok(Ok(_)) => {
+            native_issue = json!({"code":"VALIDATION_OUTPUT_LIMIT"});
+            None
+        }
+        Err(_) => {
+            native_issue = json!({"code":"VALIDATION_TIMEOUT"});
+            None
+        }
+        _ => None,
+    };
+    let accepted = completed
+        .as_ref()
+        .is_some_and(|(status, _, _)| status.success());
+    // Vector documents 78 for a rejected configuration. Other exits, output
+    // overflow, and timeout are worker failures, not completed static checks.
+    let static_checked = completed
+        .as_ref()
+        .is_some_and(|(status, _, _)| status.success() || status.code() == Some(78));
+    if completed.is_none() {
         let _ = child.kill().await;
     }
+    let tests_started = completed.as_ref().is_some_and(|(status, stdout, stderr)| {
+        status.success()
+            || [stdout.as_slice(), stderr.as_slice()]
+                .into_iter()
+                .any(|bytes| {
+                    std::str::from_utf8(bytes)
+                        .is_ok_and(|part| part.lines().any(|line| line.trim() == "Running tests"))
+                })
+    });
+    if !accepted
+        && native_issue.is_null()
+        && let Some((status, stdout, stderr)) = &completed
+        && status.code() == Some(78)
+    {
+        native_issue = validation::classify_native_issue(&input["config"], stdout, stderr, tests);
+    }
     result["valid"] = json!(accepted);
-    result["vector_validated"] = json!(accepted);
-    result["warnings"] = json!([
+    result["vector_validated"] = json!(accepted && !tests);
+    if tests {
+        result["tests_run"] = json!(tests_started);
+        result["output"] = json!(if accepted {
+            "Vector pipeline tests passed."
+        } else {
+            "Vector pipeline tests failed or exceeded execution limits."
+        });
+    }
+    result["warnings"] = json!([if tests {
+        "Pipeline tests ran with a scrubbed environment in the isolated worker. Device environment validation is still required."
+    } else {
         "Vector environment checks were disabled in the isolated worker; device environment validation is required."
-    ]);
+    }]);
+    if !accepted && !native_issue.is_null() {
+        result["native_issue"] = native_issue.clone();
+    }
     result["errors"] = if accepted {
         json!([])
+    } else if let Some(message) = validation::public_native_issue(&input["config"], &native_issue) {
+        json!([message])
     } else {
         json!([
-            "Vector validation failed or exceeded execution limits. Detailed potentially sensitive output is intentionally discarded."
+            "Vector rejected the configuration or could not finish validation. Review the configuration and run local Vector for detailed diagnostics."
         ])
     };
+    if static_paths {
+        validation::mark_device_deferred(&mut result, &input["config"]);
+        result["static_checked"] = json!(static_checked);
+        result["vector_validated"] = json!(false);
+        result["warnings"] = json!([if static_checked {
+            "Isolated Vector static checks completed with environment checks disabled. Device-local paths and environment remain unverified until device validation."
+        } else {
+            "Isolated Vector static checks did not complete. Device-local paths and environment remain unverified."
+        }]);
+    }
     Ok(Json(result))
 }
 #[tokio::main]
@@ -209,6 +307,7 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route("/validate", post(validate))
+        .route("/tests", post(pipeline_tests))
         .route("/vrl-test", post(synthetic_vrl))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(worker);

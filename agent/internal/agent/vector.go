@@ -55,10 +55,38 @@ func cleanEnvironment() []string {
 	}
 	return env
 }
+func vectorEnvironment(full bool) []string {
+	if !full {
+		return cleanEnvironment()
+	}
+	// Full mode intentionally exposes the host service environment to Vector's
+	// native integrations. Keep launcher configuration and acknowledgment logging
+	// under agent control; environment may not add extra managed input files.
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key := strings.ToUpper(strings.SplitN(entry, "=", 2)[0])
+		if strings.HasPrefix(key, "VECTOR_CONFIG") || key == "VECTOR_WATCH_CONFIG" || key == "VECTOR_LOG" || key == "VECTOR_LOG_FORMAT" || key == "VECTOR_REQUIRE_HEALTHY" || key == "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION" {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
+}
+func vectorConfigArgs(command, path string, full bool) []string {
+	args := []string{}
+	if command != "" {
+		args = append(args, command)
+	}
+	args = append(args, "--config-json", path)
+	if full {
+		args = append(args, "--dangerously-allow-env-var-interpolation")
+	}
+	return args
+}
 func (d *VectorDriver) checkBinary() error {
 	h, e := FileDigest(d.Settings.VectorBinary)
 	if e != nil || h != d.Settings.VectorBinarySHA256 {
-		return errors.New("adopted Vector binary changed or is inaccessible; local adoption required")
+		return errors.New("adopted Vector binary changed or is inaccessible; restore it or stop the agent and use re-adopt with a trusted expected SHA256")
 	}
 	return nil
 }
@@ -75,16 +103,38 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, d.Settings.VectorBinary, "validate", "--config-json", path)
-	cmd.Env = cleanEnvironment()
-	out := &limitedWriter{max: 4096}
-	cmd.Stdout = out
-	cmd.Stderr = out
-	if e := cmd.Run(); e != nil {
-		if ctx.Err() != nil {
-			return errors.New("Vector validation exceeded timeout")
+	data, e := readArtifact(path)
+	if e != nil {
+		return errors.New("cannot securely read staged configuration")
+	}
+	var document struct {
+		Tests []json.RawMessage `json:"tests"`
+	}
+	if json.Unmarshal(data, &document) != nil {
+		return errors.New("configuration or tests must use the expected JSON structure")
+	}
+	commands := []string{"validate"}
+	if len(document.Tests) > 0 {
+		commands = append(commands, "test")
+	}
+	for _, command := range commands {
+		cmd := exec.CommandContext(ctx, d.Settings.VectorBinary, vectorConfigArgs(command, path, d.Settings.CapabilityPolicy.FullVectorConfig)...)
+		// Native providers may start children that inherit output handles. Do
+		// not let an inherited pipe extend the validation deadline indefinitely.
+		cmd.WaitDelay = time.Second
+		cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
+		out := &limitedWriter{max: 4096}
+		cmd.Stdout = out
+		cmd.Stderr = out
+		if e := cmd.Run(); e != nil {
+			if ctx.Err() != nil {
+				return errors.New("Vector validation or configuration tests exceeded timeout")
+			}
+			if command == "test" {
+				return errors.New("Vector configuration tests failed; inspect the protected local configuration")
+			}
+			return errors.New("Vector rejected configuration or environment; run local doctor for remediation")
 		}
-		return errors.New("Vector rejected configuration or environment; run local doctor for remediation")
 	}
 	return nil
 }
@@ -170,8 +220,8 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if e != nil {
 		return e
 	}
-	cmd := exec.Command(exe, "__vector-host", d.Settings.VectorBinary, path)
-	cmd.Env = cleanEnvironment()
+	cmd := exec.Command(exe, "__vector-host", d.Settings.VectorBinary, path, d.Settings.CapabilityPolicy.ConfigurationMode())
+	cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
 	in, e := cmd.StdinPipe()
 	if e != nil {
 		return e
@@ -227,7 +277,7 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 
 // VectorHost is internal local process supervision, never a remotely selected command.
 // Its stdin pipe is kept open by the agent; EOF terminates its exact child.
-func VectorHost(binary, path string) int {
+func VectorHost(binary, path string, full bool) int {
 	// Linux parent-death signals are tied to the creating thread. Keep it alive
 	// for the child's complete lifetime, not merely until exec.Start returns.
 	runtime.LockOSThread()
@@ -237,10 +287,12 @@ func VectorHost(binary, path string) int {
 		return 1
 	}
 	defer cleanup()
-	cmd := exec.Command(binary, "--config-json", path, "--log-format", "json", "--require-healthy", "true")
-	cmd.Env = cleanEnvironment()
+	args := append(vectorConfigArgs("", path, full), "--log-format", "json", "--require-healthy", "true")
+	cmd := exec.Command(binary, args...)
+	cmd.Env = vectorEnvironment(full)
 	// Vector 0.58 JSON tracing uses stdout (src/trace.rs); policy excludes console
-	// stdout so event payloads cannot impersonate the trusted startup record.
+	// stdout in restricted mode. Full mode explicitly trusts publishers with
+	// process capabilities, including event output and executable providers.
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.Discard
 	childPlatformOptions(cmd)
@@ -275,6 +327,7 @@ func ProbeVector(ctx context.Context, s Settings) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.VectorBinary, "--version")
+	cmd.WaitDelay = time.Second
 	cmd.Env = cleanEnvironment()
 	out := &limitedWriter{max: 1024}
 	cmd.Stdout = out

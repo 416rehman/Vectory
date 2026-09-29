@@ -5,6 +5,7 @@ import "time"
 const Version = "0.1.0-dev"
 const VectorVersion = "0.58.0"
 const MaxArtifact = 1024 * 1024
+const MaxJSONCounter uint64 = 9007199254740991
 
 type Policy struct {
 	HeartbeatSeconds int  `json:"heartbeat_seconds"`
@@ -41,33 +42,48 @@ type Credentials struct {
 	CertificateExpiresAt time.Time `json:"certificate_expires_at"`
 }
 type Enrollment struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	RequestID       string `json:"request_id"`
-	Token           string `json:"token"`
-	Name            string `json:"name"`
-	CSRPEM          string `json:"csr_pem"`
-	OS              string `json:"os"`
-	Arch            string `json:"arch"`
-	AgentVersion    string `json:"agent_version"`
-	VectorVersion   string `json:"vector_version"`
+	ProtocolVersion   int    `json:"protocol_version"`
+	RequestID         string `json:"request_id"`
+	Token             string `json:"token"`
+	Name              string `json:"name"`
+	CSRPEM            string `json:"csr_pem"`
+	OS                string `json:"os"`
+	Arch              string `json:"arch"`
+	AgentVersion      string `json:"agent_version"`
+	VectorVersion     string `json:"vector_version"`
+	ConfigurationMode string `json:"configuration_mode"`
 }
 type Heartbeat struct {
-	ProtocolVersion         int        `json:"protocol_version"`
-	RequestID               string     `json:"request_id"`
-	Nonce                   string     `json:"nonce"`
-	BootID                  string     `json:"boot_id"`
-	AgentVersion            string     `json:"agent_version"`
-	VectorVersion           string     `json:"vector_version"`
-	ReportedGeneration      uint64     `json:"reported_generation"`
-	PolicyGeneration        uint64     `json:"policy_generation"`
-	ActualSHA256            string     `json:"actual_sha256"`
-	ApplyState              string     `json:"apply_state"`
-	LocalPaused             bool       `json:"local_paused"`
-	RemotePauseAcknowledged bool       `json:"remote_pause_acknowledged"`
-	Error                   *Issue     `json:"error,omitempty"`
-	Telemetry               *Telemetry `json:"telemetry,omitempty"`
-	AppliedTemplateSHA256   string     `json:"applied_template_sha256,omitempty"`
-	SecretRevision          uint64     `json:"secret_revision,omitempty"`
+	ProtocolVersion         int                   `json:"protocol_version"`
+	RequestID               string                `json:"request_id"`
+	Nonce                   string                `json:"nonce"`
+	BootID                  string                `json:"boot_id"`
+	AgentVersion            string                `json:"agent_version"`
+	VectorVersion           string                `json:"vector_version"`
+	ConfigurationMode       string                `json:"configuration_mode"`
+	ReportedGeneration      uint64                `json:"reported_generation"`
+	PolicyGeneration        uint64                `json:"policy_generation"`
+	ActualSHA256            string                `json:"actual_sha256"`
+	ApplyState              string                `json:"apply_state"`
+	LocalPaused             bool                  `json:"local_paused"`
+	RemotePauseAcknowledged bool                  `json:"remote_pause_acknowledged"`
+	Error                   *Issue                `json:"error,omitempty"`
+	Telemetry               *Telemetry            `json:"telemetry,omitempty"`
+	AppliedTemplateSHA256   string                `json:"applied_template_sha256,omitempty"`
+	SecretRevision          uint64                `json:"secret_revision,omitempty"`
+	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
+}
+
+// ConfigurationAttempt identifies an observed result for an authenticated
+// candidate. It never substitutes for ReportedGeneration or last-good evidence.
+// SHA256 is the signed template digest, not materialized secret-bearing content.
+type ConfigurationAttempt struct {
+	Generation     uint64 `json:"generation"`
+	VersionID      string `json:"version_id"`
+	SHA256         string `json:"sha256"`
+	State          string `json:"state"`
+	SecretRevision uint64 `json:"secret_revision,omitempty"`
+	Error          *Issue `json:"error,omitempty"`
 }
 type Telemetry struct {
 	SampledAt       time.Time            `json:"sampled_at"`
@@ -108,34 +124,36 @@ type Settings struct {
 	SecretFiles        map[string]string `json:"secret_files,omitempty"`
 }
 type State struct {
-	DeviceID                string     `json:"device_id"`
-	HighestGeneration       uint64     `json:"highest_generation"`
-	HighestPolicyGeneration uint64     `json:"highest_policy_generation"`
-	DesiredIdentity         string     `json:"desired_identity"`
-	PolicyIdentity          string     `json:"policy_identity"`
-	Accepted                bool       `json:"accepted"`
-	Desired                 *Desired   `json:"desired,omitempty"`
-	Policy                  Policy     `json:"policy"`
-	ReportedGeneration      uint64     `json:"reported_generation"`
-	ApplyState              string     `json:"apply_state"`
-	ActualSHA256            string     `json:"actual_sha256"`
-	LastGoodSHA256          string     `json:"last_good_sha256"`
-	FailedGeneration        *uint64    `json:"failed_generation,omitempty"`
-	Error                   *Issue     `json:"error,omitempty"`
-	LastHeartbeat           *time.Time `json:"last_heartbeat,omitempty"`
-	LastSigningRefresh      *time.Time `json:"last_signing_refresh,omitempty"`
-	RemotePauseAcknowledged bool       `json:"remote_pause_acknowledged"`
-	Telemetry               *Telemetry `json:"telemetry,omitempty"`
-	AppliedTemplateSHA256   string     `json:"applied_template_sha256,omitempty"`
-	SecretRevision          uint64     `json:"secret_revision"`
-	AppliedSecretRevision   uint64     `json:"applied_secret_revision"`
-	MaterializationSHA256   string     `json:"materialization_sha256,omitempty"`
-	FailedEffectiveSHA256   string     `json:"failed_effective_sha256,omitempty"`
+	DeviceID                string                `json:"device_id"`
+	HighestGeneration       uint64                `json:"highest_generation"`
+	HighestPolicyGeneration uint64                `json:"highest_policy_generation"`
+	DesiredIdentity         string                `json:"desired_identity"`
+	PolicyIdentity          string                `json:"policy_identity"`
+	Accepted                bool                  `json:"accepted"`
+	Desired                 *Desired              `json:"desired,omitempty"`
+	Policy                  Policy                `json:"policy"`
+	ReportedGeneration      uint64                `json:"reported_generation"`
+	ApplyState              string                `json:"apply_state"`
+	ActualSHA256            string                `json:"actual_sha256"`
+	LastGoodSHA256          string                `json:"last_good_sha256"`
+	FailedGeneration        *uint64               `json:"failed_generation,omitempty"`
+	Error                   *Issue                `json:"error,omitempty"`
+	LastHeartbeat           *time.Time            `json:"last_heartbeat,omitempty"`
+	LastSigningRefresh      *time.Time            `json:"last_signing_refresh,omitempty"`
+	RemotePauseAcknowledged bool                  `json:"remote_pause_acknowledged"`
+	Telemetry               *Telemetry            `json:"telemetry,omitempty"`
+	AppliedTemplateSHA256   string                `json:"applied_template_sha256,omitempty"`
+	SecretRevision          uint64                `json:"secret_revision"`
+	AppliedSecretRevision   uint64                `json:"applied_secret_revision"`
+	MaterializationSHA256   string                `json:"materialization_sha256,omitempty"`
+	FailedEffectiveSHA256   string                `json:"failed_effective_sha256,omitempty"`
+	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 }
 type Journal struct {
-	Stage          string `json:"stage"`
-	Generation     uint64 `json:"generation"`
-	DesiredSHA256  string `json:"desired_sha256"`
-	PreviousSHA256 string `json:"previous_sha256"`
-	SecretRevision uint64 `json:"secret_revision,omitempty"`
+	Stage                string                `json:"stage"`
+	Generation           uint64                `json:"generation"`
+	DesiredSHA256        string                `json:"desired_sha256"`
+	PreviousSHA256       string                `json:"previous_sha256"`
+	SecretRevision       uint64                `json:"secret_revision,omitempty"`
+	ConfigurationAttempt *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
 }

@@ -1,0 +1,90 @@
+//! Monotonic device-identity revocation. Status is exact identity state, not
+//! attribution to a particular browser attempt or proof the local process stopped.
+use crate::{
+    State, api, auth, db,
+    error::{ApiError, Result},
+};
+use axum::{
+    Json,
+    extract::{Path, Query, RawQuery, State as AppState, rejection::QueryRejection},
+    http::HeaderMap,
+};
+use serde_json::{Value, json};
+
+fn id(value: &str) -> Result<String> {
+    crate::deployment_requests::parse_id(value)
+        .map_err(|_| ApiError::invalid("device_id must be a hyphenated UUID"))
+}
+async fn revoked(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<bool> {
+    sqlx::query_scalar("SELECT revoked FROM devices WHERE id=?")
+        .bind(id)
+        .fetch_optional(conn)
+        .await?
+        .ok_or_else(ApiError::missing)
+}
+fn receipt(id: &str, revoked: bool) -> Value {
+    json!({"device_id":id,"revocation_status":true,"revoked":revoked})
+}
+pub async fn status(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(source): Path<String>,
+    RawQuery(raw): RawQuery,
+    parsed: std::result::Result<Query<crate::deployment_history::EmptyQuery>, QueryRejection>,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["operator"], false).await?;
+    crate::deployment_history::query(raw.as_deref(), parsed)?;
+    let source = id(&source)?;
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    auth::authorize_in(&mut tx, &h, &["operator"], false).await?;
+    Ok(Json(receipt(&source, revoked(&mut tx, &source).await?)))
+}
+pub async fn post(
+    AppState(s): AppState<State>,
+    h: HeaderMap,
+    Path(source): Path<String>,
+    RawQuery(raw): RawQuery,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>> {
+    auth::authorize(&s, &h, &["operator"], true).await?;
+    if raw.is_some_and(|query| !query.is_empty()) {
+        return Err(ApiError::invalid(
+            "Device revocation does not accept query parameters",
+        ));
+    }
+    // Preserve an omitted legacy action body; supplied content must be {}.
+    if !body.is_empty() && crate::token_requests::parse(&body)? != json!({}) {
+        return Err(ApiError::invalid(
+            "Device revocation requires an empty object",
+        ));
+    }
+    let source = id(&source)?;
+    let _guard = s.writer.lock().await;
+    let mut tx = s.pool.begin().await?;
+    let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
+    if !revoked(&mut tx, &source).await? {
+        sqlx::query("UPDATE devices SET revoked=1 WHERE id=?")
+            .bind(&source)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE credentials SET revoked=1 WHERE device_id=? AND revoked=0")
+            .bind(&source)
+            .execute(&mut *tx)
+            .await?;
+        crate::groups::remove_device(&mut tx, &source).await?;
+        crate::rollout::retire_persistent_targets(&mut tx, &source).await?;
+        db::audit(
+            &mut tx,
+            api::text(&actor, "id"),
+            "device.revoke",
+            &source,
+            "success",
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    let mut out = receipt(&source, true);
+    out["ok"] = json!(true);
+    Ok(Json(out))
+}

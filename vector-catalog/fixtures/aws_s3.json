@@ -1,0 +1,21 @@
+{
+  "sources": {
+    "events": {
+      "type": "demo_logs",
+      "format": "json"
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "aws_s3",
+      "inputs": [
+        "events"
+      ],
+      "bucket": "vectory-browser-fixture",
+      "region": "us-east-1",
+      "encoding": {
+        "codec": "json"
+      }
+    }
+  }
+}

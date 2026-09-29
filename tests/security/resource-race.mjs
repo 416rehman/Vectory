@@ -39,6 +39,7 @@ const bundle = await build({
   format: 'iife',
   platform: 'browser',
   jsx: 'automatic',
+  loader: {'.css':'empty'},
 });
 const server = http.createServer((request, response) => {
   response.setHeader('Content-Type', request.url === '/test.js' ? 'application/javascript' : 'text/html');
@@ -57,7 +58,7 @@ try {
   await count(1);
   await page.evaluate(() => window.fixture.respond(0, 'A-initial'));
   await view('A-initial');
-  await page.evaluate(() => { void window.fixture.reload(); window.fixture.poll(); });
+  await page.evaluate(() => { void window.fixture.reload(); void window.fixture.reload(); });
   await count(3);
   await page.evaluate(() => window.fixture.respond(2, 'A-newer'));
   await view('A-newer');

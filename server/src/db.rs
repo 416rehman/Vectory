@@ -29,12 +29,21 @@ pub fn parse(s: &str) -> Result<Value> {
         )
     })
 }
+pub fn normalize_variables(kind: &str, mut value: Value) -> Value {
+    if ["configuration", "revision", "version"].contains(&kind) && value.get("variables").is_none()
+    {
+        value["variables"] = json!([]);
+    }
+    value
+}
 pub async fn records(db: &mut SqliteConnection, kind: &str) -> Result<Vec<Value>> {
     let rows = sqlx::query("SELECT data FROM records WHERE kind=? ORDER BY created_at DESC,id")
         .bind(kind)
         .fetch_all(db)
         .await?;
-    rows.iter().map(|r| parse(r.get::<&str, _>(0))).collect()
+    rows.iter()
+        .map(|r| parse(r.get::<&str, _>(0)).map(|v| normalize_variables(kind, v)))
+        .collect()
 }
 pub async fn record(db: &mut SqliteConnection, kind: &str, id: &str) -> Result<Value> {
     let row = sqlx::query("SELECT data FROM records WHERE kind=? AND id=?")
@@ -43,7 +52,7 @@ pub async fn record(db: &mut SqliteConnection, kind: &str, id: &str) -> Result<V
         .fetch_optional(db)
         .await?
         .ok_or_else(ApiError::missing)?;
-    parse(row.get(0))
+    parse(row.get(0)).map(|v| normalize_variables(kind, v))
 }
 pub async fn insert(db: &mut SqliteConnection, kind: &str, v: &Value) -> Result<()> {
     let audit = if kind == "audit" {

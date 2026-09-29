@@ -192,6 +192,30 @@ func LocalPaused(dir string) bool {
 	return e == nil || !os.IsNotExist(e)
 }
 func SetPause(dir string, paused bool) error {
+	// Local emergency pause must remain usable while run owns agent.lock, but
+	// it must not race a purge removing the directory underneath the write.
+	releaseLifecycle, err := lockLifecycle(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseLifecycle()
+	if err := checkNoPendingPurge(dir); err != nil {
+		return err
+	}
+	// After the final purge-marker unlink, an interrupted rmdir can leave an
+	// empty directory. Do not repopulate that residue with a pause marker.
+	installed := false
+	for _, name := range []string{"settings.json", "state.json"} {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err == nil && info.Mode().IsRegular() {
+			installed = true
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if !installed {
+		return errors.New("local pause requires existing agent state")
+	}
 	if paused {
 		return AtomicWrite(filepath.Join(dir, "paused"), []byte("local emergency pause\n"))
 	}

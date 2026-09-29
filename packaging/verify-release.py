@@ -3,7 +3,8 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import stat
 import struct
 import tarfile
 import zipfile
@@ -35,6 +36,8 @@ def static_elf(path):
 
 def verify(directory, allow_new_files=False):
     catalog = json.loads((directory / 'catalog.json').read_text(encoding='utf-8'))
+    if not isinstance(catalog, list) or not catalog:
+        raise ValueError('catalog must contain at least one artifact')
     seen = set()
     for item in catalog:
         name = item['name']
@@ -50,16 +53,36 @@ def verify(directory, allow_new_files=False):
             raise ValueError('this development verifier does not establish signature trust')
         if item['os'] == 'linux':
             static_elf(path)
+        service = {
+            'linux': 'packaging/systemd/vectory.service',
+            'darwin': 'packaging/launchd/com.vectory.agent.plist',
+            'windows': 'packaging/windows/install-service.ps1',
+        }.get(item['os'])
+        if service is None:
+            raise ValueError('unsupported catalog OS')
+        expected_members = {
+            'vectory.exe' if item['os'] == 'windows' else 'vectory',
+            'LICENSE', 'NOTICE', 'docs/AGENT-INSTALL.md',
+            'docs/COMPATIBILITY.md', 'RELEASE-STATUS.txt', service,
+        }
         archive = directory / (name[:-4] + '.zip' if name.endswith('.exe') else name + '.tar.gz')
+        if not archive.is_file() or archive.is_symlink():
+            raise ValueError('archive must be a regular file')
         if archive.suffix == '.zip':
             with zipfile.ZipFile(archive) as z:
-                names = set(z.namelist())
+                members = z.infolist()
+                validate_members([m.filename for m in members], expected_members)
+                if any(m.is_dir() or stat.S_IFMT(m.external_attr >> 16) not in (0, stat.S_IFREG) for m in members):
+                    raise ValueError('archive contains a nonregular member')
                 binary = z.read('vectory.exe')
         else:
             with tarfile.open(archive) as z:
-                names = set(z.getnames())
+                members = z.getmembers()
+                validate_members([m.name for m in members], expected_members)
+                if any(not m.isfile() for m in members):
+                    raise ValueError('archive contains a nonregular member')
                 binary = z.extractfile('vectory').read()
-        if binary != path.read_bytes() or not {'LICENSE', 'NOTICE', 'docs/AGENT-INSTALL.md', 'docs/COMPATIBILITY.md', 'RELEASE-STATUS.txt'} <= names:
+        if binary != path.read_bytes():
             raise ValueError('offline archive incomplete or binary differs')
     checksum_names = set()
     for line in (directory / 'SHA256SUMS').read_text(encoding='utf-8').splitlines():
@@ -77,6 +100,17 @@ def verify(directory, allow_new_files=False):
         if checksum_names != expected_names:
             raise ValueError('checksum inventory incomplete')
     return len(catalog)
+
+
+def validate_members(names, expected):
+    if len(names) != len(set(names)):
+        raise ValueError('archive contains duplicate members')
+    for name in names:
+        path = PurePosixPath(name)
+        if path.is_absolute() or '..' in path.parts or str(path) != name or '\\' in name or ':' in name:
+            raise ValueError('archive contains an unsafe member path')
+    if set(names) != expected:
+        raise ValueError('offline archive member inventory differs from the release contract')
 
 
 if __name__ == '__main__':

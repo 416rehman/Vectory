@@ -1,0 +1,116 @@
+.configuration-import-body {
+  min-width: 0;
+}
+.configuration-import-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.configuration-import-toolbar > p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-weight: 600;
+}
+.configuration-import-toolbar .field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.configuration-import-toolbar select {
+  width: 94px;
+}
+.configuration-import-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 0 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.configuration-import-diff,
+.configuration-import-full {
+  max-height: min(52dvh, 520px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.configuration-import-hunk {
+  width: max-content;
+  min-width: 100%;
+  font:
+    12px/1.75 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.configuration-import-context {
+  padding: 5px 12px;
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+.configuration-import-line {
+  display: grid;
+  grid-template-columns: 4ch 4ch minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 0 12px;
+}
+.configuration-import-line > span {
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+.configuration-import-line > code {
+  font: inherit;
+  white-space: pre;
+  background: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+}
+.configuration-import-line.added {
+  background: color-mix(in srgb, #26804b 12%, var(--surface));
+}
+.configuration-import-line.removed {
+  background: color-mix(in srgb, #bc394b 10%, var(--surface));
+}
+.configuration-import-legend .added {
+  color: #247344;
+}
+.configuration-import-legend .removed {
+  color: #ac3042;
+}
+[data-theme="dark"] .configuration-import-legend .added {
+  color: #84d9a3;
+}
+[data-theme="dark"] .configuration-import-legend .removed {
+  color: #ffa1ad;
+}
+.configuration-import-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.configuration-import-full {
+  padding: 14px;
+}
+.configuration-import-full pre {
+  font-size: 12px;
+  overflow-x: auto;
+}
+@media (max-width: 600px) {
+  .configuration-import-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .configuration-import-line {
+    padding: 0 5px;
+    column-gap: 6px;
+  }
+}

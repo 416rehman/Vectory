@@ -5,7 +5,14 @@ async fn main() -> anyhow::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() < 3 || args[0] != "--data-dir" {
         anyhow::bail!(
-            "Usage: vectory-admin --data-dir PATH rotate-signing-key|prune-signing-keys|generation-recovery-state|recover-generations --report REVIEWED.json [--apply] (stop the server first)"
+            "Usage: vectory-admin --data-dir PATH rotate-signing-key|prune-signing-keys|generation-recovery-state|recover-generations --report REVIEWED.json [--apply]|invalidate-restored-access [--apply] (stop the server first)"
+        )
+    }
+    if args[2] == "invalidate-restored-access"
+        && !(args.len() == 3 || (args.len() == 4 && args[3] == "--apply"))
+    {
+        anyhow::bail!(
+            "Usage: vectory-admin --data-dir PATH invalidate-restored-access [--apply]. Without --apply this only previews access invalidation counts."
         )
     }
     let data = PathBuf::from(&args[1]);
@@ -23,6 +30,11 @@ async fn main() -> anyhow::Result<()> {
     };
     let state = vectory_server::initialize(settings).await?;
     match args[2].as_str() {
+        "invalidate-restored-access" => {
+            let result =
+                vectory_server::restored_access::invalidate(&state, args.len() == 4).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         "rotate-signing-key" => {
             let id = vectory_server::maintenance::rotate_signing_key(&state).await?;
             println!(

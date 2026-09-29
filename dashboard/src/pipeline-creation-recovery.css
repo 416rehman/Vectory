@@ -1,0 +1,177 @@
+.pipeline-creation-recovery-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+}
+.editor-page > .pipeline-creation-recovery-bar {
+  margin: 0;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.pipeline-creation-recovery-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.pipeline-creation-recovery-notice > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.pipeline-creation-recovery-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: min(760px, calc(100dvh - 32px));
+}
+.pipeline-creation-recovery-modal > .modal-header,
+.pipeline-creation-recovery-modal > .modal-footer {
+  flex-shrink: 0;
+}
+.pipeline-creation-recovery-body {
+  overflow: auto;
+  min-height: 0;
+}
+.pipeline-creation-recovery-body > p,
+.pipeline-creation-recovery-receipt > p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.pipeline-creation-recovery-list {
+  display: grid;
+  gap: 10px;
+}
+.pipeline-creation-recovery-list > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.pipeline-creation-recovery-list > button:hover {
+  background: var(--surface-soft);
+}
+.pipeline-creation-recovery-list > button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pipeline-creation-recovery-list small {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pipeline-creation-recovery-list > button > svg {
+  flex-shrink: 0;
+}
+.pipeline-creation-recovery-storage-error {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.pipeline-creation-recovery-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.pipeline-creation-recovery-request-id,
+.pipeline-creation-recovery-id {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+small.pipeline-creation-recovery-id {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+}
+.pipeline-creation-recovery-original,
+.pipeline-creation-recovery-receipt {
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+.pipeline-creation-recovery-body h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.pipeline-creation-recovery-body dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.pipeline-creation-recovery-body dl > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+}
+.pipeline-creation-recovery-body dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pipeline-creation-recovery-body dd {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pipeline-creation-recovery-dismiss {
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.pipeline-creation-original-data {
+  margin-top: 12px;
+  font-size: 12px;
+}
+.pipeline-creation-original-data summary {
+  cursor: pointer;
+}
+.pipeline-creation-original-data pre {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pipeline-creation-recovery-dismiss:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.pipeline-creation-recovery-footer {
+  flex-wrap: wrap;
+}
+@media (max-width: 480px) {
+  .editor-page > .pipeline-creation-recovery-bar {
+    padding: 10px 16px;
+  }
+  .pipeline-creation-recovery-body dl > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .pipeline-creation-recovery-footer > .button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .pipeline-creation-recovery-modal {
+    max-height: calc(100dvh - 24px);
+  }
+}

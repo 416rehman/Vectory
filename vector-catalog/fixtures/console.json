@@ -18,13 +18,13 @@
   "sinks": {
     "output": {
       "type": "console",
-      "inputs": [
-        "enrich"
-      ],
       "encoding": {
         "codec": "json"
       },
-      "target": "stderr"
+      "target": "stderr",
+      "inputs": [
+        "enrich"
+      ]
     }
   }
 }

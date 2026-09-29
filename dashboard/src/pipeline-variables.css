@@ -1,0 +1,67 @@
+.pipeline-variables {
+  display: grid;
+  gap: 16px;
+}
+.pipeline-variables > p {
+  margin: 0;
+  line-height: 1.5;
+}
+.pipeline-variable-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.pipeline-variable-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.pipeline-variable-list li > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.pipeline-variable-list strong {
+  color: var(--ink);
+}
+.pipeline-variable-list span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.pipeline-variable-list small {
+  color: var(--accent-ink);
+}
+.pipeline-variable-empty {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+.pipeline-variable-add {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.pipeline-variable-add h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.pipeline-variable-add > .button {
+  justify-self: start;
+}
+.pipeline-variable-note {
+  padding: 12px;
+  background: var(--surface-soft);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}

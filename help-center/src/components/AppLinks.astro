@@ -1,0 +1,39 @@
+<!-- Context contains only a pipeline ID. Markdown assets stay context-free. -->
+<script>
+  const pipeline = new URL(location.href).searchParams.get("pipeline");
+  const validPipeline = pipeline && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(pipeline);
+  function resolveLink(link: HTMLAnchorElement) {
+    const url = new URL(link.getAttribute("href")!, location.href);
+    if (url.origin !== location.origin) return;
+    if (url.pathname.startsWith("/help/") && !url.pathname.includes("/_") && !/\.md$/.test(url.pathname)) {
+      url.search = "";
+      if (validPipeline) url.searchParams.set("pipeline", pipeline!);
+    } else if (url.pathname === "/" && url.hash.startsWith("#/")) {
+      link.classList.add("help-app-link");
+      link.title = "Open in Vectory";
+      const [route, search = ""] = url.hash.slice(2).split("?");
+      if (validPipeline && (route === "configurations" || link.classList.contains("help-open-app"))) {
+        url.hash = `/configurations/${encodeURIComponent(pipeline!)}${search ? `?${search}` : ""}`;
+        link.title = "Open this pipeline in Vectory";
+      }
+    } else return;
+    link.href = url.pathname + url.search + url.hash;
+  }
+  function resolveLinks(root: ParentNode) {
+    root.querySelectorAll<HTMLAnchorElement>("a[href]").forEach(resolveLink);
+  }
+  resolveLinks(document);
+  // Search results are created after the document loads. Keep their real hrefs
+  // usable for keyboard activation, opening a new tab and copying link addresses.
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue;
+      if (node instanceof HTMLAnchorElement && node.hasAttribute("href")) resolveLink(node);
+      resolveLinks(node);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", (event) => {
+    const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+    if (link) resolveLink(link);
+  }, true);
+</script>

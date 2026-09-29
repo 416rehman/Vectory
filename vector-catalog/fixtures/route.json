@@ -9,13 +9,13 @@
   "transforms": {
     "process": {
       "type": "route",
-      "inputs": [
-        "demo"
-      ],
       "route": {
         "errors": ".level == \"error\"",
         "other": ".level != \"error\""
-      }
+      },
+      "inputs": [
+        "demo"
+      ]
     }
   },
   "sinks": {

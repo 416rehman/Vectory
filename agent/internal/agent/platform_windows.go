@@ -3,10 +3,14 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"golang.org/x/sys/windows"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unsafe"
 )
@@ -148,16 +152,153 @@ func replaceFile(from, to string) error {
 	return windows.MoveFileEx(f, t, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
 func syncDir(path string) error { return nil } // MoveFileEx WRITE_THROUGH is the Windows durability boundary.
-func Lock(dir string) (func(), error) {
+// A global named mutex survives deletion of agent.lock and coordinates the
+// service session with an interactive administrator. It is held only during
+// lock acquisition, except that purge holds it through deletion.
+func lockLifecycle(dir string) (func(), error) {
+	canonical, err := canonicalLifecyclePath(dir)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(strings.ToLower(canonical)))
+	name, err := windows.UTF16PtrFromString(`Global\VectoryLifecycle-` + hex.EncodeToString(digest[:]))
+	if err != nil {
+		return nil, err
+	}
+	// Only synchronization/release rights are shared; state-file ACLs remain
+	// unchanged. The file lock below still gates actual agent operations.
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100001;;;AU)")
+	if err != nil {
+		return nil, err
+	}
+	attrs := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	h, err := windows.CreateMutexEx(&attrs, name, 0, windows.SYNCHRONIZE|windows.MUTEX_MODIFY_STATE)
+	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil, err
+	}
+	// Windows mutex ownership belongs to a thread, not a goroutine.
+	runtime.LockOSThread()
+	result, err := windows.WaitForSingleObject(h, 0)
+	if err != nil || result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED {
+		runtime.UnlockOSThread()
+		_ = windows.CloseHandle(h)
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("another agent lifecycle operation is running")
+	}
+	return func() {
+		_ = windows.ReleaseMutex(h)
+		_ = windows.CloseHandle(h)
+		runtime.UnlockOSThread()
+	}, nil
+}
+
+// Resolve existing directories by handle so an 8.3 spelling, different case,
+// or an aliased parent cannot select a second mutex for the same state tree.
+// A fresh install has no final directory yet, so resolve its existing parent.
+func canonicalLifecyclePath(dir string) (string, error) {
+	if err := adoptionLocalPath(dir); err != nil {
+		return "", err
+	}
+	if err := SafePath(dir); err != nil {
+		return "", err
+	}
+	path := filepath.Clean(dir)
+	resolved, err := finalDirectoryPath(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return "", err
+	}
+	parent, err := finalDirectoryPath(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func purgeMarkerIdentity(dir string) (string, error) {
+	path, err := canonicalLifecyclePath(dir)
+	return strings.ToLower(path), err
+}
+
+func stateDirectoryIdentity(dir string) (string, error) {
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if err = windows.GetFileInformationByHandle(h, &info); err != nil {
+		return "", err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return "", errors.New("state path is not a directory")
+	}
+	return fmt.Sprintf("%08x:%08x:%08x", info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow), nil
+}
+
+func finalDirectoryPath(path string) (string, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if err = windows.GetFileInformationByHandle(h, &info); err != nil {
+		return "", err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return "", errors.New("state lifecycle path is not a directory")
+	}
+	buf := make([]uint16, 32768)
+	n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+	if err != nil {
+		return "", err
+	}
+	if n == 0 || n >= uint32(len(buf)) {
+		return "", errors.New("cannot resolve state lifecycle path")
+	}
+	resolved := strings.TrimPrefix(windows.UTF16ToString(buf[:n]), `\\?\`)
+	if err = adoptionLocalPath(resolved); err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// Windows will not unlink agent.lock while its locking handle remains open.
+// The named lifecycle mutex still excludes every current-version operation.
+func purgeNeedsAgentUnlock() bool { return true }
+
+func lockAgentFile(dir string) (func(), error) {
 	p := filepath.Join(dir, "agent.lock")
 	if e := SafePath(p); e != nil {
 		return nil, e
 	}
-	f, e := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0600)
+	f, e := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	created := e == nil
+	if os.IsExist(e) {
+		f, e = os.OpenFile(p, os.O_RDWR, 0600)
+	}
 	if e != nil {
 		return nil, e
 	}
-	if e = protect(p, false); e != nil {
+	// Preserve an existing service account's access, including when a stopped
+	// agent is maintained by another authorized local operator.
+	if created {
+		e = protect(p, false)
+	}
+	if e != nil {
 		f.Close()
 		return nil, e
 	}

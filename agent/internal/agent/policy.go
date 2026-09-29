@@ -15,9 +15,17 @@ import (
 // Network allowlists constrain configuration, not DNS resolution or kernel egress.
 // Use OS network/filesystem isolation when publishers are not trusted with allowed resources.
 type CapabilityPolicy struct {
+	FullVectorConfig       bool     `json:"full_vector_config,omitempty"`
 	AllowedFileRoots       []string `json:"allowed_file_roots"`
 	AllowedNetworkHosts    []string `json:"allowed_network_hosts"` // exact hostname:port
 	AllowedListenAddresses []string `json:"allowed_listen_addresses"`
+}
+
+func (p CapabilityPolicy) ConfigurationMode() string {
+	if p.FullVectorConfig {
+		return "full"
+	}
+	return "restricted"
 }
 
 var supported = map[string]map[string]bool{
@@ -34,6 +42,11 @@ func (p CapabilityPolicy) Check(data []byte) error {
 	}
 	if root == nil {
 		return errors.New("configuration must be an object")
+	}
+	// This explicit local grant trusts publishers with all capabilities of the
+	// adopted Vector process. Vector itself still validates the complete bundle.
+	if p.FullVectorConfig {
+		return nil
 	}
 	for k, v := range root {
 		switch k {

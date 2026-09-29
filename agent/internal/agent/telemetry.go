@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"regexp"
+	"strconv"
 
 	"time"
 )
@@ -34,6 +34,10 @@ func NewMetricsCollector(endpoint string) (*MetricsCollector, error) {
 	ip := net.ParseIP(u.Hostname())
 	if ip == nil || !ip.IsLoopback() || u.Port() == "" {
 		return nil, errors.New("metrics endpoint must use a literal loopback IP and explicit port")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("metrics endpoint port must be 1..65535")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
@@ -106,20 +110,49 @@ func (c *MetricsCollector) Collect(ctx context.Context, now time.Time) *Telemetr
 	return sample
 }
 func ConfigureMetrics(dir, endpoint string) error {
-	collector, err := NewMetricsCollector(endpoint)
-	if err != nil {
+	return configureMetrics(dir, &endpoint, false)
+}
+
+// ClearMetrics explicitly removes the local collector endpoint. It neither
+// changes remote telemetry policy nor removes an exporter from a pipeline.
+func ClearMetrics(dir string) error {
+	return configureMetrics(dir, nil, true)
+}
+
+func validateMetricsChange(endpoint *string, clear bool) error {
+	if endpoint != nil && clear {
+		return errors.New("metrics URL and explicit clear are mutually exclusive")
+	}
+	if endpoint != nil {
+		collector, err := NewMetricsCollector(*endpoint)
+		if err != nil {
+			return err
+		}
+		collector.client.CloseIdleConnections()
+	}
+	return nil
+}
+
+func configureMetrics(dir string, endpoint *string, clear bool) error {
+	if endpoint == nil && !clear {
+		return errors.New("provide a metrics URL or request an explicit clear")
+	}
+	if err := validateMetricsChange(endpoint, clear); err != nil {
 		return err
 	}
-	collector.client.CloseIdleConnections()
-	unlock, err := Lock(dir)
+	unlock, err := lockSettingsMaintenance(dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	s, err := LoadSettings(dir)
+	doc, err := loadSettingsDocument(dir)
 	if err != nil {
 		return err
 	}
-	s.MetricsURL = endpoint
-	return WriteJSON(filepath.Join(dir, "settings.json"), s)
+	s := doc.value
+	s.MetricsURL = ""
+	if endpoint != nil {
+		s.MetricsURL = *endpoint
+	}
+	return doc.save(s)
 }

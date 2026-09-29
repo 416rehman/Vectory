@@ -1,0 +1,120 @@
+.rollback-review {
+  min-width: 0;
+}
+.rollback-review-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rollback-review-modal > .modal-header,
+.rollback-review-modal > .modal-footer {
+  flex-shrink: 0;
+}
+.rollback-review-modal > .modal-body {
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.rollback-review-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rollback-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.rollback-review-heading > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rollback-review-heading > div > span {
+  font-size: 12px;
+}
+.rollback-version-id {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.rollback-review-effect,
+.rollback-scope-note {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.rollback-review-blockers,
+.rollback-review-stale {
+  padding: 12px 14px;
+  background: var(--surface-hover);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.rollback-review-blockers ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.rollback-scope-switch {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  margin-top: 8px;
+}
+.rollback-scope-switch button {
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rollback-scope-switch button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px #0001;
+}
+.rollback-scope-switch button:hover {
+  color: var(--ink);
+}
+.rollback-device-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.rollback-device-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.rollback-device-list li > span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.rollback-device-list strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.rollback-device-list code {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.rollback-exclusion-reason {
+  color: var(--muted);
+  font-size: 12px;
+}

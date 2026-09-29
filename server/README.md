@@ -9,23 +9,23 @@ The shared wire contract and generated OpenAPI live in `../contracts/`. Authenti
 | Variable | Default / meaning |
 | --- | --- |
 | `VECTORY_DATA_DIR` | `./data`; local persistent filesystem, one active server |
-| `VECTORY_HTTP_ADDR` | `127.0.0.1:8080`; place behind a trusted TLS reverse proxy |
-| `VECTORY_AGENT_ADDR` | `0.0.0.0:8443`; direct TLS 1.3, never trust proxy certificate headers |
+| `VECTORY_HTTP_ADDR` | `127.0.0.1:8080`; place production behind a trusted TLS reverse proxy. Development mode requires a literal loopback IP and port, such as `127.0.0.1:8080` or `[::1]:8080` |
+| `VECTORY_AGENT_ADDR` | `0.0.0.0:8443`; direct TLS 1.3, never trust proxy certificate headers. When development mode has no validator, an enabled agent listener must instead use a literal loopback IP and port |
 | `VECTORY_TLS_CERT`, `VECTORY_TLS_KEY` | Required server certificate/key in production |
 | `VECTORY_BOOTSTRAP_SECRET_FILE` | Protected file containing at least 24 random characters for first initialization |
 | `VECTORY_BOOTSTRAP_SECRET` | Environment alternative; the file takes precedence |
 | `VECTORY_COOKIE_SECURE` | `true`; disabling requires explicit development mode |
-| `VECTORY_DEVELOPMENT` | `false`; permits development HTTP cookies and an absent agent listener |
+| `VECTORY_DEVELOPMENT` | `false`; permits development HTTP cookies and an absent agent listener, but binds the dashboard/API only to loopback |
 | `VECTORY_DASHBOARD_DIR` | `../dashboard/dist` |
 | `VECTORY_RELEASES_DIR` | `DATA_DIR/releases`; Compose uses a separate read-only `/app/releases` |
 | `VECTORY_INSTANCE_NAME` | `Vectory` |
-| `VECTORY_VALIDATION_URL` | Isolated worker base URL; missing means structural validation only |
+| `VECTORY_VALIDATION_URL` | Isolated Vector 0.58 worker base URL; required for production startup. It may be absent only in explicit development mode, where checks and publication are structural-only |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | 16384, clamped 64–65536; capacity is a resource bound, not a supported fleet-size claim |
 | `VECTORY_TELEMETRY_RETENTION_DAYS` | 7, clamped 1–30; one coalesced sample per device per minute |
 | `VECTORY_PREVIOUS_DEVICE_CA` | Optional explicit PEM trust bundle for previous client CAs during planned CA overlap |
 | `RUST_LOG` | Standard tracing filter; no request bodies or private keys are logged |
 
-The worker additionally needs `VECTORY_VALIDATOR_ISOLATED=true`, `VECTORY_VECTOR_BINARY` (Compose uses `/usr/bin/vector`), and optionally `VECTORY_VALIDATOR_ADDR` (default `0.0.0.0:8081`). The isolation flag is an operator assertion, not sandbox enforcement. Use the supplied Compose restrictions: no production secrets or host mounts, no engine socket, restricted network, read-only filesystem, bounded temporary storage, non-root identity, CPU/memory/PID limits. Both `/validate` and `/vrl-test` use the pinned executable, cleared environment, fixed arguments, two execution slots, a five-second deadline, and bounded output. The API also limits worker calls and total output. A missing worker is honestly shown as structural-only; a configured worker failure blocks publication. Environment-dependent Vector checks remain a device responsibility.
+The worker additionally needs `VECTORY_VALIDATOR_ISOLATED=true`, `VECTORY_VECTOR_BINARY` (Compose uses `/usr/bin/vector`), and optionally `VECTORY_VALIDATOR_ADDR` (default `0.0.0.0:8081`). The isolation flag is an operator assertion, not sandbox enforcement. Use the supplied Compose restrictions: no production secrets or host mounts, no engine socket, restricted network, read-only filesystem, bounded temporary storage, non-root identity, CPU/memory/PID limits. Both `/validate` and `/vrl-test` use the pinned executable, cleared environment, fixed arguments, two execution slots, a five-second deadline, and bounded output. The API also limits worker calls and total output. Production startup rejects a missing worker URL; an explicitly configured but unavailable worker blocks publication. Only explicit development mode may run structural-only checks and publication without a worker. Development always restricts dashboard/API HTTP to literal loopback addresses; structural-only development also restricts the agent TLS listener to loopback when TLS certificates enable it. Set `VECTORY_AGENT_ADDR=127.0.0.1:8443` for that local preview, since its ordinary default is the production wildcard address. Environment-dependent Vector checks remain a device responsibility.
 
 ## Identity and durable state
 

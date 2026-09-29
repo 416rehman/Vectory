@@ -15,6 +15,14 @@ import (
 // Service installation is a local administrator action and never a wire capability.
 // Registration does not start the workload or imply verified service operation.
 func ServiceInstall(dir, user string) error {
+	releaseLifecycle, err := lockLifecycle(dir)
+	if err != nil {
+		return err
+	}
+	defer releaseLifecycle()
+	if err := checkNoPendingPurge(dir); err != nil {
+		return err
+	}
 	s, err := LoadSettings(dir)
 	if err != nil {
 		return err

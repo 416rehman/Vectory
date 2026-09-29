@@ -1,0 +1,2362 @@
+{
+  "captured_schema_sha256": "6fb93485e8ee61aa54ce59910e0dfdb9212f9af4a14fd39093fb207dcbf2e30d",
+  "components": [
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect events from AMQP 0.9.1 compatible brokers like RabbitMQ.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/amqp/",
+      "kind": "sources",
+      "label": "AMQP",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::amqp",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "amqp"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metrics from Apache's HTTPD server.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/apache_metrics/",
+      "kind": "sources",
+      "label": "Apache Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::apache_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "apache_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect Docker container stats for tasks running in AWS ECS and AWS Fargate.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/aws_ecs_metrics/",
+      "kind": "sources",
+      "label": "AWS ECS Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::aws_ecs_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "aws_ecs_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from AWS Kinesis Firehose.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/aws_kinesis_firehose/",
+      "kind": "sources",
+      "label": "AWS Kinesis Firehose",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::aws_kinesis_firehose",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "aws_kinesis_firehose"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from AWS S3.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/aws_s3/",
+      "kind": "sources",
+      "label": "AWS S3",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::aws_s3",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "aws_s3"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from AWS SQS.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/aws_sqs/",
+      "kind": "sources",
+      "label": "AWS SQS",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::aws_sqs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "aws_sqs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive logs, metrics, and traces collected by a Datadog Agent.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/datadog_agent/",
+      "kind": "sources",
+      "label": "Datadog Agent",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::datadog_agent",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "datadog_agent"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Generate fake log events, which can be useful for testing and demos.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/demo_logs/",
+      "kind": "sources",
+      "label": "Demo Logs",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::demo_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "demo_logs"
+    },
+    {
+      "coverage": "pinned-cue-projection",
+      "coverage_note": "Public fields projected from pinned generated CUE; hidden log_namespace added from Rust. This is editor metadata, not a complete runtime validation schema. Native target validation is required.",
+      "description": "Collect DNS telemetry from a dnstap socket.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/dnstap/",
+      "kind": "sources",
+      "label": "Dnstap",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "source-reviewed-not-run",
+        "macos": "source-reviewed-not-run",
+        "windows": "not-compiled"
+      },
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "schema_ref": "#/definitions/vectory::components::sources::dnstap",
+      "source_sha256": "9ada5b17c4d1fb5177ac27904fb6086f9a5940e8aad160286ca606a5827ef1dc",
+      "source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/dnstap.cue",
+      "type": "dnstap"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect container logs from a Docker Daemon.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/docker_logs/",
+      "kind": "sources",
+      "label": "Docker Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::docker_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "docker_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive metrics from collected by a EventStoreDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/eventstoredb_metrics/",
+      "kind": "sources",
+      "label": "EventStoreDB Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::eventstoredb_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "eventstoredb_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect output from a process running on the host.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/exec/",
+      "kind": "sources",
+      "label": "Exec",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::exec",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "exec"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from files.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/file/",
+      "kind": "sources",
+      "label": "File",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::file",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "file"
+    },
+    {
+      "coverage": "pinned-cue-projection",
+      "coverage_note": "Public fields projected from pinned generated CUE; hidden log_namespace added from Rust. This is editor metadata, not a complete runtime validation schema. Native target validation is required.",
+      "description": "Collect logs from an existing file descriptor.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/file_descriptor/",
+      "kind": "sources",
+      "label": "File descriptor",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "source-reviewed-not-run",
+        "macos": "source-reviewed-not-run",
+        "windows": "not-compiled"
+      },
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "schema_ref": "#/definitions/vectory::components::sources::file_descriptor",
+      "source_sha256": "f6a323d6e69282a9032bad3646a1d5e3064693b5d01bf5862a44d20f35f0c051",
+      "source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/file_descriptor.cue",
+      "type": "file_descriptor"
+    },
+    {
+      "coverage": "native-generated-schema-with-pinned-unix-branches",
+      "coverage_note": "Windows-generated common fields and modes, with Unix socket branches projected from pinned generated CUE. Unix activation has not been run; the target Vector runtime remains authoritative.",
+      "description": "Collect logs from a Fluentd or Fluent Bit agent.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/fluent/",
+      "kind": "sources",
+      "label": "Fluent",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "unix-branches-source-reviewed-not-run",
+        "macos": "unix-branches-source-reviewed-not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::fluent",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "supplemental_source_sha256": "935f3fb6cd93a74d921536cc1a2f2434d9c3c5f45824dbfa83769c2655e20bd2",
+      "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/fluent.cue",
+      "type": "fluent"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Fetch observability events from GCP's Pub/Sub messaging system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/gcp_pubsub/",
+      "kind": "sources",
+      "label": "GCP Pub/Sub",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::gcp_pubsub",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "gcp_pubsub"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from Heroku's Logplex, the router responsible for receiving logs from your Heroku apps.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/heroku_logs/",
+      "kind": "sources",
+      "label": "Heroku Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::heroku_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "heroku_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metric data from the local system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/host_metrics/",
+      "kind": "sources",
+      "label": "Host Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::host_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "host_metrics"
+    },
+    {
+      "alias_of": "http_server",
+      "coverage": "native-generated-schema",
+      "deprecated": true,
+      "deprecation_message": "Deprecated compatibility alias.",
+      "description": "Host an HTTP endpoint to receive logs.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/http_server/",
+      "kind": "sources",
+      "label": "HTTP",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::http",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "http"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Pull observability data from an HTTP server at a configured interval.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/http_client/",
+      "kind": "sources",
+      "label": "HTTP Client",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::http_client",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "http_client"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Host an HTTP endpoint to receive logs.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/http_server/",
+      "kind": "sources",
+      "label": "HTTP Server",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::http_server",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "http_server"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Expose internal log messages emitted by the running Vector instance.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/internal_logs/",
+      "kind": "sources",
+      "label": "Internal Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::internal_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "internal_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Expose internal metrics emitted by the running Vector instance.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/internal_metrics/",
+      "kind": "sources",
+      "label": "Internal Metrics",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::internal_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "internal_metrics"
+    },
+    {
+      "coverage": "pinned-cue-projection",
+      "coverage_note": "Public fields projected from pinned generated CUE; hidden log_namespace added from Rust. This is editor metadata, not a complete runtime validation schema. Native target validation is required.",
+      "description": "Collect logs from the systemd journal using journalctl.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/journald/",
+      "kind": "sources",
+      "label": "Journald",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "source-reviewed-not-run",
+        "macos": "requires-systemd-journalctl",
+        "windows": "not-compiled"
+      },
+      "platforms": [
+        "linux"
+      ],
+      "schema_ref": "#/definitions/vectory::components::sources::journald",
+      "source_sha256": "510fef2945780d9811ad8362949b3d5bc917c6e4e37fc880ef1acd670ffe24a1",
+      "source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/journald.cue",
+      "type": "journald"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from Apache Kafka.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/kafka/",
+      "kind": "sources",
+      "label": "Kafka",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::kafka",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "kafka"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect Pod logs from Kubernetes Nodes.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/kubernetes_logs/",
+      "kind": "sources",
+      "label": "Kubernetes Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::kubernetes_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "kubernetes_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from a Logstash agent.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/logstash/",
+      "kind": "sources",
+      "label": "Logstash",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::logstash",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "logstash"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metrics from the MongoDB database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/mongodb_metrics/",
+      "kind": "sources",
+      "label": "MongoDB Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::mongodb_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "mongodb_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from MQTT.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/mqtt/",
+      "kind": "sources",
+      "label": "Mqtt",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::mqtt",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "mqtt"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Read observability data from subjects on the NATS messaging system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/nats/",
+      "kind": "sources",
+      "label": "NATS",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::nats",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "nats"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metrics from NGINX.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/nginx_metrics/",
+      "kind": "sources",
+      "label": "NGINX Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::nginx_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "nginx_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Pull Okta system logs via the Okta API",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/okta/",
+      "kind": "sources",
+      "label": "Okta",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::okta",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "okta"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive OTLP data through gRPC or HTTP.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/opentelemetry/",
+      "kind": "sources",
+      "label": "OpenTelemetry",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::opentelemetry",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "opentelemetry"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metrics from the PostgreSQL database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/postgresql_metrics/",
+      "kind": "sources",
+      "label": "PostgreSQL Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::postgresql_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "postgresql_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive metrics via the Prometheus Pushgateway protocol.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/prometheus_pushgateway/",
+      "kind": "sources",
+      "label": "Prometheus Pushgateway",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::prometheus_pushgateway",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "prometheus_pushgateway"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive metric via the Prometheus Remote Write protocol.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/prometheus_remote_write/",
+      "kind": "sources",
+      "label": "Prometheus Remote Write",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::prometheus_remote_write",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "prometheus_remote_write"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect metrics from Prometheus exporters.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/prometheus_scrape/",
+      "kind": "sources",
+      "label": "Prometheus Scrape",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::prometheus_scrape",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "prometheus_scrape"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from Apache Pulsar.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/pulsar/",
+      "kind": "sources",
+      "label": "Pulsar",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::pulsar",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "pulsar"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect observability data from Redis.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/redis/",
+      "kind": "sources",
+      "label": "Redis",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::redis",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "redis"
+    },
+    {
+      "coverage": "native-generated-schema-with-pinned-unix-branches",
+      "coverage_note": "Windows-generated common fields and modes, with Unix socket branches projected from pinned generated CUE. Unix activation has not been run; the target Vector runtime remains authoritative.",
+      "description": "Collect logs over a socket.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/socket/",
+      "kind": "sources",
+      "label": "Socket",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "unix-branches-source-reviewed-not-run",
+        "macos": "unix-branches-source-reviewed-not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::socket",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "supplemental_source_sha256": "da804d4ac357e34714d9aa22efee58b5ec821f94d4281ef61f5583b420ec704c",
+      "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/socket.cue",
+      "type": "socket"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Receive logs from Splunk.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/splunk_hec/",
+      "kind": "sources",
+      "label": "Splunk HEC",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::splunk_hec",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "splunk_hec"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Produce static metrics defined in configuration.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/static_metrics/",
+      "kind": "sources",
+      "label": "Static Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::static_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "static_metrics"
+    },
+    {
+      "coverage": "native-generated-schema-with-pinned-unix-branches",
+      "coverage_note": "Windows-generated common fields and modes, with Unix socket branches projected from pinned generated CUE. Unix activation has not been run; the target Vector runtime remains authoritative.",
+      "description": "Collect metrics emitted by the StatsD aggregator.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/statsd/",
+      "kind": "sources",
+      "label": "StatsD",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "unix-branches-source-reviewed-not-run",
+        "macos": "unix-branches-source-reviewed-not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::statsd",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "supplemental_source_sha256": "8101e47522a856464823ad359c74b5808606eea3295ffeb941a09faeb76c8050",
+      "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/statsd.cue",
+      "type": "statsd"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs sent via stdin.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/stdin/",
+      "kind": "sources",
+      "label": "Stdin",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::stdin",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "stdin"
+    },
+    {
+      "coverage": "native-generated-schema-with-pinned-unix-branches",
+      "coverage_note": "Windows-generated common fields and modes, with Unix socket branches projected from pinned generated CUE. Unix activation has not been run; the target Vector runtime remains authoritative.",
+      "description": "Collect logs sent via Syslog.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/syslog/",
+      "kind": "sources",
+      "label": "Syslog",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "unix-branches-source-reviewed-not-run",
+        "macos": "unix-branches-source-reviewed-not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::syslog",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "supplemental_source_sha256": "f2c7c3704931ed1f92142feab1f430feb5a3f9f6a7836bfc16ab1a3a97a3f692",
+      "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sources/generated/syslog.cue",
+      "type": "syslog"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect observability data from a Vector instance.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/vector/",
+      "kind": "sources",
+      "label": "Vector",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::vector",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "vector"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect events from a websocket endpoint.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/websocket/",
+      "kind": "sources",
+      "label": "Websocket",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sources::websocket",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "websocket"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collect logs from Windows Event Log channels using the Windows Event Log API.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sources/windows_event_log/",
+      "kind": "sources",
+      "label": "Windows Event Log",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [
+        "windows"
+      ],
+      "schema_ref": "#/definitions/vectory::components::sources::windows_event_log",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sources",
+      "type": "windows_event_log"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Aggregate metrics passing through a topology.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/aggregate/",
+      "kind": "transforms",
+      "label": "Aggregate",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::aggregate",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "aggregate"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Parse metadata emitted by AWS EC2 instances.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/aws_ec2_metadata/",
+      "kind": "transforms",
+      "label": "AWS EC2 Metadata",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::aws_ec2_metadata",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "aws_ec2_metadata"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deduplicate logs passing through a topology.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/dedupe/",
+      "kind": "transforms",
+      "label": "Dedupe",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::dedupe",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "dedupe"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Slow down events passing through a topology.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/delay/",
+      "kind": "transforms",
+      "label": "Delay",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::delay",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "delay"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Split a stream of events into unique sub-streams based on user-supplied conditions.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/exclusive_route/",
+      "kind": "transforms",
+      "label": "Exclusive Route",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::exclusive_route",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "exclusive_route"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Filter events based on a set of conditions.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/filter/",
+      "kind": "transforms",
+      "label": "Filter",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::filter",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "filter"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Convert incremental metrics to absolute.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/incremental_to_absolute/",
+      "kind": "transforms",
+      "label": "Incremental To Absolute",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::incremental_to_absolute",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "incremental_to_absolute"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Convert log events to metric events.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/log_to_metric/",
+      "kind": "transforms",
+      "label": "Log To Metric",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::log_to_metric",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "log_to_metric"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Modify event data using the Lua programming language.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/lua/",
+      "kind": "transforms",
+      "label": "Lua",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::lua",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "lua"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Convert metric events to log events.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/metric_to_log/",
+      "kind": "transforms",
+      "label": "Metric To Log",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::metric_to_log",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "metric_to_log"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Collapse multiple log events into a single event based on a set of conditions and merge strategies.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/reduce/",
+      "kind": "transforms",
+      "label": "Reduce",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::reduce",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "reduce"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Modify your observability data as it passes through your topology using Vector Remap Language (VRL).",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/remap/",
+      "kind": "transforms",
+      "label": "Remap",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::remap",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "remap"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Split a stream of events into multiple sub-streams based on user-supplied conditions.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/route/",
+      "kind": "transforms",
+      "label": "Route",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::route",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "route"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Sample events from an event stream based on supplied criteria and at a configurable rate.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/sample/",
+      "kind": "transforms",
+      "label": "Sample",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::sample",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "sample"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Limit the cardinality of tags on metrics events as a safeguard against cardinality explosion.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/tag_cardinality_limit/",
+      "kind": "transforms",
+      "label": "Tag Cardinality Limit",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::tag_cardinality_limit",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "tag_cardinality_limit"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Rate limit logs passing through a topology.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/throttle/",
+      "kind": "transforms",
+      "label": "Throttle",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::throttle",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "throttle"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Convert trace events to log events.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/trace_to_log/",
+      "kind": "transforms",
+      "label": "Trace To Log",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::trace_to_log",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "trace_to_log"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Apply a buffered sliding window over the stream of events and flush it based on supplied criteria",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/transforms/window/",
+      "kind": "transforms",
+      "label": "Window",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::transforms::window",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/transforms",
+      "type": "window"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Send events to AMQP 0.9.1 compatible brokers like RabbitMQ.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/amqp/",
+      "kind": "sinks",
+      "label": "AMQP",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::amqp",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "amqp"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log and metric event data to AppSignal.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/appsignal/",
+      "kind": "sinks",
+      "label": "AppSignal",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::appsignal",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "appsignal"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish log events to AWS CloudWatch Logs.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_cloudwatch_logs/",
+      "kind": "sinks",
+      "label": "AWS CloudWatch Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_cloudwatch_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_cloudwatch_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish metric events to AWS CloudWatch Metrics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_cloudwatch_metrics/",
+      "kind": "sinks",
+      "label": "AWS CloudWatch Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_cloudwatch_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_cloudwatch_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish logs to AWS Kinesis Data Firehose topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_kinesis_firehose/",
+      "kind": "sinks",
+      "label": "AWS Kinesis Firehose",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_kinesis_firehose",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_kinesis_firehose"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish logs to AWS Kinesis Streams topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_kinesis_streams/",
+      "kind": "sinks",
+      "label": "AWS Kinesis Streams",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_kinesis_streams",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_kinesis_streams"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Store observability events in the AWS S3 object storage system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_s3/",
+      "kind": "sinks",
+      "label": "AWS S3",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_s3",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_s3"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability events to AWS Simple Notification Service topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_sns/",
+      "kind": "sinks",
+      "label": "AWS Sns",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_sns",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_sns"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability events to AWS Simple Queue Service topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/aws_sqs/",
+      "kind": "sinks",
+      "label": "AWS SQS",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::aws_sqs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "aws_sqs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log events to Axiom.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/axiom/",
+      "kind": "sinks",
+      "label": "Axiom",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::axiom",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "axiom"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Store your observability data in Azure Blob Storage.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/azure_blob/",
+      "kind": "sinks",
+      "label": "Azure Blob",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::azure_blob",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "azure_blob"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish log events to the Azure Monitor Logs Ingestion API.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/azure_logs_ingestion/",
+      "kind": "sinks",
+      "label": "Azure Logs Ingestion",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::azure_logs_ingestion",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "azure_logs_ingestion"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Send observability events nowhere, which can be useful for debugging purposes.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/blackhole/",
+      "kind": "sinks",
+      "label": "Blackhole",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::blackhole",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "blackhole"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log data to a ClickHouse database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/clickhouse/",
+      "kind": "sinks",
+      "label": "ClickHouse",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::clickhouse",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "clickhouse"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Display observability events in the console, which can be useful for debugging purposes.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/console/",
+      "kind": "sinks",
+      "label": "Console",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::console",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "console"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log data to a Databend database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/databend/",
+      "kind": "sinks",
+      "label": "Databend",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::databend",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "databend"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Stream observability data to Databricks Unity Catalog via Zerobus.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/databricks_zerobus/",
+      "kind": "sinks",
+      "label": "Databricks Zerobus",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::databricks_zerobus",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "databricks_zerobus"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability events to the Datadog Events API.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/datadog_events/",
+      "kind": "sinks",
+      "label": "Datadog Events",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::datadog_events",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "datadog_events"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish log events to Datadog.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/datadog_logs/",
+      "kind": "sinks",
+      "label": "Datadog Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::datadog_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "datadog_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish metric events to Datadog.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/datadog_metrics/",
+      "kind": "sinks",
+      "label": "Datadog Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::datadog_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "datadog_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish trace events to Datadog.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/datadog_traces/",
+      "kind": "sinks",
+      "label": "Datadog Traces",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::datadog_traces",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "datadog_traces"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log data to an Apache Doris database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/doris/",
+      "kind": "sinks",
+      "label": "Doris",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::doris",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "doris"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Index observability events in Elasticsearch.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/elasticsearch/",
+      "kind": "sinks",
+      "label": "Elasticsearch",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::elasticsearch",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "elasticsearch"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Output observability events into files.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/file/",
+      "kind": "sinks",
+      "label": "File",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::file",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "file"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Store unstructured log events in Google Chronicle.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/gcp_chronicle_unstructured/",
+      "kind": "sinks",
+      "label": "GCP Chronicle Unstructured",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::gcp_chronicle_unstructured",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "gcp_chronicle_unstructured"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Store observability events in GCP Cloud Storage.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/gcp_cloud_storage/",
+      "kind": "sinks",
+      "label": "GCP Cloud Storage",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::gcp_cloud_storage",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "gcp_cloud_storage"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability events to GCP's Pub/Sub messaging system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/gcp_pubsub/",
+      "kind": "sinks",
+      "label": "GCP Pub/Sub",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::gcp_pubsub",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "gcp_pubsub"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver logs to GCP's Cloud Operations suite.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/gcp_stackdriver_logs/",
+      "kind": "sinks",
+      "label": "GCP Stackdriver Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::gcp_stackdriver_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "gcp_stackdriver_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver metrics to GCP's Cloud Monitoring system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/gcp_stackdriver_metrics/",
+      "kind": "sinks",
+      "label": "GCP Stackdriver Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::gcp_stackdriver_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "gcp_stackdriver_metrics"
+    },
+    {
+      "alias_of": "greptimedb_metrics",
+      "coverage": "native-generated-schema",
+      "deprecated": true,
+      "deprecation_message": "The `greptimedb` sink has been renamed. Please use `greptimedb_metrics` instead.",
+      "description": "Ingest metrics data into GreptimeDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/greptimedb_metrics/",
+      "kind": "sinks",
+      "label": "Greptimedb",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::greptimedb",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "greptimedb"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Ingest logs data into GreptimeDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/greptimedb_logs/",
+      "kind": "sinks",
+      "label": "Greptimedb Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::greptimedb_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "greptimedb_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Ingest metrics data into GreptimeDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/greptimedb_metrics/",
+      "kind": "sinks",
+      "label": "Greptimedb Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::greptimedb_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "greptimedb_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log events to Honeycomb.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/honeycomb/",
+      "kind": "sinks",
+      "label": "Honeycomb",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::honeycomb",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "honeycomb"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver observability event data to an HTTP server.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/http/",
+      "kind": "sinks",
+      "label": "HTTP",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::http",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "http"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log event data to Humio.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/humio_logs/",
+      "kind": "sinks",
+      "label": "Humio Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::humio_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "humio_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver metric event data to Humio.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/humio_metrics/",
+      "kind": "sinks",
+      "label": "Humio Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::humio_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "humio_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log event data to InfluxDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/influxdb_logs/",
+      "kind": "sinks",
+      "label": "InfluxDB Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::influxdb_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "influxdb_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver metric event data to InfluxDB.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/influxdb_metrics/",
+      "kind": "sinks",
+      "label": "InfluxDB Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::influxdb_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "influxdb_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability event data to Apache Kafka topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/kafka/",
+      "kind": "sinks",
+      "label": "Kafka",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::kafka",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "kafka"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log events to Keep.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/keep/",
+      "kind": "sinks",
+      "label": "Keep",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::keep",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "keep"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log event data to the Loki aggregation system.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/loki/",
+      "kind": "sinks",
+      "label": "Loki",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::loki",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "loki"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log event data to Mezmo.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/mezmo/",
+      "kind": "sinks",
+      "label": "Mezmo",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::mezmo",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "mezmo"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "This component is missing a description.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/mqtt/",
+      "kind": "sinks",
+      "label": "Mqtt",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::mqtt",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "mqtt"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability data to subjects on the NATS messaging system.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/nats/",
+      "kind": "sinks",
+      "label": "NATS",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::nats",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "nats"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver events to New Relic.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/new_relic/",
+      "kind": "sinks",
+      "label": "New Relic",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::new_relic",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "new_relic"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver OTLP data over HTTP.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/opentelemetry/",
+      "kind": "sinks",
+      "label": "OpenTelemetry",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::opentelemetry",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "opentelemetry"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log events to Papertrail from SolarWinds.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/papertrail/",
+      "kind": "sinks",
+      "label": "Papertrail",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::papertrail",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "papertrail"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log data to a PostgreSQL database.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/postgres/",
+      "kind": "sinks",
+      "label": "Postgres",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::postgres",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "postgres"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Expose metric events on a Prometheus compatible endpoint.",
+      "device_capability": "allowed",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/prometheus_exporter/",
+      "kind": "sinks",
+      "label": "Prometheus Exporter",
+      "locallyAllowed": true,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::prometheus_exporter",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "prometheus_exporter"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver metric data to a Prometheus remote write endpoint.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/prometheus_remote_write/",
+      "kind": "sinks",
+      "label": "Prometheus Remote Write",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::prometheus_remote_write",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "prometheus_remote_write"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability events to Apache Pulsar topics.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/pulsar/",
+      "kind": "sinks",
+      "label": "Pulsar",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::pulsar",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "pulsar"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish observability data to Redis.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/redis/",
+      "kind": "sinks",
+      "label": "Redis",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::redis",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "redis"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish log events to Sematext.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/sematext_logs/",
+      "kind": "sinks",
+      "label": "Sematext Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::sematext_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "sematext_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Publish metric events to Sematext.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/sematext_metrics/",
+      "kind": "sinks",
+      "label": "Sematext Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::sematext_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "sematext_metrics"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver logs to a remote socket endpoint.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/socket/",
+      "kind": "sinks",
+      "label": "Socket",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::socket",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "socket"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver log data to Splunk's HTTP Event Collector.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/splunk_hec_logs/",
+      "kind": "sinks",
+      "label": "Splunk HEC Logs",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::splunk_hec_logs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "splunk_hec_logs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver metric data to Splunk's HTTP Event Collector.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/splunk_hec_metrics/",
+      "kind": "sinks",
+      "label": "Splunk HEC Metrics",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::splunk_hec_metrics",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "splunk_hec_metrics"
+    },
+    {
+      "coverage": "native-generated-schema-with-pinned-unix-branches",
+      "coverage_note": "Windows-generated common fields and modes, with Unix socket branches projected from pinned generated CUE. Unix activation has not been run; the target Vector runtime remains authoritative.",
+      "description": "Deliver metric data to a StatsD aggregator.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/statsd/",
+      "kind": "sinks",
+      "label": "StatsD",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "unix-branches-source-reviewed-not-run",
+        "macos": "unix-branches-source-reviewed-not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::statsd",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "supplemental_source_sha256": "4d9b0583f2802bf2407c5f63f35d6e7d9491c01dbbfb137826c441d3249b5144",
+      "supplemental_source_url": "https://github.com/vectordotdev/vector/blob/2bcad9bbb84e201dcfd58c22b1f779290101b728/website/cue/reference/components/sinks/generated/statsd.cue",
+      "type": "statsd"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Relay observability data to a Vector instance.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/vector/",
+      "kind": "sinks",
+      "label": "Vector",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::vector",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "vector"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "WebHDFS.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/webhdfs/",
+      "kind": "sinks",
+      "label": "WebHDFS",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::webhdfs",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "webhdfs"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver observability event data to a websocket listener.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/websocket/",
+      "kind": "sinks",
+      "label": "Websocket",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::websocket",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "websocket"
+    },
+    {
+      "coverage": "native-generated-schema",
+      "description": "Deliver observability event data to websocket clients.",
+      "device_capability": "requires_review",
+      "docs_url": "https://vector.dev/docs/reference/configuration/sinks/websocket_server/",
+      "kind": "sinks",
+      "label": "Websocket Server",
+      "locallyAllowed": false,
+      "platform_coverage": {
+        "linux": "not-run",
+        "macos": "not-run",
+        "windows": "schema-generated"
+      },
+      "platforms": [],
+      "schema_ref": "#/definitions/vectory::components::sinks::websocket_server",
+      "source_url": "https://github.com/vectordotdev/vector/tree/2bcad9bbb84e201dcfd58c22b1f779290101b728/src/sinks",
+      "type": "websocket_server"
+    }
+  ],
+  "coverage_note": "Component availability depends on the target Vector build. Empty platforms means no platform restriction recorded, not platform certification. Generated schemas guide editing; actual target Vector validation and local agent policy decide activation.",
+  "duplicate_registrations": [
+    {
+      "kind": "sources",
+      "type": "windows_event_log"
+    }
+  ],
+  "exclusions": [
+    "unit_test",
+    "unit_test_stream"
+  ],
+  "experimental_upstream_schema": true,
+  "schema_sha256": "750b3f954022601721b4d8cde077f4c9f6efe1a967cea0bff8e31e79e900f502",
+  "schema_standard": "https://json-schema.org/draft/2019-09/schema",
+  "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
+  "vector_version": "0.58.0"
+}

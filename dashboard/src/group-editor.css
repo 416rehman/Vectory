@@ -1,0 +1,74 @@
+.group-blocked-help {
+  display: grid;
+  gap: 6px;
+  margin: -6px 0 20px;
+  font-size: 13px;
+}
+.group-blocked-help > span {
+  color: var(--muted);
+}
+.group-editor-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.group-editor-modal > .modal-header,
+.group-editor-form > .modal-footer {
+  flex-shrink: 0;
+}
+.group-editor-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.group-editor-form > .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+.group-review {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface-hover);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.group-review h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.group-review p {
+  margin: 8px 0 12px;
+  line-height: 1.6;
+}
+.group-review-value,
+.group-review-members {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.group-review-value > span {
+  display: block;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.group-review-value > strong {
+  display: block;
+}
+.group-review-value > .button {
+  margin-top: 6px;
+}
+.group-review-members > div {
+  margin-top: 12px;
+}
+.group-review-members ul {
+  max-height: 130px;
+  overflow-y: auto;
+  margin: 6px 0 12px;
+  padding-left: 20px;
+}
+.group-review .button {
+  max-width: 100%;
+  white-space: normal;
+}

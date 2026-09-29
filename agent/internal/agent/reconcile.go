@@ -25,6 +25,7 @@ type Engine struct {
 	BootID      string
 	Now         func() time.Time
 	Fault       func(string) error
+	supervisor  *workloadSupervisor
 }
 
 func (e *Engine) now() time.Time {
@@ -44,6 +45,7 @@ func (e *Engine) paused() bool { return LocalPaused(e.Dir) || e.State.Policy.Syn
 func (e *Engine) fail(code, stage, message string) error {
 	e.State.ApplyState = "failed"
 	e.State.Error = &Issue{code, stage, message}
+	e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 	_ = e.save()
 	return errors.New(message)
 }
@@ -73,14 +75,27 @@ func (e *Engine) Recover(ctx context.Context) error {
 		// Verification was durable; activation is re-established by StartExisting.
 		return os.Remove(filepath.Join(e.Dir, "journal.json"))
 	}
-	return e.rollback(ctx, j.Generation, "An interrupted apply was recovered")
+	// A legacy journal has no candidate identity. Recover its workload without
+	// guessing a failed attempt. A stale journal must not relabel a newer desire.
+	var attempt *ConfigurationAttempt
+	if j.ConfigurationAttempt != nil && j.ConfigurationAttempt.Generation == j.Generation {
+		attempt = j.ConfigurationAttempt
+	}
+	return e.rollback(ctx, j.Generation, "An interrupted apply was recovered", attempt)
 }
 func (e *Engine) StartExisting(ctx context.Context) error {
+	return e.startExisting(ctx, false)
+}
+
+func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 	if !e.Settings.Adopted {
 		return nil
 	}
 	if e.Driver.Alive() {
 		return nil
+	}
+	if honorPause && e.paused() {
+		return errWorkloadPaused
 	}
 	// Restart the established workload after offline/manual drift. Pause preserves
 	// manual content; absent pause, a last-good artifact needs no new authorization.
@@ -91,6 +106,9 @@ func (e *Engine) StartExisting(ctx context.Context) error {
 		}
 		if err = e.Settings.CapabilityPolicy.Check(good); err != nil {
 			return e.fail("CAPABILITY_DENIED", "startup", "Recovery content violates current local capability policy")
+		}
+		if honorPause && e.paused() {
+			return errWorkloadPaused
 		}
 		if err = AtomicWrite(e.Settings.ManagedConfig, good); err != nil {
 			return e.fail("WRITE_FAILED", "startup", "Cannot restore the established local workload")
@@ -109,6 +127,9 @@ func (e *Engine) StartExisting(ctx context.Context) error {
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
 		return e.fail("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration")
 	}
+	if honorPause && e.paused() {
+		return errWorkloadPaused
+	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
 		return e.fail("ACTIVATION_FAILED", "startup", "Existing Vector startup could not be verified")
 	}
@@ -125,17 +146,28 @@ func (e *Engine) StartExisting(ctx context.Context) error {
 	}
 	if e.State.FailedGeneration == nil && e.State.Desired != nil && (h == e.State.Desired.SHA256 || (e.State.AppliedTemplateSHA256 == e.State.Desired.SHA256 && e.State.AppliedSecretRevision == e.State.SecretRevision)) && h == e.State.LastGoodSHA256 {
 		e.State.ApplyState = "verified_applied"
+		e.observeVerifiedAttempt("verified_applied", nil)
 	} else if e.State.FailedGeneration == nil {
 		e.State.ApplyState = "unmanaged"
 	}
+	if a := e.currentAttempt(); a != nil && (a.State == "failed" || a.State == "rolled_back") {
+		// Restoring the established process is not success for a newer candidate.
+		e.State.ApplyState, e.State.Error = a.State, cloneIssue(a.Error)
+	} else if e.State.ApplyState == "verified_applied" || e.State.ApplyState == "unmanaged" {
+		e.State.Error = nil
+	}
 	e.State.ActualSHA256 = h
 	if e.paused() {
-		e.State.ApplyState = "paused"
-		e.State.RemotePauseAcknowledged = e.State.Policy.SyncPaused
+		e.pauseAttempt()
 	}
 	return e.save()
 }
 func (e *Engine) Poll(ctx context.Context) error {
+	// Never silently round/clamp counters from an old or manually edited state.
+	// Such a state needs local recovery; it cannot emit an invalid heartbeat.
+	if e.State.ReportedGeneration > MaxJSONCounter || e.State.HighestGeneration > MaxJSONCounter || e.State.HighestPolicyGeneration > MaxJSONCounter || e.State.SecretRevision > MaxJSONCounter {
+		return errors.New("local counters exceed protocol bounds; preserve state and obtain authorized recovery")
+	}
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return err
@@ -147,14 +179,12 @@ func (e *Engine) Poll(ctx context.Context) error {
 		e.State.Telemetry = e.Metrics.Collect(ctx, e.now())
 	}
 	if e.paused() {
-		e.State.ApplyState = "paused"
-		e.State.RemotePauseAcknowledged = e.State.Policy.SyncPaused
+		e.pauseAttempt()
 	}
-	if e.State.ApplyState == "verified_applied" && !e.Driver.Alive() {
-		e.State.ApplyState = "verification_unknown"
-		e.State.Error = &Issue{"PROCESS_EXITED", "observation", "Owned Vector process is not running; reconciliation will attempt recovery"}
+	if err := e.observeProcessExit(); err != nil {
+		return err
 	}
-	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: e.State.Error, Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision})
+	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: e.State.Error, Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())})
 	if err != nil {
 		return err
 	}
@@ -184,6 +214,7 @@ func (e *Engine) Poll(ctx context.Context) error {
 	e.State.PolicyIdentity = Identity(m.Policy)
 	e.State.Desired = m.Desired
 	e.State.Policy = m.Policy
+	e.selectAttempt(m)
 	now := e.now()
 	e.State.LastHeartbeat = &now
 	if err = e.save(); err != nil {
@@ -195,9 +226,17 @@ func (e *Engine) Poll(ctx context.Context) error {
 	return e.Reconcile(ctx, m)
 }
 func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
+	if e.State.HighestGeneration != m.Generation || Identity(e.State.Desired) != Identity(m.Desired) {
+		return errors.New("manifest superseded before reconciliation")
+	}
+	e.selectAttempt(m)
+	// Identity is durable before compatibility, download, secret resolution or
+	// other candidate checks. This is independent from verified-generation state.
+	if err := e.save(); err != nil {
+		return err
+	}
 	if e.paused() {
-		e.State.ApplyState = "paused"
-		e.State.RemotePauseAcknowledged = e.State.Policy.SyncPaused
+		e.pauseAttempt()
 		return e.save()
 	}
 	e.State.RemotePauseAcknowledged = false
@@ -208,32 +247,36 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	d := m.Desired
 	if d.VectorVersion != VectorVersion {
-		return e.fail("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
+		return e.failAttempt("INCOMPATIBLE", "compatibility", "Desired configuration requires an unsupported Vector version")
 	}
 	if !e.Settings.Adopted {
-		return e.fail("ADOPTION_REQUIRED", "preflight", "Host operator must explicitly adopt the fixed Vector binary and sole managed config")
+		return e.failAttempt("ADOPTION_REQUIRED", "preflight", "Host operator must explicitly adopt the fixed Vector binary and sole managed config")
 	}
 	template, err := e.loadTemplate(ctx, d)
 	if err != nil {
-		return e.fail("DOWNLOAD_FAILED", "download", "Cannot obtain a digest-verified authorized template")
+		return e.failAttempt("DOWNLOAD_FAILED", "download", "Cannot obtain a digest-verified authorized template")
 	}
-	data, usesSecrets, err := ResolveLocalSecrets(template, e.Settings.SecretFiles)
+	data, usesSecrets, err := resolveLocalSecrets(template, e.Settings.SecretFiles, e.Settings.CapabilityPolicy.FullVectorConfig)
 	if err != nil {
-		return e.fail("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files")
+		return e.failAttempt("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files")
 	}
 	effectiveSHA := Digest(data)
 	if e.State.FailedGeneration != nil && *e.State.FailedGeneration == m.Generation && (e.State.FailedEffectiveSHA256 == effectiveSHA || (e.State.FailedEffectiveSHA256 == "" && !usesSecrets)) {
+		if a := e.currentAttempt(); a != nil && (a.State == "failed" || a.State == "rolled_back") {
+			e.State.ApplyState, e.State.Error = a.State, cloneIssue(a.Error)
+			return e.save()
+		}
 		return nil
 	}
 	if e.State.MaterializationSHA256 != effectiveSHA || (usesSecrets && e.State.SecretRevision == 0) {
 		if usesSecrets {
-			if e.State.SecretRevision == ^uint64(0) {
-				return e.fail("SECRET_REVISION_EXHAUSTED", "materialization", "Local secret revision counter exhausted")
+			if e.State.SecretRevision >= MaxJSONCounter {
+				return e.failAttempt("SECRET_REVISION_EXHAUSTED", "materialization", "Local secret revision counter exhausted")
 			}
 			e.State.SecretRevision++
 		}
 		e.State.MaterializationSHA256 = effectiveSHA
-		e.State.ApplyState = "desired"
+		e.attemptProgress("desired")
 		// Persist the attempt counter BEFORE staging, validation or activation. It
 		// never rolls back when an earlier effective configuration is restored.
 		if err = e.save(); err != nil {
@@ -246,11 +289,18 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	actual := e.actual()
 	e.State.ActualSHA256 = actual
-	if actual == effectiveSHA && e.State.LastGoodSHA256 == effectiveSHA && e.Driver.Alive() {
-		e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
-		return e.save()
+	if actual == effectiveSHA && e.State.LastGoodSHA256 == effectiveSHA {
+		if e.Driver.Alive() {
+			e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
+			return e.save()
+		}
+		if e.supervisor != nil {
+			// Continuous Run restores this exact established content on its local
+			// schedule. Heartbeats must not bypass flapping-process backoff.
+			return e.observeProcessExit()
+		}
 	}
-	e.State.ApplyState = "downloaded"
+	e.attemptProgress("downloaded")
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -258,20 +308,20 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.fail("CAPABILITY_DENIED", "validation", "Effective configuration violates the local capability policy")
+		return e.failAttempt("CAPABILITY_DENIED", "validation", "Effective configuration violates the local capability policy")
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {
-		return e.fail("WRITE_FAILED", "staging", "Cannot securely stage configuration")
+		return e.failAttempt("WRITE_FAILED", "staging", "Cannot securely stage configuration")
 	}
 	defer os.Remove(stage)
 	if err = e.Driver.Validate(ctx, stage); err != nil {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.fail("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; inspect the protected local configuration")
+		return e.failAttempt("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version")
 	}
-	e.State.ApplyState = "validated"
+	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -279,25 +329,27 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if e.paused() {
-		e.State.ApplyState = "paused"
-		e.State.RemotePauseAcknowledged = e.State.Policy.SyncPaused
+		e.pauseAttempt()
 		return e.save()
 	}
-	if e.now().After(m.ExpiresAt) || e.State.HighestGeneration != m.Generation {
-		return errors.New("manifest expired or superseded before commit")
+	if e.State.HighestGeneration != m.Generation || Identity(e.State.Desired) != Identity(m.Desired) {
+		return errors.New("manifest superseded before commit")
+	}
+	if e.now().After(m.ExpiresAt) {
+		return e.failAttempt("MANIFEST_EXPIRED", "commit", "Manifest expired before commit; waiting for fresh authorization")
 	}
 	previous, readErr := readArtifact(e.Settings.ManagedConfig)
 	if readErr != nil && !os.IsNotExist(readErr) {
-		return e.fail("PATH_UNSAFE", "commit", "Managed path cannot be read safely")
+		return e.failAttempt("PATH_UNSAFE", "commit", "Managed path cannot be read safely")
 	}
 	if readErr == nil {
 		if err = AtomicWrite(filepath.Join(e.Dir, "pre-attempt.json"), previous); err != nil {
-			return err
+			return e.failAttempt("WRITE_FAILED", "commit", "Cannot securely preserve pre-apply content")
 		}
 	}
-	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), SecretRevision: attemptRevision}
+	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return err
+		return e.failAttempt("WRITE_FAILED", "commit", "Cannot persist the apply recovery journal")
 	}
 	if err = e.boundary("prepared"); err != nil {
 		return err
@@ -305,24 +357,24 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	// Pause can race validation or journal IO; this last local check precedes commit.
 	if e.paused() {
 		_ = os.Remove(filepath.Join(e.Dir, "journal.json"))
-		e.State.ApplyState = "paused"
+		e.pauseAttempt()
 		return e.save()
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, data); err != nil {
-		return e.rollback(ctx, m.Generation, "Managed configuration replacement failed")
+		return e.rollback(ctx, m.Generation, "Managed configuration replacement failed", j.ConfigurationAttempt)
 	}
 	j.Stage = "written"
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return err
+		return e.rollback(ctx, m.Generation, "Cannot persist managed replacement recovery state", j.ConfigurationAttempt)
 	}
-	e.State.ApplyState = "written"
+	e.attemptProgress("written")
 	if err = e.save(); err != nil {
 		return err
 	}
 	if err = e.boundary("written"); err != nil {
 		return err
 	}
-	e.State.ApplyState = "reload_requested"
+	e.attemptProgress("reload_requested")
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -330,16 +382,16 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.rollback(ctx, m.Generation, "Effective configuration activation could not be verified")
+		return e.rollback(ctx, m.Generation, "Effective configuration activation could not be verified", j.ConfigurationAttempt)
 	}
 	if e.actual() != effectiveSHA {
-		return e.rollback(ctx, m.Generation, "Managed content changed during activation")
+		return e.rollback(ctx, m.Generation, "Managed content changed during activation", j.ConfigurationAttempt)
 	}
 	if err = e.boundary("activated"); err != nil {
 		return err
 	}
 	if err = AtomicWrite(filepath.Join(e.Dir, "good-"+effectiveSHA+".json"), data); err != nil {
-		return e.rollback(ctx, m.Generation, "Cannot persist verified recovery content")
+		return e.rollback(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt)
 	}
 	e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
 	if err = e.save(); err != nil {
@@ -365,7 +417,7 @@ func (e *Engine) markApplied(generation uint64, templateSHA, effectiveSHA string
 		e.State.AppliedTemplateSHA256 = templateSHA
 	}
 	e.State.AppliedSecretRevision = revision
-	e.State.ApplyState = "verified_applied"
+	e.attemptProgress("verified_applied")
 	e.State.FailedGeneration = nil
 	e.State.FailedEffectiveSHA256 = ""
 	e.State.Error = nil
@@ -398,32 +450,37 @@ func (e *Engine) loadTemplate(ctx context.Context, d *Desired) ([]byte, error) {
 	}
 	return data, nil
 }
-func (e *Engine) rollback(ctx context.Context, g uint64, reason string) error {
+func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt) error {
+	fail := func(code, message string) error {
+		e.attemptOutcome(attempt, "failed", &Issue{code, "rollback", message})
+		return e.fail(code, "rollback", message)
+	}
 	e.State.FailedGeneration = &g
 	e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
 	if e.State.LastGoodSHA256 == "" {
 		_ = e.Driver.Stop()
-		return e.fail("ROLLBACK_UNAVAILABLE", "rollback", reason+"; no verified recovery content exists")
+		return fail("ROLLBACK_UNAVAILABLE", reason+"; no verified recovery content exists")
 	}
 	b, err := readArtifact(e.goodPath())
 	if err != nil || Digest(b) != e.State.LastGoodSHA256 {
-		return e.fail("ROLLBACK_FAILED", "rollback", "Verified recovery artifact missing or corrupted")
+		return fail("ROLLBACK_FAILED", "Verified recovery artifact missing or corrupted")
 	}
 	if err = e.Settings.CapabilityPolicy.Check(b); err != nil {
-		return e.fail("ROLLBACK_FAILED", "rollback", "Recovery content violates current local capability policy")
+		return fail("ROLLBACK_FAILED", "Recovery content violates current local capability policy")
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, b); err != nil {
-		return e.fail("ROLLBACK_FAILED", "rollback", "Cannot restore verified recovery content")
+		return fail("ROLLBACK_FAILED", "Cannot restore verified recovery content")
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("ROLLBACK_FAILED", "rollback", "Restored configuration validation failed")
+		return fail("ROLLBACK_FAILED", "Restored configuration validation failed")
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("ROLLBACK_FAILED", "rollback", "Restored Vector activation could not be verified")
+		return fail("ROLLBACK_FAILED", "Restored Vector activation could not be verified")
 	}
 	e.State.ActualSHA256 = e.State.LastGoodSHA256
 	e.State.ApplyState = "rolled_back"
 	e.State.Error = &Issue{"APPLY_ROLLED_BACK", "rollback", reason + "; last verified configuration restored"}
+	e.attemptOutcome(attempt, "rolled_back", e.State.Error)
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -539,6 +596,7 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"
 			e.State.Error = &Issue{"PROCESS_STOPPED", "observation", "The agent supervisor stopped; restart the service to re-establish activation"}
+			e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 			_ = e.save()
 		}
 	}()
@@ -548,14 +606,13 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		report(err.Error())
 	}
 	failures := 0
+	supervisor := &workloadSupervisor{}
+	e.supervisor = supervisor
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if err = e.renew(ctx); err != nil {
-			report("Credential renewal failed; keeping the current workload")
-		}
-		err = e.Poll(ctx)
+		err = supervisor.poll(ctx, e, report)
 		if err != nil {
 			failures++
 			report(err.Error())
@@ -582,12 +639,8 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		if delay < e.Client.RetryAfter {
 			delay = e.Client.RetryAfter
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !supervisor.wait(ctx, e, delay, report) {
 			return nil
-		case <-timer.C:
 		}
 	}
 }
@@ -601,117 +654,75 @@ func StateSummary(dir string) (map[string]any, error) {
 		return nil, err
 	}
 	h, _ := FileDigest(s.ManagedConfig)
-	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version}, nil
+	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "diagnostics": localDiagnostics(dir, s, st)}, nil
 }
 func Doctor(ctx context.Context, dir string) (map[string]any, error) {
+	return doctorWithProbe(ctx, dir, ProbeVector)
+}
+func doctorWithProbe(ctx context.Context, dir string, probe func(context.Context, Settings) (string, error)) (map[string]any, error) {
 	s, err := LoadSettings(dir)
 	if err != nil {
 		return nil, err
 	}
-	v, err := ProbeVector(ctx, s)
 	telemetry := "unavailable (no local endpoint configured)"
 	if s.MetricsURL != "" {
 		telemetry = "explicit loopback Prometheus endpoint configured; sample availability shown in status"
 	}
-	r := map[string]any{"vector_version": v, "adopted": s.Adopted, "state_dir": dir, "managed_config": s.ManagedConfig, "tls_minimum": "1.3", "telemetry": telemetry}
+	r := map[string]any{"vector_version": "", "adopted": s.Adopted, "state_dir": dir, "managed_config": s.ManagedConfig, "tls_minimum": "1.3", "telemetry": telemetry, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "binary_integrity": false}
+	st, err := LoadState(dir)
+	if err != nil {
+		return r, errors.New("local apply state is unreadable; preserve state and inspect it under the service account")
+	}
+	r["diagnostics"] = localDiagnostics(dir, s, st)
+	// Diagnostics must enforce the same adoption boundary as validation/start.
+	// Never execute even --version on a binary whose adopted digest changed.
+	h, err := FileDigest(s.VectorBinary)
+	if err != nil || h != s.VectorBinarySHA256 {
+		diagnostics := localDiagnostics(dir, s, st)
+		diagnostics.NextAction = "Restore the previously approved Vector binary, or stop the agent and use re-adopt with an independently trusted expected SHA256. Re-adoption validates existing configuration but does not start or verify a workload."
+		r["diagnostics"] = diagnostics
+		return r, errors.New("Vector binary differs from adopted digest; restore the approved binary or stop the agent and use re-adopt with a trusted expected SHA256")
+	}
+	r["binary_integrity"] = true
+	v, err := probe(ctx, s)
 	if err != nil {
 		return r, err
 	}
-	h, err := FileDigest(s.VectorBinary)
-	if err != nil || h != s.VectorBinarySHA256 {
-		return r, errors.New("Vector binary differs from adopted digest")
-	}
+	r["vector_version"] = v
 	if err = SafePath(s.ManagedConfig); err != nil {
 		return r, err
 	}
-	r["binary_integrity"] = true
 	return r, nil
 }
 func Install(ctx context.Context, dir, binary, config string, adopt bool, policy *CapabilityPolicy) error {
-	if err := CheckFreshStateDirectory(dir); err != nil {
-		return err
+	options := InstallOptions{Adopt: adopt, CapabilityPolicy: policy}
+	if binary != "" {
+		options.VectorBinary = &binary
 	}
-	if err := PrivateDir(dir); err != nil {
-		return err
+	if config != "" {
+		options.ManagedConfig = &config
 	}
-	unlock, err := Lock(dir)
+	return InstallWithOptions(ctx, dir, options)
+}
+
+// ConfigureFullVector is a stopped-daemon, host-operator operation. No remote
+// manifest or policy path can call it or change this local settings field.
+func ConfigureFullVector(dir string, enabled bool) error {
+	unlock, err := lockSettingsMaintenance(dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	s, err := LoadSettings(dir)
-	if err == nil {
-		if (binary == "" || binary == s.VectorBinary) && (config == "" || config == s.ManagedConfig) {
-			return nil
-		}
-		return errors.New("installation already exists; edit protected settings locally to change adoption")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if !adopt {
-		return errors.New("explicit --adopt is required; stop the previous Vector service and inventory all existing config/include paths first")
-	}
-	if !filepath.IsAbs(binary) || !filepath.IsAbs(config) || filepath.Ext(config) != ".json" {
-		return errors.New("provide absolute Vector binary and sole managed .json configuration paths")
-	}
-	parent := filepath.Dir(filepath.Clean(config))
-	if parent == filepath.VolumeName(parent)+string(filepath.Separator) {
-		return errors.New("managed configuration must use a dedicated directory, not a filesystem root")
-	}
-	if err = SafePath(binary); err != nil {
-		return err
-	}
-	if err = SafePath(config); err != nil {
-		return err
-	}
-	if err = CheckManagedDirectory(config, dir); err != nil {
-		return err
-	}
-	s = Settings{VectorBinary: binary, ManagedConfig: config, Adopted: true, ValidationSeconds: 30, StartupSeconds: 20}
-	if _, err = ProbeVector(ctx, s); err != nil {
-		return err
-	}
-	s.VectorBinarySHA256, err = FileDigest(binary)
+	doc, err := loadSettingsDocument(dir)
 	if err != nil {
 		return err
 	}
-	if policy != nil {
-		s.CapabilityPolicy = *policy
+	s := doc.value
+	if s.CapabilityPolicy.FullVectorConfig != enabled {
+		s.CapabilityPolicy.FullVectorConfig = enabled
+		return commitSettingsWithRetryReset(dir, doc, s)
 	}
-	if err = PrivateDir(filepath.Dir(config)); err != nil {
-		return err
-	}
-	if data, err := readArtifact(config); err == nil {
-		if err = AtomicWrite(filepath.Join(dir, "adoption-backup.json"), data); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err = WriteJSON(filepath.Join(dir, "settings.json"), s); err != nil {
-		return err
-	}
-	return SaveState(dir, State{ApplyState: "unmanaged", Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}})
-}
-func ConfigureEnrollment(dir, server, name, ca string) error {
-	s, err := LoadSettings(dir)
-	if err != nil {
-		return err
-	}
-	origin, err := NormalizeServer(server)
-	if err != nil {
-		return err
-	}
-	if name == "" || len(name) > 128 {
-		return errors.New("machine name must contain 1..128 characters")
-	}
-	if s.Server != "" && (s.Server != origin || s.Name != name) {
-		return errors.New("enrollment settings cannot change an existing identity")
-	}
-	s.Server = origin
-	s.Name = name
-	s.CAFile = ca
-	return WriteJSON(filepath.Join(dir, "settings.json"), s)
+	return doc.save(s)
 }
 func ExitDescription(code int) string {
 	return fmt.Sprintf("exit %d: 0 success; 1 operational error; 2 invalid command; 3 security/preflight rejection", code)

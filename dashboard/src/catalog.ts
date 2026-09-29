@@ -1,4 +1,13 @@
 import type { Config, Graph } from "./api";
+import generatedCatalog from "./generated/vector-catalog.json";
+import generatedSchema from "./generated/vector-schema.json";
+import {
+  requiredSchemaIssues,
+  isSecretReference,
+  type Schema,
+} from "./pipelineSchema";
+export const vectorSchema: Schema = generatedSchema;
+export const vectorCatalogVersion = generatedCatalog.vector_version;
 export type Kind = "sources" | "transforms" | "sinks";
 export type Component = {
   type: string;
@@ -6,17 +15,25 @@ export type Component = {
   kind: Kind;
   description: string;
   defaults: Config;
+  schema_ref?: string;
+  docs_url?: string;
+  device_capability?: string;
+  coverage?: string;
+  platforms?: string[];
+  curated?: boolean;
   fields: {
     key: string;
     label: string;
     type?: "number" | "vrl" | "array" | "boolean";
     required?: boolean;
+    hint?: string;
+    options?: string[];
   }[];
 };
-export const catalog: Component[] = [
+const curatedCatalog: Component[] = [
   {
     type: "demo_logs",
-    label: "Demo logs",
+    label: "Synthetic logs",
     kind: "sources",
     description: "Generate synthetic events for a safe first pipeline.",
     defaults: { format: "json", interval: 1 },
@@ -27,16 +44,17 @@ export const catalog: Component[] = [
   },
   {
     type: "file",
-    label: "File",
+    label: "Log files",
     kind: "sources",
     description: "Read log files from approved paths on your device.",
-    defaults: { include: ["/var/log/app/*.log"] },
+    defaults: { include: [] },
     fields: [
       {
         key: "include",
         label: "Included paths",
         type: "array",
         required: true,
+        hint: "One path per line, such as /var/log/app/*.log. Paths must be allowed on the device.",
       },
     ],
   },
@@ -53,7 +71,7 @@ export const catalog: Component[] = [
   },
   {
     type: "http_server",
-    label: "HTTP server",
+    label: "HTTP endpoint",
     kind: "sources",
     description: "Accept events through a local HTTP endpoint.",
     defaults: { address: "127.0.0.1:8088", encoding: "json" },
@@ -71,11 +89,24 @@ export const catalog: Component[] = [
       grpc: { address: "127.0.0.1:4317" },
       http: { address: "127.0.0.1:4318" },
     },
-    fields: [],
+    fields: [
+      {
+        key: "grpc.address",
+        label: "gRPC listen address",
+        required: true,
+        hint: "Local address for OTLP gRPC, usually 127.0.0.1:4317.",
+      },
+      {
+        key: "http.address",
+        label: "HTTP listen address",
+        required: true,
+        hint: "Local address for OTLP HTTP, usually 127.0.0.1:4318.",
+      },
+    ],
   },
   {
     type: "remap",
-    label: "Remap",
+    label: "Edit fields",
     kind: "transforms",
     description: "Parse, enrich, and reshape events with VRL.",
     defaults: { source: '.environment = "development"' },
@@ -95,7 +126,7 @@ export const catalog: Component[] = [
   },
   {
     type: "route",
-    label: "Route",
+    label: "Route by condition",
     kind: "transforms",
     description: "Send events to named conditional outputs.",
     defaults: {
@@ -115,7 +146,7 @@ export const catalog: Component[] = [
   },
   {
     type: "console",
-    label: "Console",
+    label: "Console output",
     kind: "sinks",
     description: "Inspect synthetic events in standard error.",
     defaults: { encoding: { codec: "json" }, target: "stderr" },
@@ -126,10 +157,10 @@ export const catalog: Component[] = [
   },
   {
     type: "http",
-    label: "HTTP",
+    label: "HTTP destination",
     kind: "sinks",
     description: "Deliver events to an approved HTTPS endpoint.",
-    defaults: { uri: "https://logs.example.com", encoding: { codec: "json" } },
+    defaults: { uri: "", encoding: { codec: "json" } },
     fields: [
       { key: "uri", label: "Destination URL", required: true },
       { key: "encoding.codec", label: "Encoding", required: true },
@@ -141,7 +172,7 @@ export const catalog: Component[] = [
     kind: "sinks",
     description: "Index events in an Elasticsearch cluster.",
     defaults: {
-      endpoints: ["https://elasticsearch.example.com:9200"],
+      endpoints: [],
       mode: "bulk",
     },
     fields: [
@@ -154,13 +185,47 @@ export const catalog: Component[] = [
     kind: "sinks",
     description: "Ship labeled logs to a Loki endpoint.",
     defaults: {
-      endpoint: "https://loki.example.com",
+      endpoint: "",
       encoding: { codec: "json" },
       labels: { service: "vectory" },
     },
     fields: [{ key: "endpoint", label: "Endpoint", required: true }],
   },
 ];
+export const catalog: Component[] = [
+  ...curatedCatalog.map(
+    (item) =>
+      ({
+        ...generatedCatalog.components.find(
+          (component) =>
+            component.kind === item.kind && component.type === item.type,
+        ),
+        ...item,
+        curated: true,
+      }) as Component,
+  ),
+  ...generatedCatalog.components
+    .filter(
+      (component) =>
+        !curatedCatalog.some(
+          (item) =>
+            item.kind === component.kind && item.type === component.type,
+        ),
+    )
+    .map(
+      (component) =>
+        ({
+          ...component,
+          kind: component.kind as Kind,
+          defaults: {},
+          fields: [],
+          curated: false,
+        }) as Component,
+    ),
+];
+export function componentSchema(component: Component): Schema | undefined {
+  return component.schema_ref ? { $ref: component.schema_ref } : undefined;
+}
 export const starter: Config = {
   sources: { demo: { type: "demo_logs", format: "json", interval: 1 } },
   transforms: {
@@ -179,18 +244,71 @@ export const starter: Config = {
     },
   },
 };
+export function sameConfiguration(left: Config, right: Config): boolean {
+  const canonical = (value: Config) =>
+    JSON.stringify(value, (_key, item) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.fromEntries(
+            Object.keys(item)
+              .sort()
+              .map((key) => [key, item[key]]),
+          )
+        : item,
+    );
+  return canonical(left) === canonical(right);
+}
 export function getPath(value: Config, path: string): any {
   return path.split(".").reduce((o, k) => o?.[k], value);
 }
 export function outputPorts(component: Config): string[] {
+  if (component.type === "memory")
+    return [
+      "output",
+      ...(component.source_config?.export_expired_items === true
+        ? ["expired"]
+        : []),
+    ];
   if (component.type === "route")
-    return [...Object.keys(component.route || {}), "_unmatched"];
+    return [
+      ...Object.keys(component.route || {}),
+      ...(component.reroute_unmatched === false ? [] : ["_unmatched"]),
+    ];
+  if (component.type === "exclusive_route")
+    return [
+      ...(Array.isArray(component.routes)
+        ? component.routes
+            .filter((route: any) => typeof route?.name === "string")
+            .map((route: any) => route.name)
+        : []),
+      "_unmatched",
+    ];
+  if (component.type === "datadog_agent" && component.multiple_outputs === true)
+    return ["logs", "metrics", "traces", "llmobs"].filter(
+      (port) => component[`disable_${port}`] !== true,
+    );
   if (component.type === "opentelemetry") return ["logs", "metrics", "traces"];
   if (component.type === "remap" && component.reroute_dropped === true)
     return ["output", "dropped"];
   return ["output"];
 }
 type EventType = "logs" | "metrics" | "traces";
+export const exactOutputTypes = new Set([
+  "memory",
+  "demo_logs",
+  "internal_metrics",
+  "file",
+  "http_server",
+  "syslog",
+  "opentelemetry",
+  "datadog_agent",
+  "remap",
+  "route",
+  "exclusive_route",
+  "filter",
+  "sample",
+  "reduce",
+  "log_to_metric",
+]);
 const allEvents: EventType[] = ["logs", "metrics", "traces"];
 function acceptedEvents(type: string): EventType[] {
   if (["sample"].includes(type)) return ["logs", "traces"];
@@ -208,16 +326,33 @@ function inferEvents(
   if (seen.has(id)) return allEvents;
   seen.add(id);
   const c = config.sources?.[id] || config.transforms?.[id];
-  if (!c) return allEvents;
-  if (c.type === "opentelemetry" && allEvents.includes(port as EventType))
+  if (!c)
+    return memoryComponents(config).some(
+      (entry) => entry.id === id && entry.kind === "sources",
+    )
+      ? ["logs"]
+      : allEvents;
+  if (
+    (c.type === "opentelemetry" ||
+      (c.type === "datadog_agent" && c.multiple_outputs === true)) &&
+    allEvents.includes(port as EventType)
+  )
     return [port as EventType];
   if (["demo_logs", "file", "syslog", "http_server"].includes(c.type))
     return ["logs"];
   if (["internal_metrics", "log_to_metric"].includes(c.type))
     return ["metrics"];
   if (
-    ["remap", "filter", "route", "sample", "reduce"].includes(c.type) &&
-    Array.isArray(c.inputs)
+    [
+      "remap",
+      "filter",
+      "route",
+      "exclusive_route",
+      "sample",
+      "reduce",
+    ].includes(c.type) &&
+    Array.isArray(c.inputs) &&
+    c.inputs.length > 0
   )
     return [
       ...new Set<EventType>(
@@ -241,45 +376,103 @@ export function setPath(value: Config, path: string, next: any): Config {
   at[parts.at(-1)!] = next;
   return copy;
 }
+type PipelineComponent = {
+  id: string;
+  kind: Kind;
+  component: Config;
+  enrichmentTable?: string;
+  implicitSource?: boolean;
+};
+/** Memory enrichment tables can register a sink and an independently named export source. */
+export function memoryComponents(config: Config): PipelineComponent[] {
+  return Object.entries(config.enrichment_tables || {}).flatMap(
+    ([id, value]: [string, any]) => {
+      if (value?.type !== "memory") return [];
+      const entries: PipelineComponent[] = [];
+      if (Array.isArray(value.inputs))
+        entries.push({
+          id,
+          kind: "sinks",
+          component: value,
+          enrichmentTable: id,
+        });
+      const source = value.source_config?.source_key;
+      if (typeof source === "string" && source) {
+        const { inputs: _inputs, ...component } = value;
+        entries.push({
+          id: source,
+          kind: "sources",
+          component,
+          enrichmentTable: id,
+          implicitSource: true,
+        });
+      }
+      return entries;
+    },
+  );
+}
+function pipelineComponents(config: Config): PipelineComponent[] {
+  return (["sources", "transforms", "sinks"] as Kind[])
+    .flatMap((kind) =>
+      Object.entries(config[kind] || {}).map(([id, component]) => ({
+        id,
+        kind,
+        component: component as Config,
+      })),
+    )
+    .concat(memoryComponents(config));
+}
+/** Tuple encoding keeps hyphenated endpoint names and repeated inputs distinct. */
+export function connectionEdgeId(
+  reference: string,
+  target: string,
+  index: number,
+): string {
+  return `conn:${encodeURIComponent(JSON.stringify([reference, target, index]))}`;
+}
 export function toGraph(config: Config, existing?: Graph): Graph {
   const nodes: any[] = [];
   const edges: any[] = [];
-  for (const [col, kind] of (
-    ["sources", "transforms", "sinks"] as Kind[]
-  ).entries()) {
-    Object.entries(config[kind] || {}).forEach(
-      ([id, component]: [string, any], i) => {
-        if (
-          !component ||
-          typeof component !== "object" ||
-          Array.isArray(component)
-        )
-          return;
-        const old = existing?.nodes.find((n) => n.id === id);
-        nodes.push({
-          id,
-          type: "component",
-          position: old?.position || { x: col * 290 + 60, y: i * 170 + 100 },
-          data: { kind, component, label: id },
-        });
-        for (const [j, input] of (Array.isArray(component.inputs)
-          ? component.inputs
-          : []
-        ).entries()) {
-          if (typeof input !== "string") continue;
-          const dot = input.indexOf(".");
-          edges.push({
-            id: `${input}-${id}-${j}`,
-            source: dot < 0 ? input : input.slice(0, dot),
-            sourceHandle: dot < 0 ? "output" : input.slice(dot + 1),
-            target: id,
-            targetHandle: "input",
-            type: "smoothstep",
-            animated: false,
-          });
-        }
+  const counts = { sources: 0, transforms: 0, sinks: 0 };
+  for (const {
+    id,
+    kind,
+    component,
+    enrichmentTable,
+    implicitSource,
+  } of pipelineComponents(config)) {
+    if (!component || typeof component !== "object" || Array.isArray(component))
+      continue;
+    const col = ["sources", "transforms", "sinks"].indexOf(kind),
+      i = counts[kind]++;
+    const old = existing?.nodes.find((node) => node.id === id);
+    nodes.push({
+      id,
+      type: "component",
+      position: old?.position || { x: col * 290 + 60, y: i * 170 + 100 },
+      data: {
+        kind,
+        component,
+        label: id,
+        ...(enrichmentTable ? { enrichmentTable, implicitSource } : {}),
       },
-    );
+    });
+    for (const [j, input] of (Array.isArray(component.inputs)
+      ? component.inputs
+      : []
+    ).entries()) {
+      if (typeof input !== "string" || isInputPattern(input)) continue;
+      const dot = input.indexOf(".");
+      edges.push({
+        id: connectionEdgeId(input, id, j),
+        source: dot < 0 ? input : input.slice(0, dot),
+        sourceHandle: dot < 0 ? "output" : input.slice(dot + 1),
+        target: id,
+        targetHandle: "input",
+        type: "smoothstep",
+        animated: false,
+      });
+    }
   }
   for (const node of nodes)
     node.data.disconnected =
@@ -291,25 +484,21 @@ export function toGraph(config: Config, existing?: Graph): Graph {
 export function validateGraph(config: Config): string[] {
   const errors: string[] = [];
   const all = new Map<string, { kind: Kind; c: Config }>();
-  for (const kind of ["sources", "transforms", "sinks"] as Kind[])
-    for (const [id, c] of Object.entries(config[kind] || {}) as [
-      string,
-      Config,
-    ][]) {
-      if (all.has(id)) errors.push(`Duplicate component ID: ${id}`);
-      if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(id))
-        errors.push(`Invalid component ID: ${id}`);
-      if (
-        !c ||
-        typeof c !== "object" ||
-        Array.isArray(c) ||
-        typeof c.type !== "string"
-      ) {
-        errors.push(`${id}: component type is required`);
-        continue;
-      }
-      all.set(id, { kind, c });
+  for (const { id, kind, component: c } of pipelineComponents(config)) {
+    if (all.has(id)) errors.push(`Duplicate component ID: ${id}`);
+    if (!id || new TextEncoder().encode(id).length > 128 || id.includes("."))
+      errors.push(`Invalid component ID: ${id}`);
+    if (
+      !c ||
+      typeof c !== "object" ||
+      Array.isArray(c) ||
+      typeof c.type !== "string"
+    ) {
+      errors.push(`${id}: component type is required`);
+      continue;
     }
+    all.set(id, { kind, c });
+  }
   for (const [id, { kind, c }] of all) {
     if (kind !== "sources" && (!Array.isArray(c.inputs) || !c.inputs.length))
       errors.push(`${id}: connect at least one input`);
@@ -318,6 +507,7 @@ export function validateGraph(config: Config): string[] {
         errors.push(`${id}: input must be a string`);
         continue;
       }
+      if (isInputPattern(input)) continue;
       const [source, ...outputs] = input.split(".");
       const item = all.get(source);
       if (!item) errors.push(`${id}: missing input ${input}`);
@@ -325,6 +515,7 @@ export function validateGraph(config: Config): string[] {
         errors.push(`${id}: a sink cannot be an input`);
       else if (
         outputs.length &&
+        exactOutputTypes.has(item.c.type) &&
         !outputPorts(item.c).includes(outputs.join("."))
       )
         errors.push(`${id}: unknown output ${input}`);
@@ -360,6 +551,9 @@ export function validateGraph(config: Config): string[] {
   for (const id of all.keys()) visit(id);
   return [...new Set(errors)];
 }
+export function isInputPattern(reference: string): boolean {
+  return /[*?\[]/.test(reference) || /\$(?:\{|[A-Za-z_])/.test(reference);
+}
 export function connect(
   config: Config,
   source: string,
@@ -367,20 +561,21 @@ export function connect(
   handle = "output",
 ): Config {
   const copy = structuredClone(config);
-  const src = (["sources", "transforms", "sinks"] as Kind[]).find(
-    (k) => copy[k]?.[source],
-  );
-  const dst = (["sources", "transforms", "sinks"] as Kind[]).find(
-    (k) => copy[k]?.[target],
-  );
-  if (!src || !dst || src === "sinks" || dst === "sources" || source === target)
+  const entries = pipelineComponents(copy),
+    src = entries.find((entry) => entry.id === source),
+    dst = entries.find((entry) => entry.id === target);
+  if (
+    !src ||
+    !dst ||
+    src.kind === "sinks" ||
+    dst.kind === "sources" ||
+    source === target
+  )
     throw Error("Connect a source or transform to a transform or sink.");
   const ref = handle === "output" ? source : `${source}.${handle}`;
-  copy[dst][target].inputs = [
+  dst.component.inputs = [
     ...new Set([
-      ...(Array.isArray(copy[dst][target].inputs)
-        ? copy[dst][target].inputs
-        : []),
+      ...(Array.isArray(dst.component.inputs) ? dst.component.inputs : []),
       ref,
     ]),
   ];
@@ -392,4 +587,305 @@ export function connect(
   );
   if (errors.length) throw Error(errors[0]);
   return copy;
+}
+
+export function pipelineOutputs(config: Config) {
+  return pipelineComponents(config)
+    .filter((entry) => entry.kind !== "sinks")
+    .flatMap(({ id, kind, component }) => {
+      if (!component || typeof component !== "object") return [];
+      return outputPorts(component).map((port) => ({
+        id,
+        kind,
+        port,
+        reference: port === "output" ? id : `${id}.${port}`,
+        label: `${id}${port === "output" ? "" : ` / ${port}`}`,
+      }));
+    });
+}
+
+/** Keep the guided view in event-flow order, independent of object insertion order. */
+export function orderedStepIds(config: Config, kind: Kind): string[] {
+  const ordered: string[] = [],
+    seen = new Set<string>();
+  function visit(id: string) {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const component = config[kind]?.[id];
+    if (!component) return;
+    for (const input of Array.isArray(component.inputs) ? component.inputs : [])
+      if (typeof input === "string" && config[kind]?.[input.split(".")[0]])
+        visit(input.split(".")[0]);
+    ordered.push(id);
+  }
+  for (const id of Object.keys(config[kind] || {})) visit(id);
+  return ordered;
+}
+
+/** Suggest only an unambiguous end of the existing flow. Branches require a choice. */
+export function suggestedInput(config: Config): string {
+  const outputs = pipelineOutputs(config);
+  const transformInputs = new Set<string>(
+    Object.values(config.transforms || {}).flatMap((value: any) =>
+      Array.isArray(value?.inputs) ? value.inputs : [],
+    ),
+  );
+  const terminal = outputs.filter((o) => !transformInputs.has(o.reference));
+  return terminal.length === 1 ? terminal[0].reference : "";
+}
+
+/** Adds a step and safely inserts a transform into a chosen existing connection. */
+export function addConnectedComponent(
+  config: Config,
+  item: Component,
+  input = "",
+  downstreamIds?: string[],
+  options: { autoConnectSource?: boolean } = {},
+) {
+  let next = structuredClone(config);
+  const used = new Set(pipelineComponents(next).map((entry) => entry.id));
+  let id = item.type,
+    suffix = 2;
+  while (used.has(id)) id = `${item.type}_${suffix++}`;
+  next[item.kind] ??= {};
+  next[item.kind][id] = {
+    type: item.type,
+    ...structuredClone(item.defaults),
+    ...(item.kind === "sources"
+      ? {}
+      : {
+          inputs: Array.isArray(item.defaults.inputs)
+            ? structuredClone(item.defaults.inputs)
+            : [],
+        }),
+  };
+  if (item.kind === "sources" && options.autoConnectSource !== false) {
+    const outputs = outputPorts(next.sources[id]);
+    const port = outputs.includes("output")
+      ? "output"
+      : outputs.includes("logs")
+        ? "logs"
+        : outputs[0];
+    const roots = (["transforms", "sinks"] as Kind[]).flatMap((kind) =>
+      Object.entries(config[kind] || {})
+        .filter(
+          ([, c]: any) =>
+            Array.isArray(c?.inputs) &&
+            c.inputs.every(
+              (ref: unknown) =>
+                typeof ref === "string" &&
+                !!config.sources?.[ref.split(".")[0]],
+            ),
+        )
+        .map(([name]) => ({ kind, name })),
+    );
+    const transforms = roots.filter((r) => r.kind === "transforms");
+    const candidates = transforms.length
+      ? transforms
+      : roots.filter((r) => r.kind === "sinks");
+    const targets = candidates.length === 1 ? candidates : [];
+    for (const target of targets) next = connect(next, id, target.name, port);
+  } else if (input) {
+    const [source, ...parts] = input.split(".");
+    next = connect(next, source, id, parts.join(".") || "output");
+    if (item.kind === "transforms") {
+      const consumers = downstreamSteps(config, input);
+      const selectedConsumers = new Set(
+        downstreamIds ?? (consumers.length === 1 ? [consumers[0].id] : []),
+      );
+      const replacement = outputPorts(next.transforms[id]).map((port) =>
+        port === "output" ? id : `${id}.${port}`,
+      );
+      for (const kind of ["transforms", "sinks", "enrichment_tables"])
+        for (const [name, c] of Object.entries(next[kind] || {}) as [
+          string,
+          Config,
+        ][])
+          if (
+            name !== id &&
+            selectedConsumers.has(name) &&
+            Array.isArray(c?.inputs)
+          )
+            c.inputs = [
+              ...new Set(
+                c.inputs.flatMap((ref: string) =>
+                  ref === input ? replacement : [ref],
+                ),
+              ),
+            ];
+      const failure = validateGraph(next).find((e) =>
+        /Cycle|incompatible event types/.test(e),
+      );
+      if (failure) throw Error(failure);
+    }
+  }
+  return { config: next, id };
+}
+
+/** Apply the same known event-type constraints as a direct graph connection. */
+export function acceptsComponentInput(
+  config: Config,
+  input: string,
+  item: Component,
+) {
+  return (
+    !input ||
+    (item.kind !== "sources" &&
+      inferEvents(config, input).some((type) =>
+        acceptedEvents(item.type).includes(type),
+      ))
+  );
+}
+
+export function downstreamSteps(config: Config, reference: string) {
+  return (["transforms", "sinks", "enrichment_tables"] as const).flatMap(
+    (kind) =>
+      Object.entries(config[kind] || {})
+        .filter(
+          ([, component]: any) =>
+            Array.isArray(component?.inputs) &&
+            component.inputs.includes(reference),
+        )
+        .map(([id, component]) => ({
+          id,
+          kind,
+          component: component as Config,
+        })),
+  );
+}
+
+export function removePipelineStep(config: Config, id: string): Config {
+  const next = structuredClone(config);
+  const memory = memoryComponents(next).find((entry) => entry.id === id);
+  if (memory) {
+    const table = next.enrichment_tables[memory.enrichmentTable!];
+    const removed = [
+      memory.enrichmentTable,
+      table?.source_config?.source_key,
+    ].filter(Boolean);
+    delete next.enrichment_tables[memory.enrichmentTable!];
+    for (const section of ["transforms", "sinks", "enrichment_tables"])
+      for (const component of Object.values(next[section] || {}) as Config[])
+        if (Array.isArray(component?.inputs))
+          component.inputs = component.inputs.filter(
+            (ref: unknown) =>
+              typeof ref !== "string" ||
+              isInputPattern(ref) ||
+              !removed.some(
+                (name) => ref === name || ref.startsWith(name + "."),
+              ),
+          );
+    return next;
+  }
+  const kind = (["sources", "transforms", "sinks"] as Kind[]).find(
+    (k) => next[k]?.[id],
+  );
+  if (!kind) return next;
+  const removed = next[kind][id];
+  const bridge =
+    kind === "transforms" &&
+    outputPorts(removed).length === 1 &&
+    outputPorts(removed)[0] === "output"
+      ? Array.isArray(removed.inputs)
+        ? removed.inputs
+        : []
+      : [];
+  delete next[kind][id];
+  for (const section of ["transforms", "sinks", "enrichment_tables"])
+    for (const c of Object.values(next[section] || {}) as Config[])
+      if (Array.isArray(c?.inputs))
+        c.inputs = [
+          ...new Set(
+            c.inputs.flatMap((ref: string) =>
+              ref === id
+                ? bridge
+                : typeof ref === "string" && ref.startsWith(`${id}.`)
+                  ? []
+                  : [ref],
+            ),
+          ),
+        ];
+  return next;
+}
+
+export function pipelineIssues(
+  config: Config,
+): { id?: string; message: string }[] {
+  const issues = validateGraph(config).map((message) => ({
+    id: message.includes(":") ? message.split(":")[0] : undefined,
+    message,
+  }));
+  if (!config.provider && !Object.keys(config.sources || {}).length)
+    issues.push({
+      id: undefined,
+      message: "Add a source to choose where events come from.",
+    });
+  if (!config.provider && !Object.keys(config.sinks || {}).length)
+    issues.push({
+      id: undefined,
+      message: "Add a destination to choose where events go.",
+    });
+  for (const kind of ["sources", "transforms", "sinks"] as Kind[])
+    for (const [id, component] of Object.entries(config[kind] || {}) as [
+      string,
+      Config,
+    ][]) {
+      const definition = catalog.find(
+        (c) => c.kind === kind && c.type === component?.type,
+      );
+      const schema = definition ? componentSchema(definition) : undefined;
+      if (schema)
+        for (const message of requiredSchemaIssues(
+          schema,
+          vectorSchema,
+          component,
+        ))
+          issues.push({ id, message: `${id}: ${message}` });
+      // Curated display shortcuts are not authoritative requirements. Native
+      // alternatives and omitted defaults follow the pinned component schema.
+      else
+        for (const field of definition?.fields || []) {
+          const value = getPath(component, field.key);
+          if (
+            field.required &&
+            (value == null ||
+              value === "" ||
+              (Array.isArray(value) &&
+                !value.some((v) => typeof v === "string" && v.trim())))
+          )
+            issues.push({
+              id,
+              message: `${id}: enter ${field.label.toLowerCase()}.`,
+            });
+          if (
+            field.type === "number" &&
+            value != null &&
+            (!Number.isFinite(value) || value <= 0)
+          )
+            issues.push({
+              id,
+              message: `${id}: ${field.label.toLowerCase()} must be greater than zero.`,
+            });
+        }
+      if (
+        kind === "sinks" &&
+        ["http", "loki", "elasticsearch"].includes(component?.type)
+      ) {
+        const keys =
+          component.auth?.strategy === "basic"
+            ? ["user", "password"]
+            : component.auth?.strategy === "bearer"
+              ? ["token"]
+              : [];
+        for (const key of keys) {
+          const reference = component.auth?.[key];
+          if (!isSecretReference(reference))
+            issues.push({
+              id,
+              message: `${id}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
+            });
+        }
+      }
+    }
+  return issues;
 }

@@ -1,0 +1,18 @@
+{
+  "architecture": "x64",
+  "executable_sha256": "019c41f4ae28543dd8e275a631f4d7b67a6aed3e3fba4c0ed37c4bdf054ac3a6",
+  "inventory_command": [
+    "vector",
+    "list",
+    "--format",
+    "json"
+  ],
+  "platform": "win32",
+  "release": "vector 0.58.0 (x86_64-pc-windows-msvc 2bcad9b 2026-08-26 13:37:07.557544670)",
+  "schema_command": [
+    "vector",
+    "generate-schema"
+  ],
+  "upstream_commit": "2bcad9bbb84e201dcfd58c22b1f779290101b728",
+  "vector_version": "0.58.0"
+}

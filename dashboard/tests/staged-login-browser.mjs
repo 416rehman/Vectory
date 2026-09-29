@@ -1,0 +1,553 @@
+// Actual App auth UI with isolated synthetic transport. No real accounts or secrets.
+import { createServer } from "vite";
+import { chromium, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { resolve, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { mkdir, writeFile } from "node:fs/promises";
+
+const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repository = resolve(dashboard, "..");
+const output = resolve(
+  repository,
+  process.env.VECTORY_STAGED_LOGIN_OUTPUT || ".local/staged-login",
+);
+await mkdir(output, { recursive: true });
+const virtual = "\0virtual:staged-login-fixture";
+const server = await createServer({
+  root: dashboard,
+  configFile: resolve(dashboard, "vite.config.ts"),
+  server: {
+    host: "127.0.0.1",
+    port: 5202,
+    strictPort: true,
+    proxy: {},
+    hmr: false,
+  },
+  plugins: [
+    {
+      name: "staged-login-fixture",
+      resolveId(id) {
+        if (id === "virtual:staged-login-fixture") return virtual;
+      },
+      load(id) {
+        if (id === virtual)
+          return "import React from 'react';import{createRoot}from'react-dom/client';import App from '/src/App.tsx';import '/src/styles.css';createRoot(document.getElementById('root')).render(React.createElement(App));";
+      },
+      configureServer(vite) {
+        vite.middlewares.use(async (req, res, next) => {
+          if (req.url !== "/__staged-login") return next();
+          res.setHeader("Content-Type", "text/html");
+          res.end(
+            await vite.transformIndexHtml(
+              req.url,
+              '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic staged login verification</title></head><body><div id="root"></div><script type="module">import "virtual:staged-login-fixture";</script></body></html>',
+            ),
+          );
+        });
+      },
+    },
+  ],
+});
+await server.listen();
+const browser = await chromium.launch();
+const results = [],
+  unexpected = [],
+  errors = [],
+  requestSummaries = [],
+  accessibility = [];
+const credentials = {
+  email: "synthetic-mfa@example.test",
+  password: "synthetic-only-password",
+};
+const user = {
+  id: "synthetic-user",
+  email: credentials.email,
+  name: "Synthetic user",
+  role: "viewer",
+  enabled: true,
+  revision: 1,
+};
+async function fixture({ mfa = true } = {}) {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const state = {
+    mfa,
+    authenticated: false,
+    challenge: "",
+    issued: 0,
+    attempts: 0,
+    expiry: false,
+    holdLogin: false,
+    holdVerification: false,
+    held: [],
+    requests: [],
+  };
+  page.on("pageerror", (error) => errors.push(error.message));
+  await context.route("**/api/v1/**", async (route) => {
+    const req = route.request(),
+      path = new URL(req.url()).pathname.replace("/api/v1", ""),
+      method = req.method();
+    const body = req.postData() ? req.postDataJSON() : null;
+    state.requests.push({ path, method, body });
+    requestSummaries.push({
+      path,
+      method,
+      keys: body ? Object.keys(body).sort() : [],
+    });
+    const reply = async (json, status = 200) => {
+      try {
+        await route.fulfill({ status, json });
+      } catch {}
+    };
+    const session = () => ({ user, csrf_token: "synthetic-csrf" });
+    if (path === "/status")
+      return reply({ initialized: true, version: "synthetic" });
+    if (path === "/session")
+      return state.authenticated
+        ? reply(session())
+        : reply(
+            { error: { code: "UNAUTHENTICATED", message: "Sign in required" } },
+            401,
+          );
+    if (path === "/login" && method === "POST") {
+      expect(body).not.toHaveProperty("totp_code");
+      expect(body).not.toHaveProperty("recovery_code");
+      if (
+        body.email !== credentials.email ||
+        body.password !== credentials.password
+      )
+        return reply(
+          {
+            error: { code: "UNAUTHENTICATED", message: "Invalid credentials" },
+          },
+          401,
+        );
+      if (!state.mfa) {
+        state.authenticated = true;
+        return reply(session());
+      }
+      state.challenge = String(++state.issued).padStart(64, "0");
+      state.attempts = 0;
+      const next = {
+        mfa_required: true,
+        challenge_token: state.challenge,
+        expires_at: new Date(Date.now() + 300000).toISOString(),
+      };
+      const send = () => reply(next);
+      if (state.holdLogin) {
+        state.held.push(send);
+        return;
+      }
+      return send();
+    }
+    if (path === "/login/mfa" && method === "POST") {
+      expect(Object.keys(body).sort()).toEqual([
+        "challenge_token",
+        body.recovery_code !== undefined ? "recovery_code" : "totp_code",
+      ]);
+      expect(body).not.toHaveProperty("password");
+      expect(body).not.toHaveProperty("email");
+      if (
+        state.expiry ||
+        body.challenge_token !== state.challenge ||
+        ++state.attempts >= 5
+      )
+        return reply(
+          {
+            error: {
+              code: "MFA_CHALLENGE_EXPIRED",
+              message: "Sign-in verification expired. Start again.",
+            },
+          },
+          401,
+        );
+      if (
+        body.totp_code !== "246810" &&
+        body.recovery_code !== "synthetic-recovery-code"
+      )
+        return reply(
+          {
+            error: {
+              code: "INVALID_MFA_CODE",
+              message: "The verification code is invalid. Try again.",
+            },
+          },
+          401,
+        );
+      const send = () => {
+        state.authenticated = true;
+        state.challenge = "";
+        return reply(session());
+      };
+      if (state.holdVerification) {
+        state.held.push(send);
+        return;
+      }
+      return send();
+    }
+    if (path === "/settings" && state.authenticated)
+      return reply({ instance_name: "Synthetic verification" });
+    if (path === "/mfa" && state.authenticated)
+      return reply({ enabled: state.mfa });
+    unexpected.push({ path, method });
+    return reply(
+      {
+        error: { code: "UNEXPECTED", message: "Unexpected synthetic request" },
+      },
+      500,
+    );
+  });
+  await page.goto("http://127.0.0.1:5202/__staged-login#/users");
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  return {
+    context,
+    page,
+    state,
+    async credentials(password = credentials.password) {
+      await page
+        .getByLabel("Email address", { exact: true })
+        .fill(credentials.email);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    },
+    async release() {
+      await Promise.all(state.held.splice(0).map((send) => send()));
+    },
+    async close() {
+      await context.close();
+    },
+  };
+}
+async function check(name, run) {
+  const started = Date.now();
+  await run();
+  results.push({ name, status: "passed", milliseconds: Date.now() - started });
+  console.log("PASS " + name);
+}
+async function pending(f) {
+  await expect(
+    f.page.getByRole("heading", { name: "Verify your identity", exact: true }),
+  ).toBeVisible();
+  await expect(f.page.getByLabel("Password", { exact: true })).toHaveCount(0);
+  expect(f.state.authenticated).toBe(false);
+  expect(
+    await f.page.evaluate(async () => (await fetch("/api/v1/session")).status),
+  ).toBe(401);
+}
+try {
+  await check(
+    "credentials first, no partial session, isolated factor body and preserved destination",
+    async () => {
+      const f = await fixture();
+      try {
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toHaveCount(0);
+        await expect(
+          f.page.getByRole("button", { name: "Use a recovery code instead" }),
+        ).toHaveCount(0);
+        await f.credentials("incorrect-password");
+        await expect(f.page.getByRole("alert")).toBeVisible();
+        expect(f.state.issued).toBe(0);
+        await f.credentials();
+        await pending(f);
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toBeFocused();
+        const stored = await f.page.evaluate(() =>
+          JSON.stringify({
+            local: { ...localStorage },
+            session: { ...sessionStorage },
+            hash: location.hash,
+          }),
+        );
+        expect(stored.includes(f.state.challenge)).toBe(false);
+        expect(stored.includes(credentials.password)).toBe(false);
+        await f.page
+          .getByLabel("Authenticator code", { exact: true })
+          .fill("111111");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect(f.page.getByRole("alert")).toContainText(
+          /code is invalid|new code/i,
+        );
+        await pending(f);
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toHaveValue("");
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toBeFocused();
+        await f.page
+          .getByLabel("Authenticator code", { exact: true })
+          .fill("246810");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect(
+          f.page.getByRole("heading", {
+            name: "People & security",
+            exact: true,
+          }),
+        ).toBeVisible();
+        expect(f.page.url()).toContain("#/users");
+        expect(
+          f.state.requests.filter((r) => r.path === "/login/mfa"),
+        ).toHaveLength(2);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "Back, method switching and reload clear challenge input without retaining passwords",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.credentials();
+        await pending(f);
+        const first = f.state.challenge;
+        await f.page
+          .getByLabel("Authenticator code", { exact: true })
+          .fill("123456");
+        await f.page
+          .getByRole("button", {
+            name: "Use a recovery code instead",
+            exact: true,
+          })
+          .click();
+        await expect(
+          f.page.getByLabel("Recovery code", { exact: true }),
+        ).toBeFocused();
+        await expect(
+          f.page.getByLabel("Recovery code", { exact: true }),
+        ).toHaveValue("");
+        await f.page
+          .getByLabel("Recovery code", { exact: true })
+          .fill("synthetic-unused");
+        await f.page
+          .getByRole("button", {
+            name: "Use an authenticator code",
+            exact: true,
+          })
+          .click();
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toHaveValue("");
+        await f.page
+          .getByRole("button", { name: "Back to sign in", exact: true })
+          .click();
+        await expect(
+          f.page.getByLabel("Email address", { exact: true }),
+        ).toHaveValue(credentials.email);
+        await expect(
+          f.page.getByLabel("Password", { exact: true }),
+        ).toHaveValue("");
+        await f.credentials();
+        await pending(f);
+        expect(f.state.challenge === first).toBe(false);
+        await f.page.reload();
+        await expect(
+          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+        ).toBeVisible();
+        await expect(
+          f.page.getByLabel("Password", { exact: true }),
+        ).toHaveValue("");
+        expect(
+          f.state.requests.filter((r) => r.path === "/login/mfa"),
+        ).toHaveLength(0);
+        await f.credentials();
+        await pending(f);
+        await f.page
+          .getByRole("button", {
+            name: "Use a recovery code instead",
+            exact: true,
+          })
+          .click();
+        await f.page
+          .getByLabel("Recovery code", { exact: true })
+          .fill("synthetic-used-recovery-code");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect(f.page.getByRole("alert")).toContainText(
+          /recovery code is invalid/i,
+        );
+        await expect(
+          f.page.getByLabel("Recovery code", { exact: true }),
+        ).toHaveValue("");
+        await expect(
+          f.page.getByLabel("Recovery code", { exact: true }),
+        ).toBeFocused();
+        await f.page
+          .getByLabel("Recovery code", { exact: true })
+          .fill("synthetic-recovery-code");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect(
+          f.page.getByRole("heading", {
+            name: "People & security",
+            exact: true,
+          }),
+        ).toBeVisible();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "expired challenge restarts sign-in and busy stages prevent conflicting inputs",
+    async () => {
+      const f = await fixture();
+      try {
+        f.state.holdLogin = true;
+        await f.credentials();
+        await expect.poll(() => f.state.held.length).toBe(1);
+        await expect(
+          f.page.getByLabel("Email address", { exact: true }),
+        ).toBeDisabled();
+        await expect(
+          f.page.getByLabel("Password", { exact: true }),
+        ).toBeDisabled();
+        await f.release();
+        f.state.holdLogin = false;
+        await pending(f);
+        f.state.expiry = true;
+        await f.page
+          .getByLabel("Authenticator code", { exact: true })
+          .fill("246810");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect(
+          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+        ).toBeVisible();
+        await expect(
+          f.page.getByLabel("Password", { exact: true }),
+        ).toHaveValue("");
+        await expect(
+          f.page
+            .getByText(/verification expired|sign in again|start again/i)
+            .first(),
+        ).toBeVisible();
+        expect(f.state.authenticated).toBe(false);
+        f.state.expiry = false;
+        await f.credentials();
+        await pending(f);
+        f.state.holdVerification = true;
+        await f.page
+          .getByLabel("Authenticator code", { exact: true })
+          .fill("246810");
+        await f.page
+          .getByRole("button", { name: "Verify and sign in", exact: true })
+          .click();
+        await expect.poll(() => f.state.held.length).toBe(1);
+        await expect(
+          f.page.getByLabel("Authenticator code", { exact: true }),
+        ).toBeDisabled();
+        await expect(
+          f.page.getByRole("button", { name: "Back to sign in", exact: true }),
+        ).toBeDisabled();
+        await expect(
+          f.page.getByRole("button", {
+            name: "Use a recovery code instead",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        await f.release();
+        await expect(
+          f.page.getByRole("heading", {
+            name: "People & security",
+            exact: true,
+          }),
+        ).toBeVisible();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "non-MFA stays one-step and mobile verification is accessible in both themes",
+    async () => {
+      const direct = await fixture({ mfa: false });
+      try {
+        await direct.credentials();
+        await expect(
+          direct.page.getByRole("heading", {
+            name: "People & security",
+            exact: true,
+          }),
+        ).toBeVisible();
+        expect(direct.state.requests.some((r) => r.path === "/login/mfa")).toBe(
+          false,
+        );
+      } finally {
+        await direct.close();
+      }
+      const f = await fixture();
+      try {
+        await f.credentials();
+        await pending(f);
+        await f.page.setViewportSize({ width: 375, height: 812 });
+        for (const theme of ["light", "dark"]) {
+          await f.page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          expect(
+            await f.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const axe = await new AxeBuilder({ page: f.page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+            .analyze();
+          const violations = axe.violations.map((item) => ({
+            id: item.id,
+            impact: item.impact,
+          }));
+          accessibility.push({ theme, width: 375, violations });
+          expect(violations).toEqual([]);
+          await f.page.screenshot({
+            path: resolve(output, "staged-login-mobile-" + theme + ".png"),
+            animations: "disabled",
+          });
+        }
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+  await writeFile(
+    resolve(output, "report.json"),
+    JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        scope:
+          "Actual App staged sign-in with synthetic transport. Backend security verified separately; no real secrets or accounts.",
+        results,
+        accessibility,
+        requests: requestSummaries,
+        errors,
+        unexpected,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  console.log(
+    "Evidence: " + relative(repository, resolve(output, "report.json")),
+  );
+} finally {
+  await browser.close();
+  await server.close();
+}

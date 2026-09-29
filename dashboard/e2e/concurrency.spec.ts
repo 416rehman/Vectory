@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 const root = path.resolve(import.meta.dirname, "../..");
-test("publishing waits for the in-flight autosave and uses its exact content", async ({
+test("publishing waits for the in-flight explicit save and uses its exact content", async ({
   page,
 }) => {
   const session = await page.request
@@ -18,7 +18,7 @@ test("publishing waits for the in-flight autosave and uses its exact content", a
     .post("/api/v1/configurations", {
       headers: { "X-CSRF-Token": session.csrf_token },
       data: {
-        name: "Autosave race " + Date.now(),
+        name: "Explicit save race " + Date.now(),
         description: "Real API concurrency regression.",
         config,
         graph: { nodes: [], edges: [] },
@@ -47,12 +47,22 @@ test("publishing waits for the in-flight autosave and uses its exact content", a
   });
   try {
     await page.goto("/#/configurations/" + doc.id);
-    await page.locator(".pipeline-node").filter({ hasText: "process" }).click();
+    await page
+      .locator('.react-flow__node[data-id="process"] .pipeline-node')
+      .click();
     const marker = '.race_marker = "saved-before-publish"';
-    await page.getByLabel("VRL program").fill(marker);
+    await page.getByLabel("VRL program", { exact: true }).fill(marker);
+    await page
+      .locator(".editor-inspector")
+      .getByRole("button", { name: "Close component settings", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Save options" }).click();
+    await page
+      .getByRole("menuitem", { name: "Save draft", exact: true })
+      .click();
     await saving;
     await page
-      .getByRole("button", { name: "Publish version", exact: true })
+      .getByRole("button", { name: "Review & publish", exact: true })
       .click();
     await page
       .getByRole("dialog")
@@ -65,8 +75,11 @@ test("publishing waits for the in-flight autosave and uses its exact content", a
     ).toEqual([]);
     expect(publishStarted).toBeFalsy();
     release();
+    await page
+      .getByRole("button", { name: "Choose devices", exact: true })
+      .click();
     await expect(
-      page.getByRole("heading", { name: "Deploy configuration", exact: true }),
+      page.getByRole("heading", { name: "Deploy version 1", exact: true }),
     ).toBeVisible();
     const versions = await page.request
       .get(`/api/v1/configurations/${doc.id}/versions`)

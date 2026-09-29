@@ -9,10 +9,10 @@
   "transforms": {
     "process": {
       "type": "filter",
+      "condition": ".level != \"debug\"",
       "inputs": [
         "demo"
-      ],
-      "condition": ".level != \"debug\""
+      ]
     }
   },
   "sinks": {

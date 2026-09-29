@@ -1,0 +1,16 @@
+{
+  "sources": {
+    "metrics": {
+      "type": "internal_metrics"
+    }
+  },
+  "sinks": {
+    "output": {
+      "type": "prometheus_exporter",
+      "inputs": [
+        "metrics"
+      ],
+      "address": "127.0.0.1:19091"
+    }
+  }
+}

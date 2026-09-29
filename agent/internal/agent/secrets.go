@@ -20,6 +20,10 @@ var secretName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 // authentication fields. It cannot interpolate text, alter structure or choose
 // executable/providers/paths. Return values must never be logged or exported.
 func ResolveLocalSecrets(template []byte, bindings map[string]string) (effective []byte, used bool, err error) {
+	return resolveLocalSecrets(template, bindings, false)
+}
+
+func resolveLocalSecrets(template []byte, bindings map[string]string, fullVector bool) (effective []byte, used bool, err error) {
 	decoder := json.NewDecoder(bytes.NewReader(template))
 	decoder.UseNumber()
 	var root map[string]any
@@ -90,6 +94,12 @@ func ResolveLocalSecrets(template []byte, bindings map[string]string) (effective
 			if e != nil {
 				return nil, e
 			}
+			// Full Vector interpolation runs after typed materialization. A local
+			// credential must remain literal, never become another provider/env
+			// reference or be changed by Vector's dollar escaping.
+			if fullVector && (environmentVariable.MatchString(secret) || strings.Contains(secret, "${") || strings.Contains(secret, "$$") || strings.Contains(secret, "SECRET[")) {
+				return nil, errors.New("local credential contains native interpolation syntax; use a native provider directly for that credential")
+			}
 			values[name] = secret
 			return secret, nil
 		}
@@ -135,7 +145,10 @@ func readLocalSecret(path string) (string, error) {
 	}
 	return value, nil
 }
-func ConfigureSecretFiles(dir string, bindings map[string]string) error {
+func validateSecretFiles(bindings map[string]string) error {
+	if bindings == nil {
+		return errors.New("secret bindings must be an explicit object; use {} to remove all bindings")
+	}
 	if len(bindings) > 64 {
 		return errors.New("local secret binding limit exceeded")
 	}
@@ -143,19 +156,29 @@ func ConfigureSecretFiles(dir string, bindings map[string]string) error {
 		if !secretName.MatchString(name) {
 			return errors.New("invalid local secret binding name")
 		}
+		if !utf8.ValidString(path) || strings.ContainsRune(path, 0) || adoptionLocalPath(path) != nil {
+			return errors.New("local secret file must use a valid UTF-8 absolute local path without NUL")
+		}
 		if _, err := readLocalSecret(path); err != nil {
 			return err
 		}
 	}
-	unlock, err := Lock(dir)
+	return nil
+}
+func ConfigureSecretFiles(dir string, bindings map[string]string) error {
+	if err := validateSecretFiles(bindings); err != nil {
+		return err
+	}
+	unlock, err := lockSettingsMaintenance(dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	s, err := LoadSettings(dir)
+	doc, err := loadSettingsDocument(dir)
 	if err != nil {
 		return err
 	}
+	s := doc.value
 	s.SecretFiles = bindings
-	return WriteJSON(filepath.Join(dir, "settings.json"), s)
+	return doc.save(s)
 }

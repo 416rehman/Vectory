@@ -1,0 +1,23 @@
+---
+import PageTitle from '@astrojs/starlight/components/PageTitle.astro';
+import PageActions from './PageActions.astro';
+const slug = Astro.locals.starlightRoute.entry.id.replace(/\.mdx?$/, '') || 'index';
+// Generated article IDs use the same slug grammar as their Markdown assets.
+// The synthetic 404 entry intentionally has no downloadable page.
+const downloadable = /^[a-z][a-z-]*$/.test(slug);
+const section = Astro.locals.starlightRoute.sidebar.find((entry) =>
+  entry.type === 'group' && entry.entries.some((child) => child.type === 'link' && child.isCurrent)
+);
+---
+<div class="help-article-heading">
+  {downloadable && slug !== 'index' && (
+    <nav class="help-breadcrumb" aria-label="Breadcrumb" data-pagefind-ignore>
+      <ol>
+        <li><a href="/help/">Help center</a></li>
+        {section && <li><span aria-hidden="true">/</span>{section.label}</li>}
+      </ol>
+    </nav>
+  )}
+  <PageTitle />
+  {downloadable && <PageActions markdownURL={`/help/_markdown/${slug}.md`} />}
+</div>
