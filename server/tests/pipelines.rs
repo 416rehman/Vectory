@@ -548,6 +548,7 @@ async fn fixture(validation_url: Option<String>) -> (tempfile::TempDir, State, R
         releases_dir: temp.path().join("releases"),
         instance_name: "Pipeline tests".into(),
         validation_url,
+        ..Default::default()
     })
     .await
     .unwrap();

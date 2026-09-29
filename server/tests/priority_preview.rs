@@ -22,6 +22,7 @@ async fn fixture(count: usize) -> (tempfile::TempDir, State, Vec<String>) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated priority preview".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

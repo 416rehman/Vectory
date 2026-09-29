@@ -296,6 +296,58 @@ pub fn public_pipeline_test_result(config: &Value, worker: &Value) -> Option<Val
         "vector_version":VECTOR_VERSION,
     }))
 }
+/// Turn `vector vrl` stderr into a bounded plain-text diagnostic. The program
+/// and sample are the caller's own synthetic input, so the compiler's message
+/// (code, span, hint) is safe to return; process log lines and terminal escape
+/// sequences are removed and output is capped.
+pub fn vrl_diagnostic(stderr: &[u8]) -> Option<String> {
+    const LIMIT: usize = 4000;
+    let text = String::from_utf8_lossy(stderr);
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch == '\n' || ch == '\t' || !ch.is_control() {
+            plain.push(ch);
+        }
+    }
+    let lines: Vec<&str> = plain
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            // Drop Vector's own tracing lines, e.g. `2026-...Z  INFO vector::app: ...`.
+            !(trimmed.len() > 20
+                && trimmed.as_bytes()[..4].iter().all(u8::is_ascii_digit)
+                && trimmed.as_bytes()[4] == b'-'
+                && [" INFO ", " WARN ", " DEBUG ", " TRACE ", " ERROR "]
+                    .iter()
+                    .any(|level| trimmed.contains(level)))
+        })
+        .collect();
+    let joined = lines.join("\n");
+    let trimmed = joined.trim_matches('\n').trim_end();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= LIMIT {
+        return Some(trimmed.to_owned());
+    }
+    let mut end = LIMIT;
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}\n…", &trimmed[..end]))
+}
 pub fn is_native_secret_reference(text: &str) -> bool {
     let text = text
         .strip_prefix("Bearer ")
@@ -378,8 +430,21 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
                 }
             }
             Value::Object(fields) => {
+                // Component IDs and route names are user-chosen labels, not
+                // configuration fields: an ID such as `file` or `logs_dir` must
+                // not look like a device path.
+                let labels = matches!(
+                    path.as_slice(),
+                    [section] if ["sources", "transforms", "sinks", "enrichment_tables"].contains(&section.as_str())
+                ) || matches!(path.as_slice(), [section, _, field] if section == "transforms" && field == "route");
                 for (key, value) in fields {
                     if is_synthetic_test_event_field(path, key) {
+                        continue;
+                    }
+                    if labels {
+                        path.push(key.clone());
+                        walk(value, path, reasons);
+                        path.pop();
                         continue;
                     }
                     match key.as_str() {
@@ -425,44 +490,28 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     }
     reasons.into_iter().collect()
 }
-// The pinned Vector binary can check a file sink's path-bearing configuration
-// without opening that destination when --no-environment is used. Keep every
-// other device resource deferred: providers, secrets, external code, and Unix
-// transports must not be rejected on a worker with another host environment.
-pub fn can_static_check_file_sink_paths(config: &Value) -> bool {
+// `vector validate --no-environment` compiles transforms (VRL, routes) but does
+// not build sources, sinks or health checks, so device-local paths outside
+// transforms (data_dir, file globs, TLS files, sink paths, Unix sockets) are
+// parsed but never opened. The isolated worker can therefore still catch
+// compile and topology errors. Transforms that load external code, providers,
+// secrets, environment interpolation and enrichment data stay deferred.
+pub fn can_static_check_device_paths(config: &Value) -> bool {
     let reasons = device_context_reasons(config);
     if reasons.len() != 1 || reasons[0] != "device-local paths or external code files" {
         return false;
     }
-    fn walk(root: &Value, value: &Value, path: &mut Vec<String>) -> bool {
-        match value {
-            Value::Object(fields) => fields.iter().all(|(key, child)| {
-                if is_synthetic_test_event_field(path, key) {
-                    return true;
-                }
-                if is_device_path_field(key)
-                    && !(key == "path"
-                        && path.len() == 2
-                        && path[0] == "sinks"
-                        && root["sinks"][&path[1]]["type"] == "file")
-                {
-                    return false;
-                }
-                path.push(key.clone());
-                let safe = walk(root, child, path);
-                path.pop();
-                safe
-            }),
-            Value::Array(items) => items.iter().enumerate().all(|(index, child)| {
-                path.push(index.to_string());
-                let safe = walk(root, child, path);
-                path.pop();
-                safe
-            }),
-            _ => true,
-        }
-    }
-    walk(config, config, &mut Vec::new())
+    // Only transforms are built. Remap programs loaded from files and Lua
+    // modules resolved from search paths would be read on the worker.
+    !config["transforms"].as_object().is_some_and(|transforms| {
+        transforms
+            .values()
+            .any(|transform| match transform["type"].as_str() {
+                Some("remap") => !transform["file"].is_null() || !transform["files"].is_null(),
+                Some("lua") => true,
+                _ => false,
+            })
+    })
 }
 pub fn mark_device_deferred(result: &mut Value, config: &Value) -> bool {
     let reasons = device_context_reasons(config);
@@ -713,7 +762,7 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
     if result["valid"] != true {
         return Ok(result);
     }
-    let static_paths = can_static_check_file_sink_paths(config);
+    let static_paths = can_static_check_device_paths(config);
     // A configured worker must answer even when device resources prevent it
     // from running Vector. The worker reports an honest deferral for that
     // configuration; skipping the request would let its outage publish drafts.
@@ -1286,7 +1335,7 @@ mod tests {
             ]);
         assert!(device_context_reasons(&config).is_empty());
         config["sinks"]["out"] = json!({"type":"file","inputs":["sample"],"path":"/device/output.jsonl","encoding":{"codec":"json"}});
-        assert!(can_static_check_file_sink_paths(&config));
+        assert!(can_static_check_device_paths(&config));
         config["tests"][0]["inputs"]
             .as_array_mut()
             .unwrap()
@@ -1294,24 +1343,50 @@ mod tests {
         assert!(
             device_context_reasons(&config).contains(&"VRL access to device resources".to_owned())
         );
-        assert!(!can_static_check_file_sink_paths(&config));
+        assert!(!can_static_check_device_paths(&config));
     }
     #[test]
-    fn static_worker_path_probe_is_limited_to_file_sink_destination() {
-        let mut config = json!({"sources":{"input":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"file","inputs":["input"],"path":"/device/events.jsonl","encoding":{"codec":"json"}}}});
-        assert!(can_static_check_file_sink_paths(&config));
+    fn vrl_diagnostic_strips_logs_and_escapes_and_bounds_output() {
+        let stderr = b"2026-09-29T02:07:28.361246Z  INFO vector::app: Log level is enabled. level=\"info\"\n\n\x1b[0m\x1b[1m\x1b[38;5;9merror[E103]\x1b[0m\x1b[1m: unhandled fallible assignment\x1b[0m\n  \x1b[0m\x1b[34m\xe2\x94\x8c\xe2\x94\x80\x1b[0m :1:6\n";
+        let diagnostic = vrl_diagnostic(stderr).unwrap();
+        assert!(diagnostic.starts_with("error[E103]: unhandled fallible assignment"));
+        assert!(!diagnostic.contains('\u{1b}'));
+        assert!(!diagnostic.contains("Log level"));
+        assert!(diagnostic.contains(":1:6"));
+        assert_eq!(
+            vrl_diagnostic(b"2026-09-29T02:07:28Z  INFO vector::app: only logs\n"),
+            None
+        );
+        let long = vec![b'x'; 9000];
+        let bounded = vrl_diagnostic(&long).unwrap();
+        assert!(bounded.len() <= 4005 && bounded.ends_with('…'));
+    }
+    #[test]
+    fn static_worker_checks_device_paths_but_not_external_code() {
+        let mut config = json!({"data_dir":"/var/lib/vector","sources":{"input":{"type":"file","include":["/var/log/app/*.log"]}},"transforms":{"parse":{"type":"remap","inputs":["input"],"source":". = parse_json!(.message)"}},"sinks":{"out":{"type":"file","inputs":["parse"],"path":"/device/events.jsonl","encoding":{"codec":"json"}}}});
+        assert!(can_static_check_device_paths(&config));
+        // Sources and sinks are not built with --no-environment: TLS files and
+        // Unix sockets are parsed, never opened.
         config["sinks"]["out"]["tls"]["ca_file"] = json!("/device/ca.pem");
-        assert!(!can_static_check_file_sink_paths(&config));
-        config["sinks"]["out"]
-            .as_object_mut()
-            .unwrap()
-            .remove("tls");
-        config["sinks"]["out"]["path"] = json!("${DEVICE_OUTPUT}");
-        assert!(!can_static_check_file_sink_paths(&config));
-        config["sinks"]["out"]["path"] = json!("/device/events.jsonl");
+        assert!(can_static_check_device_paths(&config));
         config["sources"]["input"] =
             json!({"type":"socket","mode":"unix_stream","path":"/device/input.sock"});
-        assert!(!can_static_check_file_sink_paths(&config));
+        assert!(can_static_check_device_paths(&config));
+        // Environment interpolation changes the loaded bytes; keep it deferred.
+        config["sinks"]["out"]["path"] = json!("${DEVICE_OUTPUT}");
+        assert!(!can_static_check_device_paths(&config));
+        config["sinks"]["out"]["path"] = json!("/device/events.jsonl");
+        // Component IDs and route names are labels, not path fields.
+        let labels = json!({"sources":{"file":{"type":"demo_logs","format":"json"}},"transforms":{"logs_dir":{"type":"route","inputs":["file"],"route":{"file":".a == 1"}}},"sinks":{"out_path":{"type":"blackhole","inputs":["logs_dir.file"]}}});
+        assert!(
+            device_context_reasons(&labels).is_empty(),
+            "{:?}",
+            device_context_reasons(&labels)
+        );
+        // Transforms are compiled, so external VRL files cannot be read on the worker.
+        config["transforms"]["parse"] =
+            json!({"type":"remap","inputs":["input"],"file":"/etc/vector/parse.vrl"});
+        assert!(!can_static_check_device_paths(&config));
     }
     #[test]
     fn memory_enrichment_registers_only_declared_native_outputs() {

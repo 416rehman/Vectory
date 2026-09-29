@@ -51,6 +51,7 @@ async fn fixture() -> (
         releases_dir: temp.path().join("releases"),
         instance_name: "Saved settings request tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

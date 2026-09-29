@@ -76,7 +76,7 @@ pub async fn complete(
     }
     s.limit(
         "login-mfa-global".into(),
-        60,
+        600,
         std::time::Duration::from_secs(60),
     )?;
     let Json(v) = body.map_err(|_| {

@@ -97,6 +97,7 @@ async fn legacy_worker_cannot_claim_file_path_static_check() {
         releases_dir: temp.path().join("releases"),
         instance_name: "Legacy worker test".into(),
         validation_url: Some(format!("http://{addr}")),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -216,6 +217,7 @@ async fn real_vector_worker_accepts_and_rejects_configuration() {
         releases_dir: isolated_state.path().join("releases"),
         instance_name: "Native validation test".into(),
         validation_url: Some(url.clone()),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -253,6 +255,28 @@ async fn real_vector_worker_accepts_and_rejects_configuration() {
     );
     assert!(public_rejected.get("static_checked").is_none());
     assert!(!public_rejected.to_string().contains("THIS IS NOT"));
+    // Device-local paths (data_dir, file globs, TLS files) must not suppress VRL
+    // compilation: a fallible route condition is caught before publication.
+    let mut device_paths = json!({"data_dir":"/var/lib/vector","sources":{"logs":{"type":"file","include":["/var/log/app/*.log"]}},"transforms":{"by_status":{"type":"route","inputs":["logs"],"route":{"errors":".status >= 500"}}},"sinks":{"out":{"type":"http","inputs":["by_status.errors"],"uri":"https://collector.example.test/ingest","encoding":{"codec":"json"},"tls":{"ca_file":"/etc/vector/ca.pem"}}}});
+    let device_rejected = vectory_server::validation::validate_isolated(&state, &device_paths)
+        .await
+        .unwrap();
+    assert_eq!(device_rejected["valid"], false, "{device_rejected}");
+    assert_eq!(device_rejected["deferred"], true);
+    assert!(
+        device_rejected["errors"]
+            .to_string()
+            .contains("transforms.by_status"),
+        "{device_rejected}"
+    );
+    device_paths["transforms"]["by_status"]["route"]["errors"] =
+        json!("(int(.status) ?? 0) >= 500");
+    let device_accepted = vectory_server::validation::validate_isolated(&state, &device_paths)
+        .await
+        .unwrap();
+    assert_eq!(device_accepted["valid"], true, "{device_accepted}");
+    assert_eq!(device_accepted["deferred"], true);
+    assert_eq!(device_accepted["vector_validated"], false);
     let unknown: serde_json::Value = client.post(format!("{url}/validate")).json(&json!({"config":{"sources":{"input":{"type":"not_a_real_vector_type"}},"sinks":{"out":{"type":"blackhole","inputs":["input"]}}}})).send().await.unwrap().json().await.unwrap();
     assert_eq!(
         unknown["valid"], false,

@@ -27,6 +27,7 @@ async fn fixture_with_secrets(secret: bool) -> (tempfile::TempDir, State, Value)
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated configuration attempts".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

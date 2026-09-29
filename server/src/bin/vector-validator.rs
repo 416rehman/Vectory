@@ -74,17 +74,20 @@ async fn synthetic_vrl(
             Ok::<_, std::io::Error>((out, err))
         };
         let (status, (out, err)) = tokio::try_join!(child.wait(), read)?;
-        Ok::<_, std::io::Error>(
-            if status.success() && out.len() <= 32768 && err.len() <= 32768 {
-                serde_json::from_slice::<Value>(&out).ok()
-            } else {
-                None
-            },
-        )
+        let parsed = if status.success() && out.len() <= 32768 && err.len() <= 32768 {
+            serde_json::from_slice::<Value>(&out).ok()
+        } else {
+            None
+        };
+        Ok::<_, std::io::Error>((parsed, err))
     };
-    let parsed = match tokio::time::timeout(Duration::from_secs(5), output).await {
-        Ok(Ok(Some(v))) => Some(v),
-        _ => None,
+    let (parsed, diagnostic) = match tokio::time::timeout(Duration::from_secs(5), output).await {
+        Ok(Ok((Some(v), _))) => (Some(v), None),
+        Ok(Ok((None, err))) => (None, validation::vrl_diagnostic(&err)),
+        _ => (
+            None,
+            Some("The program did not finish within the five-second limit.".to_owned()),
+        ),
     };
     if parsed.is_none() {
         let _ = child.kill().await;
@@ -92,7 +95,7 @@ async fn synthetic_vrl(
     Ok(Json(match parsed {
         Some(output) => json!({"valid":true,"output":output,"errors":[]}),
         None => {
-            json!({"valid":false,"output":null,"errors":["VRL compilation/execution failed or exceeded the five-second/32-KiB limits. Review the program and synthetic sample."]})
+            json!({"valid":false,"output":null,"errors":["VRL compilation/execution failed or exceeded the five-second/32-KiB limits. Review the program and synthetic sample."],"diagnostic":diagnostic})
         }
     }))
 }
@@ -124,7 +127,7 @@ async fn run_configuration(
     if result["valid"] != true {
         return Ok(Json(result));
     }
-    let static_paths = !tests && validation::can_static_check_file_sink_paths(&input["config"]);
+    let static_paths = !tests && validation::can_static_check_device_paths(&input["config"]);
     if !static_paths && validation::mark_device_deferred(&mut result, &input["config"]) {
         result["deferred"] = json!(true);
         if tests {

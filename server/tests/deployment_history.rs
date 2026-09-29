@@ -43,6 +43,7 @@ async fn fixture() -> (tempfile::TempDir, State, Router, String) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Deployment history tests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

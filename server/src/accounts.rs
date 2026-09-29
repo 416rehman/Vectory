@@ -402,7 +402,7 @@ pub async fn redeem_reset(
     }
     s.limit(
         "password-reset-global".into(),
-        30,
+        300,
         std::time::Duration::from_secs(60),
     )?;
     let code = v["code"]

@@ -57,6 +57,7 @@ impl Fixture {
             releases_dir: temp.path().join("releases"),
             instance_name: "Policy gate tests".into(),
             validation_url: None,
+            ..Default::default()
         })
         .await
         .unwrap();

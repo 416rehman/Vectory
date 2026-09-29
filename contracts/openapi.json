@@ -9683,6 +9683,18 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "diagnostic": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Plain-text VRL compiler or runtime message for the submitted synthetic program, when the isolated runner produced one."
                     }
                   },
                   "required": [

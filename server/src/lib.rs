@@ -51,7 +51,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Settings {
     pub data_dir: PathBuf,
     pub bootstrap_secret: String,
@@ -60,6 +60,9 @@ pub struct Settings {
     pub releases_dir: PathBuf,
     pub instance_name: String,
     pub validation_url: Option<String>,
+    /// Take the client address from the last X-Forwarded-For hop. Enable only
+    /// when the HTTP listener is reachable solely through a trusted proxy.
+    pub trust_proxy_headers: bool,
 }
 pub struct App {
     pub pool: SqlitePool,
@@ -72,8 +75,13 @@ pub struct App {
     pub instance_lock: std::fs::File,
     pub limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
     pub device_limits: std::sync::Mutex<HashMap<String, (Instant, u32, Duration)>>,
+    /// Release file SHA-256 keyed by name and the (length, modified) pair it was computed for.
+    pub release_hashes: std::sync::Mutex<HashMap<String, (u64, std::time::SystemTime, String)>>,
 }
 pub type State = Arc<App>;
+/// Tracked rate-limit keys for browser/anonymous callers and for authenticated devices.
+pub const ANONYMOUS_LIMIT_KEYS: usize = 32768;
+pub const DEVICE_LIMIT_KEYS: usize = 40000;
 pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
     std::fs::create_dir_all(&settings.data_dir)?;
     crypto::restrict_state(&settings.data_dir)
@@ -137,41 +145,57 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         audit_exports,
         limits: Default::default(),
         device_limits: Default::default(),
+        release_hashes: Default::default(),
         agent_request_slots: tokio::sync::Semaphore::new(128),
         validation_slots: tokio::sync::Semaphore::new(2),
         instance_lock,
     }))
 }
 impl App {
-    pub fn limit(&self, key: String, maximum: u32, window: Duration) -> error::Result<()> {
+    fn limit_partition(
+        &self,
+        key: &str,
+    ) -> error::Result<(
+        std::sync::MutexGuard<'_, HashMap<String, (Instant, u32, Duration)>>,
+        usize,
+    )> {
         // These namespaces are called only after mTLS registration/revocation checks.
         // Partition them from attacker-selected login email keys: an enrolled fleet
         // must not exhaust browser authentication's independent memory budget.
         let authenticated_device = key.starts_with("heartbeat:")
             || key.starts_with("artifact:")
             || key.starts_with("renew:");
-        let maximum_entries = if authenticated_device { 40000 } else { 4096 };
+        let maximum_entries = if authenticated_device {
+            DEVICE_LIMIT_KEYS
+        } else {
+            ANONYMOUS_LIMIT_KEYS
+        };
         let partition = if authenticated_device {
             &self.device_limits
         } else {
             &self.limits
         };
-        let mut limits = partition.lock().map_err(|_| {
+        let limits = partition.lock().map_err(|_| {
             error::ApiError::new(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL",
                 "Rate limiter unavailable",
             )
         })?;
+        Ok((limits, maximum_entries))
+    }
+    /// Count an attempt against a fixed window and refuse once `maximum` is exceeded.
+    pub fn limit(&self, key: String, maximum: u32, window: Duration) -> error::Result<()> {
+        let (mut limits, maximum_entries) = self.limit_partition(&key)?;
         // Hard cap makes attacker-controlled keys unable to allocate unbounded state.
         if limits.len() >= maximum_entries {
             limits.retain(|_, (start, _, lifetime)| start.elapsed() < *lifetime);
         }
         if limits.len() >= maximum_entries && !limits.contains_key(&key) {
-            return Err(error::ApiError::new(
-                axum::http::StatusCode::TOO_MANY_REQUESTS,
+            return Err(error::ApiError::throttled(
                 "RATE_LIMITED",
-                "Retry later",
+                "The server is busy. Try again in a minute.",
+                60,
             ));
         }
         let entry = limits.entry(key).or_insert((Instant::now(), 0, window));
@@ -180,12 +204,96 @@ impl App {
         }
         entry.1 += 1;
         if entry.1 > maximum {
-            return Err(error::ApiError::new(
-                axum::http::StatusCode::TOO_MANY_REQUESTS,
+            let remaining = window.saturating_sub(entry.0.elapsed()).as_secs() + 1;
+            return Err(error::ApiError::throttled(
                 "RATE_LIMITED",
-                "Too many requests; retry later",
+                format!("Too many requests. Try again in {}.", wait_text(remaining)),
+                remaining,
             ));
         }
         Ok(())
+    }
+    /// Seconds until `key` may try again when it already has `maximum` recorded
+    /// failures in its current window. Checking never counts as a failure.
+    pub fn failures_block(&self, key: &str, maximum: u32) -> Option<u64> {
+        let (limits, _) = self.limit_partition(key).ok()?;
+        let (start, count, window) = limits.get(key)?;
+        (start.elapsed() < *window && *count >= maximum)
+            .then(|| window.saturating_sub(start.elapsed()).as_secs() + 1)
+    }
+    /// Record one failure for `key`. Legitimate successes never consume budget.
+    pub fn record_failure(&self, key: String, window: Duration) {
+        if let Ok((mut limits, maximum_entries)) = self.limit_partition(&key) {
+            if limits.len() >= maximum_entries {
+                limits.retain(|_, (start, _, lifetime)| start.elapsed() < *lifetime);
+            }
+            if limits.len() >= maximum_entries && !limits.contains_key(&key) {
+                return;
+            }
+            let entry = limits.entry(key).or_insert((Instant::now(), 0, window));
+            if entry.0.elapsed() >= window {
+                *entry = (Instant::now(), 0, window)
+            }
+            entry.1 = entry.1.saturating_add(1);
+        }
+    }
+    pub fn clear_limit(&self, key: &str) {
+        if let Ok((mut limits, _)) = self.limit_partition(key) {
+            limits.remove(key);
+        }
+    }
+}
+/// The TCP peer address, when the listener was served with connect info.
+pub struct ClientAddress(pub Option<std::net::IpAddr>);
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientAddress {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _: &S,
+    ) -> std::result::Result<Self, Self::Rejection> {
+        Ok(ClientAddress(
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0.ip()),
+        ))
+    }
+}
+impl App {
+    /// Best-effort client identity for throttling. Behind a trusted proxy the
+    /// last X-Forwarded-For hop is the address the proxy saw; otherwise the peer.
+    pub fn client_key(
+        &self,
+        headers: &axum::http::HeaderMap,
+        peer: Option<std::net::IpAddr>,
+    ) -> String {
+        let forwarded = self
+            .settings
+            .trust_proxy_headers
+            .then(|| headers.get("x-forwarded-for")?.to_str().ok())
+            .flatten()
+            .and_then(|value| value.rsplit(',').next())
+            .and_then(|hop| hop.trim().parse::<std::net::IpAddr>().ok());
+        forwarded
+            .or(peer)
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    }
+    /// Whether `key` was recorded within its window.
+    pub fn seen(&self, key: &str) -> bool {
+        self.limit_partition(key).is_ok_and(|(limits, _)| {
+            limits
+                .get(key)
+                .is_some_and(|(start, count, window)| *count > 0 && start.elapsed() < *window)
+        })
+    }
+}
+/// "45 seconds", "1 minute", "12 minutes".
+pub fn wait_text(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds} second{}", if seconds == 1 { "" } else { "s" })
+    } else {
+        let minutes = seconds.div_ceil(60);
+        format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
     }
 }

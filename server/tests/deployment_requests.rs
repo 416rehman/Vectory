@@ -60,6 +60,7 @@ async fn state() -> (tempfile::TempDir, State) {
         releases_dir: temp.path().join("releases"),
         instance_name: "Isolated deployment requests".into(),
         validation_url: None,
+        ..Default::default()
     })
     .await
     .unwrap();

@@ -188,25 +188,56 @@ pub async fn bootstrap(
     tx.commit().await?;
     Ok(response)
 }
+/// Failed sign-ins allowed per account from one client, and per account from
+/// clients that have not signed in to it before, within their windows.
+const ACCOUNT_CLIENT_FAILURES: u32 = 10;
+const ACCOUNT_FAILURES: u32 = 100;
 pub async fn login(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<(HeaderMap, Json<Value>)> {
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
+    // Coarse flood guards bound password-hashing work. They count attempts, but
+    // only failures count toward an account's lockout, so signing in
+    // successfully never locks anyone out.
+    let client = s.client_key(&h, peer);
     s.limit(
         "login-global".into(),
-        50,
+        600,
+        std::time::Duration::from_secs(60),
+    )?;
+    s.limit(
+        format!("login-client:{client}"),
+        60,
         std::time::Duration::from_secs(60),
     )?;
     let email = user_email(&v)?;
-    s.limit(
-        format!("login:{email}"),
-        8,
-        std::time::Duration::from_secs(300),
-    )?;
+    let account_client = format!("login-fail:{email}:{client}");
+    let account = format!("login-fail:{email}");
+    let known_client = format!("login-known:{email}:{client}");
+    // A client that recently signed in to this account keeps working while
+    // someone elsewhere fails against it; others share the account-wide budget.
+    let blocked = s
+        .failures_block(&account_client, ACCOUNT_CLIENT_FAILURES)
+        .or_else(|| {
+            (!s.seen(&known_client))
+                .then(|| s.failures_block(&account, ACCOUNT_FAILURES))
+                .flatten()
+        });
+    if let Some(wait) = blocked {
+        return Err(ApiError::throttled(
+            "SIGNIN_THROTTLED",
+            format!(
+                "Too many failed sign-in attempts for this account. Try again in {}, or ask an administrator for a password reset code.",
+                crate::wait_text(wait)
+            ),
+            wait,
+        ));
+    }
     let password = db::string(&v, "password", 256)?.to_owned();
     let row = sqlx::query("SELECT * FROM users WHERE email=?")
         .bind(&email)
@@ -224,10 +255,17 @@ pub async fn login(
         .as_ref()
         .is_some_and(|r| Some(r.get::<String, _>("password_hash")) == stored);
     if !valid || !unchanged {
+        s.record_failure(account_client, std::time::Duration::from_secs(15 * 60));
+        s.record_failure(account, std::time::Duration::from_secs(60 * 60));
         db::audit(&mut tx, "anonymous", "login", "", "denied").await?;
         tx.commit().await?;
         return Err(ApiError::unauthorized());
     }
+    s.clear_limit(&account_client);
+    s.record_failure(
+        known_client,
+        std::time::Duration::from_secs(30 * 24 * 60 * 60),
+    );
     let fresh = fresh.unwrap();
     let user = public_user(&fresh);
     // Reveal MFA only after the password and live account have been verified.
