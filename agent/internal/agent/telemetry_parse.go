@@ -123,12 +123,21 @@ func parseMetricObservation(data []byte) (metricObservation, error) {
 }
 
 func parseMetricObservationWithNamespace(data []byte, namespace string, internal map[string]bool) (metricObservation, error) {
+	return parseMetricObservationFor(data, namespace, internal, nil)
+}
+
+// parseMetricObservationFor reads one scrape. types maps component IDs to the
+// type the running configuration declares. Vector keeps the series of a
+// component whose type a reload changed until they expire, so a scrape can
+// hold two types for one ID; only the declared one counts.
+func parseMetricObservationFor(data []byte, namespace string, internal map[string]bool, types map[string]string) (metricObservation, error) {
 	if !metricNamespace.MatchString(namespace) {
 		namespace = "vector"
 	}
 	prefix := namespace + "_"
 	o := metricObservation{ComponentEvents: map[string]float64{}, Counters: counterSet{}}
 	components := map[string]*componentMetrics{}
+	conflicted := map[string]bool{}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 4096), 32768)
 	lines, series := 0, 0
@@ -170,6 +179,12 @@ func parseMetricObservationWithNamespace(data []byte, namespace string, internal
 				}
 				o.UptimeSeconds = &v
 			}
+			continue
+		}
+		if want, known := types[l.id]; known && l.typ != "" && l.typ != want {
+			continue
+		}
+		if conflicted[l.id] {
 			continue
 		}
 		var err error
@@ -217,7 +232,17 @@ func parseMetricObservationWithNamespace(data []byte, namespace string, internal
 			c = &componentMetrics{telemetry: ComponentTelemetry{ID: l.id, Type: l.typ, Kind: l.kind}, outputs: map[string]bool{}}
 			components[l.id] = c
 		} else if c.telemetry.Type != "" && l.typ != "" && c.telemetry.Type != l.typ {
-			return o, errors.New("component metric identity changed")
+			// Two types for one ID and no configuration to say which is
+			// current: measure neither rather than reject the whole scrape.
+			conflicted[l.id] = true
+			delete(components, l.id)
+			delete(o.ComponentEvents, l.id)
+			for key := range o.Counters {
+				if strings.HasPrefix(key, "c:"+l.id+":") {
+					delete(o.Counters, key)
+				}
+			}
+			continue
 		}
 		if c.telemetry.Kind == "" {
 			c.telemetry.Kind = l.kind
