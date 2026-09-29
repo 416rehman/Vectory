@@ -249,6 +249,13 @@ async function load({
         deferred: true,
       });
     }
+    // The VRL studio tries a program against samples; no tester here.
+    if (method === "POST" && path === "/vrl/test")
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "VRL tester unavailable" }),
+      });
     unexpected.push(`${method} ${path}`);
     return reject(
       "UNEXPECTED_REQUEST",

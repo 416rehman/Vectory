@@ -288,9 +288,11 @@ async function load({
   await expect(page.locator(".react-flow__node").first()).toBeVisible();
   return current;
 }
-const control = () =>
-  page.getByRole("button", { name: "Check pipeline", exact: true });
+const control = () => page.getByRole("button", { name: /^Check pipeline/ });
+// The old hover popover is gone; results live in the Problems panel.
 const resultsTip = () => page.locator(".editor-checks-popover");
+const problems = () =>
+  page.getByRole("region", { name: "Problems", exact: true });
 const fieldHelp = () =>
   page.getByRole("button", { name: "Help for One in every", exact: true });
 const fieldTip = () =>
@@ -333,42 +335,33 @@ async function axe(label) {
 }
 try {
   await check(
-    "check result hover bridge works and pointer click never pins cached results",
+    "hovering Check never runs a check and results appear in the Problems panel",
     async () => {
       await load({ width: 899 });
       await control().hover();
-      await expect(resultsTip()).toBeVisible();
-      expect(fixture.validations).toEqual([]);
-      await pass();
-      await expect(resultsTip()).toContainText("Device validation pending");
-      await expect(
-        page.getByRole("button", {
-          name: "Close pipeline checks",
-          exact: true,
-        }),
-      ).toHaveCount(0);
-      await resultsTip().hover();
       await page.waitForTimeout(250);
-      await expect(resultsTip()).toBeVisible();
-      await leave();
+      expect(fixture.validations).toEqual([]);
       await expect(resultsTip()).toHaveCount(0);
+      await pass();
+      await expect(problems()).toContainText(
+        "Only the pipeline structure was checked.",
+      );
       const count = fixture.validations.length;
+      await leave();
       await control().hover();
-      await expect(resultsTip()).toContainText("Device validation pending");
+      await page.waitForTimeout(250);
       expect(fixture.validations).toHaveLength(count);
       fixture.validationValid = false;
       await control().click();
-      await expect(control()).toHaveAttribute("data-check-state", "failed");
-      await expect(resultsTip()).toContainText(
+      await expect(control()).toHaveAttribute("data-check-state", "problems");
+      await expect(problems()).toContainText(
         "Synthetic configuration rejected",
       );
-      await leave();
-      await expect(resultsTip()).toHaveCount(0);
       expect(fixture.mutations).toEqual([]);
     },
   );
   await check(
-    "late validation completion cannot open a tip after pointer leave and last result reopens without a request",
+    "late validation completion settles quietly and an unavailable checker reads as Couldn't check",
     async () => {
       await load({ width: 899 });
       fixture.holdValidation = true;
@@ -376,24 +369,20 @@ try {
       await expect(control()).toHaveAttribute("data-check-state", "checking");
       await expect.poll(() => fixture.pendingValidations.length).toBe(1);
       await leave();
-      await expect(resultsTip()).toHaveCount(0);
       fixture.pendingValidations.shift()();
       await expect(control()).toHaveAttribute("data-check-state", "partial");
-      await page.waitForTimeout(300);
       await expect(resultsTip()).toHaveCount(0);
-      await control().hover();
-      await expect(resultsTip()).toContainText("Device validation pending");
       expect(fixture.validations).toHaveLength(1);
-      await leave();
-      await expect(resultsTip()).toHaveCount(0);
       fixture.holdValidation = false;
       fixture.validationError = true;
       await control().click();
-      await expect(control()).toHaveAttribute("data-check-state", "failed");
-      await leave();
-      await expect(resultsTip()).toHaveCount(0);
-      await control().hover();
-      await expect(resultsTip()).toContainText(/unavailable|failed|could not/i);
+      await expect(control()).toHaveAttribute(
+        "data-check-state",
+        "unavailable",
+      );
+      await expect(control()).toHaveAccessibleName(
+        "Check pipeline: Couldn't check",
+      );
       expect(fixture.validations).toHaveLength(2);
       expect(fixture.mutations).toEqual([]);
     },
@@ -432,54 +421,20 @@ try {
     },
   );
   await check(
-    "check keyboard and touch activation dismiss without losing focus or requiring a manual close control",
+    "keyboard and touch activation run one check without moving focus; touch dismisses field help",
     async () => {
       await load({ width: 899 });
       await control().focus();
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Shift+Tab");
-      await expect(control()).toBeFocused();
-      await expect(resultsTip()).toBeVisible();
       await page.keyboard.press("Enter");
       await expect(control()).toHaveAttribute("data-check-state", "partial");
-      measurements.push({
-        label: "keyboard check completion focus",
-        ...(await page.evaluate(() => ({
-          active: document.activeElement?.outerHTML.slice(0, 600),
-          inert: document.querySelector(".editor-draft-workspace")?.inert,
-        }))),
-      });
       await expect(control()).toBeFocused();
-      await expect(resultsTip()).toContainText("Device validation pending");
-      await page.keyboard.press("ArrowDown");
-      await expect(resultsTip()).toBeFocused();
-      await page.keyboard.press("Escape");
-      await expect(resultsTip()).toHaveCount(0);
-      await expect(control()).toBeFocused();
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Shift+Tab");
-      await expect(resultsTip()).toContainText("Device validation pending");
       expect(fixture.validations).toHaveLength(1);
-      for (const cancellation of ["escape", "outside-focus"]) {
-        fixture.holdValidation = true;
-        await control().focus();
-        await page.keyboard.press("Enter");
-        await expect.poll(() => fixture.pendingValidations.length).toBe(1);
-        if (cancellation === "escape") await page.keyboard.press("Escape");
-        else await button("Find a page").focus();
-        fixture.pendingValidations.shift()();
-        await expect(control()).toHaveAttribute("data-check-state", "partial");
-        await expect(resultsTip()).toHaveCount(0);
-        await expect(control()).not.toBeFocused();
-        if (cancellation === "outside-focus")
-          await expect(button("Find a page")).toBeFocused();
-      }
       await load({ width: 375, touch: true });
       await control().tap();
       await expect(control()).toHaveAttribute("data-check-state", "partial");
-      await expect(resultsTip()).toContainText("Device validation pending");
-      await page.locator(".editor-header").tap({ position: { x: 3, y: 3 } });
-      await expect(resultsTip()).toHaveCount(0);
+      await expect(problems()).toContainText(
+        "Only the pipeline structure was checked.",
+      );
       await sample();
       await fieldHelp().tap();
       await expect(fieldTip()).toBeVisible();
@@ -524,8 +479,8 @@ try {
             ).toBeLessThanOrEqual(14);
           }
           await pass();
-          await expect(resultsTip()).toBeVisible();
-          const tip = await resultsTip().boundingBox();
+          await expect(problems()).toBeVisible();
+          const tip = await problems().boundingBox();
           expect(tip.x).toBeGreaterThanOrEqual(0);
           expect(tip.x + tip.width).toBeLessThanOrEqual(width);
           expect(tip.y).toBeGreaterThanOrEqual(0);
@@ -548,7 +503,6 @@ try {
             animations: "disabled",
           });
           await leave();
-          await expect(resultsTip()).toHaveCount(0);
           await sample();
           await fieldHelp().hover();
           await expect(fieldTip()).toBeVisible();

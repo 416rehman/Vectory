@@ -292,8 +292,10 @@ async function load({
   return current;
 }
 const button = (name) => page.getByRole("button", { name, exact: true });
-const checkButton = () => button("Check pipeline");
-const tip = () => page.getByRole("dialog", { name: "Pipeline check results" });
+const checkButton = () => page.locator(".editor-check-button");
+// Check results live in the Problems panel under the canvas.
+const tip = () => page.getByRole("region", { name: "Problems", exact: true });
+const bufferProblem = /discard_copy[\s\S]*Enter buffer\.max_size\./;
 const sink = () => page.locator('.react-flow__node[data-id="discard_copy"]');
 const size = () => page.getByLabel("Max Size", { exact: true });
 const code = () =>
@@ -318,17 +320,12 @@ async function state(value) {
 }
 async function showTip() {
   const count = fixture.validations.length;
-  // Re-enter after a blocked check may replace feedback without moving the
-  // pointer; this explicitly exercises viewing the cached result by hovering.
-  await page.mouse.move(0, 0);
-  await checkButton().hover();
+  // Viewing the cached result never runs another check.
   await expect(tip()).toBeVisible();
   expect(fixture.validations).toHaveLength(count);
 }
 async function hideTip() {
   await page.mouse.move(0, 0);
-  await button("Graph").focus();
-  await expect(tip()).toHaveCount(0);
 }
 async function runCheck(expected) {
   await checkButton().click();
@@ -356,10 +353,10 @@ try {
     async () => {
       await load({ document: bufferDocument(), width: 899 });
       await expect(sink().locator(".pipeline-node-issue")).toBeVisible();
-      await runCheck("failed");
-      await expect(tip()).toContainText("discard_copy: Enter buffer.max_size.");
+      await runCheck("problems");
+      await expect(tip()).toContainText(bufferProblem);
       await expect(tip()).not.toContainText("checks passed");
-      expect(fixture.validations).toEqual([]);
+      expect(fixture.validations).toHaveLength(1);
       await axe("Local buffer error, desktop");
       await page.screenshot({
         path: resolve(output, "local-buffer-error-899-light.png"),
@@ -371,9 +368,7 @@ try {
         name: "Review & publish",
         exact: true,
       });
-      await expect(review).toContainText(
-        "discard_copy: Enter buffer.max_size.",
-      );
+      await expect(review).toContainText(bufferProblem);
       await expect(
         review.getByRole("button", { name: "Publish version", exact: true }),
       ).toBeDisabled();
@@ -384,19 +379,23 @@ try {
       await size().fill("268435488");
       await state("stale");
       await runCheck("partial");
-      expect(fixture.validations).toHaveLength(1);
+      expect(fixture.validations).toHaveLength(2);
       expect(
-        fixture.validations[0].config.sinks.discard_copy.buffer.max_size,
+        fixture.validations.at(-1).config.sinks.discard_copy.buffer.max_size,
       ).toBe(268435488);
-      await expect(tip()).toContainText("Device validation pending");
+      await expect(tip()).toContainText(
+        "Only the pipeline structure was checked.",
+      );
       await hideTip();
       await size().fill("-");
       await state("stale");
-      await runCheck("failed");
-      await expect(tip()).toContainText(
-        "Resolve or apply pending field changes",
-      );
-      expect(fixture.validations).toHaveLength(1);
+      // A field still being edited blocks the check where it is edited.
+      await checkButton().click();
+      await state("stale");
+      await expect(
+        page.getByText("Resolve or apply pending field changes").first(),
+      ).toBeVisible();
+      expect(fixture.validations).toHaveLength(2);
       await expect(size()).toHaveValue("-");
     },
   );
@@ -411,23 +410,22 @@ try {
       await page.getByLabel("Format", { exact: true }).selectOption("json");
       await code().fill(JSON.stringify(bufferDocument().config));
       await state("stale");
-      await runCheck("failed");
-      await expect(tip()).toContainText("discard_copy: Enter buffer.max_size.");
-      expect(fixture.validations).toHaveLength(1);
+      await runCheck("problems");
+      await expect(tip()).toContainText(bufferProblem);
+      expect(fixture.validations).toHaveLength(2);
       await page.mouse.move(0, 0);
       await code().fill(JSON.stringify(bufferDocument(true).config));
       await runCheck("partial");
-      expect(fixture.validations).toHaveLength(2);
+      expect(fixture.validations).toHaveLength(3);
       expect(fixture.validations.at(-1).config).toEqual(
         bufferDocument(true).config,
       );
       await page.mouse.move(0, 0);
       await code().fill('{"unfinished":');
       await state("stale");
-      await runCheck("failed");
-      expect(fixture.validations).toHaveLength(2);
-      await expect(tip()).toContainText("Pipeline needs attention");
-      await expect(tip().locator("li")).not.toHaveCount(0);
+      await runCheck("problems");
+      expect(fixture.validations).toHaveLength(3);
+      await expect(tip().locator(".problems-item")).not.toHaveCount(0);
     },
   );
 
@@ -440,9 +438,9 @@ try {
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "dark";
       });
-      await runCheck("failed");
+      await runCheck("problems");
       await expect(tip()).toContainText("missing_source");
-      expect(fixture.validations).toEqual([]);
+      expect(fixture.validations).toHaveLength(1);
       const box = await tip().boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(375);
@@ -454,7 +452,7 @@ try {
       });
       await load({ document: bufferDocument(true) });
       fixture.validationError = true;
-      await runCheck("failed");
+      await runCheck("unavailable");
       await expect(tip()).toContainText("Synthetic validator unavailable");
       expect(fixture.validations).toHaveLength(1);
       fixture.validationError = false;
@@ -484,14 +482,15 @@ try {
           input.dispatchEvent(new Event("input", { bubbles: true }));
         }, value);
         await expect(size()).toHaveValue(value);
-        await state("stale");
+        await state("checking");
         fixture.pendingValidations.shift()();
         await expect(checkButton()).toBeEnabled();
         await state("stale");
         await showTip();
         await expect(tip()).not.toContainText("checks passed");
         fixture.holdValidation = false;
-        await runCheck("failed");
+        await checkButton().click();
+        await state("stale");
         expect(fixture.validations).toHaveLength(1);
         await expect(size()).toHaveValue(value);
       }
@@ -510,13 +509,13 @@ try {
       await expect(page.locator(".editor-code-footer")).toContainText(
         "Code changes have not been applied to the draft",
       );
-      await runCheck("failed");
-      await expect(tip()).toContainText("discard_copy: Enter buffer.max_size.");
+      await runCheck("problems");
+      await expect(tip()).toContainText(bufferProblem);
       if (focus === "after")
         await expect(tip()).toContainText(
           "This check reviewed unapplied Code edits. Apply code changes to update the draft.",
         );
-      expect(fixture.validations).toHaveLength(0);
+      expect(fixture.validations).toHaveLength(1);
       if (focus === "before") {
         await expect.poll(() => fixture.saveAttempts.length).toBe(1);
         expect(

@@ -187,7 +187,7 @@ test("unfinished field input stays visible and unsafe integers never replace the
       validations.push(request.url());
   });
   await page
-    .getByRole("button", { name: "Check pipeline", exact: true })
+    .getByRole("button", { name: /^Check pipeline/ })
     .click();
   await expect(inspector.getByRole("alert")).toContainText(
     "Resolve or apply pending field changes",

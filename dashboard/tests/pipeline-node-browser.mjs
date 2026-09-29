@@ -302,6 +302,8 @@ async function openActions(id, keyboard = false) {
   return trigger;
 }
 async function saved(predicate) {
+  // Drafts save when asked (Save draft / Ctrl+S); nothing autosaves.
+  await page.keyboard.press("ControlOrMeta+s");
   await expect
     .poll(() => predicate(fixture.document), { timeout: 10000 })
     .toBe(true);

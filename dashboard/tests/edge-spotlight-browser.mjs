@@ -492,8 +492,8 @@ try {
     "Hover spotlights one exact named edge and its endpoint nodes, including parallel edges, without edits or check invalidation",
     async () => {
       await load({ document: spotlightDocument() });
-      await button("Check pipeline").click();
-      await expect(button("Check pipeline")).toHaveAttribute(
+      await page.locator(".editor-check-button").click();
+      await expect(page.locator(".editor-check-button")).toHaveAttribute(
         "data-check-state",
         "partial",
       );
@@ -527,7 +527,7 @@ try {
       await page.mouse.click(point.x, point.y);
       await page.mouse.move(0, 0);
       await idle();
-      await expect(button("Check pipeline")).toHaveAttribute(
+      await expect(page.locator(".editor-check-button")).toHaveAttribute(
         "data-check-state",
         "partial",
       );
