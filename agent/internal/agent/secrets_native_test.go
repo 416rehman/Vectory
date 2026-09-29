@@ -72,7 +72,9 @@ func TestNativeVectorResolvesDeviceSecretsInNonHTTPCredentials(t *testing.T) {
 	e.Log = log
 	driver := &VectorDriver{Settings: e.Settings, Dir: e.Dir, Log: log}
 	e.Driver = driver
-	defer driver.Stop()
+	// Windows cannot remove a directory holding a file that is still open, so
+	// stop Vector and close its log before the temporary directory goes.
+	t.Cleanup(func() { _ = driver.Stop(); log.close() })
 	if err := e.Reconcile(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
