@@ -807,6 +807,110 @@ fn no_consumers(config: &Value, message: &str) -> Diagnostic {
 }
 
 const BUILD_FAILURE: &str = "Vector could not build this test.";
+const TEST_REFUSAL: &str = "Failed to execute tests:";
+const TEST_UNREADABLE: &str = "Vector can't read this test";
+
+/// What Vector said when it stopped without a verdict for the tests.
+pub struct TestRefusal {
+    /// A failed result for each test Vector named as unreadable.
+    pub tests: Vec<Value>,
+    /// What still needs saying: Vector's words when it named no test, or that
+    /// it stopped without a reason.
+    pub diagnostic: Option<Diagnostic>,
+}
+
+/// Vector reads and builds every test before it runs the first one, so a test
+/// it cannot read or build stops them all. `vector test` then exits with 78
+/// after `Failed to execute tests:` and a line per problem, naming the test
+/// by position (`tests[1].inputs[0].log_fieldz: unknown field ...`). Map each
+/// such line back to the test's name; other lines become one diagnostic.
+pub fn test_refusal(config: &Value, stdout: &[u8], stderr: &[u8]) -> TestRefusal {
+    let text = format!("{}\n{}", plain_text(stderr), plain_text(stdout));
+    let lines: Vec<&str> = text.lines().filter(|line| !is_log_line(line)).collect();
+    let stopped = |message: &str| TestRefusal {
+        tests: vec![],
+        diagnostic: Some(Diagnostic {
+            section: Some("tests".into()),
+            code: Some("test_config".into()),
+            hint: Some(
+                "Run the tests again. If this keeps happening, check the pipeline for problems."
+                    .into(),
+            ),
+            ..Diagnostic::error(message)
+        }),
+    };
+    let Some(start) = lines.iter().position(|line| line.trim() == TEST_REFUSAL) else {
+        return stopped("Vector stopped before it finished these tests.");
+    };
+    let mut reasons: Vec<String> = lines[start + 1..]
+        .iter()
+        .map(|line| line.trim_end())
+        .take_while(|line| !line.trim().is_empty())
+        .take(20)
+        .map(str::to_owned)
+        .collect();
+    // Vector ends the list with its own full stop, whatever the last message says.
+    if let Some(last) = reasons.last_mut()
+        && last.ends_with('.')
+    {
+        last.pop();
+    }
+    let configured = config["tests"].as_array();
+    let mut tests: Vec<Value> = Vec::new();
+    let mut others = Vec::new();
+    for line in reasons {
+        let named = line.trim().strip_prefix("tests[").and_then(|rest| {
+            let (index, rest) = rest.split_once(']')?;
+            let index: usize = index.parse().ok()?;
+            let (path, message) = match rest.split_once(": ") {
+                Some((path, message)) => (path.trim_start_matches('.'), message),
+                None => ("", rest),
+            };
+            let name = configured?.get(index)?["name"]
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Test {}", index + 1));
+            Some((name, path.to_owned(), message.to_owned()))
+        });
+        let Some((name, path, message)) = named else {
+            others.push(line.trim().to_owned());
+            continue;
+        };
+        if tests
+            .iter()
+            .any(|test| test["name"] == json!(bounded(&name, 240)))
+        {
+            continue;
+        }
+        let reason = if path.is_empty() {
+            message.clone()
+        } else {
+            format!("{path}: {message}")
+        };
+        let mut result = json!({
+            "name": bounded(&name, 240),
+            "passed": false,
+            "message": bounded(&format!("{TEST_UNREADABLE}: {reason}"), MAX_MESSAGE),
+        });
+        if message.contains("AnyCondition") {
+            result["detail"] = json!(
+                "A condition is either a VRL string or an object with a `type` (such as `vrl`) and that type's settings, for example `source`. Check the spelling of its keys."
+            );
+        }
+        tests.push(result);
+    }
+    let diagnostic = (!others.is_empty()).then(|| Diagnostic {
+        section: Some("tests".into()),
+        code: Some("test_config".into()),
+        hint: Some("Fix what Vector names, then run the tests again.".into()),
+        ..Diagnostic::error(bounded(
+            &format!("Vector couldn't run these tests: {}", others.join(" ")),
+            MAX_MESSAGE,
+        ))
+    });
+    TestRefusal { tests, diagnostic }
+}
 
 /// Per-test results from `vector test` output: names, pass/fail and bounded failure text.
 pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
@@ -929,6 +1033,15 @@ pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
                     line.strip_prefix("Transform \"")?
                         .split_once('"')
                         .map(|(id, _)| id.to_owned())
+                });
+                // Without a compiler error, Vector's own line is the reason:
+                // `inputs[0]: unable to locate target transform 'x'.`
+                let summary = summary.or_else(|| {
+                    lines
+                        .iter()
+                        .skip(1)
+                        .find(|line| !line.is_empty() && !line.starts_with("Transform \""))
+                        .map(|line| line.trim_end_matches('.').to_owned())
                 });
                 Some(bounded(
                     &match (summary, step) {
@@ -1248,6 +1361,23 @@ mod tests {
         );
         assert_eq!(results[1]["name"], "200 matches nothing");
         assert_eq!(results[1]["passed"], false);
+        // Without a compiler error, Vector's own line is the reason.
+        let plain = parse_tests(
+            b"Running tests\n",
+            b"Failed to execute tests:\nFailed to build test 'bad target':\n  inputs[0]: unable to locate target transform 'nope'.\n",
+        );
+        assert_eq!(
+            plain[0]["message"],
+            "Could not build this test: inputs[0]: unable to locate target transform 'nope'."
+        );
+        let bare = parse_tests(
+            b"Running tests\n",
+            b"Failed to execute tests:\nFailed to build test 'no outputs':\n  unit test must contain at least one of `outputs` or `no_outputs_from`..\n",
+        );
+        assert_eq!(
+            bare[0]["message"],
+            "Could not build this test: unit test must contain at least one of `outputs` or `no_outputs_from`."
+        );
         // Tests that ran are unaffected.
         let ran = parse_tests(
             b"Running tests\ntest a ... passed\ntest b ... passed\n",
@@ -1255,5 +1385,74 @@ mod tests {
         );
         assert_eq!(ran.len(), 2);
         assert!(ran.iter().all(|r| r["passed"] == true));
+    }
+
+    #[test]
+    fn tests_vector_cannot_read_are_named_from_its_error_path() {
+        let config = json!({"tests": [{"name": "fine"}, {"name": "typo"}, {}]});
+        // Real output: Vector reads every test first and names the setting by position.
+        let refusal = test_refusal(
+            &config,
+            b"Running tests\n",
+            b"Failed to execute tests:\ntests[1].inputs[0].log_fieldz: unknown field `log_fieldz`, expected one of `insert_at`, `type`, `value`, `source`, `log_fields`, `metric`.\n",
+        );
+        assert!(refusal.diagnostic.is_none());
+        assert_eq!(refusal.tests.len(), 1);
+        assert_eq!(refusal.tests[0]["name"], "typo");
+        assert_eq!(refusal.tests[0]["passed"], false);
+        assert_eq!(
+            refusal.tests[0]["message"],
+            "Vector can't read this test: inputs[0].log_fieldz: unknown field `log_fieldz`, expected one of `insert_at`, `type`, `value`, `source`, `log_fields`, `metric`"
+        );
+
+        // The untagged-enum message is cryptic; the result says what a condition is.
+        let condition = test_refusal(
+            &config,
+            b"Running tests\n",
+            b"Failed to execute tests:\ntests[0].outputs[0].conditions[0]: data did not match any variant of untagged enum AnyCondition.\n",
+        );
+        assert_eq!(condition.tests[0]["name"], "fine");
+        assert!(
+            condition.tests[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("`type`")
+        );
+
+        // A test without a name is still a test the person can find.
+        let unnamed = test_refusal(
+            &config,
+            b"Running tests\n",
+            b"Failed to execute tests:\ntests[2]: missing field `name`.\n",
+        );
+        assert_eq!(unnamed.tests[0]["name"], "Test 3");
+        assert_eq!(
+            unnamed.tests[0]["message"],
+            "Vector can't read this test: missing field `name`"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_names_no_test_says_what_vector_said() {
+        let config = json!({"tests": [{"name": "only"}]});
+        let refusal = test_refusal(
+            &config,
+            b"Running tests\n",
+            b"\x1b[31mFailed to execute tests:\x1b[0m\nsomething else went wrong.\n",
+        );
+        assert!(refusal.tests.is_empty());
+        let diagnostic = refusal.diagnostic.unwrap();
+        assert_eq!(diagnostic.code.as_deref(), Some("test_config"));
+        assert_eq!(diagnostic.section.as_deref(), Some("tests"));
+        assert_eq!(
+            diagnostic.message,
+            "Vector couldn't run these tests: something else went wrong"
+        );
+        // No reason at all still is a failure the person can read.
+        let silent = test_refusal(&config, b"Running tests\n", b"");
+        assert_eq!(
+            silent.diagnostic.unwrap().message,
+            "Vector stopped before it finished these tests."
+        );
     }
 }

@@ -325,7 +325,12 @@ async fn pipeline_tests(
             "placeholders": candidate.placeholders,
         })));
     }
-    let Run::Completed { stdout, stderr, .. } = run else {
+    let Run::Completed {
+        code,
+        stdout,
+        stderr,
+    } = run
+    else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
     let started = [stdout.as_slice(), stderr.as_slice()].iter().any(|bytes| {
@@ -333,12 +338,12 @@ async fn pipeline_tests(
             .lines()
             .any(|line| line.trim() == "Running tests")
     });
-    let tests = if started {
+    let mut tests = if started {
         diagnostics::parse_tests(&stdout, &stderr)
     } else {
         vec![]
     };
-    let found: Vec<Value> = if started {
+    let mut found: Vec<Value> = if started {
         vec![]
     } else {
         diagnostics::parse_validate(config, &stdout, &stderr)
@@ -348,8 +353,15 @@ async fn pipeline_tests(
             .map(|d| d.to_json())
             .collect()
     };
+    // Vector exits with a failure for a failed test too. Without one, it stopped
+    // before it could give a verdict, and the reason belongs in the result.
+    if started && code != Some(0) && tests.iter().all(|test| test["passed"] == true) {
+        let refusal = diagnostics::test_refusal(config, &stdout, &stderr);
+        tests.extend(refusal.tests);
+        found.extend(refusal.diagnostic.map(|d| d.to_json()));
+    }
     Ok(protocol(json!({
-        "tests_run": started,
+        "tests_run": started && !tests.is_empty(),
         "tests": tests,
         "diagnostics": found,
         "placeholders": candidate.placeholders,

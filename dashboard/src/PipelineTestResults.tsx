@@ -1,10 +1,12 @@
-import { CircleCheck, CircleX } from "lucide-react";
+import { CircleCheck, CircleDashed, CircleX } from "lucide-react";
 import { ErrorBox } from "./ui";
 import "./pipeline-test-results.css";
 
 export type PipelineTest = {
   name: string;
   passed: boolean;
+  /** Vector did not run this test; it never counts as passed. */
+  not_run?: boolean;
   message?: string;
   detail?: string;
   outputs?: unknown[];
@@ -37,10 +39,16 @@ export function testHeadline(run: PipelineTestRun, expected = 0) {
   if (!ran(run) && run.deferred)
     return "These tests need the device environment";
   if (run.tests_run === false)
-    return "Vector couldn't load this pipeline to run its tests";
+    return "Vector couldn't run these tests";
   if (!tests.length)
     return run.valid ? "Pipeline tests passed" : "Pipeline tests failed";
   const passed = tests.filter((test) => test.passed).length;
+  const skipped = tests.filter((test) => test.not_run).length;
+  // Vector builds every test before it runs the first: one it can't read or
+  // build stops them all.
+  if (skipped && !passed) return "Vector couldn't run these tests";
+  if (skipped)
+    return `${passed} of ${tests.length} tests passed; ${skipped} didn't run`;
   if (passed === tests.length)
     return tests.length === 1
       ? "1 test passed"
@@ -72,16 +80,24 @@ export default function PipelineTestResults({
   expected?: number;
 }) {
   const tests = run.tests ?? [];
-  const failures = tests.filter((test) => !test.passed).length;
+  const failures = tests.filter(
+    (test) => !test.passed && !test.not_run,
+  ).length;
+  const skipped = tests.some((test) => test.not_run);
   // The headline already counts failures; keep only other messages.
   const errors = (run.errors ?? []).filter(
     (message) =>
-      !tests.length || !/^\d+ of \d+ pipeline tests? failed\.?$/.test(message),
+      !tests.length ||
+      !/^\d+ of \d+ pipeline tests? (failed|did not run)\b/.test(message),
   );
   const missing = unreported(run, expected);
   const note = missing
     ? "Vector couldn't build them. Check the pipeline for problems, then run them again."
-    : deferralNote(run);
+    : skipped
+      ? failures
+        ? "Vector reads every test before it runs any, so a test it can't read or build stops them all. Fix the failing test, then run them again."
+        : "Vector didn't run some of these tests. Run them again."
+      : deferralNote(run);
   const state = missing
     ? "failed"
     : ran(run)
@@ -103,16 +119,23 @@ export default function PipelineTestResults({
             <li
               key={`${index}:${test.name}`}
               data-passed={test.passed || undefined}
+              data-not-run={test.not_run || undefined}
             >
               <div className="pipeline-test-name">
                 {test.passed ? (
                   <CircleCheck size={15} aria-label="Passed" />
+                ) : test.not_run ? (
+                  <CircleDashed size={15} aria-label="Not run" />
                 ) : (
                   <CircleX size={15} aria-label="Failed" />
                 )}
                 <span>{test.name}</span>
+                {test.not_run && (
+                  <span className="pipeline-test-skipped">Not run</span>
+                )}
               </div>
               {!test.passed &&
+                !test.not_run &&
                 (test.message || test.detail || test.outputs?.length) && (
                   <details open={failures === 1 || undefined}>
                     <summary>{test.message || "Why it failed"}</summary>
