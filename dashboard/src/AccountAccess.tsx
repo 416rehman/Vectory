@@ -628,7 +628,8 @@ export function WorkspaceAccess({
             ) : person.invite_expires_at && expires !== "expired" ? (
               `Link expires ${expires}`
             ) : (
-              "Link expired"
+              // Expired, used up or revoked: all need the same next step.
+              "Needs a new invite link"
             )}
           </small>
         )}
