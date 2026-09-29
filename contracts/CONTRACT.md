@@ -211,7 +211,7 @@ Evaluation (`server/src/data_plane.rs`), all constants:
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `EVALUATION_INTERVAL_SECONDS` | 25 | At most one evaluation per device per interval (server time); a sample no newer than the last evaluated one, or older than 10 minutes, is skipped. |
+| `EVALUATION_INTERVAL_SECONDS` | 25 | At most one evaluation per device per interval (server time); a sample no newer than the last evaluated one, older than 10 minutes, or stamped more than 5 minutes ahead of server time is skipped. The last evaluated sample time is remembered as server time at the latest, so a device clock that ran ahead and was corrected never holds back later evaluations. |
 | `OPEN_SAMPLES` | 2 | Consecutive bad evaluations before an issue opens. |
 | `STALL_SAMPLES` | 3 | Consecutive bad evaluations before a stall opens. |
 | `RESOLVE_SAMPLES` | 3 | Consecutive clean evaluations before an open issue resolves (`resolved_reason:"healthy"`). |
