@@ -193,8 +193,13 @@ describe("status language", () => {
     expect(statusOf("device", "verified").label).toBe(
       statusOf("target", "verified_applied").label,
     );
+    // Unix reloads Vector in place and Windows restarts it, so the label
+    // names neither.
     expect(statusOf("audit", "reload_requested").label).toBe(
-      "Restarting Vector",
+      "Loading in Vector",
+    );
+    expect(statusOf("apply", "reload_requested").description).toMatch(
+      /reload on Linux and macOS.*restart on Windows/,
     );
     // Audit outcomes never borrow device wording such as "Apply failed".
     expect(auditOutcomes.failed.label).toBe("Failed");

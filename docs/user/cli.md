@@ -10,7 +10,7 @@ vectory <command> [flags]
 
 - Flags take `--name value` or `--name=value`. Commands accept flags only, never extra arguments.
 - Commands that change the agent's files need administrator rights on the host (`sudo` on Linux and macOS).
-- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `3` `setup` finished but something needs you (on a host without a service manager, nothing keeps the agent running), `130` `setup` was interrupted with Ctrl-C.
+- Exit codes: `0` success, `1` the operation failed, `2` invalid command or flags, `3` `setup` finished but something needs you (on a host without a service manager, nothing keeps the agent running), `78` the agent isn't installed or enrolled (the Linux service doesn't restart on this code), `130` `setup` was interrupted with Ctrl-C.
 
 Run `vectory --help` for the command list, `vectory help <command>` for one command, and `vectory --version` for the version.
 

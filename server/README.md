@@ -1,6 +1,6 @@
 # Vectory server
 
-The Rust control plane: the dashboard and API, the agent listener, the sandboxed validator and the `vectory-admin` maintenance tool. Operators should start with the Help center: [Install the server](../docs/user/install-server.md), [Server configuration](../docs/user/server-config.md) and [`vectory-admin`](../docs/user/vectory-admin.md).
+The Rust control plane: the dashboard and API, the agent listener, the isolated validator and the `vectory-admin` maintenance tool. Operators should start with the Help center: [Install the server](../docs/user/install-server.md), [Server configuration](../docs/user/server-config.md) and [`vectory-admin`](../docs/user/vectory-admin.md).
 
 ## Build and test
 
@@ -47,7 +47,7 @@ The wire contract is in `../contracts/`: `CONTRACT.md`, the generated `openapi.j
 
 Each heartbeat reply is an Ed25519-signed manifest bound to the device, the nonce the agent sent, a five-minute validity window and the configuration and policy generations. Artifact reads return only that device's current immutable artifact.
 
-`vectory-admin rotate-signing-key` keeps the previous key before replacing the current one. Each credential stays bound to the key it was issued with, and authenticated renewal delivers a new certificate with the current key, so devices never lose manifest trust. `keys/signing-history/` keeps up to four old keys; `prune-signing-keys` removes only keys no valid credential uses. Both are audited.
+`vectory-admin rotate-signing-key` keeps the previous key before replacing the current one. Each credential stays bound to the key it was issued with, and authenticated renewal delivers a new certificate with the current key, so devices keep manifest trust across a rotation as long as they renew before their certificate expires. `keys/signing-history/` keeps up to four old keys; `prune-signing-keys` removes only keys no valid credential uses. Both are audited.
 
 Device CA replacement is a stopped-server operation: install the reviewed new certificate and key, and trust the old CA during the overlap with `VECTORY_PREVIOUS_DEVICE_CA`. Test fleet renewal before you retire the old CA.
 

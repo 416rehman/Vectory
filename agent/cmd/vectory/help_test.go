@@ -126,3 +126,20 @@ func TestEnrollBeforeInstallExplainsTheOrder(t *testing.T) {
 		t.Fatal(code, stderr)
 	}
 }
+
+// The general help names every exit code main.go defines, so scripts and
+// service managers can rely on what it says.
+func TestGeneralHelpListsEveryExitCode(t *testing.T) {
+	_, stdout, _ := invoke("help")
+	for code, meaning := range map[int]string{
+		exitOK:          "0 ok",
+		exitFailed:      "1 failed",
+		exitUsage:       "2 usage error",
+		exitNotReady:    "78 not installed or not enrolled",
+		exitInterrupted: "130 setup interrupted",
+	} {
+		if !strings.Contains(stdout, meaning) {
+			t.Fatalf("general help omits exit code %d (%q):\n%s", code, meaning, stdout)
+		}
+	}
+}
