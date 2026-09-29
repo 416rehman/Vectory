@@ -43,7 +43,7 @@ Open the device and read its issue: it names the stage and the reason.
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
 | `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. | Check disk space, ownership and permissions, and remove symlinks from the paths. |
-| `INCOMPATIBLE` | The version needs a different Vector version than the device runs. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
+| `INCOMPATIBLE` | The version was built for a different Vector minor version than the device runs. Patch releases of the same minor (0.58.0, 0.58.1) are interchangeable, so a patch difference never causes this. `vectory status` names both versions. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
 | `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
 | `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, or the bytes didn't match. | Check connectivity; the agent retries on its own. |
 | `ROLLBACK_FAILED`, `ROLLBACK_UNAVAILABLE`, `RECOVERY_INVALID` | A failure left no working configuration to restore. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
