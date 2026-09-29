@@ -25,7 +25,7 @@ A task page runs:
 4. **You should see:** the visible result that proves it worked.
 5. **Next:** one to three links.
 
-Concept and reference pages use tables for anything with more than two attributes.
+Concept and reference pages use tables for anything with more than two attributes. On a phone, a table with three or more columns becomes one block per row, titled by its first cell, with each other value under its column's name. So make the first column the thing you're describing, such as a flag, variable or state, and keep column headers short.
 
 ## Security guarantees
 
