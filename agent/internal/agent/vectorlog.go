@@ -57,6 +57,8 @@ type LogSummary struct {
 type logEntry struct {
 	summary LogSummary
 	message string // unredacted, at most one log line; redacted when reported
+	// epoch is the activation (start or reload) the entry was last seen in.
+	epoch uint64
 }
 
 type vectorLog struct {
@@ -73,7 +75,11 @@ type vectorLog struct {
 	capturing bool
 	captured  []vectorRecord
 	entries   map[string]*logEntry
-	now       func() time.Time
+	// epoch counts activations: the summary reports only what Vector logged
+	// since it last started or reloaded a configuration, never errors of a
+	// configuration it no longer runs.
+	epoch uint64
+	now   func() time.Time
 }
 
 func newVectorLog(dir string) *vectorLog {
@@ -253,6 +259,7 @@ func (l *vectorLog) beginCapture(newProcess bool) logSignals {
 		l.line, l.dropping = l.line[:0], false
 	}
 	l.capturing, l.captured = true, nil
+	l.epoch++
 	return l.signals
 }
 
@@ -342,6 +349,10 @@ func (l *vectorLog) summarize(rec vectorRecord) {
 	if entry.summary.Stage == "" {
 		entry.summary.Stage = rec.Stage
 	}
+	if entry.epoch != l.epoch {
+		// The same message under a newer activation starts a new count.
+		entry.summary.Count, entry.summary.FirstSeen, entry.epoch = 0, now, l.epoch
+	}
 	entry.summary.Count += add
 	entry.summary.LastSeen = now
 }
@@ -366,7 +377,8 @@ func (l *vectorLog) summaries(r *redactor) []LogSummary {
 	cutoff := l.now().UTC().Add(-logSummaryWindow)
 	var out []LogSummary
 	for key, entry := range l.entries {
-		if entry.summary.LastSeen.Before(cutoff) {
+		// Stale, or logged under a configuration Vector no longer runs.
+		if entry.summary.LastSeen.Before(cutoff) || entry.epoch != l.epoch {
 			delete(l.entries, key)
 			continue
 		}

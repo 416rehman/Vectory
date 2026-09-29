@@ -9,20 +9,20 @@ import (
 )
 
 // Every restricted-mode refusal names the component, the exact resource and
-// the allowance line that would permit it.
+// the host command that would allow it (which keeps everything else allowed).
 func TestPolicyRefusalsSayWhatWasRefusedAndHowToAllowIt(t *testing.T) {
 	p := CapabilityPolicy{}
 	cases := []struct {
 		name, config, code, message, hint string
 	}{
 		{"destination", `{"sinks":{"out":{"type":"http","inputs":["in"],"uri":"http://127.0.0.1:9/x"}}}`, "NETWORK_DESTINATION_DENIED",
-			`Sink "out" (http) sends to 127.0.0.1:9, which this host hasn't approved.`, `Add "127.0.0.1:9" to allowed_network_hosts on the host`},
+			`Sink "out" (http) sends to 127.0.0.1:9, which this host hasn't approved.`, "with the agent stopped: vectory allow --network 127.0.0.1:9. Or deploy"},
 		{"listener", `{"sources":{"in":{"type":"http_server","address":"0.0.0.0:8080"}}}`, "LISTENER_DENIED",
-			`Source "in" (http_server) listens on 0.0.0.0:8080, which this host hasn't approved.`, `Add "0.0.0.0:8080" to allowed_listen_addresses`},
+			`Source "in" (http_server) listens on 0.0.0.0:8080, which this host hasn't approved.`, "vectory allow --listener 0.0.0.0:8080."},
 		{"file pattern", `{"sources":{"logs":{"type":"file","include":["/var/log/app/*.log"]}}}`, "FILE_ACCESS_DENIED",
-			`Source "logs" (file) uses /var/log/app/*.log, outside this host's allowed file roots.`, `Add "/var/log/app" to allowed_file_roots`},
+			`Source "logs" (file) uses /var/log/app/*.log, outside this host's allowed file roots.`, "vectory allow --file-root /var/log/app."},
 		{"data_dir", `{"data_dir":"/srv/vector/"}`, "FILE_ACCESS_DENIED",
-			`The pipeline uses /srv/vector/, outside this host's allowed file roots.`, `Add "/srv/vector" to allowed_file_roots`},
+			`The pipeline uses /srv/vector/, outside this host's allowed file roots.`, "vectory allow --file-root /srv/vector."},
 		{"component", `{"sinks":{"s3":{"type":"aws_s3"}}}`, "UNSUPPORTED_LOCAL_CAPABILITY",
 			`Sink "s3" (aws_s3) isn't available in restricted mode.`, "deploy to a full-mode device"},
 		{"vrl http", `{"transforms":{"enrich":{"type":"remap","source":".x, err = http_request(\"http://10.0.0.1/\")"}}}`, "DYNAMIC_CAPABILITY_DENIED",
