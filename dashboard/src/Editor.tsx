@@ -139,7 +139,10 @@ import PipelineSchemaFields from "./PipelineSchemaFields";
 import { resolveSchema } from "./pipelineSchema";
 import DocLink, { HelpLink } from "./DocLink";
 import { assertExactNumbers } from "./configurationNumbers";
-import { stringifyConfiguration } from "./configurationFormats";
+import {
+  hasSourceComments,
+  stringifyConfiguration,
+} from "./configurationFormats";
 import {
   parseSource,
   diagnoseConfiguration,
@@ -4631,6 +4634,14 @@ export default function Editor({
                   {importedCodeDirty.current
                     ? "Code changes have not been applied to the draft."
                     : "Code matches the current draft."}
+                  {importedCodeDirty.current &&
+                    hasSourceComments(code, format) && (
+                      <strong className="editor-code-comments">
+                        {" "}
+                        Comments are not kept when you apply. Comments inside
+                        VRL programs are.
+                      </strong>
+                    )}
                 </span>
                 {importedCodeDirty.current && (
                   <Button
