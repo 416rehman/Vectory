@@ -579,9 +579,20 @@ const review = () =>
 const removed = () =>
   page.getByRole("dialog", { name: "Assignment removed", exact: true });
 async function openReview({ ready = true } = {}) {
-  await details()
-    .getByRole("button", { name: "Remove assignment", exact: true })
-    .click();
+  // Remove assignment lives in the header's Stop rollout / Roll back or
+  // remove menu; alone, it is a plain button.
+  const control = details()
+    .getByRole("button", {
+      name: /^(Stop rollout|Roll back or remove|Remove assignment)$/,
+    })
+    .first();
+  await control.waitFor();
+  const alone = (await control.innerText()).trim() === "Remove assignment";
+  await control.click();
+  if (!alone)
+    await page
+      .getByRole("menuitem", { name: "Remove assignment", exact: true })
+      .click();
   await expect(review()).toBeVisible();
   if (ready)
     await expect(
