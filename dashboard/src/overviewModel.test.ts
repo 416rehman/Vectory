@@ -238,6 +238,15 @@ describe("fleet series", () => {
     expect(completeSeries(series, at(28, 1))).toHaveLength(3);
   });
 
+  it("does not mistake a gap in the data for a bucket still collecting", () => {
+    // 08:20, then nothing until 08:26: the 08:26 bucket ended at 08:27.
+    const series = [minute(20), minute(26)];
+    expect(completeSeries(series, at(28))).toEqual(series);
+    expect(completeSeries(series, at(26, 30))).toEqual(series.slice(0, 1));
+    // A wider bucket stays open until it has ended.
+    expect(completeSeries(series, at(28), 5 * 60_000)).toHaveLength(1);
+  });
+
   it("keeps short or malformed series as they are", () => {
     expect(completeSeries([minute(26, 1)], at(26, 6))).toHaveLength(1);
     const bad = [

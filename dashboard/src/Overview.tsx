@@ -124,6 +124,7 @@ type SummaryPoint = {
   out: number | null;
 };
 type TelemetrySummary = {
+  stepSeconds: number | null;
   devicesTotal: number;
   devicesReporting: number;
   metricsDisabled: number | null;
@@ -167,6 +168,7 @@ function parseSummary(value: unknown): TelemetrySummary | null {
       })
     : [];
   return {
+    stepSeconds: count(raw.step_seconds),
     devicesTotal,
     devicesReporting,
     metricsDisabled: count(raw.devices_metrics_disabled),
@@ -1168,7 +1170,9 @@ function FleetThroughput({
     : local.errorsPerMinute;
   const newest = summary?.newest ?? local.freshest;
   // Only complete buckets: the one still collecting would dip toward zero.
-  const complete = summary ? completeSeries(summary.series, now) : [];
+  const complete = summary
+    ? completeSeries(summary.series, now, (summary.stepSeconds || 60) * 1000)
+    : [];
   const series =
     complete.filter((point) => point.in !== null || point.out !== null)
       .length >= 2
