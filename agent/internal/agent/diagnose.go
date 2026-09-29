@@ -184,8 +184,10 @@ func (r *redactor) addLabel(path, label string) {
 }
 
 // learnConfiguration indexes an effective configuration. Its tokens become
-// echo-safe, except credential leaves, which are treated as secrets: the
-// only fields that can hold resolved local secrets are never trusted.
+// echo-safe, except credential leaves, which are treated as secrets: every
+// field the agent's table lets hold a resolved local secret, plus the sink
+// auth fields Vectory has always treated as credentials, is never trusted.
+// A credential under four bytes is redacted as a whole word (addSecret).
 func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 	var root map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -200,39 +202,46 @@ func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 			typ, _ := component["type"].(string)
 			r.components[id] = componentRef{kind, typ}
 			r.listen[id] = listenAddresses(component)
-			if section == "sinks" {
-				if auth, ok := component["auth"].(map[string]any); ok {
-					for _, field := range []string{"user", "password", "token"} {
-						if value, ok := auth[field].(string); ok {
-							r.addSecret(value)
-						}
-					}
-				}
-			}
 		}
 	}
-	var walk func(any, string)
-	walk = func(value any, key string) {
+	credential := func(path []secretStep) bool {
+		at := locateSecretField(root, path)
+		if at.credential() {
+			return true
+		}
+		legacy := at.inComponent && at.section == "sinks" && len(at.field) == 2 && !at.field[1].item && at.field[0].key == "auth"
+		return legacy && (at.field[1].key == "user" || at.field[1].key == "password" || at.field[1].key == "token")
+	}
+	var walk func(any, string, []secretStep)
+	walk = func(value any, key string, path []secretStep) {
 		switch v := value.(type) {
 		case map[string]any:
 			for k, child := range v {
 				r.safe[k] = true
-				walk(child, strings.ToLower(k))
+				walk(child, strings.ToLower(k), append(path[:len(path):len(path)], secretStep{key: k}))
 			}
 		case []any:
 			for _, child := range v {
-				walk(child, key)
+				walk(child, key, append(path[:len(path):len(path)], secretStep{item: true}))
 			}
 		case string:
-			if name, ok := strings.CutPrefix(v, secretPrefix); ok {
+			name, reference := strings.CutPrefix(v, secretPrefix)
+			if reference {
+				// A reference names a binding; the name is template text.
 				r.safe[name] = true
 			}
-			if key == "user" || key == "password" || key == "token" {
-				return
+			leaf := credential(path)
+			// An unresolved reference is template text, not a credential.
+			if leaf && !reference {
+				r.addSecret(v)
 			}
-			r.allowText(v)
+			if !leaf && key != "user" && key != "password" && key != "token" {
+				r.allowText(v)
+			}
 			for _, match := range envReference.FindAllStringSubmatch(v, -1) {
-				r.safe[match[1]] = true
+				if !leaf {
+					r.safe[match[1]] = true
+				}
 				if value, ok := os.LookupEnv(match[1]); ok && fullVector {
 					r.addSecret(value)
 				}
@@ -241,7 +250,7 @@ func (r *redactor) learnConfiguration(data []byte, fullVector bool) {
 			r.safe[v.String()] = true
 		}
 	}
-	walk(root, "")
+	walk(root, "", nil)
 	sort.Slice(r.secrets, func(i, j int) bool { return len(r.secrets[i]) > len(r.secrets[j]) })
 }
 
@@ -1108,13 +1117,13 @@ func (r *redactor) containsSecret(text string) bool {
 	return false
 }
 
-// secretDiagnostics explains a failed typed secret reference by name.
+// secretDiagnostics explains a failed typed secret reference by name and field.
 func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
 	var ref *secretReferenceError
 	if !errors.As(err, &ref) {
 		return nil
 	}
-	d := Diagnostic{Code: ref.code, ComponentKind: "sink", ComponentID: ref.sink, Field: "auth." + ref.field}
+	d := Diagnostic{Code: ref.code, ComponentKind: ref.kind, ComponentID: ref.id, Field: ref.field}
 	switch ref.code {
 	case "SECRET_BINDING_MISSING":
 		d.Message = "This device has no file bound to secret \"" + ref.name + "\"."
@@ -1122,10 +1131,18 @@ func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
 	case "SECRET_FILE_UNREADABLE":
 		d.Message = "The file bound to secret \"" + ref.name + "\" is missing, empty or not private to the agent account."
 		d.Hint = "Run configure-secrets on the host; it prints the exact fix."
+	case "SECRET_REFERENCE_REFUSED":
+		d.Message = "A vectory-secret reference is allowed only as the whole value of a credential field."
+		d.Hint = "Use vectory-secret:NAME alone in a password, token or key field."
 	default:
 		d.Message = "Secret \"" + ref.name + "\" contains interpolation syntax that full mode would expand."
 	}
-	return []Diagnostic{e.redactorFor(template).finalize(d)}
+	r := e.redactorFor(template)
+	if ref.field != "" {
+		// The field path is made of template keys; name it even when it is long.
+		r.safe[ref.field] = true
+	}
+	return []Diagnostic{r.finalize(d)}
 }
 
 func (e *Engine) redactorFor(effective []byte) *redactor {

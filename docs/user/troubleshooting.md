@@ -39,7 +39,7 @@ Open the device and read its issue: it names the stage and the reason.
 | --- | --- | --- |
 | `VALIDATION_FAILED` | Vector rejected the configuration on the device, or its tests failed. | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
 | `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator add the entry the fix names (such as `"127.0.0.1:9"` to `allowed_network_hosts`), or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix. |
-| `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, or its file can't be read. | Check the device's bindings and the secret file's permissions. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
+| `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
 | `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. | Check disk space, ownership and permissions, and remove symlinks from the paths. |
@@ -84,9 +84,21 @@ On a restricted device, the address must also be in the host's allowed listeners
 
 ## Validation says deferred or unavailable
 
-- **Deferred:** part of the check needs the device, such as a local file, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
+- **Deferred:** part of the check needs the device, such as a local file, a device secret, an environment variable or a provider. The device runs that check before applying. Deferred is not a pass.
 - **Unavailable:** the server couldn't reach its validator, so publishing is blocked until it's back. It never skips the check. An administrator should check the `validator` container and the server log.
 - **Structural only:** you're on a development preview without a validator. Production servers can't run that way.
+
+## A credential is refused when you save or publish
+
+Credentials stay on the devices, so a credential field holds a secret name, never the value. The message names the step and the field:
+
+| Message | Fix |
+| --- | --- |
+| Plaintext credentials cannot be stored in the field | Replace the value with a device secret name, then bind it on each device with `vectory configure-secrets`. |
+| Only credential fields can hold a device secret | Move the reference out of the URL, header, path or program, into the step's credential field, such as `auth.token`. |
+| The field must be exactly `vectory-secret:NAME` | Remove any text around the reference, and start the name with a letter. |
+
+See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
 
 ## A deployment is pending, paused or conflicting
 

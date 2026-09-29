@@ -13,6 +13,7 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - Deployments to devices and groups with previews, priorities, canaries, schedules, pause, cancel and rollback.
 - Outbound-only agents with mutual TLS, per-device signed manifests, protection against older configurations, drift repair and automatic restore of the last working configuration.
 - Restricted and full modes, local allowances and device-local secret bindings, all controlled on the host.
+- Device secrets in every credential field: a pipeline stores `vectory-secret:NAME`, each device fills in the value from its own file, and the device page shows which names each device has bound.
 - Device metrics, issues, and an exportable audit log.
 - Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
 - A Help center bundled with the server, searchable offline, with every page available as Markdown and an `llms.txt` index.
@@ -23,6 +24,7 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 
 - **Enrollment preflight:** an unreadable CA file or invalid local option is rejected before connection settings are saved or an enrollment request is created. Earlier builds could save the connection settings first.
 - **Combined `install` options** are validated together before anything is saved. Earlier builds could save one option and then reject the next.
+- **Credential fields:** plain text in any field Vector marks as a credential is refused at save and publish, with the fix. Earlier builds took `vectory-secret:NAME` only in the `auth` fields of `http`, `loki` and `elasticsearch` sinks, so other credentials were stored in the pipeline. Published versions are unchanged.
 - **Secret-binding maps** are parsed strictly: `null`, lists, duplicate names and trailing content are rejected. Earlier builds could treat `null` as "remove all bindings" or keep the last duplicate silently.
 - **Capability-policy files** with malformed UTF-8 or unpaired Unicode escapes are rejected instead of being repaired with replacement characters.
 - **Metrics endpoint:** `vectory configure-metrics` and `--clear-metrics-url` were added. Earlier builds could only set a URL with `install --metrics-url`.

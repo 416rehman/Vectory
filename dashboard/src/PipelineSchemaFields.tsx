@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -56,6 +57,8 @@ import {
   usePendingScope,
 } from "./SchemaValueEditor";
 import ProblemText from "./ProblemText";
+import { SecretPathContext } from "./secretFieldContext";
+import type { SecretPath } from "./secretFields";
 import "./schema-controls.css";
 
 export type SchemaPropertySection = {
@@ -78,6 +81,27 @@ export function FieldPathScope({
   return (
     <FieldPathContext.Provider value={path}>
       {children}
+    </FieldPathContext.Provider>
+  );
+}
+/**
+ * A field's option path, for labels and findings, and its exact place in the
+ * component (field names and list indexes), for device-secret fields.
+ */
+function FieldPaths({
+  path,
+  segments,
+  children,
+}: {
+  path: string;
+  segments: SecretPath;
+  children: ReactNode;
+}) {
+  return (
+    <FieldPathContext.Provider value={path}>
+      <SecretPathContext.Provider value={segments}>
+        {children}
+      </SecretPathContext.Provider>
     </FieldPathContext.Provider>
   );
 }
@@ -244,6 +268,7 @@ function MapEntry({
         <SchemaField
           inCollection
           name={entryKey}
+          segment={entryKey}
           recordLabel={entryKey || "(empty name)"}
           recordActions={
             editable && !renaming
@@ -568,6 +593,7 @@ function ArrayFields({
             inCollection
             required
             name={`${title} ${index + 1}`}
+            segment={index}
             recordLabel={
               <>
                 {title} {index + 1}
@@ -657,6 +683,7 @@ function ArrayFields({
 
 function SchemaField({
   name,
+  segment,
   schema,
   root,
   value: configuredValue,
@@ -678,6 +705,9 @@ function SchemaField({
   requiredReason,
 }: {
   name: string;
+  /** This value's step in the component: a field name (default `name`), a
+   * list index, or null for another view of the parent's value. */
+  segment?: string | number | null;
   schema: Schema;
   root: Schema;
   value: any;
@@ -700,6 +730,14 @@ function SchemaField({
 }) {
   const parentPath = useContext(FieldPathContext),
     path = parentPath ? `${parentPath}.${name}` : name;
+  const parentSegments = useContext(SecretPathContext);
+  const segments = useMemo(
+    () =>
+      segment === null
+        ? parentSegments
+        : [...parentSegments, segment === undefined ? name : segment],
+    [parentSegments, segment, name],
+  );
   const trail = useContext(FieldTrailContext);
   const fieldProblems = useContext(FieldProblemsContext)(path);
   const inConditionFormat = useContext(ConditionFormatContext);
@@ -1038,6 +1076,7 @@ function SchemaField({
       <SchemaField
         inCollection={inCollection}
         name={name}
+        segment={null}
         schema={selectedConditionType.option.schema}
         root={root}
         value={value}
@@ -1076,6 +1115,7 @@ function SchemaField({
       <SchemaField
         inCollection={inCollection}
         name={name}
+        segment={null}
         schema={schemaToRender}
         root={root}
         value={value}
@@ -1370,7 +1410,7 @@ function SchemaField({
     <ConditionFormatContext.Provider
       value={inConditionFormat || !!conditionFormat}
     >
-      <FieldPathContext.Provider value={path}>
+      <FieldPaths path={path} segments={segments}>
         <FieldTrailContext.Provider
           value={ownsHeader ? [...trail, title] : trail}
         >
@@ -1594,7 +1634,7 @@ function SchemaField({
             </div>
           </PendingFieldsContext.Provider>
         </FieldTrailContext.Provider>
-      </FieldPathContext.Provider>
+      </FieldPaths>
     </ConditionFormatContext.Provider>
   );
 }
@@ -2177,6 +2217,7 @@ export function PipelineSchemaControl({
   required = false,
   label,
   onPendingChange = ignorePending,
+  segment,
 }: {
   name: string;
   schema: Schema;
@@ -2187,11 +2228,14 @@ export function PipelineSchemaControl({
   required?: boolean;
   label?: string;
   onPendingChange?: (id: string, dirty: boolean) => void;
+  /** Config path segment for this value; null when the caller sets the path. */
+  segment?: string | null;
 }) {
   return (
     <PendingFieldsContext.Provider value={onPendingChange}>
       <SchemaField
         name={name}
+        segment={segment}
         schema={schema}
         root={root}
         value={value}
@@ -2248,6 +2292,7 @@ export default function PipelineSchemaFields({
       {hasRootSchemaVariants(schema, root, component) ? (
         <SchemaField
           name="component"
+          segment={null}
           schema={schema}
           root={root}
           value={component}

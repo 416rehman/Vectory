@@ -74,7 +74,7 @@ Enrollment tokens can be limited by use count, expiry and device-name prefix. A 
 
 ## Credentials and data
 
-- **Local secret bindings.** A reference such as `vectory-secret:API_TOKEN` is resolved by the agent from a private local file. The value is written only into the device's managed configuration, which the agent keeps private. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
+- **Device secrets.** A reference such as `vectory-secret:API_TOKEN` is resolved by the agent from a private local file, in any credential field. Plain text in a credential field is refused at save and publish. The agent substitutes only at the credential fields of its own built-in table, never where the server asks, so a pipeline can't move a secret into a URL, header or program. It reports bound names at check-in, never values or paths. The value is written only into the device's managed configuration, which the agent keeps private. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
 - **Native Vector secrets and environment variables** (full mode only) are resolved by Vector on the host. The server never sees their values.
 - **Events** never pass through Vectory. Operational metrics come only from a Prometheus exporter in your own pipeline, are bounded in size, and never include event contents.
 - **The validator** receives the pipeline you check, runs as its own user with no network route and no secrets, and returns only bounded results.

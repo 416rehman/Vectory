@@ -99,6 +99,7 @@ import { Button, IconButton, ErrorBox, Field, Modal, Spinner } from "./ui";
 import TargetDialog from "./TargetDialog";
 
 import PipelineSettings from "./PipelineSettings";
+import { secretNamesOf } from "./secretFields";
 import PipelineGlobals from "./PipelineGlobals";
 import PipelineDetails from "./PipelineDetails";
 import PipelineSaveStatus from "./PipelineSaveStatus";
@@ -3477,6 +3478,7 @@ export default function Editor({
         issueAffectsMemoryTable(issue, selectedNode.data.enrichmentTable),
       )
     : [];
+  const pipelineSecretNames = useMemo(() => secretNamesOf(config), [config]);
   const settingsContent =
     component && selectedNode ? (
       selectedNode.data.enrichmentTable ? (
@@ -3531,6 +3533,7 @@ export default function Editor({
           }
           canRunSamples={checkable}
           existingTests={Array.isArray(config.tests) ? config.tests : []}
+          secretNames={pipelineSecretNames}
           onSaveTests={editable ? saveSampleTests : undefined}
           focus={
             focusRequest?.component === selectedNode.id ? focusRequest : null

@@ -72,8 +72,13 @@ func TestSecretTypedResolutionAndNegativePaths(t *testing.T) {
 	if err != nil || used || !bytes.Equal(got, plain) {
 		t.Fatal("ordinary config bytes changed")
 	}
+	// The fields accepted before the table existed still resolve. Vector 0.58's
+	// elasticsearch sink has no bearer token, so it has user and password.
 	for _, typ := range []string{"http", "loki", "elasticsearch"} {
 		for _, field := range []string{"user", "password", "token"} {
+			if typ == "elasticsearch" && field == "token" {
+				continue
+			}
 			raw := []byte(`{"sinks":{"out":{"type":"` + typ + `","auth":{"` + field + `":"vectory-secret:API_TOKEN"},"large":9007199254740993}}}`)
 			got, used, err := ResolveLocalSecrets(raw, bindings)
 			if err != nil || !used || !bytes.Contains(got, []byte("9007199254740993")) {

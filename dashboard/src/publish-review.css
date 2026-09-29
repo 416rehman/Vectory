@@ -95,7 +95,8 @@
   border-left-color: transparent;
   color: var(--muted);
 }
-.publish-review-changes h4 {
+.publish-review-changes h4,
+.publish-review-secrets h4 {
   margin: 0 0 6px;
   font-size: 12px;
   font-weight: 600;
@@ -194,6 +195,26 @@
   color: var(--muted);
   font-family: inherit;
   font-style: italic;
+}
+.publish-review-secrets > p {
+  margin: 0 0 6px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.publish-review-secrets > ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.publish-review-secrets li > code {
+  margin-right: 0;
+}
+.publish-secret-new {
+  color: var(--ed-success);
+  font-size: 11.5px;
+  font-weight: 600;
 }
 @media (max-width: 600px) {
   .publish-program {
