@@ -131,8 +131,10 @@ func (e *PolicyRefusal) subject() string {
 // published pipeline; the caller's redaction still applies.
 func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	d := Diagnostic{Severity: "error", Code: e.Code, ComponentKind: componentKind(e.Section), ComponentID: e.ComponentID, Field: e.Field}
+	// `vectory allow` adds to the host's allowances and keeps the rest.
+	flag := map[string]string{"allowed_network_hosts": "--network", "allowed_listen_addresses": "--listener", "allowed_file_roots": "--file-root"}[e.Allowance]
 	grant := func(entry string) string {
-		return `Add "` + entry + `" to ` + e.Allowance + ` on the host (vectory install --capability-policy FILE), or deploy to a full-mode device.`
+		return "Allow it on the host, with the agent stopped: vectory allow " + flag + " " + quoteArg(entry) + ". Or deploy to a full-mode device."
 	}
 	subject := e.subject()
 	switch {
@@ -144,7 +146,7 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 		d.Hint = grant(e.Suggested)
 	case e.Allowance == "allowed_file_roots" && e.Resource != "" && e.Suggested == "":
 		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
-		d.Hint = "Choose the directory that holds these files and add it to allowed_file_roots on the host (vectory install --capability-policy FILE), or deploy to a full-mode device."
+		d.Hint = "Choose the directory that holds these files and allow it on the host, with the agent stopped: vectory allow --file-root DIR. Or deploy to a full-mode device."
 	case e.Allowance == "allowed_file_roots" && e.Resource != "":
 		d.Message = subject + " uses " + e.Resource + ", outside this host's allowed file roots."
 		d.Hint = grant(e.Suggested)
