@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityGlyph,
   activityTone,
   describeActivity,
   nameList,
@@ -188,6 +189,27 @@ describe("activity sentences", () => {
     expect(
       sentence(describeActivity(item({ action: "device.renew" }))),
     ).toContain("Device credentials renewed");
+  });
+});
+
+describe("activity glyphs", () => {
+  it("picks an icon per kind of change", () => {
+    expect(activityGlyph(item({ action: "configuration.publish" }))).toBe(
+      "publish",
+    );
+    expect(activityGlyph(item({ action: "deployment.create" }))).toBe("deploy");
+    expect(
+      activityGlyph(
+        item({ action: "device.apply_state", outcome: "verified_applied" }),
+      ),
+    ).toBe("applied");
+    expect(
+      activityGlyph(item({ action: "device.apply_state", outcome: "failed" })),
+    ).toBe("failed");
+    expect(activityGlyph(item({ action: "device.recovery_complete" }))).toBe(
+      "recovery",
+    );
+    expect(activityGlyph(item({ action: "something.new" }))).toBe("other");
   });
 });
 

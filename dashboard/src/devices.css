@@ -708,7 +708,7 @@ a.device-version-name:hover {
 }
 .device-activity-list li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   gap: var(--space-3);
   padding: var(--space-2) 0;
   border-top: 1px solid var(--border);
@@ -723,22 +723,16 @@ a.device-version-name:hover {
   line-height: var(--leading-base);
   overflow-wrap: anywhere;
 }
-.device-activity-list li[data-tone="danger"] p {
-  box-shadow: inset 2px 0 0 var(--mark-danger);
-  padding-left: var(--space-2);
-}
-.device-activity-list li[data-tone="warning"] p {
-  box-shadow: inset 2px 0 0 var(--mark-warning);
-  padding-left: var(--space-2);
-}
 .device-activity-list strong,
 .device-activity-list p a {
   color: var(--text);
   font-weight: var(--weight-medium);
+  text-decoration: none;
 }
-.device-activity-list p a {
+.device-activity-list p a:hover,
+.device-activity-list p a:focus-visible {
+  color: var(--accent-text);
   text-decoration: underline;
-  text-decoration-color: var(--border-strong);
   text-underline-offset: 3px;
 }
 .device-activity-time {

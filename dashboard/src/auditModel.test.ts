@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   auditActionLabel,
+  auditChanges,
   auditDateError,
   auditFilterParams,
   auditHistoryPath,
@@ -104,10 +105,54 @@ describe("audit view queries and identities", () => {
     );
     expect(auditRoute(null, defaultAuditQuery)).toBe("audit?page=1");
   });
+  it("hides sign-ins by default, keeps the scope in page URLs and lets event filters win", () => {
+    const api = (query: typeof defaultAuditQuery) =>
+      new URL(auditHistoryPath(query), "https://example.test").searchParams;
+    expect(api(defaultAuditQuery).get("scope")).toBe("changes");
+    expect(api({ ...defaultAuditQuery, scope: "security" }).get("scope")).toBe(
+      "security",
+    );
+    expect(api({ ...defaultAuditQuery, scope: "all" }).has("scope")).toBe(
+      false,
+    );
+    // An explicit event filter shows matching events of any kind.
+    expect(api({ ...defaultAuditQuery, action: "login" }).has("scope")).toBe(
+      false,
+    );
+    expect(auditRoute(null, defaultAuditQuery)).not.toContain("scope");
+    const security = { ...defaultAuditQuery, scope: "security" as const };
+    expect(auditRoute(null, security)).toContain("scope=security");
+    expect(readAuditQuery("scope=security")).toEqual(security);
+    expect(readAuditQuery("scope=everything")?.scope).toBe("changes");
+    expect(auditFilterParams(security).get("scope")).toBe("security");
+  });
   it("rejects inverted, nonexistent and malformed days before any API query", () => {
     expect(auditDateError("2026-09-27", "2026-09-26")).toMatch(/end date/);
     expect(auditDateError("2026-02-30", "")).toMatch(/valid start/);
     expect(auditDateError("2024-02-29", "2024-02-29")).toBe("");
     expect(auditDateError("2026-09-01T00:00:00Z", "")).toMatch(/valid/);
+  });
+});
+
+describe("what changed", () => {
+  it("pairs before and after values and names recorded ones", () => {
+    expect(
+      auditChanges({
+        previous_state: "written",
+        state: "verified_applied",
+        previous_group_revision: 3,
+        group_revision: 4,
+        version_number: 7,
+        password: "never shown",
+      }),
+    ).toEqual([
+      { label: "State", before: "Written", after: "Applied and verified" },
+      { label: "Version", after: "v7" },
+    ]);
+    expect(auditChanges({ generation: 2 })).toEqual([
+      { label: "Configuration generation", before: undefined, after: "2" },
+    ]);
+    expect(auditChanges(null)).toEqual([]);
+    expect(auditChanges({ state: { nested: true } })).toEqual([]);
   });
 });

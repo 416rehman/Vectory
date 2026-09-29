@@ -261,7 +261,75 @@ export const activityTone = (item: ActivityItem) =>
     : ["verification_unknown", "conflict", "missed"].includes(item.outcome) ||
         item.action === "deployment.missed"
       ? "warning"
-      : "neutral";
+      : item.action === "device.apply_state" &&
+          item.outcome === "verified_applied"
+        ? "success"
+        : "neutral";
+
+export type ActivityGlyph =
+  | "publish"
+  | "pipeline"
+  | "deploy"
+  | "rollback"
+  | "pause"
+  | "resume"
+  | "cancel"
+  | "missed"
+  | "applied"
+  | "failed"
+  | "check"
+  | "progress"
+  | "enroll"
+  | "revoke"
+  | "retry"
+  | "recovery"
+  | "group"
+  | "settings"
+  | "token"
+  | "issue"
+  | "other";
+/** A small per-event icon; the sentence always carries the meaning. */
+export function activityGlyph(item: ActivityItem): ActivityGlyph {
+  if (item.action === "device.apply_state")
+    return item.outcome === "verified_applied"
+      ? "applied"
+      : item.outcome === "failed"
+        ? "failed"
+        : item.outcome === "rolled_back"
+          ? "rollback"
+          : item.outcome === "verification_unknown"
+            ? "check"
+            : "progress";
+  const direct: Record<string, ActivityGlyph> = {
+    "configuration.publish": "publish",
+    "deployment.rollback": "rollback",
+    "deployment.pause": "pause",
+    "deployment.resume": "resume",
+    "deployment.cancel": "cancel",
+    "deployment.unassign": "cancel",
+    "deployment.missed": "missed",
+    "device.enroll": "enroll",
+    "device.revoke": "revoke",
+    "device.retry": "retry",
+    "policy.create": "settings",
+  };
+  if (direct[item.action]) return direct[item.action];
+  const family = item.action.split(".")[0];
+  return (
+    (
+      {
+        configuration: "pipeline",
+        deployment: "deploy",
+        device: item.action.startsWith("device.recovery")
+          ? "recovery"
+          : "other",
+        group: "group",
+        token: "token",
+        issue: "issue",
+      } as Record<string, ActivityGlyph>
+    )[family] ?? "other"
+  );
+}
 
 export const isEventId = isAuditId;
 
