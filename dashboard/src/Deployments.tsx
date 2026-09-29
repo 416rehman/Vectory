@@ -866,7 +866,7 @@ function TargetDetails({
       </span>
     ) : (
       <span className="control-muted">
-        No longer included in this assignment. Kept in history.
+        No longer included in this assignment. Kept in deployment history.
         {t.error && (
           <span className="deployment-target-history">
             Last reported error: {t.error}
@@ -1154,6 +1154,7 @@ function RolloutPage({
       checkingStatusRef.current
     )
       return;
+    rememberOpener();
     if (name === "rollback") {
       const registry = readDeploymentRegistry(user.id);
       if (registry.errors.length) {
@@ -1167,7 +1168,6 @@ function RolloutPage({
         return;
       }
     }
-    rememberOpener();
     setActionError("");
     setBlockedByCanary(false);
     setRollbackPreview(null);
@@ -1684,6 +1684,12 @@ function RolloutPage({
                     stopped={!live}
                     label="Device progress"
                   />
+                  {hasCanaryGate(deployment) && (
+                    <p className="control-muted rollout-recorded-note">
+                      Recorded progress: historical results; current readiness
+                      is shown below.
+                    </p>
+                  )}
                 </>
               )}
               {(deployment.state_counts.removed || 0) > 0 &&
@@ -1865,6 +1871,7 @@ function RolloutPage({
           allowed={can(user, "operate")}
           confirmed={confirmedRollback}
           initialError={actionError}
+          returnFocusRef={actionReturnFocus}
           onClose={() => {
             setRecovery(null);
             setConfirmedRollback(undefined);
@@ -1880,6 +1887,7 @@ function RolloutPage({
           issue={storageIssue}
           userId={user.id}
           allowed={can(user, "operate")}
+          returnFocusRef={actionReturnFocus}
           onClose={() => setStorageIssue(null)}
           onRecovered={(message) => void changed(message)}
         />

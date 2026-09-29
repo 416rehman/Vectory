@@ -195,6 +195,17 @@ async function start(
       return respond({ user: user(role), csrf_token: "synthetic-csrf" });
     if (path === "/deployments/history")
       return respond({ items: [f.summary], total: 1, page: 1, page_size: 12 });
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${f.summary.id}/summary`)
       return respond(f.summary);
     if (path === `/deployments/${f.summary.id}/targets`) {
@@ -256,11 +267,11 @@ async function open(page) {
     .getByRole("link", { name: "Synthetic retired rollout", exact: true })
     .click();
   await expect(
-    page.getByRole("dialog", { name: "Deployment details" }),
+    page.getByRole("region", { name: "Deployment details", exact: true }),
   ).toBeVisible();
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details" });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const table = (page) =>
   dialog(page).getByRole("table", { name: "Device results" });
 async function noWrites(f) {
@@ -296,27 +307,22 @@ try {
             exact: true,
           }),
         });
-        await expect(row).toContainText("0 of 1 verified");
-        await expect(row).toContainText("1 no longer targeted");
+        await expect(row).toContainText("1 device no longer targeted");
         await expect(row).toContainText("Complete");
         await open(page);
+        await expect(dialog(page)).toContainText("No devices follow this now");
         await expect(dialog(page)).toContainText(
-          "Review rollout status and verified device results.",
-        );
-        await expect(dialog(page)).toContainText("0 of 1 devices verified");
-        await expect(dialog(page)).toContainText(
-          "The rollout has finished for its current members.",
-        );
-        await expect(dialog(page)).toContainText(
-          "excluded from the current verified count",
+          "Its devices stay in history.",
         );
         await expect(table(page)).toContainText("No longer targeted");
         await expect(table(page)).toContainText(
           "No longer included in this assignment. Kept in deployment history.",
         );
         await expect(table(page)).not.toContainText("No reported error");
-        await expect(table(page)).not.toContainText("Waiting for agent");
-        await expect(table(page)).not.toContainText("Applied and verified");
+        await expect(table(page)).not.toContainText("Waiting for check-in");
+        await expect(
+          table(page).locator(".rollout-chip", { hasText: "Verified" }),
+        ).toHaveCount(0);
         await noWrites(f);
       } finally {
         await app.close();
@@ -401,7 +407,10 @@ try {
       try {
         const { page } = app;
         await open(page);
-        await expect(dialog(page)).toContainText("1 of 2 devices verified");
+        await expect(dialog(page)).toContainText("1 of 1 device verified");
+        await expect(dialog(page)).toContainText(
+          "1 earlier device is no longer targeted and stays in history.",
+        );
         const removed = table(page)
           .getByRole("row")
           .filter({
@@ -415,7 +424,9 @@ try {
         );
         await expect(removed).toContainText("Last reported error:");
         await expect(removed).toContainText("VALIDATION_FAILED (validation)");
-        await expect(removed).not.toContainText("Applied and verified");
+        await expect(
+          removed.locator(".rollout-chip", { hasText: "Verified" }),
+        ).toHaveCount(0);
         await expect(
           table(page)
             .getByRole("row")
@@ -425,16 +436,18 @@ try {
                 exact: true,
               }),
             }),
-        ).toContainText("Applied and verified");
+        ).toContainText("Verified");
         await dialog(page)
           .getByRole("button", { name: "Roll back", exact: true })
           .click();
+        // This fixture's server does not offer reviewed rollback, so the
+        // review says so and never sends anything.
         const confirmation = page.getByRole("dialog", {
-          name: "Roll back",
+          name: "Review rollback",
           exact: true,
         });
         await expect(confirmation).toContainText(
-          "Restore the previously managed version on released devices that are still targeted. Each agent must validate and verify the replacement.",
+          "This server cannot provide a reviewed rollback.",
         );
         await expect(confirmation.locator(".modal-body")).not.toContainText(
           "2 devices",
@@ -464,14 +477,14 @@ try {
       try {
         const { page } = app;
         await open(page);
-        await expect(table(page)).toContainText("Waiting for agent");
+        await expect(table(page)).toContainText("Waiting for check-in");
         await expect(
           dialog(page).locator(".deployment-removed-count"),
         ).toHaveCount(0);
         await expect(
           dialog(page).locator(".deployment-membership-note"),
         ).toHaveCount(0);
-        await expect(dialog(page)).toContainText("0 of 1 devices verified");
+        await expect(dialog(page)).toContainText("0 of 1 device verified");
         await noWrites(f);
       } finally {
         await app.close();
@@ -539,7 +552,10 @@ try {
         await expect(dialog(page)).toContainText(
           "No devices match these filters.",
         );
-        await expect(dialog(page)).toContainText("1 of 14 devices verified");
+        await expect(dialog(page)).toContainText("1 of 1 device verified");
+        await expect(dialog(page)).toContainText(
+          "13 earlier devices are no longer targeted",
+        );
         f.failTargets = true;
         await search.fill("retired");
         await expect(dialog(page).getByRole("alert")).toContainText(

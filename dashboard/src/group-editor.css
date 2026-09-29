@@ -202,11 +202,16 @@
   color: var(--rollout-danger-ink, var(--ink));
   font-weight: 550;
 }
+.group-overview li > .rollout-chip {
+  justify-self: end;
+}
 @media (max-width: 720px) {
   .group-overview li {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .group-overview-running {
+  .group-overview-running,
+  .group-overview-assignments li > .control-muted,
+  .group-overview-rollouts li > .control-muted {
     grid-column: 1 / -1;
     grid-row: 2;
   }

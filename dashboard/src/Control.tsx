@@ -37,7 +37,6 @@ import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
 import AgentSettingsEditor from "./AgentSettingsEditor";
-import { policySummary } from "./deploymentReview";
 import DocLink from "./DocLink";
 import {
   ConfigurationModePicker,
@@ -166,12 +165,42 @@ export function Policies({
               header: "Settings",
               value: (setting) => setting.name,
               filter: { placeholder: "Filter settings names" },
-              cell: (setting) => (
-                <>
-                  <strong>{setting.name}</strong>
-                  <small>{policySummary(setting.policy)}</small>
-                </>
-              ),
+              cell: (setting) => <strong>{setting.name}</strong>,
+            },
+            {
+              id: "interval",
+              header: "Check-in interval",
+              value: (setting) => setting.policy.heartbeat_seconds,
+              filter: { placeholder: "Filter seconds" },
+              cell: (setting) => `${setting.policy.heartbeat_seconds} seconds`,
+            },
+            {
+              id: "sync",
+              header: "Configuration sync",
+              value: (setting) =>
+                setting.policy.sync_paused ? "Paused" : "Enabled",
+              filter: {
+                options: [
+                  { value: "Paused", label: "Paused" },
+                  { value: "Enabled", label: "Enabled" },
+                ],
+              },
+              cell: (setting) =>
+                setting.policy.sync_paused ? "Paused" : "Enabled",
+            },
+            {
+              id: "metrics",
+              header: "Metrics",
+              value: (setting) =>
+                setting.policy.telemetry_enabled ? "Collected" : "Off",
+              filter: {
+                options: [
+                  { value: "Collected", label: "Collected" },
+                  { value: "Off", label: "Off" },
+                ],
+              },
+              cell: (setting) =>
+                setting.policy.telemetry_enabled ? "Collected" : "Off",
             },
             {
               id: "applied",

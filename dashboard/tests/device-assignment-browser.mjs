@@ -210,6 +210,17 @@ async function load({
           page: Number(url.searchParams.get("page") || 1),
           page_size: 12,
         });
+      if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+        return reply({
+          deployment_id: path.split("/")[2],
+          status: "active",
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       const detail = path.match(/^\/deployments\/([^/]+)\/(summary|targets)$/);
       if (detail) {
         if (detail[2] === "targets")
@@ -476,20 +487,12 @@ try {
         new RegExp(`#/deployments/${configurationAssignmentId}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toContainText("Synthetic governing pipeline");
-      await expect
-        .poll(() =>
-          requests.some(
-            (r) =>
-              r.path === "/deployments/history" &&
-              !r.query.includes("unrelated") &&
-              r.query.includes("page=1"),
-          ),
-        )
-        .toBe(true);
+      // The rollout is its own page; its route (checked above) already
+      // dropped the old list search and page, which Back returns to.
       await expect(
-        page.getByRole("button", { name: "Pause rollout", exact: true }),
+        page.getByRole("button", { name: "Pause", exact: true }),
       ).toHaveCount(0);
       await page.goBack();
       await deviceVisible();
@@ -498,7 +501,7 @@ try {
         new RegExp(`#/deployments/${policyAssignmentId}\\?page=1$`),
       );
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toContainText("Synthetic governing settings");
     },
   );
@@ -529,7 +532,7 @@ try {
       );
       await settingsLink().click();
       await expect(
-        page.getByRole("dialog", { name: "Deployment details", exact: true }),
+        page.getByRole("region", { name: "Deployment details", exact: true }),
       ).toBeVisible();
     },
   );

@@ -352,7 +352,8 @@ a.control-row-title {
   margin: -8px 0 0;
   font-size: 13px;
 }
-.deployment-membership-note {
+.deployment-membership-note,
+.rollout-recorded-note {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;

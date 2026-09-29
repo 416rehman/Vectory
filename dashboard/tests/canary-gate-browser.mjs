@@ -230,6 +230,17 @@ async function start(
       const { canary_gate: _, ...historical } = f.summary;
       return respond({ items: [historical], total: 1, page: 1, page_size: 12 });
     }
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${f.summary.id}/summary`) {
       if (f.failSummary)
         return route.fulfill({
@@ -302,11 +313,11 @@ async function open(page) {
     .getByRole("link", { name: "Synthetic canary observation", exact: true })
     .click();
   await expect(
-    page.getByRole("dialog", { name: "Deployment details" }),
+    page.getByRole("region", { name: "Deployment details", exact: true }),
   ).toBeVisible();
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details" });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const table = (page) =>
   dialog(page).getByRole("table", { name: "Device results" });
 async function noWrites(f) {
@@ -342,13 +353,12 @@ try {
         await expect(panel(page)).toBeVisible();
         await expect(panel(page)).toContainText("0 of 1");
         await expect(dialog(page)).toContainText("1 of 2");
-        await expect(table(page)).toContainText("Applied and verified");
+        await expect(table(page)).toContainText("Verified");
         await expect(table(page)).toContainText(
           "Canary gate: Another assignment is effective",
         );
-        await expect(dialog(page)).toContainText("Recorded progress");
         await expect(dialog(page)).toContainText(
-          "Historical results; current readiness is shown below.",
+          "Recorded progress: historical results; current readiness is shown below.",
         );
         const link = table(page).locator(`a[href="#/devices/${id(1)}"]`);
         await expect(link).toHaveCount(1);
@@ -397,7 +407,7 @@ try {
           await open(app.page);
           await expect(panel(app.page)).toBeVisible();
           await expect(panel(app.page)).toContainText("0 of 1");
-          await expect(table(app.page)).toContainText("Applied and verified");
+          await expect(table(app.page)).toContainText("Verified");
           await expect(panel(app.page)).toContainText(reasonLabels[reason]);
           await expect(table(app.page)).toContainText(
             "Canary gate: " + reasonLabels[reason],
