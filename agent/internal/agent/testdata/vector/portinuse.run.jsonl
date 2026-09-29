@@ -1,0 +1,14 @@
+{"timestamp":"2026-09-29T02:44:20.121041Z","level":"INFO","message":"Log level is enabled.","level":"\"info\"","target":"vector::app"}
+{"timestamp":"2026-09-29T02:44:20.121581Z","level":"INFO","message":"Loading configs.","paths":"[\"portinuse.json\"]","target":"vector::app"}
+{"timestamp":"2026-09-29T02:44:20.127977Z","level":"INFO","message":"Running healthchecks.","target":"vector::topology::running"}
+{"timestamp":"2026-09-29T02:44:20.128161Z","level":"INFO","message":"Vector has started.","debug":"false","version":"0.58.0","arch":"x86_64","revision":"2bcad9b 2026-08-26 13:37:07.557544670","target":"vector"}
+{"timestamp":"2026-09-29T02:44:20.128173Z","level":"INFO","message":"API is disabled, enable by setting `api.enabled` to `true` and use commands like `vector top`.","target":"vector::app"}
+{"timestamp":"2026-09-29T02:44:20.128196Z","level":"INFO","message":"Healthcheck passed.","target":"vector::topology::builder"}
+{"timestamp":"2026-09-29T02:44:20.128278Z","level":"INFO","message":"Building HTTP server.","address":"127.0.0.1:18777","target":"vector::sources::util::http::prelude","span":{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T02:44:20.128421Z","level":"ERROR","message":"An error occurred: TcpBind { source: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" } }.","target":"vector::sources::util::http::prelude","span":{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T02:44:20.128475Z","level":"ERROR","message":"An error occurred that Vector couldn't handle: the task completed with an error.","target":"vector::topology","span":{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"},"spans":[{"component_id":"h","component_kind":"source","component_type":"http_server","name":"source"}]}
+{"timestamp":"2026-09-29T02:44:20.128505Z","level":"INFO","message":"All sources have finished.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T02:44:20.128514Z","level":"INFO","message":"Internal log [All sources have finished.] is being suppressed to avoid flooding.","target":"vector_common::shutdown"}
+{"timestamp":"2026-09-29T02:44:20.128533Z","level":"INFO","message":"All sources have finished.","target":"vector::app"}
+{"timestamp":"2026-09-29T02:44:20.128540Z","level":"INFO","message":"Vector is stopping.","target":"vector"}
+{"timestamp":"2026-09-29T02:44:20.128889Z","level":"INFO","message":"Vector has stopped.","target":"vector"}

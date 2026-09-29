@@ -25,6 +25,9 @@ type InstallOptions struct {
 	MetricsURL                  *string
 	ClearMetricsURL             bool
 	SecretFiles                 *map[string]string
+	// Host runtime settings; an empty data directory restores the automatic choice.
+	VectorDataDir           *string
+	GracefulShutdownSeconds *int
 }
 
 func ReadInstallPolicy(path string) (*CapabilityPolicy, error) {
@@ -110,6 +113,14 @@ func (options InstallOptions) validate() error {
 			return err
 		}
 	}
+	if options.VectorDataDir != nil && *options.VectorDataDir != "" {
+		if err := validateVectorDataDir(*options.VectorDataDir); err != nil {
+			return err
+		}
+	}
+	if n := options.GracefulShutdownSeconds; n != nil && (*n < minGracefulShutdownSeconds || *n > maxGracefulShutdownSeconds) {
+		return errors.New("--graceful-shutdown-seconds must be between 5 and 300")
+	}
 	return nil
 }
 
@@ -132,6 +143,15 @@ func (options InstallOptions) compose(current Settings) Settings {
 		for name, path := range *options.SecretFiles {
 			current.SecretFiles[name] = path
 		}
+	}
+	if options.VectorDataDir != nil {
+		current.VectorDataDir = filepath.Clean(*options.VectorDataDir)
+		if *options.VectorDataDir == "" {
+			current.VectorDataDir = ""
+		}
+	}
+	if options.GracefulShutdownSeconds != nil {
+		current.GracefulShutdownSeconds = *options.GracefulShutdownSeconds
 	}
 	return current
 }

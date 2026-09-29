@@ -19,10 +19,7 @@ import (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 || (os.Args[4] != "restricted" && os.Args[4] != "full") {
-			os.Exit(2)
-		}
-		os.Exit(agent.VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(agent.VectorHostMain(os.Args[2:]))
 	}
 	os.Exit(run(os.Args[1:]))
 }
@@ -90,6 +87,9 @@ func run(args []string) int {
 		metrics := fs.String("metrics-url", "", "optional explicitly provisioned http://loopback-IP:port/metrics")
 		clearMetrics := fs.Bool("clear-metrics-url", false, "explicitly remove the local metrics collector setting; pipeline exporter is unchanged")
 		secretFiles := fs.String("secret-files", "", "local JSON map of approved secret names to absolute private file paths")
+		// Host runtime (W2): data directory offered to pipelines without data_dir, and Vector's drain limit.
+		dataDir := fs.String("vector-data-dir", "", "absolute data directory for pipelines that do not set data_dir; empty restores the automatic choice")
+		graceful := fs.Int("graceful-shutdown-seconds", 0, "seconds Vector may drain on stop or restart (5-300, default 60)")
 		if fs.Parse(args) != nil {
 			return 2
 		}
@@ -120,6 +120,10 @@ func run(args []string) int {
 				if err == nil {
 					opts.SecretFiles, err = agent.ReadSecretBindings(*secretFiles)
 				}
+			case "vector-data-dir":
+				opts.VectorDataDir = dataDir
+			case "graceful-shutdown-seconds":
+				opts.GracefulShutdownSeconds = graceful
 			}
 		})
 		if err == nil {
@@ -288,6 +292,17 @@ func run(args []string) int {
 			return 1
 		}
 		output(s)
+	case "logs":
+		// Vector's own log on this host (W2). Reads files only, so it works
+		// while the service runs.
+		follow := fs.Bool("follow", false, "keep printing new lines until interrupted")
+		fs.BoolVar(follow, "f", false, "shorthand for --follow")
+		lines := fs.Int("lines", 100, "number of recent lines to print")
+		raw := fs.Bool("raw", false, "print Vector's JSON log lines unchanged")
+		if !parseFlagsOnly(fs, args, command) {
+			return 2
+		}
+		err = agent.WriteVectorLog(ctx, *dir, *lines, *follow, *raw || *jsonOut, os.Stdout)
 	case "pause", "resume":
 		if !parseFlagsOnly(fs, args, command) {
 			return 2
@@ -340,7 +355,7 @@ func run(args []string) int {
 		}
 		return 1
 	}
-	if command != "status" && command != "doctor" && command != "run" && command != "service" {
+	if command != "status" && command != "doctor" && command != "run" && command != "service" && command != "logs" {
 		if *jsonOut {
 			output(map[string]string{"status": "ok", "command": command})
 		} else {
@@ -402,7 +417,7 @@ func reportMetricsConfiguration(command string, cleared, jsonOut bool) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Vectory agent - explicitly adopted Vector 0.58.0
-Commands: install re-adopt configure-secrets configure-metrics enroll recover-enrollment run service status doctor pause resume retry unenroll uninstall version
+Commands: install re-adopt configure-secrets configure-metrics enroll recover-enrollment run service status logs doctor pause resume retry unenroll uninstall version
 Native service commands: service-install [--service-user <account>], service-start, service-stop, service-uninstall
 Common: --state-dir <absolute path> --json
 Service start/stop/uninstall target the fixed service; --state-dir does not select one. Commands accept flags only.
@@ -413,6 +428,8 @@ Optional local trust grant: install --allow-full-vector-config (existing agent m
 Return to restricted mode locally: install --allow-full-vector-config=false
 Metrics while stopped: configure-metrics --metrics-url http://127.0.0.1:9598/metrics | --clear-metrics-url
 Install also accepts --metrics-url or --clear-metrics-url; omission preserves the setting.
+Install also accepts --vector-data-dir <absolute path> and --graceful-shutdown-seconds <5-300>.
+Vector log: logs [--lines 100] [--follow] [--raw]
 Enroll: --server https://host:8443 --id edge-01 --token-stdin [--ca-file <trusted PEM>]
 CA trust: omission retains saved trust; --ca-file= explicitly selects system trust.
 Compatibility: vectory -ip <server> -id <name> -token <token> [--state-dir <path>]

@@ -7,7 +7,7 @@ import (
 )
 
 func TestEnrollmentTokenFileRequiresPrivateRegularHandle(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "token.txt")
 	if err := AtomicWrite(path, []byte("synthetic-token\n")); err != nil {
 		t.Fatal(err)

@@ -25,7 +25,9 @@ type Engine struct {
 	BootID      string
 	Now         func() time.Time
 	Fault       func(string) error
-	supervisor  *workloadSupervisor
+	// Log receives Vector's JSON log; nil in tests without a native driver.
+	Log        *vectorLog
+	supervisor *workloadSupervisor
 }
 
 func (e *Engine) now() time.Time {
@@ -43,8 +45,11 @@ func (e *Engine) boundary(stage string) error {
 }
 func (e *Engine) paused() bool { return LocalPaused(e.Dir) || e.State.Policy.SyncPaused }
 func (e *Engine) fail(code, stage, message string) error {
+	return e.failWith(code, stage, message, nil)
+}
+func (e *Engine) failWith(code, stage, message string, diagnostics []Diagnostic) error {
 	e.State.ApplyState = "failed"
-	e.State.Error = &Issue{code, stage, message}
+	e.State.Error = &Issue{Code: code, Stage: stage, Message: message, Diagnostics: diagnostics}
 	e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 	_ = e.save()
 	return errors.New(message)
@@ -125,13 +130,13 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 		return e.fail("CAPABILITY_DENIED", "startup", "Existing managed configuration violates local capability policy")
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration")
+		return e.failWith("VALIDATION_FAILED", "startup", "Existing configuration failed Vector validation; inspect the protected local configuration", e.diagnoseFailure(err, data))
 	}
 	if honorPause && e.paused() {
 		return errWorkloadPaused
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.fail("ACTIVATION_FAILED", "startup", "Existing Vector startup could not be verified")
+		return e.failWith("ACTIVATION_FAILED", "startup", "Existing Vector startup could not be verified", e.diagnoseFailure(err, data))
 	}
 	h := Digest(data)
 	if e.actual() != h {
@@ -174,17 +179,18 @@ func (e *Engine) Poll(ctx context.Context) error {
 	}
 	nonce := base64.StdEncoding.EncodeToString(raw[:])
 	e.State.ActualSHA256 = e.actual()
-	e.State.Telemetry = nil
-	if e.State.Policy.TelemetryEnabled && e.Metrics != nil {
-		e.State.Telemetry = e.Metrics.Collect(ctx, e.now())
-	}
+	running, _ := readArtifact(e.Settings.ManagedConfig)
+	telemetry, metricsSource, metricsAddress := e.collectTelemetry(ctx, running)
+	e.State.Telemetry = telemetry
 	if e.paused() {
 		e.pauseAttempt()
 	}
 	if err := e.observeProcessExit(); err != nil {
 		return err
 	}
-	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: e.State.Error, Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())})
+	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: VectorVersion, ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
+	e.addHeartbeatFeatures(&heartbeat, running, metricsSource, metricsAddress)
+	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", heartbeat)
 	if err != nil {
 		return err
 	}
@@ -214,6 +220,7 @@ func (e *Engine) Poll(ctx context.Context) error {
 	e.State.PolicyIdentity = Identity(m.Policy)
 	e.State.Desired = m.Desired
 	e.State.Policy = m.Policy
+	e.State.ServerFeatures = m.Features
 	e.selectAttempt(m)
 	now := e.now()
 	e.State.LastHeartbeat = &now
@@ -258,7 +265,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	data, usesSecrets, err := resolveLocalSecrets(template, e.Settings.SecretFiles, e.Settings.CapabilityPolicy.FullVectorConfig)
 	if err != nil {
-		return e.failAttempt("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files")
+		return e.failAttemptWith("SECRET_RESOLUTION_FAILED", "materialization", "Cannot resolve configuration references; check the approved local bindings and private secret files", e.secretDiagnostics(err, template))
 	}
 	effectiveSHA := Digest(data)
 	if e.State.FailedGeneration != nil && *e.State.FailedGeneration == m.Generation && (e.State.FailedEffectiveSHA256 == effectiveSHA || (e.State.FailedEffectiveSHA256 == "" && !usesSecrets)) {
@@ -319,7 +326,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttempt("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version")
+		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Effective configuration failed Vector validation; run doctor for local checks and review the desired published version", e.diagnoseFailure(err, data))
 	}
 	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
@@ -382,7 +389,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return e.rollback(ctx, m.Generation, "Effective configuration activation could not be verified", j.ConfigurationAttempt)
+		return e.rollbackWith(ctx, m.Generation, "Effective configuration activation could not be verified", j.ConfigurationAttempt, e.diagnoseFailure(err, data))
 	}
 	if e.actual() != effectiveSHA {
 		return e.rollback(ctx, m.Generation, "Managed content changed during activation", j.ConfigurationAttempt)
@@ -451,9 +458,19 @@ func (e *Engine) loadTemplate(ctx context.Context, d *Desired) ([]byte, error) {
 	return data, nil
 }
 func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt) error {
-	fail := func(code, message string) error {
-		e.attemptOutcome(attempt, "failed", &Issue{code, "rollback", message})
-		return e.fail(code, "rollback", message)
+	return e.rollbackWith(ctx, g, reason, attempt, nil)
+}
+
+// rollbackWith restores the last verified configuration. Diagnostics explain
+// why the candidate failed; restore failures add their own.
+func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, diagnostics []Diagnostic) error {
+	fail := func(code, message string, restore ...Diagnostic) error {
+		all := append(append([]Diagnostic(nil), diagnostics...), restore...)
+		if len(all) > maxDiagnostics {
+			all = all[:maxDiagnostics]
+		}
+		e.attemptOutcome(attempt, "failed", &Issue{Code: code, Stage: "rollback", Message: message, Diagnostics: all})
+		return e.failWith(code, "rollback", message, all)
 	}
 	e.State.FailedGeneration = &g
 	e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
@@ -472,14 +489,14 @@ func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt 
 		return fail("ROLLBACK_FAILED", "Cannot restore verified recovery content")
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
-		return fail("ROLLBACK_FAILED", "Restored configuration validation failed")
+		return fail("ROLLBACK_FAILED", "Restored configuration validation failed", e.diagnoseFailure(err, b)...)
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
-		return fail("ROLLBACK_FAILED", "Restored Vector activation could not be verified")
+		return fail("ROLLBACK_FAILED", "Restored Vector activation could not be verified", e.diagnoseFailure(err, b)...)
 	}
 	e.State.ActualSHA256 = e.State.LastGoodSHA256
 	e.State.ApplyState = "rolled_back"
-	e.State.Error = &Issue{"APPLY_ROLLED_BACK", "rollback", reason + "; last verified configuration restored"}
+	e.State.Error = &Issue{Code: "APPLY_ROLLED_BACK", Stage: "rollback", Message: reason + "; last verified configuration restored", Diagnostics: diagnostics}
 	e.attemptOutcome(attempt, "rolled_back", e.State.Error)
 	if err = e.save(); err != nil {
 		return err
@@ -538,7 +555,8 @@ func OpenEngine(dir string) (*Engine, error) {
 		return nil, err
 	}
 	st.DeviceID = cred.DeviceID
-	engine := &Engine{Dir: dir, Settings: s, State: st, Credentials: cred, Client: client, BootID: RandomID(), Driver: &VectorDriver{Settings: s}}
+	log := newVectorLog(dir)
+	engine := &Engine{Dir: dir, Settings: s, State: st, Credentials: cred, Client: client, BootID: RandomID(), Driver: &VectorDriver{Settings: s, Dir: dir, Log: log}, Log: log}
 	if s.MetricsURL != "" {
 		engine.Metrics, err = NewMetricsCollector(s.MetricsURL)
 		if err != nil {
@@ -588,14 +606,19 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		return err
 	}
 	defer func() { e.Client.Close() }()
-	if e.Metrics != nil {
-		defer e.Metrics.client.CloseIdleConnections()
-	}
+	defer func() {
+		if e.Metrics != nil {
+			e.Metrics.client.CloseIdleConnections()
+		}
+		if e.Log != nil {
+			e.Log.close()
+		}
+	}()
 	defer func() {
 		_ = e.Driver.Stop()
 		if e.State.ApplyState == "verified_applied" {
 			e.State.ApplyState = "verification_unknown"
-			e.State.Error = &Issue{"PROCESS_STOPPED", "observation", "The agent supervisor stopped; restart the service to re-establish activation"}
+			e.State.Error = &Issue{Code: "PROCESS_STOPPED", Stage: "observation", Message: "The agent supervisor stopped; restart the service to re-establish activation"}
 			e.observeVerifiedAttempt("verification_unknown", e.State.Error)
 			_ = e.save()
 		}
@@ -654,7 +677,8 @@ func StateSummary(dir string) (map[string]any, error) {
 		return nil, err
 	}
 	h, _ := FileDigest(s.ManagedConfig)
-	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "diagnostics": localDiagnostics(dir, s, st)}, nil
+	running, _ := readArtifact(s.ManagedConfig)
+	return map[string]any{"state": st, "actual_sha256": h, "local_paused": LocalPaused(dir), "drift": st.LastGoodSHA256 != "" && h != st.LastGoodSHA256, "telemetry_available": st.Telemetry != nil, "version": Version, "configuration_mode": s.CapabilityPolicy.ConfigurationMode(), "diagnostics": localDiagnostics(dir, s, st), "host_runtime": hostRuntimeFor(s, dir, running), "vector_log": filepath.Join(dir, vectorLogName)}, nil
 }
 func Doctor(ctx context.Context, dir string) (map[string]any, error) {
 	return doctorWithProbe(ctx, dir, ProbeVector)

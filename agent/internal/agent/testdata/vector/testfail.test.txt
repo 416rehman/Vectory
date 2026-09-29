@@ -1,0 +1,23 @@
+Running tests
+test tags env ... failed
+
+failures:
+
+test tags env:
+
+check[0] for transforms ["tag"] failed conditions:
+
+  condition[0]: source execution failed: 
+error[E000]: function call error for "assert_eq" at (0:27): assertion failed: "prod" == "staging"
+  ┌─ :1:1
+  │
+1 │ assert_eq!(.env, "staging")
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed: "prod" == "staging"
+  │
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
+output payloads from ["tag"] (events encoded as JSON):
+  {"env":"prod","message":"hi","timestamp":"2026-09-29T02:44:19.595573464Z"}
+
