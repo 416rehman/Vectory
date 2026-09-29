@@ -58,6 +58,30 @@ const ISSUE_REFRESH_SECONDS: i64 = 300;
 /// transitions keep counting in their streak and go out on the next one.
 const MAX_ISSUE_WRITES_PER_EVALUATION: usize = 3;
 
+/// The part of detection an operator can edit (Settings → Notifications →
+/// Detection). The defaults are the constants above, so an instance that
+/// never edits them evaluates exactly as before; `crate::detection` stores,
+/// bounds and audits edits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Thresholds {
+    pub sink_errors_per_minute: f64,
+    pub error_drops_per_minute: f64,
+    pub buffer_full: f64,
+    pub stall_samples: u64,
+    pub gate_min_evaluations: u64,
+}
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds {
+            sink_errors_per_minute: SINK_ERRORS_PER_MINUTE,
+            error_drops_per_minute: ERROR_DROPS_PER_MINUTE,
+            buffer_full: BUFFER_FULL,
+            stall_samples: STALL_SAMPLES,
+            gate_min_evaluations: GATE_MIN_EVALUATIONS,
+        }
+    }
+}
+
 pub const SINK_ERRORS: &str = "DATA_PLANE_SINK_ERRORS";
 pub const STALLED: &str = "DATA_PLANE_STALLED";
 pub const BUFFER: &str = "DATA_PLANE_BUFFER_FULL";
@@ -230,9 +254,18 @@ fn finding(
     }
 }
 
+/// Judge one sample with the default thresholds.
+pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> Vec<Finding> {
+    assess_with(sample, previous, logs, &Thresholds::default())
+}
 /// Judge one sample. `previous` holds each component's buffer fill from the
 /// previous evaluation, so "rising" compares like with like.
-pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> Vec<Finding> {
+pub fn assess_with(
+    sample: &Value,
+    previous: &Map<String, Value>,
+    logs: &[Value],
+    t: &Thresholds,
+) -> Vec<Finding> {
     let mut out = Vec::new();
     let empty = Vec::new();
     let components = sample["components"].as_array().unwrap_or(&empty);
@@ -254,7 +287,7 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
                 let sending = c["events_per_second"]
                     .as_f64()
                     .is_some_and(|rate| rate > 0.0);
-                let verdict = if errors >= SINK_ERRORS_PER_MINUTE {
+                let verdict = if errors >= t.sink_errors_per_minute {
                     Verdict::Bad
                 } else if fill.map_or(sending, |f| f < BUFFER_CLEAR) {
                     Verdict::Good
@@ -286,15 +319,17 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
         if let Some(fill) = fill {
             let before = previous.get(id).and_then(Value::as_f64);
             let rising = before.is_some_and(|b| fill > b + 0.001);
-            let verdict = if fill >= BUFFER_FULL || (fill >= BUFFER_RISING && rising) {
+            let verdict = if fill >= t.buffer_full || (fill >= BUFFER_RISING && rising) {
                 Verdict::Bad
             } else if fill < BUFFER_CLEAR {
                 Verdict::Good
             } else {
                 Verdict::Hold
             };
-            let state = if fill >= BUFFER_FULL {
+            let state = if fill >= t.buffer_full && fill >= BUFFER_FULL {
                 "full".to_owned()
+            } else if fill >= t.buffer_full {
+                format!("{} full", percent(fill))
             } else {
                 format!("{} full and rising", percent(fill))
             };
@@ -313,7 +348,7 @@ pub fn assess(sample: &Value, previous: &Map<String, Value>, logs: &[Value]) -> 
             ));
         }
         if let Some(drops) = drops {
-            let verdict = if drops >= ERROR_DROPS_PER_MINUTE {
+            let verdict = if drops >= t.error_drops_per_minute {
                 Verdict::Bad
             } else {
                 Verdict::Good
@@ -529,8 +564,15 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
                 now.signed_duration_since(last).num_seconds() >= EVALUATION_INTERVAL_SECONDS
             })
     });
+    // Read only when something is evaluated or rewritten: the heartbeats in
+    // between pay nothing for editable thresholds.
+    let thresholds = if due || changed {
+        crate::detection::thresholds(db).await?
+    } else {
+        Thresholds::default()
+    };
     if let Some(at) = sampled.filter(|_| due) {
-        evaluate(db, &o, running, &mut state).await?;
+        evaluate(db, &o, running, &mut state, &thresholds).await?;
         state["sampled_at"] = json!(
             at.min(now)
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -546,7 +588,7 @@ pub async fn observe(db: &mut SqliteConnection, o: Observation<'_>) -> Result<()
         // The summary is stable while nothing changes (no timestamps, counts
         // capped, messages refreshed with their issue), so a steady state
         // doesn't rewrite the whole device row a second time.
-        let public = summary(&state);
+        let public = summary(&state, thresholds.gate_min_evaluations);
         if public != o.device["data_plane"] {
             sqlx::query("UPDATE devices SET data=json_set(data,'$.data_plane',json(?)) WHERE id=?")
                 .bind(public.to_string())
@@ -563,13 +605,14 @@ async fn evaluate(
     o: &Observation<'_>,
     running: &str,
     state: &mut Value,
+    thresholds: &Thresholds,
 ) -> Result<()> {
     let empty = Vec::new();
     let logs = o.device["vector_log_summary"]["items"]
         .as_array()
         .unwrap_or(&empty);
     let previous = state["buffers"].as_object().cloned().unwrap_or_default();
-    let findings = assess(o.sample, &previous, logs);
+    let findings = assess_with(o.sample, &previous, logs, thresholds);
     let mut keys = state["keys"].as_object().cloned().unwrap_or_default();
     let mut open = keys.values().filter(|e| e["open"] == true).count();
     let mut seen = std::collections::BTreeSet::new();
@@ -583,7 +626,7 @@ async fn evaluate(
         }
         let entry = keys.entry(key).or_insert_with(|| json!({}));
         let needed = if f.code == STALLED {
-            STALL_SAMPLES
+            thresholds.stall_samples
         } else {
             OPEN_SAMPLES
         };
@@ -681,8 +724,9 @@ async fn evaluate(
 }
 
 /// The public, bounded summary kept on the device record: which version was
-/// measured, how many times, and what is wrong right now.
-fn summary(state: &Value) -> Value {
+/// measured, how many times (up to the canary's measurement count), and
+/// what is wrong right now.
+fn summary(state: &Value, gate_min_evaluations: u64) -> Value {
     let mut open: Vec<Value> = state["keys"]
         .as_object()
         .map(|keys| {
@@ -715,7 +759,7 @@ fn summary(state: &Value) -> Value {
     json!({
         "version_id": state["version_id"],
         // Only "measured enough" matters to readers, so the count stops there.
-        "evaluations": state["evaluations"].as_u64().unwrap_or(0).min(GATE_MIN_EVALUATIONS),
+        "evaluations": state["evaluations"].as_u64().unwrap_or(0).min(gate_min_evaluations),
         "issues": open,
     })
 }
