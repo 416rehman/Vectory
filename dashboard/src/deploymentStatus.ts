@@ -226,6 +226,28 @@ export function progressSegments(
   }));
 }
 
+/**
+ * Recorded target counts with devices that verified but aren't delivering
+ * moved from verified to degraded (which the failed segment counts), so the
+ * bar agrees with the stages and failure groups. Returns how many moved.
+ */
+export function withDegraded(
+  counts: Record<string, number>,
+  degraded: number,
+): { counts: Record<string, number>; moved: number } {
+  const verified = counts.verified_applied || 0;
+  const moved = Math.max(0, Math.min(Math.trunc(degraded) || 0, verified));
+  if (!moved) return { counts, moved: 0 };
+  return {
+    counts: {
+      ...counts,
+      verified_applied: verified - moved,
+      degraded: (counts.degraded || 0) + moved,
+    },
+    moved,
+  };
+}
+
 function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }

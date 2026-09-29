@@ -997,6 +997,13 @@ export type DeploymentTarget = Omit<Deployment["targets"][number], "error"> & {
   diagnostic?: string | null;
   check_in_seconds?: number | null;
   timeline?: { state: string; at: string }[];
+  /** Verified, but an open data-plane issue says it isn't delivering. */
+  delivery?: {
+    code: string;
+    title: string;
+    message?: string | null;
+    hint?: string | null;
+  } | null;
 };
 export type RolloutLane = {
   kind: "canary" | "batch" | "all" | "added" | "not_released";

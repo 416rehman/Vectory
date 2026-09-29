@@ -248,6 +248,33 @@ async fn failing_sink_fails_the_canary_explains_why_and_resolves_when_fixed() {
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["failure_reason"], "data_plane");
     assert_eq!(generation(&f, &d, &f.ids[1]).await, 0, "no batch released");
+    // The targets page keeps the recorded state and adds the delivery reason.
+    let targets = get(&f, &format!("/api/v1/deployments/{id}/targets")).await;
+    let row = targets["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["device_id"] == canary_device.as_str())
+        .unwrap();
+    assert_eq!(row["state"], "verified_applied");
+    assert_eq!(row["delivery"]["code"], "DATA_PLANE_SINK_ERRORS");
+    assert_eq!(row["delivery"]["title"], "archive can't deliver events");
+    assert!(
+        row["delivery"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("reachable")
+    );
+    let other = targets["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["device_id"] == f.ids[1].as_str())
+        .unwrap();
+    assert!(
+        other.get("delivery").is_none(),
+        "only degraded rows carry it"
+    );
 
     let lanes = get(&f, &format!("/api/v1/deployments/{id}/rollout")).await;
     assert_eq!(lanes["stages"][0]["state"], "failed");
