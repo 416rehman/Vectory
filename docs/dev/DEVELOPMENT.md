@@ -1,68 +1,113 @@
-# Isolated local demonstration and integration tests
+# Develop Vectory locally
 
-This development workflow is for the current Windows checkout. It creates private `.local/` state, uses synthetic `demo_logs`, and does not change OS trust or register services. Production installation uses [Compose with verified HTTPS](../QUICKSTART.md), not development cookies.
+Run a private Vectory on loopback, with real agents running real Vector, and run the test suites against it. Everything lives in `.local/`: nothing registers a service or touches your system's trust store. The toolchain versions are in [CONTRIBUTING.md](../../CONTRIBUTING.md#prerequisites).
 
-Prerequisites: Node.js 22/npm, Rust 1.94+, pinned Go 1.26.8 (Go can fetch the declared toolchain), and a separately obtained, checksum-verified **Vector 0.58.0** Windows executable. Put the latter at `.local/tools/vector-0.58.0/bin/vector.exe`. Verify the official distribution before executing it; see [acceptance evidence](../internal/ACCEPTANCE.md). Never use an unknown binary for adoption.
+## Linux and macOS
 
-From the repository root, in PowerShell:
+### Build
+
+```sh
+(cd help-center && npm ci)
+(cd dashboard && npm ci && npm run build)
+(cd server && cargo build --bins)
+```
+
+`npm run build` in `dashboard/` builds the dashboard, then the Help center into `dashboard/dist/help/`.
+
+### Start a preview
+
+```sh
+scripts/preview.sh           # start; also: status, restart, stop
+```
+
+```text
+Preview running at http://127.0.0.1:8080 (agent TLS https://localhost:8443).
+Bootstrap secret: /home/you/Vectory/.local/preview/bootstrap.secret
+```
+
+On first start the script creates a short-lived test CA in `.local/pki/` (with `go run packaging/dev-pki/main.go`) and a random bootstrap secret. It starts the validator when it finds a Vector binary under `.local/tools/`; without one, pipeline checks are structural only. Logs are in `.local/preview/server.log` and `validator.log`. Run `scripts/preview.sh restart` after rebuilding.
+
+To run several previews side by side, give each its own folder and ports:
+
+```sh
+export VECTORY_PREVIEW_DIR=$PWD/.local/preview-b
+export VECTORY_PREVIEW_WEB_PORT=8180
+export VECTORY_PREVIEW_AGENT_PORT=8183
+export VECTORY_PREVIEW_VALIDATOR_PORT=8181
+scripts/preview.sh
+```
+
+### Add a demo fleet
+
+```sh
+node scripts/demo.mjs --agents 4    # 1 to 12 agents
+node scripts/demo.mjs --stop        # stops the agents and the preview
+```
+
+The demo builds the agent, downloads Vector 0.58.0 and checks it against the official SHA-256 list, starts the preview and creates an administrator, `operator@vectory.local`, with a random password in `.local/preview/credentials.json`. It then enrolls the agents, puts them in two groups, sets 15-second check-ins, and publishes and deploys two pipelines that generate synthetic `demo_logs` events. Nothing leaves the machine.
+
+Each agent keeps its state in `.local/demo/agents/<name>/`. Running the demo again reuses agents that are still running. Set `VECTORY_DEMO_DIR` to keep a second demo apart.
+
+### Test
+
+```sh
+(cd dashboard && npx tsc -b && npm test)
+(cd server && cargo test --locked)
+(cd agent && go vet ./... && go test ./...)
+node --test help-center/scripts/*.test.mjs
+node help-center/tests/ci.mjs
+```
+
+- `help-center/tests/ci.mjs` starts its own disposable server, so it doesn't need the preview. It needs `server/target/debug/vectory-server` and a built dashboard.
+- Most browser harnesses in `dashboard/tests/` and `tests/` run against the preview at `http://127.0.0.1:8080` and create clearly named synthetic accounts, tokens and pipelines. Set `VECTORY_UI_URL` to point them elsewhere. Install their browser once with `(cd dashboard && npx playwright install chromium)`.
+- Native tests run the real Vector binary:
+
+  ```sh
+  VECTOR="$PWD/.local/tools/vector-x86_64-unknown-linux-gnu/bin/vector"
+  VECTORY_TEST_VECTOR="$VECTOR" cargo test --locked --manifest-path server/Cargo.toml
+  (cd agent && VECTOR_TEST_BINARY="$VECTOR" go test ./internal/agent -run TestNativeVector)
+  ```
+
+- `node tests/native-workflow.mjs` drives a whole workflow against the preview: a synthetic device and pipeline, activation, drift repair, pause, metrics and secret rotation.
+- Independent TLS checks: `VECTORY_SECURITY_SERVER=$PWD/server/target/debug/vectory-server go test -v tests/security/protocol_test.go`.
+
+### Capture product screenshots
+
+With a preview and a demo fleet running:
+
+```sh
+node scripts/capture-screenshots.mjs
+```
+
+It signs in as the demo administrator and writes 1440×900 screenshots to `docs/screenshots/`.
+
+## Windows (PowerShell)
+
+Put a checksum-verified Vector 0.58.0 at `.local/tools/vector-0.58.0/bin/vector.exe`, then:
 
 ```powershell
-Push-Location help-center
-npm ci
-Pop-Location
-Push-Location dashboard
-npm ci
-npm run build
-npm exec playwright -- install chromium
-Pop-Location
-Push-Location server
-cargo build --locked
-Pop-Location
-Push-Location agent
-go build -trimpath -o vectory.exe ./cmd/vectory
-Pop-Location
+Push-Location help-center; npm ci; Pop-Location
+Push-Location dashboard; npm ci; npm run build; Pop-Location
+Push-Location server; cargo build --locked; Pop-Location
+Push-Location agent; go build -trimpath -o vectory.exe ./cmd/vectory; Pop-Location
 go run packaging/dev-pki/main.go --out .local/pki --hosts localhost,127.0.0.1,::1
 ./packaging/Start-LocalPreview.ps1
 node tests/initialize-preview.mjs
 node tests/native-workflow.mjs
 ```
 
-The PKI generator requires a new destination. Preserve an existing local CA/state between runs; do not overwrite trust under an already enrolled device. `Start-LocalPreview.ps1` serves the built dashboard at **http://127.0.0.1:8080** and a verified agent TLS listener at **https://localhost:8443**. The local admin email is `operator@vectory.local`; its generated random password remains in `.local/preview/credentials.json` and is never a committed/default password. This file, bootstrap secret, test CA key and device state must remain private.
+`Start-LocalPreview.ps1` serves the dashboard at `http://127.0.0.1:8080` and the agent listener at `https://localhost:8443`. `initialize-preview.mjs` creates `operator@vectory.local` with a random password in `.local/preview/credentials.json`. The native workflow leaves its synthetic agent running and records its process in `.local/preview/native-run.json`; stop that process before you run the workflow again.
 
-The native workflow creates a new explicit synthetic device/configuration, publishes and targets it, starts the agent in a path containing spaces, verifies actual Vector activation and exact artifact hash, repairs drift, tests local pause, then resumes. It also reads actual Vector component metrics through an explicitly permitted loopback exporter, creates a private synthetic credential file, verifies device-local secret substitution and rotation against a temporary loopback HTTP receiver, checks that those values never appear in server responses, and restores the console pipeline. It leaves the synthetic daemon running for dashboard inspection; `.local/preview/native-run.json` records its PID, binary and paths. Set `VECTORY_AGENT_BIN` to an absolute agent executable path to test a particular candidate. Before repeating the native workflow, stop the prior synthetic daemon after checking that its executable and command line match this file. Never stop an unrelated Vector/agent process. No production device is adopted by these tests.
-
-For the Vite development UI, run `npm run dev` in `dashboard/` and visit **http://127.0.0.1:5173**. Vite proxies `/api` to the loopback server. Then:
+Windows-specific checks:
 
 ```powershell
-Push-Location dashboard
-npm test
-npm run test:browser
-Pop-Location
-node tests/contracts.mjs
-node tests/catalog.mjs
-node tests/fleet-browser.mjs
-node tests/security/resource-race.mjs
 ./tests/native-outage.ps1
+$env:VECTOR_TEST_BINARY = (Resolve-Path .local/tools/vector-0.58.0/bin/vector.exe)
+Push-Location agent; go test -v ./internal/agent -run 'TestNativeVector'; Pop-Location
 ```
 
-Browser tests use the real API/database and create clearly named test accounts, tokens, configurations, groups and schedules. They require a synthetic offline device left by a prior native fixture for non-live recovery/removal tests. Secrets are read from the private credentials file, not from environment-independent defaults. Run these only against this isolated preview. Screenshots and nonsensitive evidence are written to `docs/`; failure traces are ignored. `VECTORY_UI_URL=http://127.0.0.1:8080` can test the built dashboard without Vite.
+## Rules for test data
 
-The loopback server runs structural validation; it does not execute arbitrary user VRL on the API host. Synthetic VRL testing reports capability unavailable until the isolated validator is deployed. The actual worker's bounded native invocation is tested separately in Rust, while Compose container isolation still requires a Docker engine for verification.
-
-Independent negative TLS tests create their own short-lived server state and TLS listeners:
-
-```powershell
-$env:VECTORY_SECURITY_SERVER=(Resolve-Path server/target/debug/vectory-server.exe)
-go test -v tests/security/protocol_test.go
-```
-
-For actual agent activation/rollback and metrics integration:
-
-```powershell
-$env:VECTOR_TEST_BINARY=(Resolve-Path .local/tools/vector-0.58.0/bin/vector.exe)
-Push-Location agent
-go test -v ./internal/agent -run 'TestNativeVector'
-Pop-Location
-```
-
-The [load harness](../../tests/load/README.md) runs an isolated synthetic protocol population, not native Vector workloads. Its measured failure boundary is recorded in [CAPACITY.md](../internal/CAPACITY.md).
+- Use synthetic data only. Never point a test at a real installation or real hosts.
+- Keep `.local/` private: it holds a test CA key, bootstrap secrets, credentials and device state.
+- Don't commit screenshots or evidence from ad-hoc runs. Product screenshots come from `scripts/capture-screenshots.mjs`.
