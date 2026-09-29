@@ -2153,7 +2153,12 @@
             "description": "Success",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedPolicyListItem"
+                  }
+                }
               }
             }
           },
@@ -5161,10 +5166,21 @@
                 "cancelled",
                 "failed",
                 "missed",
-                "unassigned"
+                "unassigned",
+                "rolled_back"
               ],
               "default": "all"
-            }
+            },
+            "description": "rolled_back selects rolled-back sources (stored status cancelled or unassigned); cancelled and unassigned then exclude them."
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Only deployments whose selector names this group."
           },
           {
             "name": "scheduled",
@@ -6856,6 +6872,359 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/policies/{id}": {
+      "get": {
+        "summary": "Read saved agent settings with where they are applied",
+        "operationId": "get__api_v1_policies__id_",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPolicyListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      },
+      "put": {
+        "summary": "Operator or administrator edits saved settings under revision CAS (409 STALE_REVISION). Never changes a device: applying the settings again is a separate reviewed deployment.",
+        "operationId": "put__api_v1_policies__id_",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPolicyListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/rollout": {
+      "get": {
+        "summary": "Stage lanes and grouped failures for the rollout page",
+        "operationId": "get__api_v1_deployments__id__rollout",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutLanes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        }
+      }
+    },
+    "/api/v1/groups/membership-preview": {
+      "post": {
+        "summary": "Operator or administrator previews what a membership edit changes on each added or removed device, without writing anything",
+        "operationId": "post__api_v1_groups_membership_preview",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "group_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "device_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "group_id",
+                  "device_ids"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupMembershipPreview"
                 }
               }
             }
@@ -13267,6 +13636,79 @@
           },
           "reason": {
             "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_mode": {
+            "enum": [
+              "snapshot",
+              "persistent"
+            ]
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "active",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed",
+              "missed",
+              "unassigned"
+            ]
+          },
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -13315,7 +13757,8 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "Computed status. awaiting_first_check_in: enrolled but never checked in. offline: more than three check-in intervals late."
           },
           "apply_state": {
             "type": "string"
@@ -13427,6 +13870,132 @@
           "reported_apply_state": {
             "type": "string",
             "description": "Agent-reported workload state, separate from progress of the current desired assignment."
+          },
+          "check_in_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 3600,
+            "description": "Current check-in interval; until the agent acknowledges a policy change, the longer of the old and new interval."
+          },
+          "desired_version": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 240
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "number",
+                  "configuration_id",
+                  "configuration_name"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running_version": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "number": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "configuration_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 240
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "number",
+                  "configuration_id",
+                  "configuration_name"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last verified managed version on the host, which keeps running after a failed update or a removed assignment. Null means no managed version was ever verified (the host runs its adopted local config)."
           }
         },
         "required": [
@@ -13558,6 +14127,96 @@
           "request_correlation": {
             "const": true,
             "description": "Keyed create/rollback receipts and exact request lookup echo durable request, operation and source identity."
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "replaces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "replaced_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "deployment_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "deployment_id",
+                "device_count",
+                "at",
+                "version_number"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "rolled_back_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rollback_of": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status_before_removal": {
+            "type": "string"
+          },
+          "status_before_rollback": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": "string"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "removed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rolled_back_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "policy_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
@@ -13712,6 +14371,245 @@
           "canary_gate": {
             "$ref": "#/components/schemas/CanaryGate",
             "description": "Present only on the single-deployment summary for active/paused canaries; omitted from paged history and other rollout states. Absence does not establish readiness."
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollback_available": {
+            "type": "boolean",
+            "description": "Some released current target recorded a previously managed version."
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "removed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status_before_removal": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status_before_rollback": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rolled_back_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rolled_back_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rolled_back_to_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollback_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollback_of_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replaced_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "deployment_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "deployment_id",
+                "device_count",
+                "at",
+                "version_number"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "replaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "deployment_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "version_number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "deployment_id",
+                "version_number"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -13732,7 +14630,8 @@
           "verified_count",
           "state_counts"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Status is the assignment lifecycle. status_before_removal and status_before_rollback keep how the rollout itself ended when an assignment is later removed, replaced or rolled back."
       },
       "DeploymentHistoryPage": {
         "type": "object",
@@ -13824,6 +14723,99 @@
               }
             ],
             "description": "Current gate blocker for this target of an active/paused canary. Null also covers pending or no-longer-targeted rows and must not be interpreted as verified. Omitted outside this context or by older servers."
+          },
+          "released_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replaced_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a removed row: the deployment that replaced this assignment on the device."
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First sanitized diagnostic the agent reported for this exact candidate, when available."
+          },
+          "check_in_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Longest interval the agent may currently take between check-ins."
+          },
+          "timeline": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "state",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Recorded apply-state changes after release, oldest first. Heartbeats can skip states."
           }
         },
         "required": [
@@ -13930,6 +14922,21 @@
           },
           "rollout": {
             "$ref": "#/components/schemas/Rollout"
+          },
+          "replaces": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Existing assignments of the same resource that this deployment explicitly replaces on the selected devices. Until this deployment releases a device the replaced assignment keeps it; each release retires the replaced assignment there (history kept, persistent selectors exclude the device). An assignment left with nothing to deliver is retired (status unassigned, status_before_removal kept). Without replaces, equal-priority different payloads still conflict. A replaced assignment that changed or no longer selects any of these devices returns 409 REPLACEMENT_CHANGED."
+          },
+          "policy_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Saved agent settings a policy deployment applies. The policy must equal their current values, otherwise preview and creation return 409."
           }
         },
         "required": [
@@ -14342,11 +15349,21 @@
             "enum": [
               "requested",
               "higher_priority",
-              "conflict"
-            ]
+              "conflict",
+              "replace"
+            ],
+            "description": "replace: the device moves from the listed replaced assignment when this deployment releases it."
           },
           "assignment": {
             "$ref": "#/components/schemas/Assignment"
+          },
+          "winner": {
+            "$ref": "#/components/schemas/AssignmentDescription",
+            "description": "The assignment that currently wins for this device and resource, possibly not yet released."
+          },
+          "replaces": {
+            "$ref": "#/components/schemas/AssignmentDescription",
+            "description": "The requested replacement that covers this device."
           }
         },
         "required": [
@@ -14438,7 +15455,43 @@
           },
           "conflicts": {
             "type": "array",
-            "items": {}
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "assignment_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "priority": {
+                  "type": "integer"
+                },
+                "resource": {
+                  "enum": [
+                    "configuration",
+                    "policy"
+                  ]
+                },
+                "assignments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentDescription"
+                  }
+                }
+              },
+              "required": [
+                "device_id",
+                "assignment_ids",
+                "priority",
+                "resource"
+              ],
+              "additionalProperties": true
+            }
           },
           "warnings": {
             "type": "array",
@@ -14470,6 +15523,92 @@
           "request_correlation": {
             "const": true,
             "description": "Keyed create/rollback receipts and exact request lookup echo durable request, operation and source identity."
+          },
+          "replacements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "assignment": {
+                  "$ref": "#/components/schemas/AssignmentDescription"
+                },
+                "device_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "retires_assignment": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "assignment",
+                "device_ids",
+                "retires_assignment"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The effect of the requested replaces list. retires_assignment is true when nothing is left for the replaced assignment to deliver, including future members of a persistent selector."
+          },
+          "suggested_replaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "assignment": {
+                  "$ref": "#/components/schemas/AssignmentDescription"
+                },
+                "device_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "required": [
+                "assignment",
+                "device_ids"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Current winners of the same pipeline (or any agent settings) with a different payload, which a reviewed deployment would normally replace."
+          },
+          "suggested_priority": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -1000000,
+                "maximum": 1000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Highest priority among suggested replacements, to reuse."
+          },
+          "winning_priority": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -1000000,
+                "maximum": 1000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lowest priority that would outrank every existing winner on conflicting or outranked devices, when one exists."
+          },
+          "paused_device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Configuration targets whose sync is paused; they apply the change after sync resumes."
           }
         },
         "required": [
@@ -15982,8 +17121,16 @@
                   ]
                 },
                 "artifact_sha256": {
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Null when the device had no previously managed version before this deployment; the preview is then blocked with PRIOR_VERSION_UNKNOWN."
                 }
               },
               "required": [
@@ -16786,6 +17933,647 @@
           "expected_generation"
         ],
         "additionalProperties": false
+      },
+      "AssignmentDescription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "enum": [
+              "configuration",
+              "policy"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "target_mode": {
+            "enum": [
+              "snapshot",
+              "persistent"
+            ]
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "active",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed",
+              "missed",
+              "unassigned"
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "resource",
+          "priority",
+          "target_mode",
+          "status",
+          "created_at",
+          "version_id",
+          "version_number",
+          "configuration_id",
+          "configuration_name",
+          "policy",
+          "policy_id",
+          "policy_name"
+        ],
+        "additionalProperties": false,
+        "description": "Display metadata for an assignment. Names and numbers only: never selectors, targets, variable values or artifacts."
+      },
+      "RolloutLane": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "canary",
+              "batch",
+              "all",
+              "added",
+              "not_released"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "enum": [
+              "verified",
+              "in_progress",
+              "failed",
+              "queued",
+              "stopped"
+            ]
+          },
+          "released_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 60,
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "device_id",
+                "device_name",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "more": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "kind",
+          "index",
+          "state",
+          "released_at",
+          "verified_at",
+          "size",
+          "counts",
+          "devices",
+          "more"
+        ],
+        "additionalProperties": false
+      },
+      "RolloutFailure": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "device_id",
+                "device_name"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "state",
+          "message",
+          "diagnostic",
+          "count",
+          "devices"
+        ],
+        "additionalProperties": false
+      },
+      "RolloutLanes": {
+        "type": "object",
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "active",
+              "paused",
+              "completed",
+              "cancelled",
+              "failed",
+              "missed",
+              "unassigned"
+            ]
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloutLane"
+            }
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloutFailure"
+            }
+          },
+          "removed_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "check_in_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_admission_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "deployment_id",
+          "status",
+          "evaluated_at",
+          "stages",
+          "failures",
+          "removed_count",
+          "check_in_seconds",
+          "next_admission_at"
+        ],
+        "additionalProperties": false,
+        "description": "Waves recovered from persisted release times; queued waves follow the scheduler order (pending targets by device ID, canary first, then batches). Failures group current failed targets by diagnostic or error."
+      },
+      "SavedPolicyListItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "policy": {
+            "$ref": "#/components/schemas/AgentPolicy"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "applied_device_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "applied_devices": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 240
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "policy",
+          "created_at",
+          "revision",
+          "applied_device_count",
+          "applied_devices"
+        ],
+        "additionalProperties": false,
+        "description": "Applied devices are live devices whose winning settings assignment was applied from this template, or (for assignments made before templates were linked) carries exactly these settings."
+      },
+      "PolicyUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "policy": {
+            "$ref": "#/components/schemas/AgentPolicy"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "policy",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
+      "GroupMembershipEffect": {
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RemovalState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RemovalState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentDescription"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "changed",
+          "before",
+          "after",
+          "pending"
+        ],
+        "additionalProperties": false
+      },
+      "GroupMembershipPreview": {
+        "type": "object",
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "change": {
+                  "enum": [
+                    "added",
+                    "removed"
+                  ]
+                },
+                "configuration": {
+                  "$ref": "#/components/schemas/GroupMembershipEffect"
+                },
+                "policy": {
+                  "$ref": "#/components/schemas/GroupMembershipEffect"
+                }
+              },
+              "required": [
+                "device_id",
+                "device_name",
+                "change",
+                "configuration",
+                "policy"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "group_id",
+          "revision",
+          "stale",
+          "ready",
+          "blockers",
+          "devices"
+        ],
+        "additionalProperties": false,
+        "description": "Read-only simulation of a membership edit with the real resolver, rolled back afterwards. pending names a winning assignment that has not released the device yet."
       }
     }
   }

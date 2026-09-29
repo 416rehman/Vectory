@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_TARGETS: usize = 10_000;
 const MAX_SAFE: i64 = 9_007_199_254_740_991;
-const CONFIG: &str = "json_object('assignment_id',d.assignment_id,'version_id',d.desired_version_id,'generation',d.desired_generation,'policy',NULL)";
-const POLICY: &str = "json_object('assignment_id',d.policy_assignment_id,'version_id',NULL,'generation',d.policy_generation,'policy',json(d.policy))";
+pub(crate) const CONFIG: &str = "json_object('assignment_id',d.assignment_id,'version_id',d.desired_version_id,'generation',d.desired_generation,'policy',NULL)";
+pub(crate) const POLICY: &str = "json_object('assignment_id',d.policy_assignment_id,'version_id',NULL,'generation',d.policy_generation,'policy',json(d.policy))";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,7 +126,7 @@ fn validate_state(value: &Value) -> Result<()> {
     }
     Ok(())
 }
-async fn decorate(db: &mut SqliteConnection, value: &Value) -> Result<Value> {
+pub(crate) async fn decorate(db: &mut SqliteConnection, value: &Value) -> Result<Value> {
     if value.is_null() {
         return Ok(Value::Null);
     }
