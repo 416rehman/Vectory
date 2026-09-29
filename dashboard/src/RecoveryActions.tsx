@@ -6,14 +6,11 @@ import {
   can,
   getSessionEpoch,
   withRequestDeadline,
-  type Deployment,
   type Device,
   type User,
 } from "./api";
 import { Button, ErrorBox, RefreshButton } from "./ui";
-import AssignmentRemoval from "./AssignmentRemoval";
 import DeviceRecoveryAuthorization from "./DeviceRecoveryAuthorization";
-import ScheduledAssignmentRefresh from "./ScheduledAssignmentRefresh";
 import "./control.css";
 
 type DeviceRecoveryProps = {
@@ -309,106 +306,6 @@ function DeviceApplicationRetry({
         </div>
       )}
       {retryState?.error && <ErrorBox message={retryState.error} />}
-    </>
-  );
-}
-
-export function AssignmentActions({
-  deployment,
-  user,
-  onDone,
-  onCommittingChange,
-  onReviewRemoval,
-  onReviewScheduled,
-}: {
-  deployment: Pick<Deployment, "id" | "status">;
-  user: User;
-  onDone(message: string): void;
-  onCommittingChange?(busy: boolean): void;
-  onReviewRemoval?(): void;
-  onReviewScheduled?(): void;
-}) {
-  const [removalOpen, setRemovalOpen] = useState(false);
-  const [scheduledOpen, setScheduledOpen] = useState(false);
-  const removalOpener = useRef<HTMLButtonElement | null>(null);
-  const scheduledOpener = useRef<HTMLButtonElement | null>(null);
-  if (!can(user, "operate")) return null;
-  return (
-    <>
-      {deployment.status === "scheduled" && (
-        <details className="control-disclosure">
-          <summary>Update scheduled devices</summary>
-          <div className="control-disclosure-content">
-            <p className="control-muted">
-              Compare the saved device selection with current group membership
-              before the schedule activates.
-            </p>
-            <Button
-              variant="secondary"
-              onClick={(event) => {
-                if (onReviewScheduled) {
-                  onReviewScheduled();
-                  return;
-                }
-                scheduledOpener.current = event.currentTarget;
-                setScheduledOpen(true);
-              }}
-            >
-              Review scheduled devices
-            </Button>
-          </div>
-        </details>
-      )}
-      {!["scheduled", "missed", "unassigned"].includes(deployment.status) && (
-        <details className="control-disclosure">
-          <summary>Remove this assignment</summary>
-          <div className="control-disclosure-content">
-            <p className="control-muted">
-              Review what each device will use after this assignment is removed.
-              Removing a configuration assignment does not stop Vector.
-            </p>
-            <Button
-              variant="secondary"
-              onClick={(event) => {
-                if (onReviewRemoval) {
-                  onReviewRemoval();
-                  return;
-                }
-                removalOpener.current = event.currentTarget;
-                setRemovalOpen(true);
-              }}
-            >
-              Review assignment removal
-            </Button>
-          </div>
-        </details>
-      )}
-      {!onReviewRemoval && (
-        <AssignmentRemoval
-          key={`${user.id}:${deployment.id}`}
-          deploymentId={deployment.id}
-          actorId={user.id}
-          allowed={can(user, "operate")}
-          open={removalOpen}
-          onClose={() => setRemovalOpen(false)}
-          onDone={onDone}
-          onCommittingChange={onCommittingChange}
-          returnFocusRef={removalOpener}
-        />
-      )}
-      {!onReviewScheduled && (
-        <ScheduledAssignmentRefresh
-          key={`${user.id}:${deployment.id}`}
-          deploymentId={deployment.id}
-          actorId={user.id}
-          allowed={can(user, "operate")}
-          open={scheduledOpen}
-          onClose={() => setScheduledOpen(false)}
-          onDone={onDone}
-          onCommittingChange={onCommittingChange}
-          returnFocusRef={scheduledOpener}
-        />
-      )}
     </>
   );
 }

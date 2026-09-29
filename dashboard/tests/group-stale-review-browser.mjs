@@ -88,6 +88,24 @@ await context.route("**/*", async (route) => {
   requests.push({ path, method });
   if (method === "GET" && path === "/devices")
     return route.fulfill({ json: devices });
+  // The group overview lists assignments; member edits preview their effects.
+  if (method === "GET" && path === "/deployments/history")
+    return route.fulfill({
+      json: { items: [], total: 0, page: 1, page_size: 12 },
+    });
+  if (method === "POST" && path === "/groups/membership-preview") {
+    const body = req.postDataJSON();
+    return route.fulfill({
+      json: {
+        group_id: body.group_id,
+        revision: body.revision,
+        stale: false,
+        ready: true,
+        blockers: [],
+        devices: [],
+      },
+    });
+  }
   if (method === "GET" && path === "/groups")
     return route.fulfill({ json: [group] });
   if (method === "PUT" && path === `/groups/${group.id}`) {
@@ -111,6 +129,7 @@ try {
       })
       .click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("tab", { name: "Edit members", exact: true }).click();
     await expect(
       page.getByRole("checkbox", { name: /Synthetic edge 1/ }),
     ).toBeChecked();

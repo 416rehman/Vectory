@@ -362,292 +362,296 @@ export default function GroupEditor({
           </div>
         </div>
       ) : (
-        <form
+        <div
           className="group-editor-form"
-          onSubmit={save}
           id={base ? "group-panel" : undefined}
           role={base ? "tabpanel" : undefined}
           aria-labelledby={base ? "group-tab-members" : undefined}
         >
-          <div className="modal-body fleet-group-form">
-            {!compatible && (
-              <ErrorBox message="Update the server to enable safe group editing. You can still view this group." />
-            )}
-            {pendingCreate && !review && !busy && (
-              <ErrorBox message="Review the pending group request on the Groups page before creating another group. Your existing group edits are still available." />
-            )}
-            {(error || deviceError) && (
-              <ErrorBox message={error || deviceError} />
-            )}
-            {blockedByCanary && (
-              <p className="group-blocked-help">
-                <a
-                  href={`#/${deploymentRoute(false, null, { search: "", status: "active", page: 1 })}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Review active deployments
-                  <span className="sr-only"> (opens in a new tab)</span>
-                </a>
-                <span>Your edits stay here while you review.</span>
-              </p>
-            )}
-            {review && (
-              <section
-                className="group-review"
-                ref={notice}
-                tabIndex={-1}
-                aria-label="Review group changes"
-              >
-                <h3>
-                  {confirmedCreate
-                    ? "Group saved"
-                    : review === "conflict"
-                      ? "This group changed"
-                      : "Save could not be confirmed"}
-                </h3>
-                <p>
-                  {confirmedCreate
-                    ? "This group was created successfully. You can close this form and open it from the saved request."
-                    : review === "conflict"
-                      ? "Your edits are still here. Compare them with the latest saved group before saving again."
-                      : !base
-                        ? "The server may have created this group. Its exact request is saved in this browser and stays available after closing or reloading. Review it from Groups before trying again."
-                        : "The request may have saved. Your edits are still here; check the saved group before trying again."}
+          <form className="group-editor-form" onSubmit={save}>
+            <div className="modal-body fleet-group-form">
+              {!compatible && (
+                <ErrorBox message="Update the server to enable safe group editing. You can still view this group." />
+              )}
+              {pendingCreate && !review && !busy && (
+                <ErrorBox message="Review the pending group request on the Groups page before creating another group. Your existing group edits are still available." />
+              )}
+              {(error || deviceError) && (
+                <ErrorBox message={error || deviceError} />
+              )}
+              {blockedByCanary && (
+                <p className="group-blocked-help">
+                  <a
+                    href={`#/${deploymentRoute(false, null, { search: "", status: "active", page: 1 })}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Review active deployments
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </a>
+                  <span>Your edits stay here while you review.</span>
                 </p>
-                {reviewError && <ErrorBox message={reviewError} />}
-                {!base ? (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      onRefresh();
-                      onClose();
-                    }}
-                  >
-                    Close and review request
-                  </Button>
-                ) : !latest ? (
-                  <Button
-                    variant="secondary"
-                    onClick={loadLatest}
-                    busy={busy}
-                    disabled={missing}
-                  >
-                    Review saved group
-                  </Button>
-                ) : (
-                  <>
-                    {latest.name !== name && (
-                      <div className="group-review-value">
-                        <span>Latest saved name</span>
-                        <strong>{latest.name}</strong>
-                        <Button
-                          variant="ghost"
-                          onClick={() => setName(latest.name)}
-                        >
-                          Use latest name
-                        </Button>
-                      </div>
-                    )}
-                    {latest.description !== description && (
-                      <div className="group-review-value">
-                        <span>Latest saved description</span>
-                        <p>{latest.description || "No description"}</p>
-                        <Button
-                          variant="ghost"
-                          onClick={() => setDescription(latest.description)}
-                        >
-                          Use latest description
-                        </Button>
-                      </div>
-                    )}
-                    <div className="group-review-members">
-                      <strong>Membership compared with the saved group</strong>
-                      {added.length > 0 && (
-                        <div>
-                          <span>
-                            Your edits would add {added.length}{" "}
-                            {added.length === 1 ? "device" : "devices"}
-                          </span>
-                          <ul>
-                            {added.map((id) => (
-                              <li key={id}>{deviceName(id)}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {removed.length > 0 && (
-                        <div>
-                          <span>
-                            Your edits would remove {removed.length}{" "}
-                            {removed.length === 1 ? "device" : "devices"}
-                          </span>
-                          <ul>
-                            {removed.map((id) => (
-                              <li key={id}>{deviceName(id)}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {!added.length && !removed.length ? (
-                        <p>Your selection matches the saved membership.</p>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          onClick={() => setIds([...latest.device_ids])}
-                        >
-                          Use latest members
-                        </Button>
-                      )}
-                    </div>
-                    <p>
-                      Keep the edits shown below or use saved values above.
-                      Continuing does not save anything.
-                    </p>
+              )}
+              {review && (
+                <section
+                  className="group-review"
+                  ref={notice}
+                  tabIndex={-1}
+                  aria-label="Review group changes"
+                >
+                  <h3>
+                    {confirmedCreate
+                      ? "Group saved"
+                      : review === "conflict"
+                        ? "This group changed"
+                        : "Save could not be confirmed"}
+                  </h3>
+                  <p>
+                    {confirmedCreate
+                      ? "This group was created successfully. You can close this form and open it from the saved request."
+                      : review === "conflict"
+                        ? "Your edits are still here. Compare them with the latest saved group before saving again."
+                        : !base
+                          ? "The server may have created this group. Its exact request is saved in this browser and stays available after closing or reloading. Review it from Groups before trying again."
+                          : "The request may have saved. Your edits are still here; check the saved group before trying again."}
+                  </p>
+                  {reviewError && <ErrorBox message={reviewError} />}
+                  {!base ? (
                     <Button
                       variant="secondary"
                       onClick={() => {
-                        setBase(latest);
-                        setLatest(null);
-                        setReview(null);
-                        setError("");
-                        nameInput.current?.focus();
+                        onRefresh();
+                        onClose();
                       }}
                     >
-                      Continue editing
+                      Close and review request
                     </Button>
-                  </>
-                )}
-              </section>
-            )}
-            <Field label="Group name">
-              <input
-                ref={nameInput}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                maxLength={120}
-                required
-                readOnly={!allowed || !compatible || (!base && !!review)}
-                disabled={busy}
-                placeholder="e.g. Production"
-              />
-            </Field>
-            <Field label="Description (optional)">
-              <textarea
-                rows={2}
-                value={description}
-                maxLength={2000}
-                readOnly={!allowed || !compatible || (!base && !!review)}
-                disabled={busy}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </Field>
-            <div className="fleet-members-heading">
-              <h3>Devices</h3>
-              <span>{ids.length} selected</span>
-            </div>
-            <SearchBox
-              value={search}
-              onChange={setSearch}
-              placeholder="Find a device"
-            />
-            {deviceLoading ? (
-              <p role="status">Loading devices…</p>
-            ) : (
-              <div className="fleet-members">
-                {members.map((device) => (
-                  <label key={device.id}>
-                    <input
-                      type="checkbox"
-                      disabled={
-                        !allowed ||
-                        !compatible ||
-                        (!base && !!review) ||
-                        busy ||
-                        (device.status === "revoked" &&
-                          !ids.includes(device.id))
-                      }
-                      checked={ids.includes(device.id)}
-                      onChange={() =>
-                        setIds((previous) =>
-                          previous.includes(device.id)
-                            ? previous.filter((id) => id !== device.id)
-                            : [...previous, device.id],
-                        )
-                      }
-                    />
-                    <span>
-                      <strong>{device.name}</strong>
-                      <small>
-                        {[device.os, device.arch].filter(Boolean).join(" / ") ||
-                          "Platform not reported"}
-                        {device.status === "revoked" ? " · Revoked" : ""}
-                      </small>
-                    </span>
-                  </label>
-                ))}
-                {unknownIds.map((id) => (
-                  <label key={id}>
-                    <input
-                      type="checkbox"
-                      checked
-                      disabled={
-                        !allowed || !compatible || busy || (!base && !!review)
-                      }
-                      onChange={() =>
-                        setIds((previous) =>
-                          previous.filter((value) => value !== id),
-                        )
-                      }
-                    />
-                    <span>
-                      <strong>{id}</strong>
-                      <small>Device unavailable</small>
-                    </span>
-                  </label>
-                ))}
-                {!members.length && !unknownIds.length && (
-                  <p>
-                    {search
-                      ? "No devices match your search."
-                      : "No enrolled devices. You can save an empty group."}
-                  </p>
-                )}
+                  ) : !latest ? (
+                    <Button
+                      variant="secondary"
+                      onClick={loadLatest}
+                      busy={busy}
+                      disabled={missing}
+                    >
+                      Review saved group
+                    </Button>
+                  ) : (
+                    <>
+                      {latest.name !== name && (
+                        <div className="group-review-value">
+                          <span>Latest saved name</span>
+                          <strong>{latest.name}</strong>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setName(latest.name)}
+                          >
+                            Use latest name
+                          </Button>
+                        </div>
+                      )}
+                      {latest.description !== description && (
+                        <div className="group-review-value">
+                          <span>Latest saved description</span>
+                          <p>{latest.description || "No description"}</p>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setDescription(latest.description)}
+                          >
+                            Use latest description
+                          </Button>
+                        </div>
+                      )}
+                      <div className="group-review-members">
+                        <strong>
+                          Membership compared with the saved group
+                        </strong>
+                        {added.length > 0 && (
+                          <div>
+                            <span>
+                              Your edits would add {added.length}{" "}
+                              {added.length === 1 ? "device" : "devices"}
+                            </span>
+                            <ul>
+                              {added.map((id) => (
+                                <li key={id}>{deviceName(id)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {removed.length > 0 && (
+                          <div>
+                            <span>
+                              Your edits would remove {removed.length}{" "}
+                              {removed.length === 1 ? "device" : "devices"}
+                            </span>
+                            <ul>
+                              {removed.map((id) => (
+                                <li key={id}>{deviceName(id)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {!added.length && !removed.length ? (
+                          <p>Your selection matches the saved membership.</p>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            onClick={() => setIds([...latest.device_ids])}
+                          >
+                            Use latest members
+                          </Button>
+                        )}
+                      </div>
+                      <p>
+                        Keep the edits shown below or use saved values above.
+                        Continuing does not save anything.
+                      </p>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setBase(latest);
+                          setLatest(null);
+                          setReview(null);
+                          setError("");
+                          nameInput.current?.focus();
+                        }}
+                      >
+                        Continue editing
+                      </Button>
+                    </>
+                  )}
+                </section>
+              )}
+              <Field label="Group name">
+                <input
+                  ref={nameInput}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  maxLength={120}
+                  required
+                  readOnly={!allowed || !compatible || (!base && !!review)}
+                  disabled={busy}
+                  placeholder="e.g. Production"
+                />
+              </Field>
+              <Field label="Description (optional)">
+                <textarea
+                  rows={2}
+                  value={description}
+                  maxLength={2000}
+                  readOnly={!allowed || !compatible || (!base && !!review)}
+                  disabled={busy}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </Field>
+              <div className="fleet-members-heading">
+                <h3>Devices</h3>
+                <span>{ids.length} selected</span>
               </div>
-            )}
-            {base && allowed && compatible && !review && (
-              <GroupMembershipEffects
-                group={base}
-                ids={ids}
-                devices={devices}
+              <SearchBox
+                value={search}
+                onChange={setSearch}
+                placeholder="Find a device"
               />
-            )}
-          </div>
-          <div className="modal-footer">
-            <Button variant="secondary" onClick={close} disabled={busy}>
-              {allowed && !(review === "uncertain" && !base)
-                ? "Cancel"
-                : "Close"}
-            </Button>
-            {allowed && (
-              <Button
-                type="submit"
-                busy={busy}
-                disabled={
-                  !compatible ||
-                  pendingCreate ||
-                  !!review ||
-                  !name.trim() ||
-                  (base !== null && !changed) ||
-                  deviceLoading ||
-                  !!deviceError
-                }
-              >
-                {base ? "Save changes" : "Create group"}
+              {deviceLoading ? (
+                <p role="status">Loading devices…</p>
+              ) : (
+                <div className="fleet-members">
+                  {members.map((device) => (
+                    <label key={device.id}>
+                      <input
+                        type="checkbox"
+                        disabled={
+                          !allowed ||
+                          !compatible ||
+                          (!base && !!review) ||
+                          busy ||
+                          (device.status === "revoked" &&
+                            !ids.includes(device.id))
+                        }
+                        checked={ids.includes(device.id)}
+                        onChange={() =>
+                          setIds((previous) =>
+                            previous.includes(device.id)
+                              ? previous.filter((id) => id !== device.id)
+                              : [...previous, device.id],
+                          )
+                        }
+                      />
+                      <span>
+                        <strong>{device.name}</strong>
+                        <small>
+                          {[device.os, device.arch]
+                            .filter(Boolean)
+                            .join(" / ") || "Platform not reported"}
+                          {device.status === "revoked" ? " · Revoked" : ""}
+                        </small>
+                      </span>
+                    </label>
+                  ))}
+                  {unknownIds.map((id) => (
+                    <label key={id}>
+                      <input
+                        type="checkbox"
+                        checked
+                        disabled={
+                          !allowed || !compatible || busy || (!base && !!review)
+                        }
+                        onChange={() =>
+                          setIds((previous) =>
+                            previous.filter((value) => value !== id),
+                          )
+                        }
+                      />
+                      <span>
+                        <strong>{id}</strong>
+                        <small>Device unavailable</small>
+                      </span>
+                    </label>
+                  ))}
+                  {!members.length && !unknownIds.length && (
+                    <p>
+                      {search
+                        ? "No devices match your search."
+                        : "No enrolled devices. You can save an empty group."}
+                    </p>
+                  )}
+                </div>
+              )}
+              {base && allowed && compatible && !review && (
+                <GroupMembershipEffects
+                  group={base}
+                  ids={ids}
+                  devices={devices}
+                />
+              )}
+            </div>
+            <div className="modal-footer">
+              <Button variant="secondary" onClick={close} disabled={busy}>
+                {allowed && !(review === "uncertain" && !base)
+                  ? "Cancel"
+                  : "Close"}
               </Button>
-            )}
-          </div>
-        </form>
+              {allowed && (
+                <Button
+                  type="submit"
+                  busy={busy}
+                  disabled={
+                    !compatible ||
+                    pendingCreate ||
+                    !!review ||
+                    !name.trim() ||
+                    (base !== null && !changed) ||
+                    deviceLoading ||
+                    !!deviceError
+                  }
+                >
+                  {base ? "Save changes" : "Create group"}
+                </Button>
+              )}
+            </div>
+          </form>
+        </div>
       )}
     </Modal>
   );

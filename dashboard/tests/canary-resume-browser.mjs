@@ -258,6 +258,17 @@ async function start(
       );
       return respond({ items, total: items.length, page: 1, page_size: 12 });
     }
+    if (/^\/deployments\/[^/]+\/rollout$/.test(path))
+      return respond({
+        deployment_id: path.split("/")[2],
+        status: "active",
+        evaluated_at: new Date().toISOString(),
+        stages: [],
+        failures: [],
+        removed_count: 0,
+        check_in_seconds: 60,
+        next_admission_at: null,
+      });
     if (path === `/deployments/${id(100)}/summary`) {
       const mode = f.summaryMode;
       if (mode === "hold") await new Promise((done) => f.holds.push(done));
@@ -295,7 +306,7 @@ async function start(
   };
 }
 const details = (page) =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
 const action = (page) =>
   page.getByRole("dialog", { name: "Resume rollout", exact: true });
 const submit = (page) =>
@@ -309,7 +320,7 @@ async function open(page) {
 async function begin(page) {
   await open(page);
   await details(page)
-    .getByRole("button", { name: "Resume rollout", exact: true })
+    .getByRole("button", { name: "Resume", exact: true })
     .click();
   await expect(action(page)).toBeVisible();
   await expect(details(page)).toHaveCount(0);
@@ -471,7 +482,7 @@ try {
           await expect.poll(() => f.holds.length).toBe(1);
           expect(writes(f)).toHaveLength(1);
           const controls = page.getByRole("button", {
-            name: /^(Resume rollout|Pause rollout|Cancel rollout|Roll back)$/,
+            name: /^(Resume|Pause|Cancel)( rollout)?$|^Roll back$/,
           });
           for (const button of await controls.all())
             await expect(button).toBeDisabled();
@@ -485,7 +496,7 @@ try {
           await expect(details(page)).toBeVisible();
           await expect(
             details(page).getByRole("button", {
-              name: mode === "lost" ? "Pause rollout" : "Resume rollout",
+              name: mode === "lost" ? "Pause" : "Resume",
               exact: true,
             }),
           ).toBeEnabled();
@@ -511,7 +522,7 @@ try {
         ).toBeVisible();
         expect(writes(f)).toHaveLength(1);
         await expect(
-          page.getByRole("button", { name: "Resume rollout", exact: true }),
+          page.getByRole("button", { name: /^Resume( rollout)?$/ }),
         ).toHaveCount(0);
         f.summaryMode = "wrong-source";
         await page
@@ -522,7 +533,7 @@ try {
         );
         for (const button of await details(page)
           .getByRole("button", {
-            name: /^(Resume rollout|Pause rollout|Cancel rollout|Roll back)$/,
+            name: /^(Resume|Pause|Cancel)( rollout)?$|^Roll back$/,
           })
           .all())
           await expect(button).toBeDisabled();
@@ -534,7 +545,7 @@ try {
         await expect(action(page)).toHaveCount(0);
         await expect(
           details(page).getByRole("button", {
-            name: "Pause rollout",
+            name: "Pause",
             exact: true,
           }),
         ).toBeEnabled();
@@ -588,7 +599,7 @@ try {
           .click();
         await expect(
           details(page).getByRole("button", {
-            name: "Pause rollout",
+            name: "Pause",
             exact: true,
           }),
         ).toBeEnabled();
@@ -609,7 +620,7 @@ try {
           await open(app.page);
           await expect(
             details(app.page).getByRole("button", {
-              name: "Resume rollout",
+              name: "Resume",
               exact: true,
             }),
           ).toHaveCount(0);
@@ -635,7 +646,7 @@ try {
           )
           .toBe(true);
         await details(app.page)
-          .getByRole("button", { name: "Resume rollout", exact: true })
+          .getByRole("button", { name: "Resume", exact: true })
           .click();
         await expect(action(app.page)).toBeVisible();
         await app.page.keyboard.press("Escape");
