@@ -1,10 +1,7 @@
 import type { Config } from "./api";
 import { isInputPattern, type Kind } from "./catalog";
 import { stringifyConfiguration } from "./configurationFormats";
-import {
-  guessConfigurationFormat,
-  parseSource,
-} from "./configurationSource";
+import { guessConfigurationFormat, parseSource } from "./configurationSource";
 
 const SECTIONS: Kind[] = ["sources", "transforms", "sinks"];
 const record = (value: unknown): value is Config =>

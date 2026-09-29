@@ -3,6 +3,7 @@ import { Search, X } from "lucide-react";
 import type { Config } from "./api";
 import type { Kind } from "./catalog";
 import { componentTitle } from "./pipelineNodeModel";
+import "./canvas-tools.css";
 
 type FindNode = {
   id: string;
