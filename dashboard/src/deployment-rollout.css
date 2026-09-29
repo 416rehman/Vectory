@@ -415,6 +415,8 @@
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+  /* Table cells don't wrap by default. */
+  white-space: normal;
 }
 .rollout-delivery strong {
   color: var(--ink);
