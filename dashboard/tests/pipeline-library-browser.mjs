@@ -244,13 +244,11 @@ try {
       await expect(
         page.locator(".pipeline-library-table tbody tr"),
       ).toHaveCount(1);
-      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByRole("link", { name: "Overview", exact: true }).click();
       await expect(
         page.getByRole("heading", { name: "Overview", exact: true }),
       ).toBeVisible();
-      await page
-        .getByRole("button", { name: "Pipelines", exact: true })
-        .click();
+      await page.getByRole("link", { name: "Pipelines", exact: true }).click();
       await expect(page.getByLabel("Search pipelines")).toHaveValue("blue");
       await expect(
         page.getByRole("button", {
