@@ -32,12 +32,14 @@ func ServiceInstall(dir, account string) error {
 	return ServiceInstallFor(exe, dir, account)
 }
 
-// systemdUnit is the generated definition. Exit status 78 (not installed or
-// not enrolled) stops restart loops; ProtectSystem=full keeps /usr, /boot and
-// /etc read-only except the managed configuration directory, while Vector's
-// own data directories stay writable.
+// systemdUnit is the generated definition; packaging/systemd/vectory.service
+// is the same unit for OS packages. Exit status 78 (not installed or not
+// enrolled) stops restart loops. ProtectSystem=full and ProtectHome=read-only
+// keep /usr, /boot, /etc and home directories read-only except the state and
+// managed configuration directories, while Vector's own data and output
+// directories elsewhere stay writable.
 func systemdUnitFile(exe, dir, managedDir, account, group string) string {
-	return "[Unit]\nDescription=Vectory outbound configuration agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=" + account + "\nGroup=" + group + "\nExecStart=" + unitArg(exe) + " run --state-dir " + unitArg(dir) + "\nRestart=on-failure\nRestartSec=5s\nRestartPreventExitStatus=78\nKillMode=control-group\nTimeoutStopSec=20s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nReadWritePaths=" + unitArg("-"+dir) + " " + unitArg("-"+managedDir) + "\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n"
+	return "[Unit]\nDescription=Vectory outbound configuration agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=" + account + "\nGroup=" + group + "\nExecStart=" + unitArg(exe) + " run --state-dir " + unitArg(dir) + "\nRestart=on-failure\nRestartSec=5s\nRestartPreventExitStatus=78\nKillMode=control-group\nTimeoutStopSec=20s\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\nProtectHome=read-only\nReadWritePaths=" + unitArg("-"+dir) + " " + unitArg("-"+managedDir) + "\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 
 // ServiceInstallFor registers exe as the agent service for dir, owned by account.

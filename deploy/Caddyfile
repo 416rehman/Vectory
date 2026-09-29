@@ -16,6 +16,9 @@ https://{$VECTORY_HOSTNAME}:8443 {
   @agent path /agent/*
   respond @agent 404
   reverse_proxy server:8080 {
+    # The server trusts the last X-Forwarded-For hop (VECTORY_TRUST_PROXY_HEADERS);
+    # replace any client-supplied value with the address Caddy sees.
+    header_up X-Forwarded-For {remote_host}
     header_up -X-Client-Cert
     header_up -X-SSL-Client-Cert
     header_up -X-Forwarded-Client-Cert

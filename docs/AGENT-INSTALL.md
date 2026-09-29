@@ -5,7 +5,7 @@ The agent manages an existing Vector 0.58 installation. It never installs or upg
 Choose a private, absolute state directory, the absolute existing Vector executable, and an absolute sole managed JSON configuration path in a dedicated directory. The configuration directory must not contain unrelated files; installers must not transfer ownership of a shared `/etc/vector` tree. The agent identity must be able to write these managed paths and control only the adopted Vector process. Do not grant blanket sudo or make an arbitrary executable/service selectable from the dashboard.
 
 ```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vector/vectory-managed/vector.json --adopt
+vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vectory/managed/vector.json --adopt
 vectory enroll --state-dir /var/lib/vectory-agent --server https://vectory.example.com:8443 --ca-file /protected/server-ca.pem --id edge-01 --token-stdin
 vectory doctor --state-dir /var/lib/vectory-agent
 vectory run --state-dir /var/lib/vectory-agent
@@ -16,7 +16,7 @@ The adoption flag is an explicit local decision. Coordinate shutdown of any inde
 Installation defaults to **restricted** configuration capabilities. To use all configuration features supported by the adopted Vector build, the host operator explicitly opts in locally:
 
 ```sh
-vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vector/vectory-managed/vector.json --adopt --allow-full-vector-config
+vectory install --state-dir /var/lib/vectory-agent --vector-binary /usr/bin/vector --managed-config /etc/vectory/managed/vector.json --adopt --allow-full-vector-config
 ```
 
 Full mode trusts pipeline publishers with the Vector process's host permissions, including executable components/providers, external files, native environment references, enrichment tables and all native integrations available on that OS/build. Provision required accounts, credentials, files, environment and services on the device. The dashboard cannot grant this permission; it receives the locally reported `configuration_mode` during enrollment and heartbeats. Restricted mode retains its component/file/network allowlists; those allowlists do not constrain full mode.
@@ -108,7 +108,7 @@ vectory re-adopt --state-dir /var/lib/vectory-agent --expected-sha256 "$approved
 
 ```powershell
 $approvedVectorSha256 = 'REPLACE_WITH_TRUSTED_EXECUTABLE_SHA256'
-vectory re-adopt --state-dir 'C:\ProgramData\Vectory' --expected-sha256 $approvedVectorSha256 --vector-binary 'C:\Program Files\Vector\bin\vector.exe'
+vectory re-adopt --state-dir 'C:\ProgramData\Vectory\agent' --expected-sha256 $approvedVectorSha256 --vector-binary 'C:\Program Files\Vector\bin\vector.exe'
 ```
 
 The command checks the expected digest before executing the candidate, requires the pinned Vector version and validates available managed and last-good configurations under the existing capability policy. A missing managed file is allowed only when no workload was previously established and no last-good configuration is recorded; in that case no workload was validated. Validation and configured tests can access resources or native providers permitted by that policy; use the actual service environment and review those dependencies first. The command does not install Vector, change the managed configuration path, grant full configuration mode, start a workload or confirm a deployment.
@@ -119,7 +119,7 @@ Re-adoption preserves enrollment, credential/trust files, generation and secret 
 
 Current qualification uses private Windows foreground CLI fixtures and different bytes of the same supported Vector build. It verifies preservation and validation, not a different upstream release, SCM service-account execution, reboot recovery or Linux/macOS native behavior. Audit SACL policies and other platform-specific metadata need their own qualification; preserving the tested access descriptor is not a full service lifecycle test.
 
-The `packaging/systemd` and `packaging/launchd` files are reviewable examples, not proof of native service acceptance. Create the dedicated account and scope writable paths to the adopted instance. Native `service-install`, `service-start`, `service-stop` and `service-uninstall` commands are also available; verify their options with `vectory help` before installing and use one registration approach. On macOS use `/Library/Application Support/Vectory` and concrete paths without symlink ancestors; `/var` commonly resolves through `/private/var` and is intentionally rejected by strict path checks. Windows service registration requires an administrator but steady-state rights should remain limited. The MSI path installs only the binary; it does not enroll or auto-adopt. Reboot, service install/remove and upgrade-preserving-identity gates remain in ACCEPTANCE.md.
+The `packaging/systemd` and `packaging/launchd` files are reviewable examples, not proof of native service acceptance. Create the dedicated account and scope writable paths to the adopted instance. Native `service-install`, `service-start`, `service-stop` and `service-uninstall` commands are also available; verify their options with `vectory help` before installing and use one registration approach. On macOS use `/Library/Application Support/Vectory/agent` and concrete paths without symlink ancestors; `/var` commonly resolves through `/private/var` and is intentionally rejected by strict path checks. Windows service registration requires an administrator but steady-state rights should remain limited. The MSI path installs only the binary; it does not enroll or auto-adopt. Reboot, service install/remove and upgrade-preserving-identity gates remain in ACCEPTANCE.md.
 
 Keep private key/state files inaccessible to the Vector process whenever the identity model permits. The local capability policy controls file roots, network/listen destinations and supported component capabilities; dashboard content cannot change it. If local policy denies a pipeline, review the requested capability and change local policy explicitly rather than weakening it remotely. Pin/protect the Vector binary so another local user cannot swap the executable after adoption.
 

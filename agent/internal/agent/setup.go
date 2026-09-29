@@ -182,6 +182,20 @@ func ProbeServer(ctx context.Context, server, caFile string) error {
 	return err
 }
 
+// packagedLocation reports whether exe already sits where the installer
+// (defaultBinary) or an OS package (/usr/bin) puts the agent. The service
+// then runs it in place, so package upgrades reach the running service.
+func packagedLocation(exe, defaultBinary string) bool {
+	same := func(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
+	if runtime.GOOS == "windows" {
+		same = func(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
+	}
+	if same(exe, defaultBinary) {
+		return true
+	}
+	return runtime.GOOS != "windows" && same(exe, "/usr/bin/vectory")
+}
+
 func sameContents(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
@@ -303,7 +317,7 @@ func Setup(ctx context.Context, options SetupOptions) (SetupResult, error) {
 		executable = resolved
 	}
 	agentPath, installBinary := executable, false
-	if service != "none" {
+	if service != "none" && !packagedLocation(executable, defaults.Binary) {
 		agentPath = defaults.Binary
 		installBinary = !sameContents(executable, agentPath)
 	}
