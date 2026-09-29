@@ -454,6 +454,114 @@ try {
     },
   );
   await check(
+    "a first version that couldn't start reads as nothing running, and applied without metrics says delivery isn't measured",
+    async () => {
+      const snapshot = async (name, width, theme) => {
+        const audit = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        accessibility.push({
+          label: name,
+          width,
+          theme,
+          violations: audit.violations.map(({ id, impact }) => ({
+            id,
+            impact,
+          })),
+        });
+        expect(audit.violations).toEqual([]);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const filename = `device-${name}-${width}-${theme}.png`;
+        await page.screenshot({
+          path: resolve(output, filename),
+          fullPage: true,
+          animations: "disabled",
+        });
+        screenshots.push(relative(repository, resolve(output, filename)));
+      };
+      for (const width of [899, 375])
+        for (const theme of ["light", "dark"]) {
+          await load({
+            width,
+            theme,
+            device: {
+              ...baseDevice(),
+              status: "failed",
+              apply_state: "failed",
+              reported_apply_state: "failed",
+              reported_generation: 0,
+              vector_running: false,
+              configuration_attempt: {
+                generation: 5,
+                version_id: version.id,
+                sha256: version.sha256,
+                state: "failed",
+                error: {
+                  code: "ROLLBACK_UNAVAILABLE",
+                  stage: "rollback",
+                  message: "sanitized",
+                  diagnostics: [
+                    {
+                      severity: "error",
+                      code: "PRIVILEGED_PORT",
+                      component_kind: "source",
+                      component_id: "syslog",
+                      message:
+                        "Vector can't listen on 127.0.0.1:514: ports below 1024 need a privilege the service account lacks.",
+                      hint: "Listen on a port above 1023, such as 1514, or allow it on this host.",
+                    },
+                  ],
+                },
+              },
+            },
+          });
+          await deviceVisible();
+          const lines = page.locator(".device-running-lines");
+          await expect(lines).toContainText(
+            "Nothing running: Vector stopped after v3 failed to start.",
+          );
+          await expect(lines).not.toContainText("local config");
+          const explanation = page.locator(".device-explanation");
+          await expect(explanation).toContainText(
+            "there is no earlier version to go back to, so nothing is running",
+          );
+          await expect(explanation).toContainText(
+            "Vector can't listen on 127.0.0.1:514",
+          );
+          await expect(explanation).not.toContainText("Inspect the host");
+          await snapshot("first-version", width, theme);
+          await load({
+            width,
+            theme,
+            device: {
+              ...baseDevice(),
+              effective_policy: {
+                ...baseDevice().effective_policy,
+                telemetry_enabled: true,
+              },
+              host_runtime: { metrics_source: "none" },
+            },
+          });
+          await deviceVisible();
+          const unmeasured = page.locator(".device-delivery-unmeasured");
+          await expect(unmeasured).toHaveText(
+            "Delivery health: not measured. Add monitoring",
+          );
+          await expect(
+            unmeasured.getByRole("link", { name: "Add monitoring" }),
+          ).toHaveAttribute(
+            "href",
+            `#/configurations/${pipeline.id}?panel=tools`,
+          );
+          await snapshot("delivery-unmeasured", width, theme);
+        }
+    },
+  );
+  await check(
     "configuration and policy links use separate canonical IDs, clear old list context, and remain read-only for viewers",
     async () => {
       await load({ path: "deployments?search=unrelated&status=failed&page=4" });
@@ -597,9 +705,25 @@ try {
     },
   );
   await check(
-    "unassigned devices with or without a file digest do not claim Vector is running and retain device selection in the pipeline chooser",
+    "unassigned devices say what runs from the agent's own report and retain device selection in the pipeline chooser",
     async () => {
-      for (const digest of [null, "a".repeat(64)]) {
+      for (const [digest, running, says] of [
+        [
+          null,
+          undefined,
+          "Nothing yet. Vector starts when you deploy a pipeline.",
+        ],
+        [
+          "a".repeat(64),
+          undefined,
+          "A local configuration adopted at setup (SHA-256 aaaaaaaa…) stays in place until you deploy.",
+        ],
+        [
+          "a".repeat(64),
+          true,
+          "A local configuration adopted at setup (SHA-256 aaaaaaaa…) keeps running until you deploy.",
+        ],
+      ]) {
         await load({
           role: "operator",
           device: {
@@ -609,6 +733,7 @@ try {
             apply_state: "unmanaged",
             status: "unmanaged",
             actual_sha256: digest,
+            vector_running: running,
           },
         });
         await deviceVisible();
@@ -616,13 +741,11 @@ try {
           .locator(".device-pipeline")
           .filter({ hasText: "No pipeline assigned" });
         await expect(unassigned).toHaveCount(1);
-        await expect(unassigned).toContainText(
-          "An adopted local workload may continue running",
-        );
-        await expect(unassigned).toContainText("waits without starting Vector");
-        await expect(unassigned).toContainText(
-          "An agent check-in alone does not confirm a running workload",
-        );
+        await expect(unassigned).toContainText(says);
+        // Only Vector's reported state says a workload runs.
+        if (running !== true)
+          await expect(unassigned).not.toContainText("keeps running");
+        await expect(unassigned).not.toContainText("may still be running");
         await expect(unassigned).not.toContainText(
           "The agent keeps its existing",
         );
