@@ -34,6 +34,9 @@ Agents built before these fixes behave differently. Rebuild agents from this rev
 - **Tests Vector refuses to run are failures.** A misspelled test setting, an unknown step or a test with no expected output shows Vector's reason, and the tests it did not run are marked **Not run**, instead of "0 of 0 tests passed".
 - **The documentation page's recovery screen** shows **Reload page** at once for a signed-out visitor; it used to appear after five seconds.
 - **The installer's dry run** plans for the directory you chose with `--install-dir`.
+- **A listener below port 1024** (syslog on 514, for example) now gets a `PRIVILEGED_PORT` diagnostic that says how to allow it, instead of a hint about a path.
+- **Setup never leaves a stopped service behind.** It checks the service registration before it stops anything and starts the service again on every failure path; launchd stop and restart survive a long drain. The installer stays an upgrade command.
+- **Agent changes to know about:** `vectory logs --json` prints one JSON object per line (use `--raw` for the raw lines), setup exits 130 when interrupted while it waits for the check-in, the packaged launchd plist is `io.vectory.agent.plist`, and a pre-release Vector such as 0.58.1-rc1 is refused up front.
 
 ### Documentation
 

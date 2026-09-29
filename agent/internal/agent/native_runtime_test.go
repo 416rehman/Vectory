@@ -56,6 +56,59 @@ func pipeline(extra map[string]any) map[string]any {
 	return config
 }
 
+// A configuration that fails to load on reload ends with Vector's "Failed to
+// load config files, reload aborted." The agent reports it at once instead of
+// waiting out its startup timeout.
+func TestNativeReloadOfAConfigurationThatFailsToLoadFailsAtOnce(t *testing.T) {
+	binary := os.Getenv("VECTOR_TEST_BINARY")
+	if binary == "" {
+		t.Skip("set VECTOR_TEST_BINARY for native Vector runtime tests")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Vector on Windows has no reload; the agent restarts it")
+	}
+	dir := t.TempDir()
+	digest, err := FileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(dir, "managed.json")
+	pipelineReading := func(input string) {
+		t.Helper()
+		writeManaged(t, managed, map[string]any{
+			"data_dir": dir,
+			"sources":  map[string]any{"in": map[string]any{"type": "demo_logs", "format": "json", "interval": 0.5}},
+			"sinks":    map[string]any{"out": map[string]any{"type": "blackhole", "inputs": []string{input}, "print_interval_secs": 0}},
+		})
+	}
+	driver := &VectorDriver{Dir: dir, Settings: Settings{Adopted: true, VectorBinary: binary, VectorBinarySHA256: digest, StartupSeconds: 20, GracefulShutdownSeconds: minGracefulShutdownSeconds}}
+	t.Cleanup(func() {
+		_ = driver.Stop()
+		if driver.Log != nil {
+			driver.Log.close()
+		}
+	})
+	pipelineReading("in")
+	ctx := context.Background()
+	if err = driver.Activate(ctx, managed); err != nil {
+		t.Fatal(err)
+	}
+	pipelineReading("missing")
+	started := time.Now()
+	err = driver.reload(ctx)
+	took := time.Since(started)
+	var verdict string
+	for _, line := range driver.Log.recent() {
+		if rec, ok := parseVectorRecord([]byte(line)); ok && rec.Target == "vector::internal_events::process" {
+			verdict = line
+		}
+	}
+	if err == nil || took > 10*time.Second || !strings.Contains(verdict, "Failed to load config files, reload aborted.") {
+		t.Fatalf("reload of a configuration that fails to load: %v after %s; verdict %s", err, took, verdict)
+	}
+	t.Logf("reported after %s: %s", took.Round(time.Millisecond), verdict)
+}
+
 func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 	e, driver := nativeRuntimeFixture(t)
 	ctx := context.Background()
@@ -75,9 +128,12 @@ func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 	if info, err := os.Stat(agentDataDir(e.Dir)); err != nil || !info.IsDir() {
 		t.Fatal("agent data directory was not created")
 	}
-	overlay, _ := os.ReadFile(hostRuntimePath(e.Dir))
-	if !strings.Contains(string(overlay), agentDataDir(e.Dir)) {
-		t.Fatalf("host runtime overlay = %s", overlay)
+	var overlay struct {
+		DataDir string `json:"data_dir"`
+	}
+	data, _ := os.ReadFile(hostRuntimePath(e.Dir))
+	if json.Unmarshal(data, &overlay) != nil || overlay.DataDir != agentDataDir(e.Dir) {
+		t.Fatalf("host runtime overlay = %s", data)
 	}
 
 	// An unreachable destination is a warning, never a rejection; Unix
@@ -169,7 +225,12 @@ func TestNativeHostDataDirHealthchecksReloadAndDiagnostics(t *testing.T) {
 		t.Fatalf("stop took %s: %v", time.Since(started), err)
 	}
 	var local strings.Builder
-	if err = WriteVectorLog(ctx, e.Dir, 2000, false, true, &local); err != nil || !strings.Contains(local.String(), "Vector has reloaded.") || !strings.Contains(local.String(), "vector validate rejected the configuration") {
-		t.Fatalf("local Vector log incomplete: %v", err)
+	if err = WriteVectorLog(ctx, e.Dir, 2000, false, LogRaw, &local); err != nil {
+		t.Fatal(err)
+	}
+	// Windows has no in-place reload: the agent restarted Vector each time.
+	reloaded := runtime.GOOS == "windows" || strings.Contains(local.String(), "Vector has reloaded.")
+	if !reloaded || !strings.Contains(local.String(), "vector validate rejected the configuration") {
+		t.Fatal("local Vector log incomplete")
 	}
 }

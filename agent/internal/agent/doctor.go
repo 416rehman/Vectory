@@ -157,7 +157,13 @@ func RunDoctor(ctx context.Context, dir string) (*DoctorReport, error) {
 	case svc.Running():
 		report.add("service", "ok", "Service", svc.Name+" running", "")
 	case svc.Installed:
-		report.add("service", "fail", "Service", svc.Name+" is "+firstNonEmpty(svc.State, "stopped")+".", "Start it: sudo vectory service-start. Its log: "+serviceLogHint(map[string]string{"systemd": "systemd", "launchd": "launchd", "Windows services": "windows"}[svc.Manager]))
+		// Only systemd keeps the agent's output; see serviceCheckHint.
+		service := map[string]string{"systemd": "systemd", "launchd": "launchd", "Windows services": "windows"}[svc.Manager]
+		fix := "Start it: " + adminCommand(service, "vectory service-start") + "."
+		if service == "systemd" {
+			fix += " Its log: journalctl -u vectory.service -n 50"
+		}
+		report.add("service", "fail", "Service", svc.Name+" is "+firstNonEmpty(svc.State, "stopped")+".", fix)
 	case foreground:
 		report.add("service", "ok", "Service", "none · the agent is running in the foreground", "")
 	case svc.Manager == "":

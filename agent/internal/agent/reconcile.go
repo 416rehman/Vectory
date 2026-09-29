@@ -3,14 +3,18 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -611,24 +615,64 @@ func (e *Engine) renewForced(ctx context.Context) error {
 	return nil
 }
 
-// runningAgentBuild identifies this process's executable. It is read at
-// startup, before an upgrade can replace the file.
+// runningAgentBuild identifies this process's executable. Run reads it first
+// thing: an upgrade can replace the file while recovery and startup run. On
+// Linux /proc/self/exe is the running image even after the file is replaced.
 func runningAgentBuild() *AgentBuild {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	digest, err := FileDigest(exe)
+	digest, err := runningExecutableDigest()
 	if err != nil {
 		return nil
 	}
 	return &AgentBuild{Version: Version, SHA256: digest}
 }
 
+func runningExecutableDigest() (string, error) {
+	if runtime.GOOS == "linux" {
+		if f, err := os.Open("/proc/self/exe"); err == nil {
+			defer f.Close()
+			h := sha256.New()
+			if _, err = io.Copy(h, f); err == nil {
+				return hex.EncodeToString(h.Sum(nil)), nil
+			}
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return FileDigest(exe)
+}
+
+// interruptedCheckIn reports a check-in cut short by the agent stopping: a
+// clean stop, not an outage.
+func interruptedCheckIn(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	ce, ok := AsConnectionError(err)
+	return ok && ce.Code == "CANCELED"
+}
+
+// recordCheckInFailure keeps the outage for status: the first failed
+// check-in since the last success, with the latest reason. Only network
+// failures count, never a check-in interrupted by stopping the agent.
+func (e *Engine) recordCheckInFailure(ctx context.Context, err error, message string) {
+	if _, network := AsConnectionError(err); !network || interruptedCheckIn(ctx, err) {
+		return
+	}
+	failure := CheckInFailure{Since: e.now(), Message: message}
+	if previous := e.State.CheckInFailure; previous != nil {
+		failure.Since = previous.Since
+	}
+	e.State.CheckInFailure = &failure
+	_ = e.save()
+}
+
 func Run(ctx context.Context, dir string, once bool, report func(string)) error {
+	build := runningAgentBuild()
 	unlock, err := Lock(dir)
 	if err != nil {
 		return err
@@ -638,6 +682,7 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 	if err != nil {
 		return err
 	}
+	e.State.Agent = build
 	defer func() { e.Client.Close() }()
 	defer func() {
 		if e.Metrics != nil {
@@ -664,7 +709,6 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 	} else if err = e.StartExisting(ctx); err != nil {
 		report(err.Error())
 	}
-	e.State.Agent = runningAgentBuild()
 	if e.Settings.VectorVersion == "" {
 		// Adopted before the version was recorded: report what the binary says.
 		if version, err := ProbeVector(ctx, e.Settings); err == nil {
@@ -680,19 +724,19 @@ func Run(ctx context.Context, dir string, once bool, report func(string)) error 
 		}
 		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
 		err = supervisor.poll(ctx, e, report)
-		if err != nil {
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// Stopping the agent interrupted the check-in: not an outage.
+			if once {
+				return err
+			}
+			return nil
+		case err != nil:
 			failures++
 			message := describeCheckInFailure(err, e.State.LastHeartbeat, e.now())
 			report(message)
-			if _, network := AsConnectionError(err); network {
-				failure := CheckInFailure{Since: e.now(), Message: message}
-				if previous := e.State.CheckInFailure; previous != nil {
-					failure.Since = previous.Since
-				}
-				e.State.CheckInFailure = &failure
-				_ = e.save()
-			}
-		} else {
+			e.recordCheckInFailure(ctx, err, message)
+		default:
 			failures = 0
 			if e.State.CheckInFailure != nil {
 				e.State.CheckInFailure = nil

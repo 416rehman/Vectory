@@ -55,6 +55,33 @@ func unitIdentity(unit string) string {
 	return strings.Join(keep, "\n")
 }
 
+func registeredElsewhere() error {
+	return errors.New(serviceDefinition + " already exists for another account, binary or state directory; review it, then remove it with `vectory service-uninstall` before registering again")
+}
+
+// serviceRegistrationCheck reports, reading only, whether the existing unit
+// belongs to another account, executable or state directory, which
+// ServiceInstallFor refuses; setup checks it before it changes anything. An
+// account that doesn't exist yet can't be compared: registration decides
+// after setup creates it.
+func serviceRegistrationCheck(exe, dir, account string) error {
+	old, err := os.ReadFile(serviceDefinition)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	u, err := user.Lookup(account)
+	if err != nil {
+		return nil
+	}
+	if unitIdentity(string(old)) != unitIdentity(systemdUnitFile(exe, dir, "", account, u.Gid)) {
+		return registeredElsewhere()
+	}
+	return nil
+}
+
 // ServiceInstallFor registers exe as the agent service for dir, owned by
 // account. An existing definition for the same account, executable and state
 // directory is brought up to date (for example a changed stop policy); any
@@ -105,7 +132,7 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 		case unitIdentity(string(old)) == unitIdentity(unit):
 			registration = ServiceUpdated
 		default:
-			return "", errors.New(serviceDefinition + " already exists for another account, binary or state directory; review it, then remove it with `vectory service-uninstall` before registering again")
+			return "", registeredElsewhere()
 		}
 	}
 	if err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {

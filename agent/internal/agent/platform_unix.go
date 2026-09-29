@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
+	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -69,6 +72,49 @@ func checkPrivateFile(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// privateFileProblem says which check made openPrivateFile refuse path, and a
+// command that fixes it.
+func privateFileProblem(path string, openErr error) (problem, fix string) {
+	info, err := os.Lstat(path)
+	switch {
+	case os.IsNotExist(err):
+		return "doesn't exist", ""
+	case err != nil || errors.Is(openErr, fs.ErrPermission):
+		return "can't be read by this account", "Run the command with sudo."
+	case info.Mode()&os.ModeSymlink != 0 || errors.Is(openErr, unix.ELOOP):
+		return "is a symbolic link", "Pass the real file's path."
+	case !info.Mode().IsRegular():
+		return "isn't a regular file", ""
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "isn't private", ""
+	}
+	quoted := quoteArg(path)
+	var problems, fixes []string
+	if stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
+		owner := "uid " + strconv.FormatUint(uint64(stat.Uid), 10)
+		if account, err := user.LookupId(strconv.FormatUint(uint64(stat.Uid), 10)); err == nil {
+			owner = account.Username
+		}
+		problems = append(problems, "belongs to "+owner)
+		fixes = append(fixes, "chown root "+quoted)
+	}
+	if perm := info.Mode().Perm(); perm&0077 != 0 {
+		problems = append(problems, fmt.Sprintf("is readable by other accounts (mode %04o)", perm))
+		fixes = append(fixes, "chmod 600 "+quoted)
+	}
+	switch {
+	case stat.Nlink != 1:
+		return strings.Join(append(problems, fmt.Sprintf("has %d hard links", stat.Nlink)), " and "), "Save the token in a new file, then chmod 600 it."
+	case len(problems) == 0:
+		return "isn't private", ""
+	case stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 && os.Geteuid() != 0:
+		return strings.Join(problems, " and "), "Use a file you own, with chmod 600."
+	}
+	return strings.Join(problems, " and "), "Fix it: " + strings.Join(fixes, " && ")
 }
 func rejectPlatformLink(path string) error { return nil }
 func replaceFile(from, to string) error    { return os.Rename(from, to) }

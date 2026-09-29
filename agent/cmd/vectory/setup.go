@@ -19,7 +19,8 @@ var setupCommand = command{
 service and waits for the first check-in. Nothing on the host changes until
 every check has passed and you've entered the token. Safe to run again: it
 resumes where it stopped, and restarts a running service on this build.
-Restricted mode is the default; full mode only when you pass --mode full.`,
+Restricted mode is the default; full mode only when you pass --mode full.
+Ctrl-C during the wait for the check-in leaves the service running (exit 130).`,
 	examples: []string{
 		"curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh",
 		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
@@ -141,13 +142,14 @@ func defineSetup(c *cli) func() int {
 		result, err := agent.Setup(ctx, options)
 		if !human {
 			c.output(result)
-			if err != nil {
-				return exitFailed
-			}
-			return exitOK
 		}
-		if err != nil {
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return exitInterrupted
+		case err != nil:
 			return exitFailed
+		case !human:
+			return exitOK
 		}
 		if result.DeviceURL != "" {
 			fmt.Fprintf(c.stdout, "Connected: %s\n", result.DeviceURL)
