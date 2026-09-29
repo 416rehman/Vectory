@@ -769,8 +769,24 @@ pub async fn heartbeat(
         })
         .map(|a| &a["error"]);
     let issue_error = candidate_error.unwrap_or(&v["error"]);
+    // Until this response reaches it, the agent still reports its previous
+    // attempt: after a retry or a new deployment it describes an older
+    // generation, and its error was recorded while that attempt was current.
+    // Echoing it is neither a new failure of the desired version nor of the
+    // version the device runs.
+    let stale_echo = candidate_error.is_none()
+        && attempt.as_ref().is_some_and(|a| {
+            let workload = crate::configuration_attempt::safe_error(&v["error"]);
+            !crate::configuration_attempt::identity_matches(a, generation, &desired)
+                && ["failed", "rolled_back"].contains(&text(a, "state"))
+                && (a["error"].is_null()
+                    || (a["error"]["code"] == workload["code"]
+                        && a["error"]["stage"] == workload["stage"]))
+        });
     if desired.is_null() {
         crate::issues::resolve_device(&mut tx, &id, "unassigned").await?;
+    } else if stale_echo {
+        // Nothing to record: see above.
     } else if !issue_error.is_null() || device["apply_state"] == "failed" {
         let safe = crate::configuration_attempt::safe_error(issue_error);
         // A candidate failure belongs to its exact attempt. A workload error
