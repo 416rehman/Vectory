@@ -214,9 +214,8 @@ try {
 
   const platform = { linux: "linux", darwin: "darwin" }[process.platform];
   const arch = { x64: "amd64", arm64: "arm64" }[process.arch];
-  const release = (await api("releases")).find(
-    (r) => r.os === platform && r.arch === arch,
-  );
+  const releases = await api("releases");
+  const release = releases.find((r) => r.os === platform && r.arch === arch);
   const agent = path.join(host, "bin", "vectory");
   const bytes = await fs.readFile(agent);
   if (!release || sha256(bytes) !== release.sha256)
@@ -259,6 +258,10 @@ try {
           sha256: release.sha256,
           source: release.source,
         },
+        listed_builds: releases.map(
+          (r) =>
+            `${r.os}/${r.arch} ${r.version} (${r.source}, signed: ${r.signed})`,
+        ),
         device: {
           id: device.id,
           name,
