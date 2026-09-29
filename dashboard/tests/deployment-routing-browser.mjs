@@ -185,7 +185,7 @@ async function fixture({
       });
     }
     const match = path.match(
-      /^\/deployments\/([^/]+)\/(summary|targets|pause|unassign-preview|unassign)$/,
+      /^\/deployments\/([^/]+)\/(summary|rollout|targets|pause|unassign-preview|unassign)$/,
     );
     if (match) {
       const [, identity, action] = match;
@@ -211,6 +211,17 @@ async function fixture({
           await new Promise((resolve) => (state.releaseDetail = resolve));
         return reply(copy);
       }
+      if (action === "rollout")
+        return reply({
+          deployment_id: item.id,
+          status: item.status,
+          evaluated_at: new Date().toISOString(),
+          stages: [],
+          failures: [],
+          removed_count: 0,
+          check_in_seconds: 60,
+          next_admission_at: null,
+        });
       if (action === "targets")
         return reply({
           items: [
@@ -273,7 +284,11 @@ async function fixture({
   };
 }
 const dialog = (page) =>
-  page.getByRole("dialog", { name: "Deployment details", exact: true });
+  page.getByRole("region", { name: "Deployment details", exact: true });
+const back = (page) =>
+  dialog(page).getByRole("button", {
+    name: /^Back to (deployments|schedules)$/,
+  });
 async function check(name, run) {
   await run();
   results.push({ name, passed: true });
@@ -337,9 +352,7 @@ try {
             exact: true,
           }),
         ).toBeVisible();
-        await dialog(f.page)
-          .getByRole("button", { name: "Close dialog", exact: true })
-          .click();
+        await back(f.page).click();
         await expect(f.page).toHaveURL(
           origin + "#/deployments?search=Alpha&status=active&page=2",
         );
@@ -430,9 +443,7 @@ try {
               input.selectionEnd === input.value.length,
           ),
         ).toBe(true);
-        await dialog(f.page)
-          .getByRole("button", { name: "Close dialog", exact: true })
-          .click();
+        await back(f.page).click();
         await expect(f.page).toHaveURL(origin + "#/schedules?page=1");
         expect(
           f.state.requests.filter((r) => r.method !== "GET").map((r) => r.path),
@@ -502,7 +513,7 @@ try {
           origin + "#/deployments/%2E%2E%2Fdevices?action=rollback&page=0",
         );
         await expect(
-          f.page.getByRole("dialog", {
+          f.page.getByRole("heading", {
             name: "Invalid deployment link",
             exact: true,
           }),
@@ -546,7 +557,7 @@ try {
         ).toBeVisible();
         await expect(
           dialog(f.page).getByRole("button", {
-            name: "Pause rollout",
+            name: "Pause",
             exact: true,
           }),
         ).toHaveCount(0);
@@ -563,7 +574,7 @@ try {
       try {
         await f.page.goto(origin + "#/deployments/" + id(4) + "?page=1");
         await dialog(f.page)
-          .getByRole("button", { name: "Pause rollout", exact: true })
+          .getByRole("button", { name: "Pause", exact: true })
           .click();
         f.state.holdMutation = "pause";
         await f.page
@@ -587,18 +598,12 @@ try {
         f.state.holdMutation = "";
         await expect(
           dialog(f.page).getByRole("button", {
-            name: "Resume rollout",
+            name: "Resume",
             exact: true,
           }),
         ).toBeVisible();
         await dialog(f.page)
-          .getByText("Remove this assignment", { exact: true })
-          .click();
-        await dialog(f.page)
-          .getByRole("button", {
-            name: "Review assignment removal",
-            exact: true,
-          })
+          .getByRole("button", { name: "Remove assignment", exact: true })
           .click();
         const removal = f.page.getByRole("dialog", {
           name: "Remove assignment",
@@ -619,9 +624,7 @@ try {
         f.state.holdMutation = "";
         await expect(removal).toHaveCount(0);
         await f.page.getByRole("dialog", { name: "Assignment removed", exact: true }).getByRole("button", { name: "Close", exact: true }).click();
-        await dialog(f.page)
-          .getByRole("button", { name: "Close dialog", exact: true })
-          .click();
+        await back(f.page).click();
         await expect(dialog(f.page)).toHaveCount(0);
         expect(f.state.requests.filter((r) => r.path === "/overview")).toEqual(
           [],

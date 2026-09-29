@@ -25,7 +25,7 @@
 .canary-gate-heading svg {
   flex: none;
 }
-.canary-gate-heading h3 {
+.canary-gate-heading h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 500;

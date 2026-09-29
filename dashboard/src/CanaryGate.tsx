@@ -54,7 +54,7 @@ export default function CanaryGate({
       <header>
         <div className="canary-gate-heading">
           <Icon size={18} aria-hidden="true" />
-          <h3>Canary gate</h3>
+          <h2>Canary gate</h2>
         </div>
         <div className="canary-gate-actions">
           <RefreshButton
