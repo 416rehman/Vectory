@@ -28,8 +28,11 @@ export async function readStartText(
   text: string,
   format: ConfigurationFormat,
 ): Promise<StartImport> {
-  const { assertValidPipelineSource, MAX_CONFIGURATION_BYTES, sourceErrorMessage } =
-    await loadSource();
+  const {
+    assertValidPipelineSource,
+    MAX_CONFIGURATION_BYTES,
+    sourceErrorMessage,
+  } = await loadSource();
   try {
     if (new TextEncoder().encode(text).length > MAX_CONFIGURATION_BYTES)
       throw Error("Configurations must be 1 MiB or smaller.");

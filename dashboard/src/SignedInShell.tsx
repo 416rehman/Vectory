@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -68,6 +69,85 @@ const UsersSecurity = lazy(() =>
     import("./UsersSecurity").then((m) => ({ default: m.UsersSecurity })),
   ),
 );
+
+/** The new page's title, or its main region when the title can't take focus. */
+function arrivalTarget() {
+  const main = document.getElementById("main-content");
+  if (!main) return null;
+  // A loading skeleton's title is about to be replaced: wait for the page's.
+  const title = [...main.querySelectorAll<HTMLElement>("h1")].find(
+    (heading) => !heading.closest("[data-page-skeleton]"),
+  );
+  if (!title) return null;
+  return title.hasAttribute("tabindex") ? title : main;
+}
+
+/**
+ * After in-app navigation. When the focused control left with the old page
+ * (a section tab, a row link, "Open rollout"), focus the new page's title, so
+ * the next Tab continues from there and a screen reader reads where it is.
+ * Otherwise (the sidebar, search, a shortcut) focus stays put and a polite
+ * live region names the new page. Returns that region's text.
+ */
+function usePageArrival(pageKey: string) {
+  const [announcement, setAnnouncement] = useState("");
+  const lastFocused = useRef<Element | null>(null);
+  const first = useRef(true);
+  useEffect(() => {
+    const record = (event: FocusEvent) => {
+      if (event.target instanceof Element) lastFocused.current = event.target;
+    };
+    document.addEventListener("focusin", record);
+    return () => document.removeEventListener("focusin", record);
+  }, []);
+  useLayoutEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    const active = document.activeElement;
+    const lost =
+      (!active || active === document.body) &&
+      !!lastFocused.current &&
+      !lastFocused.current.isConnected;
+    const timers: number[] = [];
+    let observer: MutationObserver | null = null;
+    if (lost) {
+      const place = () => {
+        // Someone moved focus meanwhile: theirs wins.
+        if (document.activeElement && document.activeElement !== document.body)
+          return true;
+        const target = arrivalTarget();
+        target?.focus({ preventScroll: true });
+        return !!target;
+      };
+      if (!place()) {
+        // A lazy page renders its title once its files arrive.
+        observer = new MutationObserver(() => {
+          if (place()) observer?.disconnect();
+        });
+        const main = document.getElementById("main-content");
+        if (main) observer.observe(main, { childList: true, subtree: true });
+        timers.push(window.setTimeout(() => observer?.disconnect(), 15000));
+      }
+    } else {
+      // Clear, then write, so a repeated name is announced again. The page
+      // names itself (document.title) as it renders.
+      setAnnouncement("");
+      timers.push(
+        window.setTimeout(() => {
+          setAnnouncement(document.title.split(" · ")[0] || "");
+          timers.push(window.setTimeout(() => setAnnouncement(""), 10000));
+        }, 350),
+      );
+    }
+    return () => {
+      observer?.disconnect();
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [pageKey]);
+  return announcement;
+}
 
 /**
  * Everything a signed-in person sees around the page: navigation, search,
@@ -251,8 +331,7 @@ export default function SignedInShell({
     [user.id],
   );
   const rememberLibraryView = useCallback(
-    (query: PipelineLibraryQuery) =>
-      setLibraryView({ userId: user.id, query }),
+    (query: PipelineLibraryQuery) => setLibraryView({ userId: user.id, query }),
     [user.id],
   );
   const notify = useCallback<Notify>((message, options) => {
@@ -320,6 +399,12 @@ export default function SignedInShell({
   }, [page, user.id]);
   const shell = useMemo(() => shellInfo(page, id), [page, id]);
   const section = sectionOf(page);
+  // The page element: a rollout and its list share one, as do audit views.
+  const mainKey =
+    page === "deployments" || page === "schedules" || page === "audit"
+      ? page
+      : routePath;
+  const arrival = usePageArrival(mainKey);
   return (
     <ShellContext.Provider value={shell}>
       <div
@@ -398,11 +483,7 @@ export default function SignedInShell({
           />
           <DeploymentRecoveryCenter key={user.id} user={user} notify={notify} />
           <main
-            key={
-              page === "deployments" || page === "schedules" || page === "audit"
-                ? page
-                : routePath
-            }
+            key={mainKey}
             id="main-content"
             tabIndex={-1}
             className={`page-content ${page === "configurations" && id ? "editor-content" : ""}`}
@@ -543,6 +624,14 @@ export default function SignedInShell({
           </main>
         </div>
         <ToastViewport />
+        <div
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          data-route-announcer=""
+        >
+          {arrival}
+        </div>
         <CommandPalette
           open={commandOpen}
           onOpenChange={setCommandOpen}

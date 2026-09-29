@@ -63,6 +63,7 @@ import {
   type StatusTone,
 } from "./status";
 import { exactLocal, relativeTime } from "./time";
+import { isSingleKey, useSingleKeyShortcuts } from "./shortcutPreference";
 
 export const DEFAULT_POLL_INTERVAL = 15000;
 const visible = () =>
@@ -581,6 +582,10 @@ export function Tooltip({
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
+  // A single-key hint is only true while single-key shortcuts are on.
+  const [singleKeys] = useSingleKeyShortcuts();
+  const keys =
+    shortcut && (singleKeys || !isSingleKey(shortcut)) ? shortcut : undefined;
   const [position, setPosition] = useState<{
     top: number;
     left: number;
@@ -683,8 +688,8 @@ export function Tooltip({
             : props["aria-describedby"],
         "aria-keyshortcuts":
           props["aria-keyshortcuts"] ??
-          (shortcut
-            ? shortcut
+          (keys
+            ? keys
                 .join("+")
                 .replace(/^mod/i, isMacPlatform() ? "Meta" : "Control")
             : undefined),
@@ -726,7 +731,7 @@ export function Tooltip({
             }}
           >
             <span>{content}</span>
-            {shortcut && <Kbd keys={shortcut} />}
+            {keys && <Kbd keys={keys} />}
           </div>,
           document.body,
         )}
@@ -858,7 +863,7 @@ export function PageHeader({
   titleAside?: ReactNode;
   /** The title is not known yet: show a placeholder bar (the text stays for screen readers). */
   loadingTitle?: boolean;
-  /** Makes the title focusable for focus moves after navigation. */
+  /** The title element; it is always focusable for moves after navigation. */
   headingRef?: React.Ref<HTMLHeadingElement>;
   /** The browser tab title's leading part, when it differs from the title. */
   documentTitle?: string;
@@ -890,8 +895,8 @@ export function PageHeader({
   return (
     <>
       <div className="page-context">
-        <nav aria-label="Breadcrumb">
-          {crumbs.length > 0 && (
+        {crumbs.length > 0 && (
+          <nav aria-label="Breadcrumb">
             <ol className="page-breadcrumb">
               {crumbs.map((crumb, index) => (
                 <li key={`${index}:${crumb.label}`}>
@@ -924,18 +929,14 @@ export function PageHeader({
                 </li>
               ))}
             </ol>
-          )}
-        </nav>
+          </nav>
+        )}
         {live && <LiveStatus {...live} />}
       </div>
       <header className="page-heading">
         <div>
           <div className="page-title-row">
-            <h1
-              ref={headingRef}
-              tabIndex={headingRef ? -1 : undefined}
-              className={headingRef ? "page-title-focus" : undefined}
-            >
+            <h1 ref={headingRef} tabIndex={-1} className="page-title-focus">
               {loadingTitle ? (
                 <>
                   <span className="sr-only">{title}</span>
@@ -1625,6 +1626,8 @@ export function SearchBox({
   shortcut?: boolean;
   inputRef?: React.Ref<HTMLInputElement>;
 }) {
+  const [singleKeys] = useSingleKeyShortcuts();
+  const hint = shortcut && singleKeys;
   return (
     <div className="search-field">
       <Search size={15} aria-hidden="true" />
@@ -1635,7 +1638,7 @@ export function SearchBox({
         value={value}
         maxLength={maxLength}
         data-page-search={shortcut ? "" : undefined}
-        aria-keyshortcuts={shortcut ? "/" : undefined}
+        aria-keyshortcuts={hint ? "/" : undefined}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape" && value) {
@@ -1651,7 +1654,7 @@ export function SearchBox({
           label="Clear search"
           onClick={() => onChange("")}
         />
-      ) : shortcut ? (
+      ) : hint ? (
         <Kbd keys="/" className="search-field-kbd" />
       ) : null}
     </div>
