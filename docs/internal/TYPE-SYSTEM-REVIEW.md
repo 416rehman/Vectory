@@ -4,7 +4,7 @@ Reviewed against the pinned Vector **0.58.0** configuration schema and the user'
 
 ## Reference coverage
 
-[`reference-urls.json`](../vector-catalog/reference-urls.json) preserves the 139 supplied URLs and 138 normalized unique URLs. The bounded four-request audit retrieved all 138 official pages successfully. The list includes the configuration overview, all requested component pages, global options, pipeline components, TLS, API configuration, tests, event schema, template syntax, and secrets. It covers 126 distinct component pages. All 126 occur in the pinned 128-entry catalog; the two additional entries are deprecated aliases, `sources/http` and `sinks/greptimedb`.
+[`reference-urls.json`](../../vector-catalog/reference-urls.json) preserves the 139 supplied URLs and 138 normalized unique URLs. The bounded four-request audit retrieved all 138 official pages successfully. The list includes the configuration overview, all requested component pages, global options, pipeline components, TLS, API configuration, tests, event schema, template syntax, and secrets. It covers 126 distinct component pages. All 126 occur in the pinned 128-entry catalog; the two additional entries are deprecated aliases, `sources/http` and `sinks/greptimedb`.
 
 The pinned schema contains 493 definitions and 6,145 schema nodes. All 128 component schemas compile with AJV's draft-2019 implementation. Formats are intentionally not treated as proof of native Vector semantics. The audit records platform metadata and native-versus-projected provenance for each component, and URL status, title, content hash and retrieval time for every page. Raw HTML is cached under ignored `.local/vector-reference-cache`.
 
@@ -12,7 +12,7 @@ The script also extracts **6,788 field headers** from the Configuration sections
 
 This comparison initially identified nine missing fields across five shared component types: Unix socket branches of the socket, syslog, fluent and statsd sources and the statsd sink. Six mode branches were restored from the same pinned upstream commit's CUE metadata. Their provenance remains distinct from native Windows generation, and Unix runtime activation is untested.
 
-Reproduce with `node scripts/audit-vector-reference.mjs --refresh`; `--offline` reads the existing private cache. The committed report is [`vector-reference-audit.json`](evidence/vector-reference-audit.json).
+Reproduce with `node scripts/audit-vector-reference.mjs --refresh`; `--offline` reads the existing private cache. The committed report is [`vector-reference-audit.json`](../evidence/vector-reference-audit.json).
 
 ## Actual field shapes
 
@@ -38,7 +38,7 @@ The [template reference](https://vector.dev/docs/reference/configuration/templat
 
 `tests/security/schema-fixtures.mjs` executes **34 exact upstream schema probes** and lossless JSON round trips. They cover nullable integers, tagged and shorthand conditions, string/object compression, mixed numeric/string enums, disk/memory buffers, typed header maps, arbitrary nested test-event values, fractional seconds, nullable TLS, sensitive token arrays and Unix conditional requirements. Every validation probe verifies that validation did not mutate the original value.
 
-With `VECTORY_TEST_VECTOR` pointing to the pinned binary, three additional native configurations are validated: the local timezone, a memory enrichment table exporting a generated source, and a relative VRL source file. All passed on native Windows Vector 0.58.0. Results: [`schema-fixtures.json`](evidence/schema-fixtures.json).
+With `VECTORY_TEST_VECTOR` pointing to the pinned binary, three additional native configurations are validated: the local timezone, a memory enrichment table exporting a generated source, and a relative VRL source file. All passed on native Windows Vector 0.58.0. Results: [`schema-fixtures.json`](../evidence/schema-fixtures.json).
 
 Three upstream schema inconsistencies are deliberately recorded as expected failures rather than hidden:
 
@@ -52,7 +52,7 @@ The [Splunk HEC source reference](https://vector.dev/docs/reference/configuratio
 
 Six worker regressions cover the projected Unix transport branches in the socket, syslog, fluent and statsd sources and statsd sink. Each valid branch contains a device-local path and is deferred before Windows Vector execution; pipeline tests are explicitly reported as unexecuted. A transport mode without its required path does not obtain that deferral. This checks the validation boundary, not Unix activation.
 
-The separate [renderer report](evidence/schema-controls-browser.json) records **21 actual React browser scenarios**. These include complete Syslog and Socket forms, shared fields that stay current across mode changes, cached branch-specific values, pending nullable numbers that preserve the stored null until valid input, and cancellation of those drafts. Complete Remap and Sample forms distinguish the native required-one-of constraint from genuine format alternatives. HTTP source authentication is available in the schema controls; curated labels and starter fields no longer impose requirements that conflict with valid native alternatives.
+The separate [renderer report](../evidence/schema-controls-browser.json) records **21 actual React browser scenarios**. These include complete Syslog and Socket forms, shared fields that stay current across mode changes, cached branch-specific values, pending nullable numbers that preserve the stored null until valid input, and cancellation of those drafts. Complete Remap and Sample forms distinguish the native required-one-of constraint from genuine format alternatives. HTTP source authentication is available in the schema controls; curated labels and starter fields no longer impose requirements that conflict with valid native alternatives.
 
 ## Boundaries
 
@@ -64,4 +64,4 @@ The browser now rejects non-finite numbers and integers outside the exact JavaSc
 
 Read-only closeout review confirmed that memory export-source name collisions are checked before committing or retargeting references, preventing an intermediate collision from redirecting unrelated edges. Inspector navigation/destructive actions guard pending field drafts, and pipeline checking rejects unapplied changes. The lead's focused integrated browser regression verifies collision-then-rename preserves the original input. The complete product-browser suite is tracked separately in [ACCEPTANCE.md](ACCEPTANCE.md).
 
-Independent actual React/Chromium interaction checks passed **13/13**, recorded in [`schema-review.json`](evidence/schema-review.json) and reproduced with `node tests/security/schema-review.mjs`. They cover sensitive arrays, partial numeric drafts, fractional display units, numeric/string enum identity, event-template URLs, map rename/duplicate, pending edits during reorder and rename, nullable value restoration, HTTP authentication branch caching and pending-plaintext guards, arbitrary map keys without prototype mutation, synthetic key constraints, and read-only controls. This harness uses isolated synthetic state and does not mock activation or modify an ordinary fleet. The URL inventory, schema compilation and representative field probes are not complete UI interaction coverage.
+Independent actual React/Chromium interaction checks passed **13/13**, recorded in [`schema-review.json`](../evidence/schema-review.json) and reproduced with `node tests/security/schema-review.mjs`. They cover sensitive arrays, partial numeric drafts, fractional display units, numeric/string enum identity, event-template URLs, map rename/duplicate, pending edits during reorder and rename, nullable value restoration, HTTP authentication branch caching and pending-plaintext guards, arbitrary map keys without prototype mutation, synthetic key constraints, and read-only controls. This harness uses isolated synthetic state and does not mock activation or modify an ordinary fleet. The URL inventory, schema compilation and representative field probes are not complete UI interaction coverage.
