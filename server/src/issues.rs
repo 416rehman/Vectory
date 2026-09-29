@@ -400,10 +400,38 @@ fn render(mut issue: Value) -> Value {
         issue["diagnostics"] = diagnostics;
         return issue;
     }
-    issue["title"] = json!(crate::configuration_attempt::title(&code));
+    issue["title"] = json!(
+        first_version_title(&code, issue["device_name"].as_str(), &issue, 1)
+            .unwrap_or_else(|| crate::configuration_attempt::title(&code).to_owned())
+    );
     issue["message"] = json!(crate::configuration_attempt::summary(&code, &diagnostics));
     issue["diagnostics"] = diagnostics;
     issue
+}
+/// A device's first version that stopped Vector says who couldn't start
+/// what: "edge-01 couldn't start Syslog intake v1", or "3 devices couldn't
+/// start ..." for a group. None for other codes or without the names.
+fn first_version_title(
+    code: &str,
+    device: Option<&str>,
+    issue: &Value,
+    devices: i64,
+) -> Option<String> {
+    if code != "ROLLBACK_UNAVAILABLE" {
+        return None;
+    }
+    let pipeline = issue["configuration_name"].as_str()?;
+    let version = issue["version_number"].as_u64()?;
+    let who = match device {
+        Some(name) if devices <= 1 => name.to_owned(),
+        _ => format!("{devices} devices"),
+    };
+    let title = format!("{who} couldn't start {pipeline} v{version}");
+    Some(if title.chars().count() <= 120 {
+        title
+    } else {
+        title.chars().take(119).chain(['…']).collect()
+    })
 }
 fn rendered(rows: &[String]) -> Result<Vec<Value>> {
     rows.iter().map(|row| db::parse(row).map(render)).collect()
@@ -639,10 +667,15 @@ pub async fn groups(
             .collect();
         deployments.sort_unstable();
         deployments.dedup();
+        let device_count = key.get::<i64, _>("devices");
+        let title = match first_version_title(&code, None, &first, device_count) {
+            Some(title) if device_count > 1 => json!(title),
+            _ => first["title"].clone(),
+        };
         items.push(json!({
             "key": db::hash(format!("{version}:{code}")),
             "code": code,
-            "title": first["title"],
+            "title": title,
             "message": first["message"],
             "diagnostics": first["diagnostics"],
             "version_id": if version.is_empty() { Value::Null } else { json!(version) },
@@ -650,7 +683,7 @@ pub async fn groups(
             "configuration_id": first["configuration_id"],
             "configuration_name": first["configuration_name"],
             "deployment_ids": deployments,
-            "device_count": key.get::<i64, _>("devices"),
+            "device_count": device_count,
             "issue_count": key.get::<i64, _>("issues"),
             "attempts": key.get::<Option<i64>, _>("attempts").unwrap_or(0),
             "reports": key.get::<Option<i64>, _>("reports").unwrap_or(0),

@@ -174,7 +174,9 @@ pub fn title(code: &str) -> &'static str {
         "INCOMPATIBLE" => "The device runs a different Vector version",
         "ADOPTION_REQUIRED" => "The device isn't ready to manage Vector",
         "WRITE_FAILED" | "PATH_UNSAFE" => "The device couldn't write the configuration",
-        "ROLLBACK_FAILED" | "ROLLBACK_UNAVAILABLE" => "The update failed and couldn't be undone",
+        "ROLLBACK_FAILED" => "The update failed and couldn't be undone",
+        // Issues name the device and version (issues::first_version_title).
+        "ROLLBACK_UNAVAILABLE" => "The first version couldn't start",
         "RECOVERY_INVALID" => "Local recovery needs attention",
         "PROCESS_EXITED" => "Vector stopped running",
         "PROCESS_STOPPED" => "The agent stopped Vector",
@@ -207,8 +209,11 @@ fn fallback_summary(code: &str) -> &'static str {
         "WRITE_FAILED" | "PATH_UNSAFE" => {
             "The agent couldn't safely write the managed configuration on the host."
         }
-        "ROLLBACK_FAILED" | "ROLLBACK_UNAVAILABLE" => {
+        "ROLLBACK_FAILED" => {
             "The device couldn't restore a working configuration. Inspect the host."
+        }
+        "ROLLBACK_UNAVAILABLE" => {
+            "Vector isn't running: this was the device's first version, so there was nothing earlier to go back to."
         }
         "RECOVERY_INVALID" => "The agent's recovery journal needs a host operator.",
         "PROCESS_EXITED" => "The Vector process exited. The agent restarts it with backoff.",
