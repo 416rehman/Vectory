@@ -20,6 +20,9 @@ const demoRoot = process.env.VECTORY_DEMO_DIR || path.join(local, "demo");
 const web = `http://127.0.0.1:${process.env.VECTORY_PREVIEW_WEB_PORT || 8080}`;
 const agentServer = `https://localhost:${process.env.VECTORY_PREVIEW_AGENT_PORT || 8443}`;
 const VECTOR_VERSION = "0.58.0";
+// Each agent's pipeline exports Vector's metrics on its own loopback port; the
+// agent discovers the exporter in the running configuration by itself.
+const metricsPortBase = Number(process.env.VECTORY_DEMO_METRICS_PORT_BASE || 19600);
 const args = process.argv.slice(2);
 const agentCount = Math.min(
   12,
@@ -56,6 +59,7 @@ async function stopDemo() {
   const agents = await fs
     .readdir(path.join(demoRoot, "agents"))
     .catch(() => []);
+  const stopping = [];
   for (const name of agents) {
     const pidFile = path.join(demoRoot, "agents", name, "agent.pid");
     const pid = Number(await fs.readFile(pidFile, "utf8").catch(() => ""));
@@ -67,12 +71,31 @@ async function stopDemo() {
     const ours =
       process.platform !== "linux" || cmdline.includes(path.join(demoRoot));
     try {
-      if (ours) process.kill(pid, "SIGTERM");
+      if (ours) {
+        process.kill(pid, "SIGTERM");
+        stopping.push(pid);
+      }
     } catch {
       /* already stopped */
     }
     await fs.rm(pidFile, { force: true });
   }
+  // Vector drains in-flight events for up to its graceful shutdown limit (60 s
+  // by default), longer while a destination is down. Wait, so a restart does
+  // not find the previous agent still holding its state directory.
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const deadline = Date.now() + 90_000;
+  if (stopping.some(alive)) say("Waiting for Vector to drain and the agents to exit…");
+  while (stopping.some(alive) && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  if (stopping.some(alive)) say("Some agents are still stopping; they exit on their own.");
   run(path.join(root, "scripts/preview.sh"), ["stop"]);
   done("Demo agents and preview stopped. State remains in .local/ for next time.");
 }
@@ -208,7 +231,7 @@ async function startAgent(agent, vector, api, token, name, index) {
   const state = path.join(home, "state");
   const managed = path.join(home, "config", "managed.json");
   const data = path.join(home, "vector-data");
-  const metricsPort = 19600 + index;
+  const metricsPort = metricsPortBase + index;
   const pidFile = path.join(home, "agent.pid");
   const priorPid = Number(await fs.readFile(pidFile, "utf8").catch(() => ""));
   if (priorPid) {
@@ -235,7 +258,6 @@ async function startAgent(agent, vector, api, token, name, index) {
       "--state-dir", state,
       "--vector-binary", vector,
       "--managed-config", managed,
-      "--metrics-url", `http://127.0.0.1:${metricsPort}/metrics`,
       "--adopt",
       "--allow-full-vector-config",
       "--json",
@@ -268,8 +290,8 @@ async function startAgent(agent, vector, api, token, name, index) {
 }
 
 function demoPipeline(format) {
+  // No data_dir: each device supplies its own (here the adopted file's).
   return {
-    data_dir: path.join(demoRoot, "vector-data"),
     sources: {
       app_logs: { type: "demo_logs", format, interval: 0.2 },
       vector_metrics: { type: "internal_metrics", scrape_interval_secs: 5 },
@@ -362,7 +384,6 @@ async function main() {
     });
     done("Applied 15-second check-ins to the demo fleet.");
   }
-  await fs.mkdir(path.join(demoRoot, "vector-data"), { recursive: true });
   const existing = await api("/configurations");
   for (const [label, format, members] of [
     ["Edge syslog processing", "syslog", edge],
