@@ -25,6 +25,9 @@ import ConfigurationCodeEditor, {
 import "./schema-value-editor.css";
 import VrlField from "./VrlField";
 import { SchemaFieldHeader } from "./SchemaFieldChrome";
+import SecretReferenceField from "./SecretReferenceField";
+import { SecretPathContext, SecretScopeContext } from "./secretFieldContext";
+import { isSecretField } from "./secretFields";
 import { parseExactJSON } from "./configurationNumbers";
 import {
   fieldModel,
@@ -129,6 +132,8 @@ export function ScalarValueEditor({
     present: value !== undefined,
     path,
   });
+  const secretScope = useContext(SecretScopeContext),
+    secretPath = useContext(SecretPathContext);
   const title = label || model.title;
   const numeric =
     model.schema.type === "number" || model.schema.type === "integer";
@@ -190,12 +195,6 @@ export function ScalarValueEditor({
         return;
       }
     }
-    if (model.sensitive && !isSecretReference(next)) {
-      setError(
-        "Enter a secret reference. Plaintext credentials are not saved.",
-      );
-      return;
-    }
     const problems = validateFieldValue(parsed, schema, root);
     if (problems.length) {
       setError(problems[0]);
@@ -203,6 +202,37 @@ export function ScalarValueEditor({
     }
     setError("");
     onChange(parsed);
+  }
+  // Credential fields never get a text box for the value: a device secret by
+  // name where this component's type allows one, otherwise a Vector reference.
+  if (model.sensitive && !numeric) {
+    const device =
+      secretScope &&
+      isSecretField(secretScope.kind, secretScope.type, secretPath)
+        ? { componentId: secretScope.id, path: secretPath }
+        : null;
+    return (
+      <SecretReferenceField
+        title={title}
+        value={value}
+        onChange={onChange}
+        editable={!disabled}
+        required={required}
+        device={device}
+        className={
+          hideHeader ? "" : "schema-field-owned schema-standalone-value"
+        }
+        header={
+          !hideHeader && (
+            <SchemaFieldHeader
+              title={title}
+              required={required}
+              model={model}
+            />
+          )
+        }
+      />
+    );
   }
   const placeholder = model.hasDefault
     ? asText(model.defaultValue)
@@ -219,10 +249,7 @@ export function ScalarValueEditor({
         <SchemaFieldHeader title={title} required={required} model={model} />
       )}
       <div className="field">
-        <span id={`${controlId}-label`}>
-          {title +
-            (model.sensitive && !/reference$/i.test(title) ? " reference" : "")}
-        </span>
+        <span id={`${controlId}-label`}>{title}</span>
         {model.intent.kind === "vrl" ? (
           <VrlField
             path={path || name}
@@ -276,11 +303,8 @@ export function ScalarValueEditor({
               }
               spellCheck={
                 !numeric &&
-                !["path", "uri", "template", "secret"].includes(
-                  model.intent.kind,
-                )
+                !["path", "uri", "template"].includes(model.intent.kind)
               }
-              autoComplete={model.sensitive ? "off" : undefined}
               aria-invalid={!!error}
               aria-required={required || undefined}
               aria-describedby={error ? errorId : undefined}

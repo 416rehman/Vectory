@@ -20,6 +20,7 @@ import {
   REMAP_STARTER,
 } from "./catalog";
 import { componentTitle } from "./pipelineNodeModel";
+import { DEVICE_SECRET_FIX } from "./secretFields";
 import {
   resolveSchema,
   setSchemaProperty,
@@ -347,15 +348,19 @@ describe("guided pipeline editing", () => {
       message: "http_out: Enter uri.",
     });
     config.sinks.http_out.uri = "https://logs.example.test";
-    config.sinks.http_out.auth = {
-      strategy: "bearer",
-      token: "plaintext-not-a-reference",
-    };
-    expect(
-      pipelineIssues(config).some((issue) =>
-        issue.message.includes("secret reference"),
-      ),
-    ).toBe(true);
+    config.sinks.http_out.auth = { strategy: "bearer" };
+    expect(pipelineIssues(config)).toContainEqual({
+      id: "http_out",
+      message:
+        "http_out: enter a valid token secret reference in Authentication.",
+    });
+    config.sinks.http_out.auth.token = "plaintext-not-a-reference";
+    expect(pipelineIssues(config)).toEqual([
+      {
+        id: "http_out",
+        message: `http_out.auth.token: Plaintext credentials cannot be stored in \`auth.token\`. ${DEVICE_SECRET_FIX}`,
+      },
+    ]);
     config.sinks.http_out.auth.token = "vectory-secret:INGEST_TOKEN";
     expect(pipelineIssues(config)).toEqual([]);
     for (const reference of [
@@ -368,11 +373,15 @@ describe("guided pipeline editing", () => {
       expect(config.sinks.http_out.auth.token).toBe(reference);
     }
     config.sinks.http_out.auth.token = "vectory-secret:wrong name";
-    expect(
-      pipelineIssues(config).some((issue) =>
-        issue.message.includes("secret reference"),
-      ),
-    ).toBe(true);
+    expect(pipelineIssues(config).map((issue) => issue.message)).toEqual([
+      "http_out.auth.token: `auth.token` must be exactly `vectory-secret:NAME`, where NAME is a letter followed by up to 63 letters, digits, dots, dashes or underscores.",
+    ]);
+    // A reference in a destination is refused, naming the field.
+    config.sinks.http_out.auth.token = "vectory-secret:INGEST_TOKEN";
+    config.sinks.http_out.uri = "vectory-secret:INGEST_TOKEN";
+    expect(pipelineIssues(config).map((issue) => issue.message)).toEqual([
+      "http_out.uri: Only credential fields can hold a device secret, and `uri` isn't one.",
+    ]);
   });
 });
 
