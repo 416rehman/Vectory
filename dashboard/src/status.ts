@@ -138,7 +138,7 @@ export const applyStepLabels = {
 export const deviceStatuses = {
   verified: applyStates.verified_applied,
   degraded: entry(
-    "Degraded",
+    "Not delivering",
     "warning",
     "alert",
     "Applied, but not delivering. An open delivery issue says why.",
@@ -539,7 +539,7 @@ export function dataPlaneIssues(device: DeviceStatusInput): DataPlaneIssue[] {
 /**
  * The state to show for a device. A dashboard pause reads "Pause requested"
  * until the agent acknowledges it; a host-local pause is always in effect. An
- * applied device that isn't delivering reads "Degraded".
+ * applied device that isn't delivering reads "Not delivering".
  */
 export function deviceDisplayStatus(device: DeviceStatusInput): string {
   if (dataPlaneIssues(device).length) return "degraded";

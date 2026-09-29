@@ -91,7 +91,7 @@ import {
   withDegraded,
   statusFilters,
   targetFilterStates,
-  verifiedText,
+  appliedText,
   targetLabel,
   targetState,
 } from "./deploymentStatus";
@@ -177,17 +177,13 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
   if (d.rolled_back_by)
     return (
       <div className="deployment-devices-cell">
-        <span className="control-muted">
-          {d.verified_count} of {current} verified, then rolled back
-        </span>
+        <span className="control-muted">{appliedText(d)}</span>
       </div>
     );
   return (
     <div className="deployment-devices-cell">
       <span>
-        {current || d.target_count
-          ? `${d.verified_count} of ${current} verified`
-          : "No devices"}
+        {appliedText(d)}
         {failed > 0 && (
           <strong className="deployment-failed-count">
             {" "}
@@ -577,9 +573,7 @@ export function Deployments({
                   ),
                   meta: [
                     subtitle(d),
-                    current > 0
-                      ? `${d.verified_count} of ${current} verified`
-                      : null,
+                    current > 0 ? appliedText(d) : null,
                     display.note,
                   ],
                 };
@@ -1897,7 +1891,7 @@ function RolloutPage({
                         {deployment.verified_count - delivery.moved} of{" "}
                         {currentTargets}
                       </strong>{" "}
-                      {currentTargets === 1 ? "device" : "devices"} verified
+                      {currentTargets === 1 ? "device" : "devices"} applied
                       {deployment.rolled_back_by ? " before the rollback" : ""}
                     </p>
                     <span className="control-muted">
@@ -1907,7 +1901,7 @@ function RolloutPage({
                           : `Stops after ${deployment.rollout.failure_threshold + 1} failures`
                         : deployment.status === "failed"
                           ? "Stopped"
-                          : "Only verified devices count"}
+                          : "Only applied devices count"}
                     </span>
                   </div>
                   <ProgressBar

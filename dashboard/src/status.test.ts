@@ -108,7 +108,9 @@ describe("status language", () => {
       data_plane: { version_id: "v2", issues: [issue] },
     };
     expect(deviceDisplayStatus(device)).toBe("degraded");
-    expect(deviceStatuses.degraded.label).toBe("Degraded");
+    // One word per state: the device and its rollout target both say it.
+    expect(deviceStatuses.degraded.label).toBe("Not delivering");
+    expect(deviceStatuses.degraded.label).toBe(targetStates.degraded.label);
     expect(dataPlaneIssues(device)).toEqual([issue]);
     // Old measurements, other states and missing summaries never degrade.
     expect(

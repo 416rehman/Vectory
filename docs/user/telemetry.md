@@ -94,7 +94,7 @@ Applied means Vector runs the version. Delivery is a separate question, so Vecto
 - **Buffer filling:** a buffer is over 80% full and rising, or over 95% full.
 - **Error drops:** a component drops at least one event a minute because of errors.
 
-A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. A sink counts as recovered only when its buffer is seen low or it sends events again: silence isn't recovery. If you turn metrics off for a device, its delivery issues close as **unmonitored**, because Vectory can no longer check. Meanwhile the device reads **Degraded**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
+A problem opens an issue after two checks in a row (three for a stall) and closes by itself after three clean checks, so one noisy sample neither alarms nor heals. A sink counts as recovered only when its buffer is seen low or it sends events again: silence isn't recovery. If you turn metrics off for a device, its delivery issues close as **unmonitored**, because Vectory can no longer check. Meanwhile the device reads **Not delivering**, the **Devices** list shows its events in and out (for example `5.0 → 0`), and **Needs you** on the Overview names the component and the fix. Canary rollouts wait for a few healthy checks before they release more devices, and a canary that isn't delivering fails like one that couldn't apply. See [A pipeline applies but delivers nothing](troubleshooting.md#a-pipeline-applies-but-delivers-nothing).
 
 ## Read history and gaps
 
@@ -119,7 +119,7 @@ This pattern points to a slow or failing destination, but confirm it with the de
 [**Activity → Issues**](/#/issues) lists problems devices reported, such as a version that failed to apply. Each issue names the device, the version and the reason, and links to the device and the deployment. Issues are grouped by version and reason; choose **All issues** for one row per device.
 
 - An apply issue resolves by itself when the device next applies a version and confirms it.
-- A delivery issue (**Degraded**) resolves by itself after three clean checks, or when the device stops running that version.
+- A delivery issue (**Not delivering**) resolves by itself after three clean checks, or when the device stops running that version.
 - **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back. Both are recorded in the audit log.
 - A new failure after an acknowledgement reopens the issue.
 
