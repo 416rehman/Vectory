@@ -39,6 +39,37 @@
   line-height: 14px;
   font-weight: 500;
 }
+/* The one explanation of device secrets, above the step's fields. */
+.pipeline-secret-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--success-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--success-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pipeline-secret-note > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--success-text);
+}
+.pipeline-secret-note p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pipeline-secret-note code {
+  padding: 0;
+  background: transparent;
+  font-family: var(--ed-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+}
 .pipeline-input-patterns {
   display: grid;
   gap: 6px;

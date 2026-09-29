@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -56,6 +57,7 @@ import {
   usePendingScope,
 } from "./SchemaValueEditor";
 import ProblemText from "./ProblemText";
+import { SecretPathContext } from "./secretFieldContext";
 import "./schema-controls.css";
 
 export type SchemaPropertySection = {
@@ -244,6 +246,7 @@ function MapEntry({
         <SchemaField
           inCollection
           name={entryKey}
+          segment={entryKey}
           recordLabel={entryKey || "(empty name)"}
           recordActions={
             editable && !renaming
@@ -568,6 +571,7 @@ function ArrayFields({
             inCollection
             required
             name={`${title} ${index + 1}`}
+            segment={index}
             recordLabel={
               <>
                 {title} {index + 1}
@@ -657,6 +661,7 @@ function ArrayFields({
 
 function SchemaField({
   name,
+  segment,
   schema,
   root,
   value: configuredValue,
@@ -678,6 +683,9 @@ function SchemaField({
   requiredReason,
 }: {
   name: string;
+  /** This value's step in the component: a field name (default `name`), a
+   * list index, or null for another view of the parent's value. */
+  segment?: string | number | null;
   schema: Schema;
   root: Schema;
   value: any;
@@ -700,6 +708,14 @@ function SchemaField({
 }) {
   const parentPath = useContext(FieldPathContext),
     path = parentPath ? `${parentPath}.${name}` : name;
+  const parentSegments = useContext(SecretPathContext);
+  const segments = useMemo(
+    () =>
+      segment === null
+        ? parentSegments
+        : [...parentSegments, segment === undefined ? name : segment],
+    [parentSegments, segment, name],
+  );
   const trail = useContext(FieldTrailContext);
   const fieldProblems = useContext(FieldProblemsContext)(path);
   const inConditionFormat = useContext(ConditionFormatContext);
@@ -1038,6 +1054,7 @@ function SchemaField({
       <SchemaField
         inCollection={inCollection}
         name={name}
+        segment={null}
         schema={selectedConditionType.option.schema}
         root={root}
         value={value}
@@ -1076,6 +1093,7 @@ function SchemaField({
       <SchemaField
         inCollection={inCollection}
         name={name}
+        segment={null}
         schema={schemaToRender}
         root={root}
         value={value}
@@ -1370,231 +1388,239 @@ function SchemaField({
     <ConditionFormatContext.Provider
       value={inConditionFormat || !!conditionFormat}
     >
-      <FieldPathContext.Provider value={path}>
-        <FieldTrailContext.Provider
-          value={ownsHeader ? [...trail, title] : trail}
-        >
-          <PendingFieldsContext.Provider value={scope.report}>
-            <div
-              className={`schema-field-control ${ownsHeader ? "schema-field-owned" : ""} ${structured ? "schema-field-section" : ""}`}
-              data-field-name={name}
-              data-field-path={path}
-              data-field-problem={
-                fieldProblems.some((problem) => problem.severity === "error")
-                  ? "error"
-                  : fieldProblems.length
-                    ? "warning"
-                    : undefined
-              }
-            >
-              {ownsHeader && (
-                <SchemaFieldHeader
-                  title={title}
-                  label={recordLabel}
-                  leading={sectionIcon}
-                  parentLabel={trail.at(-1)}
-                  parentPath={trail.join(" / ")}
-                  required={required && !inCollection}
-                  requiredReason={requiredReason}
-                  model={model}
-                  helpSchemas={[schema, schemaToRender]}
-                  helpRoot={root}
-                  accessory={
-                    <span
-                      className="schema-field-picker-slot"
-                      ref={setObjectPickerTarget}
-                      hidden={rawOpen}
-                    />
-                  }
-                  actions={actions}
-                />
-              )}
-              {ownsHeader &&
-                required &&
-                requiredReason?.startsWith("Required when ") && (
-                  <p className="schema-condition-note">{requiredReason}</p>
-                )}
-              {choiceError && (
-                <p className="schema-control-error" role="status">
-                  {choiceError}
-                </p>
-              )}
-              {unknownType && (
-                <Field label={`${title} value type`}>
-                  <select
-                    disabled={!canEdit}
-                    value={actual === "undefined" ? "" : actual}
-                    onChange={(event) => {
-                      if (scope.fields.current.size) {
-                        setChoiceError(
-                          "Apply or discard pending field changes before changing formats.",
-                        );
-                        return;
-                      }
-                      cache.current.set(`type:${actual}`, clone(value));
-                      const next = genericTypes.find(
-                        (type) => type.type === event.target.value,
-                      );
-                      if (next)
-                        onChange(
-                          cache.current.has(`type:${next.type}`)
-                            ? clone(cache.current.get(`type:${next.type}`))
-                            : clone(next.value),
-                        );
-                    }}
-                  >
-                    <option value="">Choose a type</option>
-                    {genericTypes.map((type) => (
-                      <option key={type.type} value={type.type}>
-                        {type.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              )}
-              {conditionKinds ? (
-                <div className="schema-variant schema-selector-owned">
+      <SecretPathContext.Provider value={segments}>
+        <FieldPathContext.Provider value={path}>
+          <FieldTrailContext.Provider
+            value={ownsHeader ? [...trail, title] : trail}
+          >
+            <PendingFieldsContext.Provider value={scope.report}>
+              <div
+                className={`schema-field-control ${ownsHeader ? "schema-field-owned" : ""} ${structured ? "schema-field-section" : ""}`}
+                data-field-name={name}
+                data-field-path={path}
+                data-field-problem={
+                  fieldProblems.some((problem) => problem.severity === "error")
+                    ? "error"
+                    : fieldProblems.length
+                      ? "warning"
+                      : undefined
+                }
+              >
+                {ownsHeader && (
                   <SchemaFieldHeader
-                    title="Condition kind"
+                    title={title}
+                    label={recordLabel}
+                    leading={sectionIcon}
+                    parentLabel={trail.at(-1)}
+                    parentPath={trail.join(" / ")}
+                    required={required && !inCollection}
+                    requiredReason={requiredReason}
                     model={model}
                     helpSchemas={[schema, schemaToRender]}
                     helpRoot={root}
+                    accessory={
+                      <span
+                        className="schema-field-picker-slot"
+                        ref={setObjectPickerTarget}
+                        hidden={rawOpen}
+                      />
+                    }
+                    actions={actions}
                   />
-                  <Field label="Condition kind">
+                )}
+                {ownsHeader &&
+                  required &&
+                  requiredReason?.startsWith("Required when ") && (
+                    <p className="schema-condition-note">{requiredReason}</p>
+                  )}
+                {choiceError && (
+                  <p className="schema-control-error" role="status">
+                    {choiceError}
+                  </p>
+                )}
+                {unknownType && (
+                  <Field label={`${title} value type`}>
                     <select
-                      value={conditionKind}
                       disabled={!canEdit}
-                      aria-required={required || undefined}
-                      onChange={(event) =>
-                        chooseConditionKind(event.target.value)
-                      }
+                      value={actual === "undefined" ? "" : actual}
+                      onChange={(event) => {
+                        if (scope.fields.current.size) {
+                          setChoiceError(
+                            "Apply or discard pending field changes before changing formats.",
+                          );
+                          return;
+                        }
+                        cache.current.set(`type:${actual}`, clone(value));
+                        const next = genericTypes.find(
+                          (type) => type.type === event.target.value,
+                        );
+                        if (next)
+                          onChange(
+                            cache.current.has(`type:${next.type}`)
+                              ? clone(cache.current.get(`type:${next.type}`))
+                              : clone(next.value),
+                          );
+                      }}
                     >
-                      <option value="">Choose a condition</option>
-                      {conditionKind === "current" && (
-                        <option value="current" disabled>
-                          {record(value) && typeof value.type === "string"
-                            ? `Unknown condition: ${value.type}`
-                            : "Unknown condition"}
-                        </option>
-                      )}
-                      {conditionKinds.map(({ id, label }) => (
-                        <option value={id} key={id}>
-                          {label}
+                      <option value="">Choose a type</option>
+                      {genericTypes.map((type) => (
+                        <option key={type.type} value={type.type}>
+                          {type.label}
                         </option>
                       ))}
                     </select>
                   </Field>
-                </div>
-              ) : (
-                choiceVisible && (
-                  <div
-                    className={`schema-variant ${tagged || unboxed ? "schema-selector-owned" : ""}`}
-                  >
-                    {(tagged || unboxed) && (
-                      <SchemaFieldHeader
-                        title={variantLabel}
-                        model={
-                          tagged
-                            ? fieldModel(
-                                choices.options[0].discriminator!.key,
-                                resolved.properties?.[
-                                  choices.options[0].discriminator!.key
-                                ] || {},
-                                root,
-                                value?.[choices.options[0].discriminator!.key],
-                                { required: true },
-                              )
-                            : model
-                        }
-                        helpSchemas={[schema, schemaToRender]}
-                        helpRoot={root}
-                      />
-                    )}
-                    <Field label={variantLabel}>
+                )}
+                {conditionKinds ? (
+                  <div className="schema-variant schema-selector-owned">
+                    <SchemaFieldHeader
+                      title="Condition kind"
+                      model={model}
+                      helpSchemas={[schema, schemaToRender]}
+                      helpRoot={root}
+                    />
+                    <Field label="Condition kind">
                       <select
-                        value={activeChoice || ""}
+                        value={conditionKind}
                         disabled={!canEdit}
                         aria-required={required || undefined}
-                        onChange={(event) => choose(event.target.value)}
+                        onChange={(event) =>
+                          chooseConditionKind(event.target.value)
+                        }
                       >
-                        <option value="">
-                          {conditionFormat
-                            ? "Choose a condition format"
-                            : "Choose a format"}
-                        </option>
-                        {choices.options.map((option) => (
-                          <option value={option.id} key={option.id}>
-                            {conditionFormat && option.label === "String"
-                              ? "VRL expression"
-                              : conditionFormat && option.label === "Map"
-                                ? "Structured condition"
-                                : option.label}
+                        <option value="">Choose a condition</option>
+                        {conditionKind === "current" && (
+                          <option value="current" disabled>
+                            {record(value) && typeof value.type === "string"
+                              ? `Unknown condition: ${value.type}`
+                              : "Unknown condition"}
+                          </option>
+                        )}
+                        {conditionKinds.map(({ id, label }) => (
+                          <option value={id} key={id}>
+                            {label}
                           </option>
                         ))}
                       </select>
                     </Field>
-                    {choices.ambiguous &&
-                      !forcedChoice &&
-                      value !== undefined &&
-                      value !== null &&
-                      (typeof value === "object"
-                        ? Object.keys(value).length > 0
-                        : value !== "") && (
-                        <p className="schema-control-hint">
-                          More than one format matches this value. Choose the
-                          intended format to edit its fields.
-                        </p>
-                      )}
                   </div>
-                )
-              )}
-              <div className="schema-structured-value" hidden={rawOpen}>
-                {control}
-              </div>
-              {fieldProblems.length > 0 && (
-                <ul
-                  className="schema-field-problems"
-                  aria-label={`Problems in ${title}`}
-                >
-                  {fieldProblems.map((problem) => (
-                    <li key={problem.key} data-severity={problem.severity}>
-                      <ProblemText text={problem.message} />
-                      {problem.hint && (
-                        <small>
-                          <ProblemText text={problem.hint.split("\n")[0]} />
-                        </small>
+                ) : (
+                  choiceVisible && (
+                    <div
+                      className={`schema-variant ${tagged || unboxed ? "schema-selector-owned" : ""}`}
+                    >
+                      {(tagged || unboxed) && (
+                        <SchemaFieldHeader
+                          title={variantLabel}
+                          model={
+                            tagged
+                              ? fieldModel(
+                                  choices.options[0].discriminator!.key,
+                                  resolved.properties?.[
+                                    choices.options[0].discriminator!.key
+                                  ] || {},
+                                  root,
+                                  value?.[
+                                    choices.options[0].discriminator!.key
+                                  ],
+                                  { required: true },
+                                )
+                              : model
+                          }
+                          helpSchemas={[schema, schemaToRender]}
+                          helpRoot={root}
+                        />
                       )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {rawAvailable && (
-                <div className="schema-raw-value" id={rawId} hidden={!rawOpen}>
-                  {rawVisited && (
-                    <PendingFieldsContext.Provider value={reportRawPending}>
-                      <JSONValueEditor
-                        label={title}
-                        value={value}
-                        editable={canEdit}
-                        onChange={(next) => {
-                          if (staging || hasStructuredPending())
-                            throw new Error(
-                              "Apply or discard pending field changes before applying JSON.",
-                            );
-                          onChange(next);
-                        }}
-                        schema={schema}
-                        root={root}
-                        path={path}
-                      />
-                    </PendingFieldsContext.Provider>
-                  )}
+                      <Field label={variantLabel}>
+                        <select
+                          value={activeChoice || ""}
+                          disabled={!canEdit}
+                          aria-required={required || undefined}
+                          onChange={(event) => choose(event.target.value)}
+                        >
+                          <option value="">
+                            {conditionFormat
+                              ? "Choose a condition format"
+                              : "Choose a format"}
+                          </option>
+                          {choices.options.map((option) => (
+                            <option value={option.id} key={option.id}>
+                              {conditionFormat && option.label === "String"
+                                ? "VRL expression"
+                                : conditionFormat && option.label === "Map"
+                                  ? "Structured condition"
+                                  : option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      {choices.ambiguous &&
+                        !forcedChoice &&
+                        value !== undefined &&
+                        value !== null &&
+                        (typeof value === "object"
+                          ? Object.keys(value).length > 0
+                          : value !== "") && (
+                          <p className="schema-control-hint">
+                            More than one format matches this value. Choose the
+                            intended format to edit its fields.
+                          </p>
+                        )}
+                    </div>
+                  )
+                )}
+                <div className="schema-structured-value" hidden={rawOpen}>
+                  {control}
                 </div>
-              )}
-            </div>
-          </PendingFieldsContext.Provider>
-        </FieldTrailContext.Provider>
-      </FieldPathContext.Provider>
+                {fieldProblems.length > 0 && (
+                  <ul
+                    className="schema-field-problems"
+                    aria-label={`Problems in ${title}`}
+                  >
+                    {fieldProblems.map((problem) => (
+                      <li key={problem.key} data-severity={problem.severity}>
+                        <ProblemText text={problem.message} />
+                        {problem.hint && (
+                          <small>
+                            <ProblemText text={problem.hint.split("\n")[0]} />
+                          </small>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {rawAvailable && (
+                  <div
+                    className="schema-raw-value"
+                    id={rawId}
+                    hidden={!rawOpen}
+                  >
+                    {rawVisited && (
+                      <PendingFieldsContext.Provider value={reportRawPending}>
+                        <JSONValueEditor
+                          label={title}
+                          value={value}
+                          editable={canEdit}
+                          onChange={(next) => {
+                            if (staging || hasStructuredPending())
+                              throw new Error(
+                                "Apply or discard pending field changes before applying JSON.",
+                              );
+                            onChange(next);
+                          }}
+                          schema={schema}
+                          root={root}
+                          path={path}
+                        />
+                      </PendingFieldsContext.Provider>
+                    )}
+                  </div>
+                )}
+              </div>
+            </PendingFieldsContext.Provider>
+          </FieldTrailContext.Provider>
+        </FieldPathContext.Provider>
+      </SecretPathContext.Provider>
     </ConditionFormatContext.Provider>
   );
 }
@@ -2177,6 +2203,7 @@ export function PipelineSchemaControl({
   required = false,
   label,
   onPendingChange = ignorePending,
+  segment,
 }: {
   name: string;
   schema: Schema;
@@ -2187,11 +2214,14 @@ export function PipelineSchemaControl({
   required?: boolean;
   label?: string;
   onPendingChange?: (id: string, dirty: boolean) => void;
+  /** Config path segment for this value; null when the caller sets the path. */
+  segment?: string | null;
 }) {
   return (
     <PendingFieldsContext.Provider value={onPendingChange}>
       <SchemaField
         name={name}
+        segment={segment}
         schema={schema}
         root={root}
         value={value}
@@ -2248,6 +2278,7 @@ export default function PipelineSchemaFields({
       {hasRootSchemaVariants(schema, root, component) ? (
         <SchemaField
           name="component"
+          segment={null}
           schema={schema}
           root={root}
           value={component}

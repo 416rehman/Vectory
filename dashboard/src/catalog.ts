@@ -1,11 +1,8 @@
 import type { Config, Graph } from "./api";
 import generatedCatalog from "./generated/vector-catalog.json";
 import generatedSchema from "./generated/vector-schema.json";
-import {
-  requiredSchemaIssues,
-  isSecretReference,
-  type Schema,
-} from "./pipelineSchema";
+import { requiredSchemaIssues, type Schema } from "./pipelineSchema";
+import { secretFindings } from "./secretFields";
 /**
  * Vector's schema does not say that a condition's `source` is VRL, so a test's
  * `conditions` would get a plain text box. Mark it, and the same editor as
@@ -1182,6 +1179,8 @@ export function pipelineIssues(
               message: `${id}: ${field.label.toLowerCase()} must be greater than zero.`,
             });
         }
+      // A chosen strategy needs its credentials; what a present value may be
+      // is checked with every other credential field below.
       if (
         kind === "sinks" &&
         ["http", "loki", "elasticsearch"].includes(component?.type)
@@ -1194,7 +1193,7 @@ export function pipelineIssues(
               : [];
         for (const key of keys) {
           const reference = component.auth?.[key];
-          if (!isSecretReference(reference))
+          if (typeof reference !== "string" || !reference.trim())
             issues.push({
               id,
               message: `${id}: enter a valid ${key === "user" ? "username" : key} secret reference in Authentication.`,
@@ -1202,5 +1201,7 @@ export function pipelineIssues(
         }
       }
     }
+  for (const finding of secretFindings(config))
+    issues.push({ id: finding.id, message: finding.message });
   return issues;
 }

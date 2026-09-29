@@ -70,7 +70,8 @@ describe("field help preserves authoritative schema information", () => {
     );
     expect(html).not.toContain("unsafe-default");
     expect(html).not.toContain("unsafe-example");
-    expect(html).toContain("Plaintext credentials are not saved");
+    expect(html).toContain("Credentials stay on each device.");
+    expect(html).toContain("Plain-text credentials are never saved.");
     expect(html).toContain("keep-credentials-on-the-device");
   });
   it("gives a scalar its own help/header with required semantics and no accordion", () => {

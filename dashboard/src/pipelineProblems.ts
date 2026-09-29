@@ -537,6 +537,7 @@ const deferralPhrases: Record<string, string> = {
   "environment variables": "environment variables",
   "native secret references": "secrets",
   "native secret providers": "secrets",
+  "device secrets": "secrets",
   "VRL access to device resources": "VRL that reads device resources",
   "native configuration provider": "the configuration provider",
   "device enrichment data": "enrichment data files",
