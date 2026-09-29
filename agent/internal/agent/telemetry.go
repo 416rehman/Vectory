@@ -328,7 +328,36 @@ func (e *Engine) collectTelemetry(ctx context.Context, running []byte) (*Telemet
 	if e.Metrics.setEndpoint(endpoint, namespace) != nil {
 		return nil, source, address
 	}
-	return e.Metrics.Collect(ctx, e.now()), source, address
+	sample := e.Metrics.Collect(ctx, e.now())
+	if sample != nil {
+		sample.Components = runningComponents(sample.Components, running)
+	}
+	return sample, source, address
+}
+
+// runningComponents keeps components of the running configuration. Vector
+// retains the internal metrics of components a reload removed until the
+// process restarts; they would otherwise linger as idle rows. Device totals
+// are unaffected: removed components no longer move any rate.
+func runningComponents(components []ComponentTelemetry, running []byte) []ComponentTelemetry {
+	var root struct {
+		Sources    map[string]json.RawMessage `json:"sources"`
+		Transforms map[string]json.RawMessage `json:"transforms"`
+		Sinks      map[string]json.RawMessage `json:"sinks"`
+	}
+	if json.Unmarshal(running, &root) != nil || len(root.Sources)+len(root.Transforms)+len(root.Sinks) == 0 {
+		return components
+	}
+	kept := components[:0:0]
+	for _, c := range components {
+		_, source := root.Sources[c.ID]
+		_, transform := root.Transforms[c.ID]
+		_, sink := root.Sinks[c.ID]
+		if source || transform || sink {
+			kept = append(kept, c)
+		}
+	}
+	return kept
 }
 
 func ConfigureMetrics(dir, endpoint string) error {

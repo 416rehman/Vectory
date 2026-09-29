@@ -207,3 +207,16 @@ func TestHeartbeatFeaturesAreSentOnlyToServersThatAcceptThem(t *testing.T) {
 		}
 	}
 }
+
+func TestComponentsRemovedByReloadAreNotReported(t *testing.T) {
+	components := []ComponentTelemetry{{ID: "app"}, {ID: "old_source"}, {ID: "out"}}
+	running := []byte(`{"sources":{"app":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["app"]}}}`)
+	got := runningComponents(components, running)
+	if len(got) != 2 || got[0].ID != "app" || got[1].ID != "out" || len(components) != 3 || components[1].ID != "old_source" {
+		t.Fatalf("running components = %+v (input %+v)", got, components)
+	}
+	// Without a readable running configuration nothing is dropped.
+	if got := runningComponents(components, []byte("not json")); len(got) != 3 {
+		t.Fatalf("unreadable configuration dropped components: %+v", got)
+	}
+}
