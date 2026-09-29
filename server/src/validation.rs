@@ -795,6 +795,19 @@ pub fn structural_diagnostics(config: &Value, result: &Value) -> Vec<Diagnostic>
                     diagnostic.related = vec![input.trim().to_owned()];
                     diagnostic.message =
                         format!("Input `{}` does not match any component.", input.trim());
+                } else if let Some(producer) = rest
+                    .strip_prefix('`')
+                    .and_then(|rest| rest.split_once("` emits "))
+                    .map(|(producer, _)| producer)
+                    .filter(|_| rest.contains(" accepts "))
+                {
+                    diagnostic.code = Some("type_mismatch".into());
+                    diagnostic.field = Some("inputs".into());
+                    diagnostic.related = vec![producer.to_owned()];
+                    diagnostic.hint = Some(
+                        "Connect a step that produces the event type this component accepts."
+                            .into(),
+                    );
                 } else if rest.contains("input") || rest.contains("output") {
                     diagnostic.field = Some("inputs".into());
                 }
@@ -1038,8 +1051,10 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
     for item in native {
         let diagnostic = Diagnostic::from_json(&item);
         // The server's structural checks already explain topology errors.
-        if matches!(diagnostic.code.as_deref(), Some("missing_input" | "cycle"))
-            && structural_components.contains(&diagnostic.component)
+        if matches!(
+            diagnostic.code.as_deref(),
+            Some("missing_input" | "cycle" | "type_mismatch")
+        ) && structural_components.contains(&diagnostic.component)
         {
             continue;
         }
@@ -1695,6 +1710,164 @@ pub fn render(config: &Value) -> std::result::Result<String, serde_json::Error> 
 }
 // Output semantics from Vector v0.58.0. Unknown component types are deliberately
 // left to the pinned native validator instead of treating this list as a catalog.
+const LOGS: u8 = 1;
+const METRICS: u8 = 2;
+const TRACES: u8 = 4;
+const ANY_EVENT: u8 = LOGS | METRICS | TRACES;
+
+/// Sources that always emit one event type. A native codec can decode any
+/// event type, and anything not listed is treated as emitting anything.
+fn source_emits(item: &Value, port: Option<&str>) -> u8 {
+    let typ = item["type"].as_str().unwrap_or("");
+    if matches!(typ, "opentelemetry" | "datadog_agent") {
+        return match port {
+            Some("logs") => LOGS,
+            Some("metrics") => METRICS,
+            Some("traces") => TRACES,
+            _ => ANY_EVENT,
+        };
+    }
+    if item["decoding"]["codec"]
+        .as_str()
+        .is_some_and(|codec| codec.starts_with("native"))
+    {
+        return ANY_EVENT;
+    }
+    match typ {
+        "demo_logs" | "file" | "journald" | "kubernetes_logs" | "syslog" | "docker_logs"
+        | "internal_logs" => LOGS,
+        "host_metrics" | "internal_metrics" | "prometheus_scrape" | "statsd" | "static_metrics"
+        | "apache_metrics" | "nginx_metrics" => METRICS,
+        _ => ANY_EVENT,
+    }
+}
+
+/// Components that accept only some event types. Vector's own check stops at
+/// a transform (it types every transform output as any event), so a remap
+/// between a log source and a metrics sink passes `vector validate` and then
+/// delivers nothing. The native test keeps this table equal to Vector 0.58.
+pub(crate) fn accepted_events(kind: &str, typ: &str) -> u8 {
+    match (kind, typ) {
+        (
+            "sinks",
+            "datadog_metrics"
+            | "prometheus_exporter"
+            | "prometheus_remote_write"
+            | "statsd"
+            | "influxdb_metrics"
+            | "aws_cloudwatch_metrics"
+            | "gcp_stackdriver_metrics",
+        )
+        | ("transforms", "metric_to_log" | "aggregate") => METRICS,
+        (
+            "sinks",
+            "loki"
+            | "datadog_logs"
+            | "splunk_hec_logs"
+            | "aws_cloudwatch_logs"
+            | "gcp_stackdriver_logs"
+            | "influxdb_logs"
+            | "papertrail",
+        )
+        | ("transforms", "log_to_metric") => LOGS,
+        _ => ANY_EVENT,
+    }
+}
+
+fn event_names(types: u8) -> String {
+    let names: Vec<&str> = [(LOGS, "logs"), (METRICS, "metrics"), (TRACES, "traces")]
+        .into_iter()
+        .filter(|(bit, _)| types & bit != 0)
+        .map(|(_, name)| name)
+        .collect();
+    match names.as_slice() {
+        [one] => (*one).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        _ => names.join(", "),
+    }
+}
+
+/// Follow event types from sources through transforms that keep them, and
+/// report a consumer that can accept none of what an input sends.
+fn event_type_mismatches(
+    config: &Value,
+    dependencies: &BTreeMap<String, Vec<String>>,
+    errors: &mut Vec<String>,
+) {
+    fn emits(
+        config: &Value,
+        dependencies: &BTreeMap<String, Vec<String>>,
+        input: &str,
+        visiting: &mut BTreeSet<String>,
+    ) -> u8 {
+        if input.contains(['*', '?', '['])
+            || has_environment_reference(input)
+            || input.contains("SECRET[")
+        {
+            return ANY_EVENT;
+        }
+        let (id, port) = match input.split_once('.') {
+            Some((id, port)) => (id, Some(port)),
+            None => (input, None),
+        };
+        if let Some(source) = config["sources"].get(id) {
+            return source_emits(source, port);
+        }
+        let Some(transform) = config["transforms"].get(id) else {
+            return ANY_EVENT;
+        };
+        let passes = match transform["type"].as_str().unwrap_or("") {
+            "log_to_metric" => return METRICS,
+            "metric_to_log" => return LOGS,
+            typ => matches!(
+                typ,
+                "remap"
+                    | "filter"
+                    | "route"
+                    | "exclusive_route"
+                    | "sample"
+                    | "throttle"
+                    | "dedupe"
+                    | "reduce"
+                    | "aggregate"
+            ),
+        };
+        if !passes || !visiting.insert(id.to_owned()) {
+            return ANY_EVENT;
+        }
+        let types = dependencies
+            .get(id)
+            .into_iter()
+            .flatten()
+            .fold(0, |types, input| {
+                types | emits(config, dependencies, input, visiting)
+            });
+        visiting.remove(id);
+        if types == 0 { ANY_EVENT } else { types }
+    }
+    for (name, inputs) in dependencies {
+        let kind = if config["sinks"].get(name).is_some() {
+            "sinks"
+        } else {
+            "transforms"
+        };
+        let accepts = accepted_events(kind, config[kind][name]["type"].as_str().unwrap_or(""));
+        if accepts == ANY_EVENT {
+            continue;
+        }
+        for input in inputs {
+            let sent = emits(config, dependencies, input, &mut BTreeSet::new());
+            if sent & accepts == 0 {
+                errors.push(format!(
+                    "{name}: `{input}` emits {} but `{name}` accepts {}.",
+                    event_names(sent),
+                    event_names(accepts)
+                ));
+            }
+        }
+    }
+}
+
 fn output_exists(kind: &str, item: &Value, port: Option<&str>) -> Option<bool> {
     let typ = item["type"].as_str()?;
     match (kind, typ) {
@@ -1990,6 +2163,7 @@ pub fn validate(config: &Value) -> Value {
             _ => {}
         }
     }
+    event_type_mismatches(config, &dependencies, &mut errors);
     security(config, &mut errors);
     let (_, reference_errors) = local_secret_references(config);
     errors.extend(reference_errors);
@@ -2003,6 +2177,62 @@ pub fn validate(config: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn event_types_follow_transforms_that_keep_them() {
+        let mismatch = |config: &Value| {
+            validate(config)["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|e| e.contains(" emits "))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let mut config = json!({
+            "sources":{"in":{"type":"demo_logs","format":"json"}},
+            "transforms":{"p":{"type":"remap","inputs":["in"],"source":".x = 1"},
+                "r":{"type":"route","inputs":["p"],"route":{"a":"true"}}},
+            "sinks":{"dd":{"type":"datadog_metrics","inputs":["r.a"],"default_api_key":"SECRET[vault.dd_key]"}}
+        });
+        assert_eq!(
+            mismatch(&config),
+            ["dd: `r.a` emits logs but `dd` accepts metrics."]
+        );
+        let diagnostics = structural_diagnostics(&config, &validate(&config));
+        let diagnostic = diagnostics
+            .iter()
+            .find(|d| d.code.as_deref() == Some("type_mismatch"))
+            .unwrap();
+        assert_eq!(diagnostic.component.as_deref(), Some("dd"));
+        assert_eq!(diagnostic.field.as_deref(), Some("inputs"));
+        assert_eq!(diagnostic.related, ["r.a"]);
+        assert_eq!(
+            diagnostic.message,
+            "`r.a` emits logs but `dd` accepts metrics."
+        );
+        // Converting first, a wildcard, a native codec or an unknown step all pass.
+        config["transforms"]["m"] = json!({"type":"log_to_metric","inputs":["r.a"],"metrics":[]});
+        config["sinks"]["dd"]["inputs"] = json!(["m"]);
+        assert!(mismatch(&config).is_empty());
+        config["sinks"]["dd"]["inputs"] = json!(["r.*"]);
+        assert!(mismatch(&config).is_empty());
+        config["sinks"]["dd"]["inputs"] = json!(["p"]);
+        config["sources"]["in"]["decoding"] = json!({"codec":"native_json"});
+        assert!(mismatch(&config).is_empty());
+        config["sources"]["in"] = json!({"type":"http_server","address":"0.0.0.0:80"});
+        assert!(mismatch(&config).is_empty());
+        let otel = json!({
+            "sources":{"otel":{"type":"opentelemetry"}},
+            "transforms":{"t":{"type":"metric_to_log","inputs":["otel.logs"]}},
+            "sinks":{"prom":{"type":"prometheus_exporter","inputs":["otel.metrics"]},"loki":{"type":"loki","inputs":["t","otel.logs"]}}
+        });
+        assert_eq!(
+            mismatch(&otel),
+            ["t: `otel.logs` emits logs but `t` accepts metrics."]
+        );
+    }
+
     #[test]
     fn sample_strategy_errors_fail_structural_checks_without_native_vector() {
         let mut config = json!({"sources":{"in":{"type":"demo_logs"}},"transforms":{"pick":{"type":"sample","inputs":["in"]}},"sinks":{"out":{"type":"blackhole","inputs":["pick"]}}});
