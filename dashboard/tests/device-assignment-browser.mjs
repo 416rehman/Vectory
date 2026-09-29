@@ -291,7 +291,7 @@ try {
       await load({ device: failed });
       await deviceVisible();
       await expect(page.locator(".device-explanation")).toContainText(
-        "rejected this version during Vector validation",
+        "Vector rejected this version on the device.",
       );
       await expect(page.locator("body")).not.toContainText(
         "raw diagnostic must not appear",

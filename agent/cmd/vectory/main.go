@@ -18,10 +18,7 @@ import (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 || (os.Args[4] != "restricted" && os.Args[4] != "full") {
-			os.Exit(2)
-		}
-		os.Exit(agent.VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(agent.VectorHostMain(os.Args[2:]))
 	}
 	os.Exit(run(os.Args[1:]))
 }

@@ -86,7 +86,7 @@ sudo vectory install \
 
 | Flag | Meaning |
 | --- | --- |
-| `--vector-binary PATH` | The installed Vector 0.58.0 binary to adopt. Must be absolute and not a symlink. |
+| `--vector-binary PATH` | The installed Vector 0.58.0 binary to adopt, pinned by its SHA-256. A symbolic link is resolved and the real file is adopted; after upgrading Vector, approve the new binary with `vectory re-adopt`. |
 | `--managed-config PATH` | The single JSON configuration file the agent manages. Its folder becomes private. |
 | `--adopt` | Confirms the adoption. Required for a new install. |
 | `--capability-policy PATH` | Restricted-mode allowances. Replaces all three lists. |
@@ -94,6 +94,8 @@ sudo vectory install \
 | `--metrics-url URL` | Loopback Prometheus endpoint to read metrics from, for example `http://127.0.0.1:9598/metrics`. |
 | `--clear-metrics-url` | Remove the saved metrics endpoint. |
 | `--secret-files PATH` | JSON map of secret names to absolute private files. Replaces all bindings. |
+| `--vector-data-dir PATH` | Data directory for pipelines that don't set `data_dir`. Empty restores the automatic choice: the adopted configuration's `data_dir`, then `/var/lib/vector` if it exists and is writable (not on Windows), then `<state-dir>/vector-data`. |
+| `--graceful-shutdown-seconds N` | How long Vector may drain on stop or restart before it is killed, 5 to 300. Default 60. |
 
 All options are checked together before anything is saved. Options you leave out keep their values.
 
@@ -152,12 +154,17 @@ sudo vectory doctor
 
 ## logs
 
-<!-- verify-after-merge: `vectory logs` and `--follow` -->
-Show Vector's recent output, kept in a size-limited log in the state directory.
+Show Vector's own log on this host: startup, reloads, and component warnings and errors. It never shows your events. The log lives in `<state-dir>/vector.log` and rotates at 10 MiB into one `.1` file. `logs` only reads files, so it works while the agent runs.
 
 ```sh
 sudo vectory logs --follow
 ```
+
+| Flag | Meaning |
+| --- | --- |
+| `--lines N` | How many recent lines to print. Default 100. |
+| `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
+| `--raw` | Print Vector's JSON log lines unchanged. `--json` does the same. |
 
 | Flag | Meaning |
 | --- | --- |

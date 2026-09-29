@@ -1,0 +1,35 @@
+√ Loaded ["multi.json"]
+
+Transform errors
+----------------
+x Transform "a": 
+error[E103]: unhandled fallible assignment
+  ┌─ :1:6
+  │
+1 │ .x = to_int(.y)
+  │ ---- ^^^^^^^^^^ this expression is fallible because at least one argument's type cannot be verified to be valid
+  │ │
+  │ or change this to an infallible assignment:
+  │ .x, err = to_int(.y)
+  │
+  = see documentation about error handling at https://errors.vrl.dev/#handling
+  = see functions characteristics documentation at https://vrl.dev/expressions/#function-call-characteristics
+  = learn more about error code 103 at https://errors.vrl.dev/103
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+x Transform "b": 
+error[E204]: syntax error
+  ┌─ :1:5
+  │
+1 │ del(
+  │     ^
+  │
+  │     unexpected end of program
+  │     expected one of: "identifier", "string literal", "raw string literal", "integer literal", "float literal", "regex literal", "timestamp literal", "function call", "reserved identifier", "path literal", "if", "else", "null", "true", "false", "abort", "return", "\n", "!", "[", "{", "(", ")"
+  │
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
+x data_dir "/var/lib/vector/" does not exist

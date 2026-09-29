@@ -29,6 +29,9 @@ type Manifest struct {
 	PolicyGeneration uint64    `json:"policy_generation"`
 	Policy           Policy    `json:"policy"`
 	Desired          *Desired  `json:"desired,omitempty"`
+	// Features lists additive heartbeat fields this server accepts. Older
+	// servers omit it, and the agent then sends the original heartbeat shape.
+	Features []string `json:"features,omitempty"`
 }
 type Envelope struct {
 	Payload   string `json:"payload"`
@@ -72,6 +75,10 @@ type Heartbeat struct {
 	AppliedTemplateSHA256   string                `json:"applied_template_sha256,omitempty"`
 	SecretRevision          uint64                `json:"secret_revision,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
+	HostRuntime             *HostRuntime          `json:"host_runtime,omitempty"`
+	// VectorLogSummary is nil for servers without the feature; an empty list
+	// tells a supporting server there is nothing to report.
+	VectorLogSummary *[]LogSummary `json:"vector_log_summary,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated
@@ -85,29 +92,61 @@ type ConfigurationAttempt struct {
 	SecretRevision uint64 `json:"secret_revision,omitempty"`
 	Error          *Issue `json:"error,omitempty"`
 }
+
+// Telemetry is one bounded sample. Rates are averages over the interval since
+// the previous sample; Errors and Discarded* are cumulative since Vector
+// started. A nil value is unavailable, never zero.
 type Telemetry struct {
-	SampledAt       time.Time            `json:"sampled_at"`
-	EventsPerSecond *float64             `json:"events_per_second,omitempty"`
-	Errors          *float64             `json:"errors,omitempty"`
-	UptimeSeconds   *float64             `json:"uptime_seconds,omitempty"`
-	MemoryBytes     *float64             `json:"memory_bytes,omitempty"`
-	CPUSeconds      *float64             `json:"cpu_seconds,omitempty"`
-	DiscardedEvents *float64             `json:"discarded_events,omitempty"`
-	BufferBytes     *float64             `json:"buffer_bytes,omitempty"`
-	Components      []ComponentTelemetry `json:"components,omitempty"`
+	SampledAt            time.Time            `json:"sampled_at"`
+	EventsPerSecond      *float64             `json:"events_per_second,omitempty"`
+	EventsOutPerSecond   *float64             `json:"events_out_per_second,omitempty"`
+	BytesInPerSecond     *float64             `json:"bytes_in_per_second,omitempty"`
+	BytesOutPerSecond    *float64             `json:"bytes_out_per_second,omitempty"`
+	Errors               *float64             `json:"errors,omitempty"`
+	ErrorsPerMinute      *float64             `json:"errors_per_minute,omitempty"`
+	UptimeSeconds        *float64             `json:"uptime_seconds,omitempty"`
+	MemoryBytes          *float64             `json:"memory_bytes,omitempty"`
+	CPUSeconds           *float64             `json:"cpu_seconds,omitempty"`
+	DiscardedEvents      *float64             `json:"discarded_events,omitempty"`
+	DiscardedIntentional *float64             `json:"discarded_intentional,omitempty"`
+	DiscardedError       *float64             `json:"discarded_error,omitempty"`
+	FilteredPerMinute    *float64             `json:"filtered_per_minute,omitempty"`
+	DroppedPerMinute     *float64             `json:"dropped_per_minute,omitempty"`
+	BufferBytes          *float64             `json:"buffer_bytes,omitempty"`
+	BufferEvents         *float64             `json:"buffer_events,omitempty"`
+	BufferUtilization    *float64             `json:"buffer_utilization,omitempty"`
+	Components           []ComponentTelemetry `json:"components,omitempty"`
 }
 type ComponentTelemetry struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type,omitempty"`
-	EventsPerSecond *float64 `json:"events_per_second,omitempty"`
-	Errors          *float64 `json:"errors,omitempty"`
-	DiscardedEvents *float64 `json:"discarded_events,omitempty"`
-	BufferBytes     *float64 `json:"buffer_bytes,omitempty"`
+	ID                      string             `json:"id"`
+	Type                    string             `json:"type,omitempty"`
+	Kind                    string             `json:"kind,omitempty"`
+	EventsPerSecond         *float64           `json:"events_per_second,omitempty"`
+	ReceivedEventsPerSecond *float64           `json:"received_events_per_second,omitempty"`
+	SentByOutput            map[string]float64 `json:"sent_by_output,omitempty"`
+	ReceivedBytesPerSecond  *float64           `json:"received_bytes_per_second,omitempty"`
+	SentBytesPerSecond      *float64           `json:"sent_bytes_per_second,omitempty"`
+	Errors                  *float64           `json:"errors,omitempty"`
+	ErrorsPerMinute         *float64           `json:"errors_per_minute,omitempty"`
+	DiscardedEvents         *float64           `json:"discarded_events,omitempty"`
+	DiscardedIntentional    *float64           `json:"discarded_intentional,omitempty"`
+	DiscardedError          *float64           `json:"discarded_error,omitempty"`
+	FilteredPerMinute       *float64           `json:"filtered_per_minute,omitempty"`
+	DroppedPerMinute        *float64           `json:"dropped_per_minute,omitempty"`
+	BufferBytes             *float64           `json:"buffer_bytes,omitempty"`
+	BufferEvents            *float64           `json:"buffer_events,omitempty"`
+	BufferMaxEvents         *float64           `json:"buffer_max_events,omitempty"`
+	BufferMaxBytes          *float64           `json:"buffer_max_bytes,omitempty"`
+	BufferUtilization       *float64           `json:"buffer_utilization,omitempty"`
+	Utilization             *float64           `json:"utilization,omitempty"`
+	LatencyMeanSeconds      *float64           `json:"latency_mean_seconds,omitempty"`
 }
 type Issue struct {
 	Code    string `json:"code"`
 	Stage   string `json:"stage"`
 	Message string `json:"message"`
+	// Diagnostics are redacted, structured findings from Vector's own output.
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 type Settings struct {
 	Server             string            `json:"server"`
@@ -122,6 +161,11 @@ type Settings struct {
 	StartupSeconds     int               `json:"startup_seconds"`
 	MetricsURL         string            `json:"metrics_url,omitempty"`
 	SecretFiles        map[string]string `json:"secret_files,omitempty"`
+	// VectorDataDir is the host-owned data directory offered to pipelines
+	// that do not set data_dir (install --vector-data-dir). Empty: resolved.
+	VectorDataDir string `json:"vector_data_dir,omitempty"`
+	// GracefulShutdownSeconds bounds Vector's drain on stop (default 60).
+	GracefulShutdownSeconds int `json:"graceful_shutdown_seconds,omitempty"`
 }
 type State struct {
 	DeviceID                string                `json:"device_id"`
@@ -148,6 +192,7 @@ type State struct {
 	MaterializationSHA256   string                `json:"materialization_sha256,omitempty"`
 	FailedEffectiveSHA256   string                `json:"failed_effective_sha256,omitempty"`
 	ConfigurationAttempt    *ConfigurationAttempt `json:"configuration_attempt,omitempty"`
+	ServerFeatures          []string              `json:"server_features,omitempty"`
 }
 type Journal struct {
 	Stage                string                `json:"stage"`

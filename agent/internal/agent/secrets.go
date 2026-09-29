@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,6 +16,16 @@ const secretPrefix = "vectory-secret:"
 const MaxSecret = 16 * 1024
 
 var secretName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
+
+// secretReferenceError says which typed reference failed, by name and
+// location only. Values and file paths never leave the host.
+type secretReferenceError struct {
+	name, sink, field, code string
+	err                     error
+}
+
+func (e *secretReferenceError) Error() string { return e.err.Error() }
+func (e *secretReferenceError) Unwrap() error { return e.err }
 
 // ResolveLocalSecrets only replaces complete typed JSON string leaves at known
 // authentication fields. It cannot interpolate text, alter structure or choose
@@ -88,17 +99,17 @@ func resolveLocalSecrets(template []byte, bindings map[string]string, fullVector
 			}
 			file, ok := bindings[name]
 			if !ok {
-				return nil, errors.New("a local secret reference has no host-operator binding")
+				return nil, &secretReferenceError{name, path[1], path[3], "SECRET_BINDING_MISSING", errors.New("a local secret reference has no host-operator binding")}
 			}
 			secret, e := readLocalSecret(file)
 			if e != nil {
-				return nil, e
+				return nil, &secretReferenceError{name, path[1], path[3], "SECRET_FILE_UNREADABLE", e}
 			}
 			// Full Vector interpolation runs after typed materialization. A local
 			// credential must remain literal, never become another provider/env
 			// reference or be changed by Vector's dollar escaping.
 			if fullVector && (environmentVariable.MatchString(secret) || strings.Contains(secret, "${") || strings.Contains(secret, "$$") || strings.Contains(secret, "SECRET[")) {
-				return nil, errors.New("local credential contains native interpolation syntax; use a native provider directly for that credential")
+				return nil, &secretReferenceError{name, path[1], path[3], "SECRET_VALUE_REJECTED", errors.New("local credential contains native interpolation syntax; use a native provider directly for that credential")}
 			}
 			values[name] = secret
 			return secret, nil
@@ -126,7 +137,10 @@ func readLocalSecret(path string) (string, error) {
 	}
 	f, err := openPrivateFile(path)
 	if err != nil {
-		return "", errors.New("local secret file must be available, private, unlinked and owned by the agent account or system administrator")
+		if os.IsNotExist(err) {
+			return "", errors.New("local secret file does not exist: " + path)
+		}
+		return "", errors.New("local secret file must be private to the agent account; " + privateFileFix(path))
 	}
 	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, MaxSecret+1))

@@ -1,0 +1,4 @@
+Failed to load ["type_mismatch.json"]
+-------------------------------------
+x Data type mismatch between app (["Log"]) and prom (["Metric"])
+

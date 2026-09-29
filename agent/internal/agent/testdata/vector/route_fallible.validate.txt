@@ -1,0 +1,40 @@
+Loaded with warnings ["route_fallible.json"]
+--------------------------------------------
+~ Transform "by_severity._unmatched" has no consumers
+
+Transform errors
+----------------
+x Transform "by_severity": route "errors": 
+error[E100]: unhandled error
+  ┌─ :1:1
+  │
+1 │ .status >= 500
+  │ ^^^^^^^^^^^^^^
+  │ │
+  │ expression can result in runtime error
+  │ handle the error case to ensure runtime success
+  │
+  = see documentation about error handling at https://errors.vrl.dev/#handling
+  = learn more about error code 100 at https://errors.vrl.dev/100
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
+Component errors
+----------------
+x Transform "by_severity": 
+error[E100]: unhandled error
+  ┌─ :1:1
+  │
+1 │ .status >= 500
+  │ ^^^^^^^^^^^^^^
+  │ │
+  │ expression can result in runtime error
+  │ handle the error case to ensure runtime success
+  │
+  = see documentation about error handling at https://errors.vrl.dev/#handling
+  = learn more about error code 100 at https://errors.vrl.dev/100
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+

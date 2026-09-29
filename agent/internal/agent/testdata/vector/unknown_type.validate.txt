@@ -1,0 +1,4 @@
+Failed to load ["unknown_type.json"]
+------------------------------------
+x sources.app: unknown variant `demo_logz`, expected one of `amqp`, `apache_metrics`, `aws_ecs_metrics`, `aws_kinesis_firehose`, `aws_s3`, `aws_sqs`, `datadog_agent`, `demo_logs`, `dnstap`, `docker_logs`, `eventstoredb_metrics`, `exec`, `file`, `file_descriptor`, `fluent`, `gcp_pubsub`, `heroku_logs`, `host_metrics`, `http`, `http_client`, `http_server`, `internal_logs`, `internal_metrics`, `journald`, `kafka`, `kubernetes_logs`, `logstash`, `memory_enrichment_table`, `mongodb_metrics`, `mqtt`, `nats`, `nginx_metrics`, `okta`, `opentelemetry`, `postgresql_metrics`, `prometheus_pushgateway`, `prometheus_remote_write`, `prometheus_scrape`, `pulsar`, `redis`, `socket`, `splunk_hec`, `static_metrics`, `statsd`, `stdin`, `syslog`, `unit_test`, `unit_test_stream`, `vector`, `websocket`, `windows_event_log`
+

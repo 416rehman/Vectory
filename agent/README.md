@@ -28,8 +28,8 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 1. **Persist first.** Generations and the desired identity are saved before anything is fetched. A manifest with the same generation must carry the same identity; a rollback always arrives as a newer generation.
 2. **Fetch and check.** The artifact is fetched by SHA-256 from the agent listener and compared byte for byte.
 3. **Render.** Local secret bindings are substituted in memory; the effective configuration is checked against the local policy.
-4. **Validate** with the adopted Vector, and run the pipeline's tests when it has any.
-5. **Apply** through a journal that records each step: prepare, write, start, observe and verify. An interruption at any step recovers on the next start.
+4. **Validate** with the adopted Vector, and run the pipeline's tests when it has any. A failing destination health check doesn't reject a version: Vector buffers and retries at runtime, so refusing would only keep the old pipeline running or keep Vector down. When the pipeline omits `data_dir`, the agent supplies this host's own directory in a separate runtime file (`<state-dir>/host-runtime.json`), so the managed file still matches the published version exactly.
+5. **Apply** through a journal that records each step: prepare, write, start, observe and verify. On Linux and macOS a running Vector is reloaded in place (SIGHUP) and must log `Vector has reloaded.`; if it refuses (for example a changed `data_dir`), the agent restarts it instead. An interruption at any step recovers on the next start.
 6. **Verify.** Activation requires Vector 0.58's startup record from the newly started process, two seconds of liveness and a matching managed-file digest. A health endpoint, another process, a download or a written file never counts.
 7. **Roll back** to the last verified configuration if the new one fails. The separate pre-attempt snapshot can contain drift and is never promoted automatically.
 
@@ -40,7 +40,7 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 - The agent owns its Vector process. Stopping the agent stops Vector; starting it starts the current managed configuration and finishes any incomplete journal.
 - A control-plane outage, or an expired or revoked credential, never stops a running Vector. There is no fallback to token-based heartbeats.
 - If Vector exits, a local health check restores the established configuration even while the server is unreachable. Restarts back off through 10, 20, 40, 80, 160 and 300 seconds, resetting after a minute of healthy running. A local or remote sync pause blocks automatic restarts.
-- Linux stops Vector with SIGTERM and a bounded kill fallback. Windows uses forced termination.
+- Linux and macOS stop Vector with SIGTERM and give it `--graceful-shutdown-seconds` (default 60, 5 to 300) to drain before a kill. Windows still uses forced termination.
 
 ## Local state and maintenance
 
@@ -48,7 +48,8 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 - Maintenance commands take the agent's operation lock, so they need the agent stopped. `pause` and `resume` work while it runs.
 - `uninstall --purge` fences other Vectory operations on the same path, writes a marker inside the state directory so an interrupted purge can resume, and deletes only that directory. Stop older agent binaries first: they don't observe the fence.
 - On Windows, a per-path global mutex coordinates the service and maintenance accounts. A local user who can guess the path can hold it and block maintenance (never purge state), so restrict untrusted local logons on managed hosts.
-- Errors never include configuration text, Vector's raw output, enrollment credentials or server error bodies.
+- Vector's own log goes to `<state-dir>/vector.log` (rotated at 10 MiB into one `.1` file); `vectory logs [--follow]` reads it. Treat it like other private host files. Heartbeats carry at most ten redacted diagnostics per failed attempt and a redacted summary of Vector's warnings and errors: secrets, URL credentials and environment values are removed.
+- Command errors never include configuration text, enrollment credentials or server error bodies.
 
 ## Security boundary
 
@@ -68,7 +69,9 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 
 ## Telemetry
 
-The agent reads a loopback Prometheus endpoint: at most 1 MiB, 5,000 series, 10,000 lines and 32 KiB per line, within three seconds, with redirects and proxies disabled. It reports source throughput, errors, discards, buffer bytes, uptime and up to 50 components, drops host, URI, file and free-form labels, and never invents zeros for missing series. It never inserts monitoring components or opens a public endpoint, and never uploads events.
+The agent scrapes a `prometheus_exporter` sink it finds in the running configuration: one on a literal loopback address, without TLS or auth, whose inputs reach an `internal_metrics` source. `configure-metrics --metrics-url` overrides discovery. Scrapes are bounded to 1 MiB, 5,000 series, 10,000 lines and 32 KiB per line, within three seconds, with redirects and proxies disabled.
+
+It reports events in (sources other than `internal_metrics` and `internal_logs`), events out (sinks other than those fed only by such sources, like the exporter), bytes, errors per minute, discarded events split into expected filtering and drops due to errors, buffer fill, uptime and up to 50 running components. It drops host, URI, file and free-form labels and never invents zeros for missing series. It never inserts monitoring components or opens a public endpoint, and never uploads events.
 
 ## Test evidence
 

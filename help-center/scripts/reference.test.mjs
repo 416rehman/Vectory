@@ -23,7 +23,8 @@ test("Agent CLI documents every command and flag defined in agent/cmd/vectory", 
   const text = await page("cli");
   const gaps = [
     ...missing(commands, (name) => new RegExp(`\\bvectory ${escape(name)}(?![a-z0-9-])`).test(text), (name) => `vectory ${name}`),
-    ...missing(flags, (name) => new RegExp(`--${escape(name)}(?![a-z0-9-])`).test(text), (name) => `--${name}`),
+    // One-letter shorthands such as -f are documented with a single dash.
+    ...missing(flags, (name) => new RegExp(name.length === 1 ? `(?<![-a-z0-9])-${escape(name)}(?![a-z0-9-])` : `--${escape(name)}(?![a-z0-9-])`).test(text), (name) => (name.length === 1 ? `-${name}` : `--${name}`)),
   ];
   assert.deepEqual(gaps, [], `Add these to docs/user/cli.md:\n${gaps.join("\n")}`);
 });

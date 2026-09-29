@@ -15,10 +15,7 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
-		if len(os.Args) != 5 {
-			os.Exit(2)
-		}
-		os.Exit(VectorHost(os.Args[2], os.Args[3], os.Args[4] == "full"))
+		os.Exit(VectorHostMain(os.Args[2:]))
 	}
 	hermeticTestEnvironment()
 	os.Exit(m.Run())
@@ -192,17 +189,19 @@ func TestScrubbedEnvironment(t *testing.T) {
 	}
 }
 func TestStartupAckCannotBeForgedByOtherTargets(t *testing.T) {
-	w := &startupWriter{ack: make(chan struct{})}
-	_, _ = w.Write([]byte(`{"target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-		t.Fatal("wrong target accepted")
-	default:
+	w := newVectorLog("")
+	for _, forged := range []string{
+		`{"level":"INFO","target":"vector::vrl","message":"Vector has started.","version":"0.58.0"}`,
+		`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.57.0"}`,
+		`{"host":"x","message":"Vector has started.","target":"vector","version":"0.58.0"}`,
+	} {
+		_, _ = w.Write([]byte(forged + "\n"))
 	}
-	_, _ = w.Write([]byte(`{"target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
-	select {
-	case <-w.ack:
-	default:
+	if w.signals.started != 0 {
+		t.Fatal("forged or incomplete ack accepted")
+	}
+	_, _ = w.Write([]byte(`{"level":"INFO","target":"vector","message":"Vector has started.","version":"0.58.0"}` + "\n"))
+	if w.signals.started != 1 {
 		t.Fatal("real ack not accepted")
 	}
 }

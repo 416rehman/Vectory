@@ -1,0 +1,40 @@
+√ Loaded ["vrl_e103.json"]
+
+Transform errors
+----------------
+x Transform "tag": 
+error[E103]: unhandled fallible assignment
+  ┌─ :2:16
+  │
+2 │ .status_code = to_int(.status)
+  │ -------------- ^^^^^^^^^^^^^^^ this expression is fallible because at least one argument's type cannot be verified to be valid
+  │ │
+  │ or change this to an infallible assignment:
+  │ .status_code, err = to_int(.status)
+  │
+  = see documentation about error handling at https://errors.vrl.dev/#handling
+  = see functions characteristics documentation at https://vrl.dev/expressions/#function-call-characteristics
+  = learn more about error code 103 at https://errors.vrl.dev/103
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
+Component errors
+----------------
+x Transform "tag": 
+error[E103]: unhandled fallible assignment
+  ┌─ :2:16
+  │
+2 │ .status_code = to_int(.status)
+  │ -------------- ^^^^^^^^^^^^^^^ this expression is fallible because at least one argument's type cannot be verified to be valid
+  │ │
+  │ or change this to an infallible assignment:
+  │ .status_code, err = to_int(.status)
+  │
+  = see documentation about error handling at https://errors.vrl.dev/#handling
+  = see functions characteristics documentation at https://vrl.dev/expressions/#function-call-characteristics
+  = learn more about error code 103 at https://errors.vrl.dev/103
+  = see language documentation at https://vrl.dev
+  = try your code in the VRL REPL, learn more at https://vrl.dev/examples
+
+
