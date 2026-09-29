@@ -715,7 +715,7 @@ export default function AuthScreen({
       const failed = failure instanceof APIError ? failure.code : "";
       if (failed === "RESET_CODE_INVALID")
         setFields({
-          code: "This reset link is invalid, expired or already used. Ask your administrator for a new one.",
+          code: "This reset code is invalid, expired or already used. Ask your administrator for a new one.",
         });
       else if (failed === "PASSWORD_TOO_WEAK")
         setFields({ password: (failure as Error).message });
