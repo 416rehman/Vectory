@@ -295,6 +295,7 @@ await context.route("**/*", async (route) => {
       instance_name: "Synthetic workspace label must not appear in the rail",
     });
   if (path === "/mfa") return reply({ enabled: false });
+  if (path === "/account/sessions") return reply({ sessions: [] });
   if (path === "/overview")
     return reply({
       devices_total: 1,
@@ -924,7 +925,7 @@ try {
     },
   );
   await check(
-    "documentation and sign-out retain draft guards; confirmation cancellation, failure and retry preserve the isolated session",
+    "documentation and sign-out retain draft guards; a failed sign-out checks the session before a deliberate retry",
     async () => {
       await page.goto(
         origin + `/__sidebar-fixture#/configurations/${ids.pipeline}`,
@@ -976,24 +977,9 @@ try {
           await dialog.dismiss();
         });
         await page.getByRole("menuitem", { name, exact: true }).click();
-        if (name === "Sign out") {
-          const confirmation = page.getByRole("alertdialog", {
-            name: "Sign out of Vectory?",
-          });
-          await expect(confirmation).toBeVisible();
-          await expect(
-            confirmation.getByRole("button", { name: "Cancel", exact: true }),
-          ).toBeFocused();
-          expect(rejected).toBe(false);
-          expect(
-            requests.filter((request) => request.method !== "GET"),
-          ).toEqual([]);
-          await confirmation
-            .getByRole("button", { name: "Sign out", exact: true })
-            .click();
-          await expect(confirmation).toHaveCount(0);
-        }
-        expect(rejected).toBe(true);
+        // Sign-out asks only through the draft guard; declining keeps everything.
+        await expect.poll(() => rejected).toBe(true);
+        await expect(page.getByRole("alertdialog")).toHaveCount(0);
         expect(await code.innerText()).toBe(pending);
         await expect(page).toHaveURL(
           new RegExp(`#/configurations/${ids.pipeline}$`),
@@ -1016,88 +1002,54 @@ try {
         .click();
       await expect(page).toHaveURL(/#\/users$/);
       await page.setViewportSize({ width: 375, height: 812 });
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
-      const confirmation = page.getByRole("alertdialog");
-      await expect(confirmation).toHaveAccessibleName("Sign out of Vectory?");
-      await expect(confirmation).toBeVisible();
-      await expect(
-        confirmation.getByRole("button", { name: "Cancel", exact: true }),
-      ).toBeFocused();
       expect(requests.filter((request) => request.method !== "GET")).toEqual(
         [],
       );
-      await axe("mobile sign-out confirmation");
-      await page.screenshot({
-        path: resolve(output, "account-signout-confirmation-mobile.png"),
-        animations: "disabled",
-      });
-      await confirmation
-        .getByRole("button", { name: "Cancel", exact: true })
-        .click();
-      await expect(confirmation).toHaveCount(0);
-      await expect(accountTrigger()).toBeFocused();
-      await expect(sidebar).toBeVisible();
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
-      await expect(confirmation).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(confirmation).toHaveCount(0);
-      await expect(accountTrigger()).toBeFocused();
-      await expect(sidebar).toBeVisible();
-      expect(signedIn).toBe(true);
-      expect(requests.filter((request) => request.method !== "GET")).toEqual(
-        [],
-      );
-      await openAccount();
-      await page
-        .getByRole("menuitem", { name: "Sign out", exact: true })
-        .click();
+      // No draft: sign-out starts at once. A slow one shows its progress; a
+      // failure checks the session itself before offering a deliberate retry.
       failLogout = true;
       holdLogout = true;
-      await confirmation
-        .getByRole("button", { name: "Sign out", exact: true })
-        .evaluate((button) => {
-          button.click();
-          button.click();
-        });
+      await openAccount();
+      await page
+        .getByRole("menuitem", { name: "Sign out", exact: true })
+        .click();
       await expect.poll(() => pendingLogout.length).toBe(1);
       expect(
         requests.filter((request) => request.path === "/logout"),
       ).toHaveLength(1);
+      const progress = page.getByRole("alertdialog", { name: "Signing out…" });
+      await expect(progress).toBeVisible();
       await expect(
-        confirmation.getByRole("button", { name: "Stop waiting", exact: true }),
+        progress.getByRole("button", { name: "Stop waiting", exact: true }),
       ).toBeEnabled();
-      await expect(
-        confirmation.getByRole("button", { name: "Close dialog", exact: true }),
-      ).toBeEnabled();
-      await expect(confirmation).toBeVisible();
       await pendingLogout.shift()();
-      await expect(confirmation).toHaveAccessibleName("Sign-out not confirmed");
-      await expect(confirmation.getByRole("alert")).toContainText(
-        "The response did not confirm sign-out",
-      );
+      const retry = page.getByRole("alertdialog", {
+        name: "Couldn't sign out",
+      });
+      await expect(retry).toBeVisible();
+      await expect(retry).toContainText("Your session is still active.");
       await expect(
-        confirmation.getByRole("button", {
-          name: "Retry sign out",
-          exact: true,
-        }),
-      ).toHaveCount(0);
-      await confirmation
-        .getByRole("button", { name: "Check sign-out status", exact: true })
-        .click();
-      await expect(confirmation).toHaveAccessibleName(
-        "This session is still active",
-      );
+        retry.getByRole("button", { name: "Try again", exact: true }),
+      ).toBeFocused();
       expect(signedIn).toBe(true);
+      expect(
+        requests.filter((request) => request.path === "/logout"),
+      ).toHaveLength(1);
+      await axe("mobile sign-out retry");
+      await page.screenshot({
+        path: resolve(output, "account-signout-retry-mobile.png"),
+        animations: "disabled",
+      });
+      await retry
+        .getByRole("button", { name: "Keep working", exact: true })
+        .click();
+      await expect(retry).toHaveCount(0);
       await expect(accountTrigger()).toBeAttached();
+      expect(signedIn).toBe(true);
       failLogout = false;
-      await confirmation
-        .getByRole("button", { name: "Retry sign out", exact: true })
+      await openAccount();
+      await page
+        .getByRole("menuitem", { name: "Sign out", exact: true })
         .click();
       await expect.poll(() => pendingLogout.length).toBe(1);
       expect(
@@ -1107,9 +1059,14 @@ try {
       await pendingLogout.shift()();
       holdLogout = false;
       await expect(
-        page.getByRole("heading", { name: "Sign in", exact: true }),
+        page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
       ).toBeVisible();
       expect(signedIn).toBe(false);
+      // The account just signed out is offered again; the password is next.
+      await expect(
+        page.getByLabel("Email address", { exact: true }),
+      ).toHaveValue(user.email);
+      await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
       await expect(accountTrigger()).toHaveCount(0);
       expect(await page.evaluate(() => document.body.style.overflow)).not.toBe(
         "hidden",

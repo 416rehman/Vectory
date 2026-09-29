@@ -230,13 +230,19 @@ fn command(directory: &Path, apply: Option<&str>) -> std::process::Output {
 async fn real_cli_refuses_live_state_defaults_to_preview_and_requires_exact_apply() {
     let (directory, state) = fixture().await;
     let locked = command(directory.path(), Some("--apply"));
-    assert!(!locked.status.success());
-    assert!(String::from_utf8_lossy(&locked.stderr).contains("holds this data directory"));
+    assert_eq!(locked.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&locked.stderr);
+    assert!(
+        stderr.contains("still running on this data directory"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Stack backtrace") && !stderr.contains("Error: "));
     assert_eq!(counts(&state).await["browser_sessions"], 2);
     state.pool.close().await;
     drop(state);
     let invalid = command(directory.path(), Some("--aply"));
-    assert!(!invalid.status.success());
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("unexpected argument '--aply'"));
     let preview = command(directory.path(), None);
     assert!(
         preview.status.success(),

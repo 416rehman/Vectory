@@ -115,7 +115,8 @@ async function fixture() {
       },
     });
   });
-  await page.goto(`${origin}/__table-fixture`);
+  // A cold dev-server transform can exceed the action timeout on a busy host.
+  await page.goto(`${origin}/__table-fixture`, { timeout: 60000 });
   await page.waitForFunction(() => window.ready);
   return { page, close: () => context.close() };
 }
@@ -164,7 +165,7 @@ try {
           "Person 6",
           "Person 3",
         ]);
-        await headerFilter(f.page, "Access");
+        await headerFilter(f.page, "Status");
         await f.page
           .getByRole("radio", { name: "Disabled", exact: true })
           .click();
@@ -199,7 +200,7 @@ try {
         await f.page
           .getByRole("radio", { name: "Viewer", exact: true })
           .click();
-        await headerFilter(f.page, "Access");
+        await headerFilter(f.page, "Status");
         await f.page
           .getByRole("radio", { name: "Active", exact: true })
           .click();
@@ -215,7 +216,7 @@ try {
         ).toBeVisible();
         await expect(
           f.page.getByRole("button", {
-            name: "Filter Access (active)",
+            name: "Filter Status (active)",
             exact: true,
           }),
         ).toBeVisible();
@@ -331,9 +332,31 @@ try {
               (theme) => (document.documentElement.dataset.theme = theme),
               theme,
             );
+            // On a phone, people are cards with their actions in view.
+            const cards = view === "people" && width < 760;
             const table = f.page.getByRole("table").first();
-            await expect(table.locator("thead")).toBeVisible();
-            await expect(table.getByRole("columnheader").first()).toBeVisible();
+            if (cards) {
+              await expect(table).toBeHidden();
+              const list = f.page.getByRole("list", {
+                name: "Workspace access",
+                exact: true,
+              });
+              await expect(list).toBeVisible();
+              await expect(list.getByRole("listitem")).toHaveCount(
+                people.length,
+              );
+              await expect(
+                list.getByRole("button", {
+                  name: "Edit access for Person 3",
+                  exact: true,
+                }),
+              ).toBeVisible();
+            } else {
+              await expect(table.locator("thead")).toBeVisible();
+              await expect(
+                table.getByRole("columnheader").first(),
+              ).toBeVisible();
+            }
             const axe = await new AxeBuilder({ page: f.page }).analyze();
             accessibility.push({
               view,
@@ -347,18 +370,20 @@ try {
                 () => document.documentElement.scrollWidth <= innerWidth,
               ),
             ).toBe(true);
-            const region = f.page.getByRole("region", {
-              name:
-                view === "people"
-                  ? "Workspace access table"
-                  : "Component metrics table",
-              exact: true,
-            });
-            await region.focus();
-            await expect(region).toBeFocused();
-            if (width === 375) {
-              await f.page.keyboard.press("End");
-              await f.page.keyboard.press("ArrowRight");
+            if (!cards) {
+              const region = f.page.getByRole("region", {
+                name:
+                  view === "people"
+                    ? "Workspace access table"
+                    : "Component metrics table",
+                exact: true,
+              });
+              await region.focus();
+              await expect(region).toBeFocused();
+              if (width === 375) {
+                await f.page.keyboard.press("End");
+                await f.page.keyboard.press("ArrowRight");
+              }
             }
             await f.page.screenshot({
               path: resolve(output, `${view}-${width}-${theme}.png`),

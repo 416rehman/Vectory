@@ -1,0 +1,708 @@
+/* Authentication, first run and account controls. Built on the workspace
+   tokens in styles.css; the few status colors are scoped with an --va prefix. */
+:root {
+  --va-danger: #a42f29;
+  --va-danger-soft: #fff1ef;
+  --va-danger-line: #e2aca6;
+  --va-warning: #7a520f;
+  --va-warning-soft: #fff6df;
+  --va-success: #22603f;
+  --va-success-soft: #eaf5ee;
+  --va-success-line: #b9dcc6;
+}
+[data-theme="dark"] {
+  --va-danger: #ffb4ad;
+  --va-danger-soft: #3b2322;
+  --va-danger-line: #8a4c46;
+  --va-warning: #f1d18f;
+  --va-warning-soft: #3d311f;
+  --va-success: #9fd4b0;
+  --va-success-soft: #1f3528;
+  --va-success-line: #3f6b50;
+}
+
+/* Fields */
+.auth-field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 18px;
+  min-width: 0;
+  font-size: 13px;
+}
+.auth-field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.auth-field-label > label {
+  font-weight: 600;
+}
+.auth-field-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.auth-field-link:hover {
+  text-decoration: underline;
+}
+/* Tab order is email, password, Sign in, then this link beside the label. */
+.signin-password {
+  position: relative;
+}
+.signin-forgot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  line-height: 1.45;
+}
+.auth-field-hint,
+.auth-field-error,
+.auth-caps {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.auth-field-hint {
+  color: var(--muted);
+}
+.auth-field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--va-danger);
+}
+.auth-field-error > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.auth-field input[aria-invalid="true"],
+.auth-field select[aria-invalid="true"] {
+  border-color: var(--va-danger-line);
+}
+.auth-field input:disabled {
+  opacity: 0.7;
+}
+.auth-mono {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+.auth-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+.auth-input-wrap > input {
+  padding-right: 46px;
+}
+.auth-reveal {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.auth-reveal:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+.auth-reveal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.auth-caps {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--va-warning);
+  font-weight: 500;
+}
+
+/* Strength */
+.password-meter {
+  display: grid;
+  gap: 6px;
+}
+.password-meter-bars {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.password-meter-bars > span {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background-color 180ms var(--ease);
+}
+.password-meter.score-0 .on,
+.password-meter.score-1 .on {
+  background: var(--va-danger);
+}
+.password-meter.score-2 .on {
+  background: #c4861c;
+}
+.password-meter.score-3 .on,
+.password-meter.score-4 .on {
+  background: var(--green);
+}
+.password-meter > p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.password-meter > p strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.password-meter.score-0 > p strong,
+.password-meter.score-1 > p strong {
+  color: var(--va-danger);
+}
+
+/* One-time code: a real input over six visual cells */
+.otp {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+}
+.otp-native {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  font-size: 16px;
+  caret-color: transparent;
+  cursor: text;
+}
+.otp-cells {
+  display: flex;
+  gap: 8px;
+}
+.otp-cell {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 54px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 23px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
+}
+.otp-cell:nth-child(4) {
+  margin-left: 10px;
+}
+.otp-cell.filled {
+  border-color: var(--muted);
+}
+.otp-cell.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.otp-cell.active::after {
+  content: "";
+  width: 2px;
+  height: 24px;
+  border-radius: 1px;
+  background: var(--ink);
+  animation: otp-caret 1.1s steps(1) infinite;
+}
+.otp.invalid .otp-cell {
+  border-color: var(--va-danger-line);
+}
+.otp[data-disabled] .otp-cells {
+  opacity: 0.6;
+}
+@keyframes otp-caret {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .otp-cell.active::after {
+    animation: none;
+  }
+}
+
+/* Copyable values */
+.copy-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.copy-line > code {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.copy-line.wrap > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.copy-button {
+  flex: none;
+  min-height: 38px;
+}
+
+/* The one voice for unconfirmed outcomes */
+.unconfirmed {
+  display: flex;
+  gap: 12px;
+  padding: 15px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  margin-bottom: 16px;
+}
+.unconfirmed-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--accent-ink);
+}
+.unconfirmed h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.unconfirmed-body {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.unconfirmed-body p {
+  margin: 0 0 6px;
+}
+.unconfirmed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.unconfirmed-details {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.unconfirmed-details summary {
+  cursor: pointer;
+  width: max-content;
+}
+.unconfirmed-details > div {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+/* Sign-in, setup, reset and invitation screens */
+.signin {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 56px 20px;
+  background: var(--rail);
+}
+.signin-card {
+  width: min(432px, 100%);
+  padding: 34px 36px 26px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 24px 80px #2621250f;
+}
+.signin-card.wide {
+  width: min(520px, 100%);
+}
+.signin-card > .brand {
+  display: inline-flex;
+  margin-bottom: 30px;
+}
+.signin-card h1 {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.signin-card h1:focus {
+  outline: none;
+}
+.signin-lede {
+  margin: 8px 0 24px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.signin-lede strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.signin-card form > .button,
+.signin-submit {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 4px;
+}
+.signin-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 0 18px;
+  padding: 11px 13px;
+  border: 1px solid var(--va-danger-line);
+  border-radius: 8px;
+  background: var(--va-danger-soft);
+  color: var(--va-danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.signin-alert > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.signin-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 0 18px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.signin-notice.success {
+  background: var(--va-success-soft);
+  color: var(--va-success);
+  border: 1px solid var(--va-success-line);
+}
+.signin-notice > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.signin-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 18px;
+  font-size: 13px;
+}
+.signin-links .text-link {
+  font-size: 13px;
+  font-weight: 500;
+}
+.signin-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.signin-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.signin-footer a:hover {
+  color: var(--ink);
+}
+.signin-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.signin-identity > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 12px;
+}
+.signin-identity > div {
+  display: grid;
+  min-width: 0;
+}
+.signin-identity strong,
+.signin-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signin-identity small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.signin-identity .text-link {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.signin-otp-hint {
+  margin: -6px 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.signin-countdown {
+  font-variant-numeric: tabular-nums;
+}
+.signin-loading {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 16px 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* First run */
+.setup-hint {
+  margin: 0 0 20px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+.setup-hint > strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.setup-hint > p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.setup-hint > p:last-child {
+  margin: 10px 0 0;
+}
+.setup-hint p code {
+  background: transparent;
+  padding: 0;
+  color: var(--ink);
+}
+.setup-hint .copy-line > code {
+  background: var(--surface);
+}
+.setup-section {
+  margin: 22px 0 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.setup-done-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 18px;
+  border-radius: 50%;
+  background: var(--va-success-soft);
+  color: var(--va-success);
+}
+
+/* Secure-your-workspace checklist (setup and People & security) */
+.checklist {
+  display: grid;
+  gap: 0;
+  margin: 0 0 22px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.checklist > li {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 13px 15px;
+  background: var(--surface);
+}
+.checklist > li + li {
+  border-top: 1px solid var(--line);
+}
+.checklist-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.checklist > li.done .checklist-mark {
+  border-color: var(--va-success-line);
+  background: var(--va-success-soft);
+  color: var(--va-success);
+}
+.checklist-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.checklist-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.checklist > li.done .checklist-copy strong {
+  color: var(--muted);
+  font-weight: 500;
+}
+.checklist-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.checklist > li > .button,
+.checklist > li > a.button {
+  flex: none;
+}
+
+/* Sign-out progress, shown only when it takes a moment */
+.signout-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Re-sign-in over the workspace */
+.session-renewal .modal-body {
+  padding-top: 20px;
+}
+.session-renewal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+.session-renewal-actions .button[type="submit"] {
+  min-width: 120px;
+}
+.session-paused {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 8px 8px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 13px;
+}
+.session-paused > span {
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .signin {
+    padding: 16px;
+    align-items: start;
+  }
+  .signin-card,
+  .signin-card.wide {
+    padding: 26px 20px 20px;
+    border-radius: 12px;
+  }
+  .signin-card > .brand {
+    margin-bottom: 24px;
+  }
+  .signin-card h1 {
+    font-size: 23px;
+  }
+  .otp-cells {
+    gap: 6px;
+  }
+  .otp-cell {
+    width: 41px;
+    height: 50px;
+    font-size: 21px;
+  }
+  .otp-cell:nth-child(4) {
+    margin-left: 6px;
+  }
+  .checklist > li {
+    flex-wrap: wrap;
+  }
+  .checklist-copy {
+    flex-basis: calc(100% - 40px);
+  }
+  .checklist > li > .button {
+    margin-left: 39px;
+  }
+  .session-paused {
+    top: auto;
+    bottom: 12px;
+    width: calc(100vw - 24px);
+    justify-content: space-between;
+  }
+}

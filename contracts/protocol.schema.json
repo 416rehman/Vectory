@@ -707,6 +707,17 @@
             },
             "message": {
               "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "GET /session 401 only: why this browser's session ended (expired, signed_out, signed_out_elsewhere, password_changed, access_changed, mfa_changed, mfa_reset, replaced, revoked) or null."
             }
           },
           "required": [
@@ -863,6 +874,58 @@
       ],
       "description": "Actor-scoped exact-target access edit status. An applied user is the immutable public commit snapshot, not necessarily the account’s current state. not_found is noncausal while a PUT may be in flight; cancellation fences only an absent request and cannot undo an applied edit."
     },
+    "Person": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/User"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "invited",
+                "active",
+                "disabled"
+              ]
+            },
+            "mfa_enabled": {
+              "type": "boolean"
+            },
+            "last_login_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "invite_expires_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "mfa_enabled",
+            "last_login_at",
+            "invite_expires_at"
+          ],
+          "additionalProperties": true
+        }
+      ],
+      "description": "Administrator view of one account. invited means no password has been chosen yet; invite_expires_at is the live invitation expiry, if any."
+    },
     "UserCreateReceipt": {
       "type": "object",
       "properties": {
@@ -872,6 +935,24 @@
         },
         "user": {
           "$ref": "#/$defs/User"
+        },
+        "invite": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "code",
+            "expires_at"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -968,13 +1049,20 @@
         "expires_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "purpose": {
+          "enum": [
+            "reset",
+            "invite"
+          ]
         }
       },
       "required": [
         "request_id",
         "user_id",
         "code",
-        "expires_at"
+        "expires_at",
+        "purpose"
       ],
       "additionalProperties": false
     },
@@ -990,11 +1078,18 @@
             "expires_at": {
               "type": "string",
               "format": "date-time"
+            },
+            "purpose": {
+              "enum": [
+                "reset",
+                "invite"
+              ]
             }
           },
           "required": [
             "code",
-            "expires_at"
+            "expires_at",
+            "purpose"
           ],
           "additionalProperties": false
         },
@@ -1095,13 +1190,134 @@
         },
         "csrf_token": {
           "type": "string"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": [
         "user",
-        "csrf_token"
+        "csrf_token",
+        "expires_at"
       ],
       "additionalProperties": true
+    },
+    "SessionSummary": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_seen_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "user_agent": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client_address": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "current",
+        "created_at",
+        "last_seen_at",
+        "expires_at",
+        "user_agent",
+        "client_address"
+      ],
+      "additionalProperties": false
+    },
+    "SetupHint": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "enum": [
+            "file",
+            "environment",
+            "unknown"
+          ]
+        },
+        "variable": {
+          "anyOf": [
+            {
+              "enum": [
+                "VECTORY_BOOTSTRAP_SECRET_FILE",
+                "VECTORY_BOOTSTRAP_SECRET"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "container": {
+          "type": "boolean"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "variable",
+        "container",
+        "path"
+      ],
+      "additionalProperties": false
     },
     "LoginChallenge": {
       "type": "object",
@@ -1143,6 +1359,12 @@
         },
         "version": {
           "type": "string"
+        },
+        "instance_name": {
+          "type": "string"
+        },
+        "setup_hint": {
+          "$ref": "#/$defs/SetupHint"
         }
       },
       "required": [

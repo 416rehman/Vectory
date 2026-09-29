@@ -92,11 +92,15 @@ function safe(message) {
     text = text.replaceAll(secret, "[synthetic credential redacted]");
   return text;
 }
-function setupValue(index) {
+function setupValue(index, lifetime) {
   const secret = seeds[index % seeds.length];
   const otpauth_url = `otpauth://totp/${encodeURIComponent("Vectory Synthetic & Test:" + user.email)}?secret=${secret}&issuer=${encodeURIComponent("Vectory Synthetic & Test")}&algorithm=SHA1&digits=6&period=30`;
   secrets.add(otpauth_url);
-  return { secret, otpauth_url };
+  return {
+    secret,
+    otpauth_url,
+    expires_at: new Date(Date.now() + lifetime).toISOString(),
+  };
 }
 async function load({
   width = 1200,
@@ -104,20 +108,21 @@ async function load({
   clipboard = "allow",
   setupFailure = false,
   setupConflict = false,
-  confirmFailure = false,
   confirmExpired = false,
   invalidSetup = null,
+  lifetime = 600000,
 } = {}) {
   if (page) await page.context().close();
   state = {
     enabled: false,
     issued: [],
     confirmations: [],
+    statusReads: 0,
     setupFailure,
     setupConflict,
-    confirmFailure,
     confirmExpired,
     invalidSetup,
+    lifetime,
     holdSetup: false,
     holdConfirm: false,
     held: [],
@@ -165,12 +170,36 @@ async function load({
       reply({ error: { code, message } }, status);
     if (method === "GET") {
       if (path === "/status")
-        return reply({ initialized: true, version: "synthetic" });
+        return reply({
+          initialized: true,
+          version: "synthetic",
+          instance_name: "Synthetic isolated fixture",
+        });
       if (path === "/session")
         return reply({ user, csrf_token: "synthetic-setup-csrf" });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated fixture" });
-      if (path === "/mfa") return reply({ enabled: current.enabled });
+      if (path === "/mfa") {
+        current.statusReads++;
+        return reply({
+          enabled: current.enabled,
+          recovery_codes_remaining: current.enabled ? 8 : null,
+        });
+      }
+      if (path === "/account/sessions")
+        return reply({
+          sessions: [
+            {
+              id: "0123456789abcdef0123456789abcdef",
+              current: true,
+              created_at: new Date().toISOString(),
+              last_seen_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              user_agent: "Synthetic browser",
+              client_address: "192.0.2.10",
+            },
+          ],
+        });
       if (path === "/overview")
         return reply({
           devices_total: 0,
@@ -194,16 +223,16 @@ async function load({
       if (current.setupFailure || body.password !== syntheticPassword)
         return error(
           "WRONG_PASSWORD",
-          "The current password is incorrect.",
+          "Your current password didn't match.",
           403,
         );
       if (current.setupConflict)
         return error(
-          "CONFLICT",
-          "MFA changed while this request was being checked. Review its current state and start again.",
+          "MFA_CHANGED",
+          "Your two-factor settings changed in another window. Check them and try again.",
           409,
         );
-      const value = setupValue(current.issued.length);
+      const value = setupValue(current.issued.length, current.lifetime);
       if (current.invalidSetup) value.otpauth_url = current.invalidSetup;
       current.issued.push(value);
       return reply(value);
@@ -213,16 +242,22 @@ async function load({
       current.confirmations.push(body.code);
       if (current.holdConfirm)
         await new Promise((resolve) => current.held.push(resolve));
+      if (current.enabled)
+        return error(
+          "MFA_ALREADY_ENABLED",
+          "Two-factor authentication is already on for your account.",
+          409,
+        );
       if (current.confirmExpired)
         return error(
           "MFA_SETUP_EXPIRED",
-          "Authenticator setup expired. Start again.",
+          "This setup expired. Start a new one to get a fresh QR code.",
           409,
         );
-      if (current.confirmFailure || body.code !== "654321")
+      if (body.code !== "654321")
         return error(
           "INVALID_MFA_CODE",
-          "The authenticator code is incorrect or already used.",
+          "That code didn't match. Enter the current 6-digit code from your authenticator app.",
           403,
         );
       current.enabled = true;
@@ -238,16 +273,13 @@ async function load({
   page = await context.newPage();
   page.setDefaultTimeout(8000);
   page.on("pageerror", (error) => errors.push(safe(error.message)));
-  await page.goto(`${origin}/__authenticator-setup#/users`);
+  // A cold dev-server transform can exceed the action timeout on a busy host.
+  await page.goto(`${origin}/__authenticator-setup#/users`, { timeout: 60000 });
   await expect(
     page.getByRole("heading", { name: "People & security", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Set up authenticator", exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    page.getByRole("button", { name: "Set up authenticator", exact: true }),
-  ).toBeEnabled();
+  await expect(setUp()).toHaveCount(1);
+  await expect(setUp()).toBeEnabled();
 }
 async function check(name, run, focused = false) {
   if (Boolean(focus) !== focused) return;
@@ -256,20 +288,48 @@ async function check(name, run, focused = false) {
   results.push({ name, passed: true, milliseconds: Date.now() - started });
   console.log("PASS", name);
 }
-async function beginSetup() {
-  await page
-    .getByRole("button", { name: "Set up authenticator", exact: true })
+const setUp = () => page.getByRole("button", { name: "Set up", exact: true });
+const passwordDialog = () =>
+  page.getByRole("dialog", {
+    name: "Set up two-factor authentication",
+    exact: true,
+  });
+const setupDialog = () =>
+  page.getByRole("dialog", {
+    name: "Connect your authenticator app",
+    exact: true,
+  });
+const qrImage = () =>
+  page.getByRole("img", { name: "Authenticator setup QR code", exact: true });
+const enable = () =>
+  setupDialog().getByRole("button", {
+    name: /^(Loading )?Turn on two-factor$/,
+  });
+const codeField = () =>
+  setupDialog().getByLabel("6-digit code from your app", { exact: true });
+async function submitPassword(value = syntheticPassword) {
+  await passwordDialog().getByLabel("Password", { exact: true }).fill(value);
+  await passwordDialog()
+    .getByRole("button", { name: "Continue", exact: true })
     .click();
-  await page
-    .getByLabel("Current password", { exact: true })
-    .fill(syntheticPassword);
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(
-    page.getByRole("dialog", {
-      name: "Connect your authenticator",
-      exact: true,
-    }),
-  ).toBeVisible();
+}
+async function beginSetup() {
+  await setUp().click();
+  await submitPassword();
+  await expect(setupDialog()).toBeVisible();
+}
+async function pasteCode(text) {
+  await codeField().evaluate((input, text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text", text);
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+  }, text);
 }
 async function noPersistedSecrets() {
   const values = await page.evaluate(() =>
@@ -304,14 +364,6 @@ async function axe(label) {
   });
   expect(result.violations, label).toEqual([]);
 }
-const setupDialog = () =>
-  page.getByRole("dialog", { name: "Connect your authenticator", exact: true });
-const qrImage = () =>
-  page.getByRole("img", { name: "Authenticator setup QR code", exact: true });
-const enable = () =>
-  page.getByRole("button", {
-    name: /^(Loading )?Enable two-factor authentication$/,
-  });
 async function decodeRenderedQR() {
   await expect(qrImage()).toBeVisible();
   const png = await qrImage().screenshot({ animations: "disabled" });
@@ -355,23 +407,15 @@ async function decodeRenderedQR() {
   });
 }
 async function manualKey() {
-  const details = setupDialog().locator("details.authenticator-manual");
-  if ((await details.getAttribute("open")) === null)
-    await details.locator("summary").click();
-  const key = setupDialog().getByLabel("Setup key", { exact: true });
-  await expect(key).toHaveAttribute("readonly", "");
+  const key = setupDialog().locator(".authenticator-key-row code");
+  await expect(key).toBeVisible();
+  const shown = await key.innerText();
   expect(
-    (await key.inputValue()) === state.issued.at(-1).secret,
-    "manual key matches synthetic setup seed",
+    shown.replace(/\s+/g, "") === state.issued.at(-1).secret,
+    "the grouped manual key matches the synthetic setup seed",
   ).toBe(true);
+  expect(shown).toMatch(/^[A-Z2-7]{4}( [A-Z2-7]{1,4})+$/);
   return key;
-}
-async function closeDialog() {
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Close dialog", exact: true })
-    .click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
 }
 async function footerGeometry(theme) {
   const geometry = await setupDialog()
@@ -406,39 +450,37 @@ async function footerGeometry(theme) {
 
 try {
   await check(
-    "password gate retries without exposing setup; rendered QR decodes exactly and manual copy stays local",
+    "a wrong password stays next to its field; the rendered QR decodes exactly and manual copy stays local",
     async () => {
       await load({ setupFailure: true });
-      await page
-        .getByRole("button", { name: "Set up authenticator", exact: true })
-        .click();
+      await setUp().click();
       await expect(qrImage()).toHaveCount(0);
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
-      await expect(page.getByRole("dialog")).toContainText(
-        "The current password is incorrect",
+      await submitPassword();
+      await expect(passwordDialog()).toContainText(
+        "Your password didn't match.",
       );
+      const password = passwordDialog().getByLabel("Password", {
+        exact: true,
+      });
+      await expect(password).toHaveAttribute("aria-invalid", "true");
+      await expect(password).toHaveValue("");
+      await expect(password).toBeFocused();
       expect(state.issued).toHaveLength(0);
       await expect(qrImage()).toHaveCount(0);
       state.setupFailure = false;
-      await expect(
-        page.getByLabel("Current password", { exact: true }),
-      ).toHaveValue("");
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await submitPassword();
       await expect(setupDialog()).toBeVisible();
       await decodeRenderedQR();
+      await expect(setupDialog()).toContainText(
+        /This QR code expires in (10:00|9:\d\d)/,
+      );
       await page.screenshot({
         path: resolve(output, "authenticator-setup-desktop-synthetic.png"),
         animations: "disabled",
       });
       await manualKey();
       await setupDialog()
-        .getByRole("button", { name: "Copy setup key", exact: true })
+        .getByRole("button", { name: "Copy key", exact: true })
         .click();
       expect(
         await page.evaluate(
@@ -458,28 +500,30 @@ try {
     },
   );
   await check(
-    "hiding setup retains its QR in this tab, while deliberate navigation discards it",
+    "hiding setup retains its QR and partial code in this tab, while deliberate navigation discards it",
     async () => {
       await load();
       await beginSetup();
       await manualKey();
-      await page
-        .getByLabel("Authenticator code", { exact: true })
-        .fill("123456");
-      await closeDialog();
+      await codeField().fill("123");
+      await setupDialog()
+        .getByRole("button", { name: "Not now", exact: true })
+        .click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       await noVisibleSecrets();
       expect(state.enabled).toBe(false);
+      await expect(
+        page.getByText(
+          "Setup in progress. Enter a code from your app to finish.",
+        ),
+      ).toBeVisible();
       await page
-        .getByRole("button", {
-          name: "Continue authenticator setup",
-          exact: true,
-        })
+        .getByRole("button", { name: "Continue setup", exact: true })
         .click();
       await decodeRenderedQR();
       expect(state.issued).toHaveLength(1);
-      await expect(
-        page.getByLabel("Authenticator code", { exact: true }),
-      ).toHaveValue("123456");
+      await expect(codeField()).toHaveValue("123");
+      expect(state.confirmations).toHaveLength(0);
       let navigationPrompted = false;
       page.once("dialog", (dialog) => {
         navigationPrompted = true;
@@ -502,151 +546,143 @@ try {
     },
   );
   await check(
-    "six ASCII digits and spaced paste support error retry on the same setup, then hand off to one-time recovery display",
+    "only six ASCII digits count; a pasted spaced code submits itself, a miss clears the field, and recovery codes follow",
     async () => {
       await load();
       await beginSetup();
-      const code = page.getByLabel("Authenticator code", { exact: true });
       for (const invalid of ["12345", "abcdef", "１２３４５６"]) {
-        await code.fill(invalid);
+        await codeField().fill(invalid);
         await expect(enable()).toBeDisabled();
+        expect(state.confirmations).toHaveLength(0);
       }
-      await code.evaluate((input) => {
-        const clipboardData = new DataTransfer();
-        clipboardData.setData("text", "123 456");
-        input.dispatchEvent(
-          new ClipboardEvent("paste", {
-            bubbles: true,
-            cancelable: true,
-            clipboardData,
-          }),
-        );
-      });
-      await expect(code).toHaveValue("123456");
-      await expect(enable()).toBeEnabled();
-      await enable().click();
-      await expect(setupDialog()).toContainText("incorrect or already used");
+      await codeField().fill("");
+      await pasteCode("123 456");
+      await expect(setupDialog()).toContainText("That code didn't match.");
+      await expect(setupDialog()).not.toContainText("recovery code");
+      await expect(codeField()).toHaveValue("");
+      await expect(codeField()).toBeFocused();
+      await expect(
+        setupDialog().getByRole("button", { name: "Start a new setup" }),
+      ).toHaveCount(0);
+      expect(state.confirmations).toEqual(["123456"]);
+      expect(state.issued).toHaveLength(1);
+      await decodeRenderedQR();
+      await codeField().fill("111111");
+      await expect.poll(() => state.confirmations.length).toBe(2);
+      await expect(setupDialog()).toContainText(
+        "Codes change every 30 seconds.",
+      );
+      await codeField().fill("222222");
+      await expect.poll(() => state.confirmations.length).toBe(3);
       await expect(
         setupDialog().getByRole("button", { name: "Start a new setup" }),
       ).toBeVisible();
-      expect(state.issued).toHaveLength(1);
-      expect(
-        state.confirmations.length === 1 && state.confirmations[0] === "123456",
-        "confirmation sends only the six-digit code",
-      ).toBe(true);
-      await decodeRenderedQR();
-      await code.fill("654321");
-      await enable().click();
+      await codeField().fill("654321");
       const recovery = page.getByRole("dialog", {
         name: "Save your recovery codes",
         exact: true,
       });
       await expect(recovery).toBeVisible();
       await expect(qrImage()).toHaveCount(0);
-      const displayed = await recovery.locator("pre").innerText();
+      const displayed = await recovery
+        .getByRole("list", { name: "Recovery codes" })
+        .innerText();
       expect(
         recoveryCodes.every((value) => displayed.includes(value)),
         "all eight synthetic recovery codes are handed off",
       ).toBe(true);
+      await expect(recovery).toContainText(user.email);
+      await expect(recovery).toContainText("Synthetic isolated fixture");
+      await recovery.getByRole("button", { name: "Copy", exact: true }).click();
+      const copied = await page.evaluate(() =>
+        window.__syntheticClipboard.at(-1),
+      );
+      expect(copied.split("\n")[0]).toContain(
+        `Vectory recovery codes for ${user.email} on Synthetic isolated fixture`,
+      );
+      expect(recoveryCodes.every((value) => copied.includes(value))).toBe(true);
+      const download = page.waitForEvent("download");
+      await recovery
+        .getByRole("button", { name: "Download", exact: true })
+        .click();
+      const file = await download;
+      expect(file.suggestedFilename()).toMatch(
+        /^vectory-recovery-codes-127\.0\.0\.1-\d+-\d{4}-\d\d-\d\d\.txt$/,
+      );
       expect(state.enabled).toBe(true);
-      await recovery.getByRole("button", { name: "Hide for now" }).click();
+      await recovery
+        .getByRole("button", { name: "Close dialog", exact: true })
+        .click();
       await expect(recovery).toHaveCount(0);
       await noVisibleSecrets();
       await page
         .getByRole("button", { name: "Show recovery codes", exact: true })
         .click();
       await expect(recovery).toBeVisible();
-      const reopened = await recovery.locator("pre").innerText();
+      const reopened = await recovery
+        .getByRole("list", { name: "Recovery codes" })
+        .innerText();
       expect(
         recoveryCodes.every((value) => reopened.includes(value)),
         "the original eight codes remain in memory for deliberate reopening",
       ).toBe(true);
       await recovery
-        .getByRole("button", { name: /saved my recovery codes/i })
+        .getByRole("button", { name: "I've saved these codes", exact: true })
         .click();
       await expect(
-        page.getByRole("button", {
-          name: "Disable authenticator",
-          exact: true,
-        }),
+        page.getByRole("button", { name: "Turn off", exact: true }),
       ).toBeVisible();
+      await expect(page.getByText("8 of 8 recovery codes left")).toBeVisible();
       await noVisibleSecrets();
     },
   );
   await check(
-    "expired confirmation uses current-status review before a new password-gated setup",
+    "an expired setup shows its own state, from the server or the countdown, and restarts behind the password",
     async () => {
       await load({ confirmExpired: true });
       await beginSetup();
-      await page
-        .getByLabel("Authenticator code", { exact: true })
-        .fill("654321");
-      await enable().click();
-      const review = page.getByRole("dialog", {
-        name: "Authenticator change not confirmed",
-        exact: true,
-      });
-      await expect(review).toBeVisible();
+      await codeField().fill("654321");
+      await expect(setupDialog()).toContainText("This QR code expired");
       await expect(qrImage()).toHaveCount(0);
-      await review
-        .getByRole("button", { name: "Check current status", exact: true })
+      await setupDialog()
+        .getByRole("button", { name: "Start a new setup", exact: true })
         .click();
-      await expect(review).toContainText("not enabled now");
-      await review
-        .getByRole("button", { name: "Review a new setup", exact: true })
-        .click();
+      await expect(passwordDialog()).toBeVisible();
       await expect(
-        page.getByRole("dialog", { name: "Verify your password", exact: true }),
-      ).toBeVisible();
-      await expect(
-        page.getByLabel("Current password", { exact: true }),
+        passwordDialog().getByLabel("Password", { exact: true }),
       ).toHaveValue("");
       await noVisibleSecrets();
       state.confirmExpired = false;
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await submitPassword();
       await decodeRenderedQR();
       expect(state.issued).toHaveLength(2);
+      await load({ lifetime: 2500 });
+      await beginSetup();
+      await decodeRenderedQR();
+      await expect(setupDialog()).toContainText("This QR code expired", {
+        timeout: 6000,
+      });
+      await expect(qrImage()).toHaveCount(0);
+      expect(state.confirmations).toHaveLength(0);
     },
   );
   await check(
-    "a competing setup conflict requires current-status review before another password-gated setup",
+    "a concurrent two-factor change keeps the password form with a plain message; the retry is deliberate",
     async () => {
       await load({ setupConflict: true });
-      await page
-        .getByRole("button", { name: "Set up authenticator", exact: true })
-        .click();
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
-      const review = page.getByRole("dialog", {
-        name: "Authenticator change not confirmed",
-        exact: true,
-      });
-      await expect(review).toBeVisible();
+      await setUp().click();
+      await submitPassword();
+      await expect(passwordDialog().getByRole("alert")).toContainText(
+        "changed in another window",
+      );
       await expect(qrImage()).toHaveCount(0);
       expect(state.setupRequestCount).toBe(1);
       expect(state.issued).toHaveLength(0);
-      await review
-        .getByRole("button", { name: "Check current status", exact: true })
-        .click();
-      await expect(review).toContainText(
-        "does not reveal whether a setup key is pending",
-      );
-      await review
-        .getByRole("button", { name: "Review a new setup", exact: true })
-        .click();
       await expect(
-        page.getByLabel("Current password", { exact: true }),
+        passwordDialog().getByLabel("Password", { exact: true }),
       ).toHaveValue("");
       state.setupConflict = false;
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await submitPassword();
       await expect(setupDialog()).toBeVisible();
       expect(state.setupRequestCount).toBe(2);
       expect(state.issued).toHaveLength(1);
@@ -654,82 +690,65 @@ try {
     },
   );
   await check(
-    "stopping a pending setup or confirmation retains an honest review without secret replay",
+    "stopping a pending setup or confirmation reads the current state once and never resends a secret",
     async () => {
       await load();
       state.holdSetup = true;
-      await page
-        .getByRole("button", { name: "Set up authenticator", exact: true })
-        .click();
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await setUp().click();
+      await submitPassword();
       await expect.poll(() => state.held.length).toBe(1);
-      const waiting = page.getByRole("dialog", {
-        name: "Waiting for the server",
-        exact: true,
-      });
-      await expect(waiting).toBeVisible();
-      await waiting
+      const reads = state.statusReads;
+      await passwordDialog()
         .getByRole("button", { name: "Stop waiting", exact: true })
         .click();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      state.held.shift()();
-      await expect(
-        page.getByText("Authenticator change not confirmed.", {
-          exact: true,
-        }),
-      ).toBeVisible();
-      await expect(qrImage()).toHaveCount(0);
-      await page
-        .getByRole("button", { name: "Review authenticator change" })
-        .click();
-      const review = page.getByRole("dialog", {
-        name: "Authenticator change not confirmed",
+      const outcome = page.getByRole("dialog", {
+        name: "Two-factor is still off",
         exact: true,
       });
-      await review
-        .getByRole("button", { name: "Check current status", exact: true })
-        .click();
-      await expect(review).toContainText("not enabled now");
-      await review
-        .getByRole("button", { name: "Review a new setup", exact: true })
+      await expect(outcome).toBeVisible();
+      await expect.poll(() => state.statusReads).toBeGreaterThan(reads);
+      state.held.shift()();
+      await expect(qrImage()).toHaveCount(0);
+      expect(state.setupRequestCount).toBe(1);
+      await outcome
+        .getByRole("button", { name: "Start again", exact: true })
         .click();
       await expect(
-        page.getByRole("dialog", { name: "Verify your password", exact: true }),
-      ).toBeVisible();
+        passwordDialog().getByLabel("Password", { exact: true }),
+      ).toHaveValue("");
       state.holdSetup = false;
-      await page
-        .getByLabel("Current password", { exact: true })
-        .fill(syntheticPassword);
-      await page.getByRole("button", { name: "Continue", exact: true }).click();
+      await submitPassword();
       await expect(setupDialog()).toBeVisible();
+      expect(state.setupRequestCount).toBe(2);
       state.holdConfirm = true;
-      await page
-        .getByLabel("Authenticator code", { exact: true })
-        .fill("654321");
-      await enable().click();
+      await codeField().fill("654321");
       await expect.poll(() => state.held.length).toBe(1);
-      await waiting
+      await setupDialog()
         .getByRole("button", { name: "Stop waiting", exact: true })
         .click();
+      await expect(setupDialog()).toContainText(
+        "We couldn't confirm that code. Enter the next code from your app.",
+      );
+      await expect(codeField()).toHaveValue("");
+      expect(state.confirmations).toEqual(["654321"]);
       state.held.shift()();
-      await expect(qrImage()).toHaveCount(0);
+      await expect.poll(() => state.enabled).toBe(true);
+      state.holdConfirm = false;
+      await codeField().fill("654321");
+      const lost = page.getByRole("dialog", {
+        name: "Two-factor is on",
+        exact: true,
+      });
+      await expect(lost).toBeVisible();
+      await expect(lost).toContainText("Generate new ones now");
       await expect(
         page.getByRole("dialog", { name: "Save your recovery codes" }),
       ).toHaveCount(0);
-      await expect.poll(() => state.enabled).toBe(true);
-      await page
-        .getByRole("button", { name: "Review authenticator change" })
-        .click();
-      await review
-        .getByRole("button", { name: "Check current status", exact: true })
-        .click();
-      await expect(review).toContainText(
-        "Recovery codes from an unread response cannot be recovered",
-      );
-      expect(state.confirmations).toEqual(["654321"]);
+      expect(state.confirmations).toEqual(["654321", "654321"]);
+      await lost.getByRole("button", { name: "Not now", exact: true }).click();
+      await expect(
+        page.getByText("Your recovery codes weren't shown. Generate new ones."),
+      ).toBeVisible();
       await noVisibleSecrets();
     },
   );
@@ -740,32 +759,27 @@ try {
       await beginSetup();
       const key = await manualKey();
       await setupDialog()
-        .getByRole("button", { name: "Copy setup key", exact: true })
+        .getByRole("button", { name: "Copy key", exact: true })
         .click();
       await expect(key).toBeVisible();
       expect(
         await page.evaluate(() => window.__syntheticClipboard.length),
       ).toBe(0);
-      await expect(setupDialog()).not.toContainText("Setup key copied");
+      await expect(setupDialog()).toContainText(
+        "Copy isn't available here. Select the text to copy it.",
+      );
       for (const url of [
         "https://untrusted.invalid/qr",
         "otpauth://hotp/Untrusted?secret=JBSWY3DPEHPK3PXP&counter=0",
       ]) {
         await load({ invalidSetup: url });
-        await page
-          .getByRole("button", { name: "Set up authenticator", exact: true })
-          .click();
-        await page
-          .getByLabel("Current password", { exact: true })
-          .fill(syntheticPassword);
-        await page
-          .getByRole("button", { name: "Continue", exact: true })
-          .click();
-        const review = page.getByRole("dialog", {
-          name: "Authenticator change not confirmed",
+        await setUp().click();
+        await submitPassword();
+        const outcome = page.getByRole("dialog", {
+          name: "Two-factor is still off",
           exact: true,
         });
-        await expect(review).toBeVisible();
+        await expect(outcome).toBeVisible();
         await expect(qrImage()).toHaveCount(0);
         await expect(
           page.getByRole("link", {
@@ -774,31 +788,31 @@ try {
           }),
         ).toHaveCount(0);
         await expect(enable()).toHaveCount(0);
-        await review
-          .getByRole("button", { name: "Check current status", exact: true })
+        await outcome
+          .getByRole("button", { name: "Close dialog", exact: true })
           .click();
-        await expect(review).toContainText("not enabled now");
-        await closeDialog();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
         await noVisibleSecrets();
       }
     },
   );
   await check(
-    "mobile light/dark setup and manual controls have contained layout, accessible focus and independently decodable QR pixels",
+    "mobile light/dark setup puts the app link and key first, stays contained, and keeps QR pixels decodable",
     async () => {
       for (const theme of ["light", "dark"]) {
         await load({ width: 375, theme });
         await beginSetup();
         await decodeRenderedQR();
-        await footerGeometry(theme);
-        await axe(`375px ${theme} scan step`);
-        await page.screenshot({
-          path: resolve(
-            output,
-            `authenticator-setup-mobile-${theme}-synthetic.png`,
-          ),
-          animations: "disabled",
+        const order = await setupDialog().evaluate((dialog) => {
+          const top = (selector) =>
+            dialog.querySelector(selector).getBoundingClientRect().top;
+          return {
+            manual: top(".authenticator-manual"),
+            scan: top(".authenticator-scan"),
+          };
         });
+        expect(order.manual).toBeLessThan(order.scan);
+        await footerGeometry(theme);
         await manualKey();
         const dimensions = await setupDialog().evaluate((dialog) => ({
           left: dialog.getBoundingClientRect().left,
@@ -811,13 +825,14 @@ try {
         expect(dimensions.document_width).toBeLessThanOrEqual(
           dimensions.viewport,
         );
-        await axe(`375px ${theme} manual step`);
+        await axe(`375px ${theme} setup`);
         await page.screenshot({
           path: resolve(
             output,
-            `authenticator-manual-mobile-${theme}-synthetic.png`,
+            `authenticator-setup-mobile-${theme}-synthetic.png`,
           ),
           animations: "disabled",
+          fullPage: true,
         });
         await page.keyboard.press("Escape");
         await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -826,7 +841,7 @@ try {
     },
   );
   await check(
-    "375px light/dark footer keeps both actions on one contained row after the CSS correction",
+    "375px light/dark footer keeps both actions on one contained row",
     async () => {
       for (const theme of ["light", "dark"]) {
         await load({ width: 375, theme });
@@ -836,15 +851,6 @@ try {
           path: resolve(
             output,
             `authenticator-setup-mobile-${theme}-synthetic.png`,
-          ),
-          animations: "disabled",
-        });
-        await manualKey();
-        await footerGeometry(theme);
-        await page.screenshot({
-          path: resolve(
-            output,
-            `authenticator-manual-mobile-${theme}-synthetic.png`,
           ),
           animations: "disabled",
         });
@@ -867,9 +873,9 @@ try {
     "src/mfaActionModel.ts",
     "src/AuthenticatorSetup.tsx",
     "src/authenticator-setup.css",
+    "src/authControls.tsx",
     "src/App.tsx",
     "src/ui.tsx",
-    "src/control.css",
     "package.json",
     "package-lock.json",
   ])
@@ -882,7 +888,7 @@ try {
       {
         generated_at: new Date().toISOString(),
         scope: focus
-          ? "Focused CSS follow-up: 375px light/dark scan and manual footer containment on actual App with synthetic setup fixtures. No behavioral-suite rerun, real MFA setup or server verification. Screenshots contain synthetic credentials only."
+          ? "Focused CSS follow-up: 375px light/dark setup footer containment on actual App with synthetic setup fixtures. No behavioral-suite rerun, real MFA setup or server verification. Screenshots contain synthetic credentials only."
           : "Actual App MFA onboarding with synthetic credentials and isolated mocked API. No real MFA setup, server TOTP/recovery validation, native activation or traces. Reports omit QR payloads and credential values; screenshots contain only explicitly synthetic setup fixtures.",
         focus: focus || null,
         passed: !failure,
