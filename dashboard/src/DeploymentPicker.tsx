@@ -10,6 +10,9 @@ import {
 import { Button, ErrorBox, Modal, SearchBox, Spinner, useResource } from "./ui";
 import TargetDialog from "./TargetDialog";
 import { relativeTime } from "./time";
+// Its own styles: the picker also opens from a device's page, which never
+// loads the Deployments page's stylesheet.
+import "./deployment-picker.css";
 
 type VersionItem = {
   id: string;
@@ -186,8 +189,11 @@ export default function DeploymentPicker({
                     {relativeTime(item.latest_version!.created_at)}
                     {" · "}
                     {item.component_counts.sources} in,{" "}
-                    {item.component_counts.transforms} transforms,{" "}
-                    {item.component_counts.sinks} out
+                    {item.component_counts.transforms}{" "}
+                    {item.component_counts.transforms === 1
+                      ? "transform"
+                      : "transforms"}
+                    , {item.component_counts.sinks} out
                   </small>
                 </span>
               </label>
