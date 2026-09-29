@@ -38,6 +38,11 @@ func TestAccountAccessNamesWhatBlocksTheServiceAccount(t *testing.T) {
 		return path
 	}
 	stranger := "vectory-test-no-such-account"
+	// macOS keeps TMPDIR under a per-user private folder, which would block a
+	// stranger before any fixture does.
+	if problem, _ := accessBlocker(accountIDs{uid: -1, gid: -1, groups: map[int]bool{}}, root, false); problem != "" {
+		t.Skipf("the temporary directory isn't reachable by other accounts: %s", problem)
+	}
 	private := mk(0700, 0755, "home")
 	if problem := accountAccessProblem(context.Background(), stranger, private, true, "--version"); !strings.Contains(problem, filepath.Join(root, "home")+" is private (mode 0700") {
 		t.Fatalf("private home: %q", problem)
@@ -60,7 +65,7 @@ func TestAccountAccessNamesWhatBlocksTheServiceAccount(t *testing.T) {
 	// An existing account is asked for real, as root, when the bits say no:
 	// nobody still can't enter a private directory.
 	if os.Geteuid() == 0 {
-		if nobody, ok := lookupAccountIDs("nobody"); ok {
+		if nobody, ok := lookupAccountIDs("nobody"); ok && nobody.uid > 0 {
 			if !runsAs(context.Background(), nobody, fine, "--version") {
 				t.Fatal("nobody could not run a system-wide binary")
 			}

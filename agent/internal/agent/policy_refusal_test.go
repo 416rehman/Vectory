@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,9 @@ func TestPolicyRefusalsSayWhatWasRefusedAndHowToAllowIt(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tc.config, `"/`) {
+				t.Skip("POSIX paths")
+			}
 			err := p.Check([]byte(tc.config))
 			var refusal *PolicyRefusal
 			if !errors.As(err, &refusal) {
