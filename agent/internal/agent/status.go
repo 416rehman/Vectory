@@ -54,7 +54,10 @@ type StatusView struct {
 	ActualSHA   string
 	Drift       bool
 	BinaryOK    bool
-	Next        string
+	// Delivery is a sink that failed requests in the last minute, from the
+	// local Vector log; nil when the log shows none.
+	Delivery *DeliveryProblem
+	Next     string
 }
 
 // ReadStatus builds the status view for dir.
@@ -87,7 +90,9 @@ func ReadStatus(ctx context.Context, dir string) (*StatusView, error) {
 		v.Service = ServiceInfo{Manager: v.Service.Manager, Name: v.Service.Name}
 	}
 	v.Foreground = !v.Service.Running() && agentLockHeld(dir)
-	v.Next = v.nextStep(time.Now())
+	now := time.Now()
+	v.Delivery = recentDeliveryProblem(dir, s.ManagedConfig, now)
+	v.Next = v.nextStep(now)
 	return v, nil
 }
 
@@ -137,6 +142,10 @@ func (v *StatusView) nextStep(now time.Time) string {
 		return "No check-in for " + humanDuration(now.Sub(*v.State.LastHeartbeat)) + ". Run `sudo vectory doctor` to check the connection."
 	case v.State.Error != nil:
 		return applyNextAction(v.State)
+	case v.Delivery != nil:
+		// Applied and verified is not delivering: Vector's own log says a
+		// sink fails its requests.
+		return v.Delivery.Next()
 	case v.State.Desired == nil:
 		return "Nothing to do here. Deploy a pipeline to " + v.Settings.Name + " from the dashboard."
 	}
@@ -254,6 +263,9 @@ func RenderStatus(v *StatusView, now time.Time) string {
 		vector += " · changed or missing since adoption"
 	}
 	row("Vector", vector)
+	if v.Delivery != nil {
+		row("", v.Delivery.Summary())
+	}
 	pipeline := v.pipeline()
 	if v.LocalPaused {
 		pipeline += " · paused on this host"
@@ -322,6 +334,9 @@ func StatusJSON(v *StatusView) map[string]any {
 	}
 	if v.Pending != nil {
 		out["enrollment"] = v.Pending
+	}
+	if v.Delivery != nil {
+		out["delivery"] = v.Delivery
 	}
 	return out
 }

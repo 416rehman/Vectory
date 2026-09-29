@@ -250,6 +250,12 @@ func Enroll(ctx context.Context, dir string, s Settings, token string) error {
 }
 
 func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c *Client) error {
+	return enrollPreparedAs(ctx, dir, s, token, c, "")
+}
+
+// enrollPreparedAs enrolls and names the service manager setup registered
+// (empty: not known, omitted). Servers that predate the field ignore it.
+func enrollPreparedAs(ctx context.Context, dir string, s Settings, token string, c *Client, serviceManager string) error {
 	if e := ctx.Err(); e != nil {
 		return e
 	}
@@ -281,7 +287,7 @@ func enrollPrepared(ctx context.Context, dir string, s Settings, token string, c
 			return e
 		}
 	}
-	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: s.adoptedVectorVersion(), ConfigurationMode: s.CapabilityPolicy.ConfigurationMode()})
+	b, e := c.request(ctx, "POST", "/agent/v1/enroll", Enrollment{ProtocolVersion: 1, RequestID: pending.RequestID, Token: token, Name: s.Name, CSRPEM: csr, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: Version, VectorVersion: s.adoptedVectorVersion(), ConfigurationMode: s.CapabilityPolicy.ConfigurationMode(), ServiceManager: serviceManager})
 	if e != nil {
 		if ce, ok := AsConnectionError(e); ok {
 			outcome := pending

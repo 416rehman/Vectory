@@ -11,6 +11,10 @@ const (
 	featureHostRuntime = "host_runtime"
 	featureLogSummary  = "vector_log_summary"
 	featureTelemetryV2 = "telemetry_v2"
+	// What keeps the agent running, and whether Vector runs: the dashboard
+	// says "nothing keeps its agent running" and "Nothing running" from them.
+	featureServiceManager = "service_manager"
+	featureVectorRunning  = "vector_running"
 )
 
 func (e *Engine) serverSupports(feature string) bool {
@@ -46,6 +50,13 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 			items = []LogSummary{}
 		}
 		h.VectorLogSummary = &items
+	}
+	if e.serverSupports(featureServiceManager) && e.ServiceManager != "" {
+		h.ServiceManager = e.ServiceManager
+	}
+	if e.serverSupports(featureVectorRunning) && e.Driver != nil {
+		alive := e.Driver.Alive()
+		h.VectorRunning = &alive
 	}
 }
 
