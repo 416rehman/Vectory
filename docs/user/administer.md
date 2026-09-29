@@ -117,7 +117,9 @@ An old backup also restores old decisions: accounts that were disabled, old role
 3. Try the new version against a copy of the restored state first. Confirm the database migrated, people can sign in and representative devices check in.
 4. Upgrade production: update the source, then `docker compose up -d --build` from `deploy`.
 
-If an upgrade fails, stop and restore the pre-upgrade backup into a new volume with the previous image. Don't start an older server on a database a newer one migrated.
+The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
+
+Migrations only move forward. An older server refuses a database that a newer one migrated, so going back to a previous version means restoring its backup: if an upgrade fails, stop and restore the pre-upgrade backup into a new volume with the previous image.
 
 ## Rotate the signing key
 

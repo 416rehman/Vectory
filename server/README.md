@@ -23,7 +23,8 @@ The wire contract is in `../contracts/`: `CONTRACT.md`, the generated `openapi.j
 ## Durable state
 
 - SQLite with WAL, `FULL` synchronous writes, foreign keys, migrations, a five-second busy timeout, eight pooled connections and serialized writers. Every write transaction goes through `db::write_tx`: the process-wide writer lock plus `BEGIN IMMEDIATE`.
-- Migration numbers have gaps (0001–0027, 0040, 0100). Number a new migration above the highest existing one; tests that replay old schemas rewind exact version ranges.
+- Migration numbers have gaps (0001–0027, 0040, 0100, 0110). Number a new migration above the highest existing one; tests that replay old schemas rewind exact version ranges.
+- Migrations run at startup and only move forward: an older server refuses a database a newer one migrated, so a downgrade means restoring the pre-upgrade backup. Migration 0100 indexes stored telemetry, which delays the first start after that upgrade on a large telemetry table.
 - An exclusive lock on the data directory keeps out a second server or a running `vectory-admin`. No network filesystems, no active-active replicas.
 - At startup the server makes the data directory, database, lock and key tree private: owner-only modes on Unix, and on Windows an access list for the current identity and SYSTEM only. It refuses symlinks and reparse points. Operating-system administrators remain trusted.
 - The database and the `keys/` tree (device CA, manifest signing keys, `mfa-sealing.key`) belong together. A database that refers to a missing key refuses to start.
