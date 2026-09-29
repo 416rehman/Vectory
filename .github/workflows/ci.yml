@@ -1073,6 +1073,12 @@ jobs:
         run: node tests/target-recovery-browser.mjs
         env:
           VECTORY_TARGET_RECOVERY_OUTPUT: artifacts/browsers/target-recovery
+      # Last and independent, so a stale table never hides a harness result.
+      - name: Check docs/internal/CI.md lists every job of every workflow
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        working-directory: .
+        run: node scripts/check-ci-table.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         timeout-minutes: 10
