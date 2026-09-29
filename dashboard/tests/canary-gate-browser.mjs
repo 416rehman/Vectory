@@ -95,9 +95,9 @@ const user = (role = "viewer") => ({
 const reasons = ["superseded", "stale", "paused", "unverified", "unavailable"];
 const reasonLabels = {
   superseded: "Another assignment is effective",
-  stale: "Waiting for a fresh heartbeat",
+  stale: "Waiting for a check-in",
   paused: "Configuration sync is paused",
-  unverified: "Current application is not verified",
+  unverified: "Waiting for the device to confirm",
   unavailable: "Device is unavailable",
 };
 const gate = (extra = {}) => ({
