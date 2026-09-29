@@ -1,6 +1,6 @@
 # vectory-admin
 
-`vectory-admin` is the offline maintenance tool for a Vectory server. Use it after restoring a backup, to rotate signing keys, and for break-glass account recovery.
+`vectory-admin` is the offline maintenance tool for a Vectory server. Use it after restoring a backup, to rotate signing keys and the device certificate authority, and for break-glass account recovery.
 
 ## Usage
 
@@ -23,6 +23,9 @@ vectory-admin --data-dir PATH <command> [flags]
 | [`recover-generations`](#recover-generations) | Raise configuration counters above what devices already accepted, from a reviewed report. |
 | [`rotate-signing-key`](#rotate-signing-key) | Create a new manifest signing key. |
 | [`prune-signing-keys`](#prune-signing-keys) | Delete old signing keys that no valid device credential still uses. |
+| [`device-ca-status`](#device-ca-status) | Show the device certificate authorities and which devices still use the previous one. |
+| [`rotate-device-ca`](#rotate-device-ca) | Create a new device certificate authority; the current one stays trusted as the previous one. |
+| [`retire-device-ca`](#retire-device-ca) | Stop trusting the previous device certificate authority once no device uses it. |
 | [`reset-password`](#reset-password) | Create a single-use password reset link for an account. |
 | [`disable-mfa`](#disable-mfa) | Turn off two-factor sign-in for an account that lost its authenticator. |
 
@@ -107,6 +110,37 @@ vectory-admin --data-dir /var/lib/vectory prune-signing-keys
 ```
 
 At most four old keys are kept. Never delete a key by hand just because a newer one exists.
+
+## device-ca-status
+
+Show the device certificate authority (CA) that issues device certificates, the previous one while it's still trusted, and the devices that still hold certificates from it.
+
+```sh
+vectory-admin --data-dir /var/lib/vectory device-ca-status
+```
+
+**Settings → General** shows the same while the server runs.
+
+## rotate-device-ca
+
+Create a new device CA. The current one becomes the previous one and stays trusted, so every enrolled device keeps working.
+
+```sh
+vectory-admin --data-dir /var/lib/vectory rotate-device-ca
+```
+
+It prints both fingerprints and how many devices hold certificates from the previous CA. New enrollments and renewals get certificates from the new CA. Each device moves when it renews, in its certificate's last day, so every device has moved within 30 days. The manifest signing key doesn't change. There's one previous CA at a time: retire it before you rotate again. See [Rotate the device certificate authority](administer.md#rotate-the-device-certificate-authority).
+
+## retire-device-ca
+
+Stop trusting the previous device CA once no device needs it.
+
+```sh
+vectory-admin --data-dir /var/lib/vectory retire-device-ca
+vectory-admin --data-dir /var/lib/vectory retire-device-ca --apply
+```
+
+The first command only checks. Both refuse, exit 1 and name the devices while any unrevoked device still holds a valid certificate from the previous CA. A device that just renewed keeps its old certificate as a fallback for 24 hours, so it counts until then. With `--apply`, the previous CA is removed; from the next start the server refuses certificates it issued.
 
 ## reset-password
 

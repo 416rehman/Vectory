@@ -49,7 +49,7 @@ Each heartbeat reply is an Ed25519-signed manifest bound to the device, the nonc
 
 `vectory-admin rotate-signing-key` keeps the previous key before replacing the current one. Each credential stays bound to the key it was issued with, and authenticated renewal delivers a new certificate with the current key, so devices keep manifest trust across a rotation as long as they renew before their certificate expires. `keys/signing-history/` keeps up to four old keys; `prune-signing-keys` removes only keys no valid credential uses. Both are audited.
 
-Device CA replacement is a stopped-server operation: install the reviewed new certificate and key, and trust the old CA during the overlap with `VECTORY_PREVIOUS_DEVICE_CA`. Test fleet renewal before you retire the old CA.
+`vectory-admin rotate-device-ca` (stopped server) creates a new device CA and keeps the replaced certificate as `keys/device-ca-previous.pem`: new and renewed certificates come from the new CA, and client certificates from either pass TLS until `retire-device-ca --apply`, which refuses while an unrevoked device still holds a valid certificate from the old CA (`credentials.ca_id` records each issuer). A chain alone never authenticates; the registered fingerprint is still checked on every request. `src/device_ca.rs` and `crypto::settle_device_ca_rotation` hold the file protocol, which finishes or undoes a rotation that stopped midway at the next start. The older manual overlap, `VECTORY_PREVIOUS_DEVICE_CA`, still works and logs a warning.
 
 ## Local secret references
 

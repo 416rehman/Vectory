@@ -20,12 +20,139 @@ pub struct Keys {
     pub signing: SigningKey,
     previous_signing: std::collections::HashMap<String, SigningKey>,
     mfa_sealing: [u8; 32],
+    device_ca: DeviceCa,
+    /// The device CA a rotation replaced, with its PEM: still trusted for
+    /// client certificates until `retire-device-ca` removes it.
+    previous_device_ca: Option<(String, DeviceCa)>,
 }
 pub struct Issued {
     pub response: Value,
     pub fingerprint: String,
     pub key_hash: String,
     pub expires: String,
+    /// SHA-256 of the DER of the device CA that signed the certificate.
+    pub ca_id: String,
+}
+/// Files of the dedicated device CA inside the keys directory.
+pub const DEVICE_CA: &str = "device-ca.pem";
+pub const DEVICE_CA_KEY: &str = "device-ca-key.pem";
+/// The CA a rotation replaced (certificate only; its key is not kept).
+pub const PREVIOUS_DEVICE_CA: &str = "device-ca-previous.pem";
+/// A rotation's new CA before it becomes current (see `settle_device_ca_rotation`).
+pub const NEXT_DEVICE_CA: &str = "device-ca-next.pem";
+pub const NEXT_DEVICE_CA_KEY: &str = "device-ca-next-key.pem";
+/// Public facts about a device CA certificate, for status and audit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceCa {
+    /// SHA-256 of the certificate DER, lowercase hex: the fingerprint devices
+    /// and operators compare, and the issuer ID recorded on each credential.
+    pub sha256: String,
+    pub subject: String,
+    pub not_before: String,
+    pub not_after: String,
+}
+impl DeviceCa {
+    /// Parse the first certificate of a PEM file, which must be a CA.
+    pub fn from_pem(pem: &str) -> anyhow::Result<Self> {
+        let der = CertificateDer::pem_slice_iter(pem.as_bytes())
+            .next()
+            .context("Device CA certificate missing")??;
+        let (_, parsed) = x509_parser::parse_x509_certificate(&der)
+            .map_err(|_| anyhow::anyhow!("Device CA certificate is invalid"))?;
+        if !parsed.is_ca() {
+            bail!("Device CA certificate is not a CA certificate")
+        }
+        let time = |seconds: i64| {
+            chrono::DateTime::from_timestamp(seconds, 0)
+                .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                .context("Device CA validity is out of range")
+        };
+        Ok(Self {
+            sha256: db::hash(&der),
+            subject: parsed.subject().to_string(),
+            not_before: time(parsed.validity().not_before.timestamp())?,
+            not_after: time(parsed.validity().not_after.timestamp())?,
+        })
+    }
+    pub fn summary(&self) -> Value {
+        json!({"sha256":self.sha256,"subject":self.subject,"not_before":self.not_before,"not_after":self.not_after})
+    }
+}
+/// A new self-signed device CA valid for ten years: (key PEM, certificate PEM).
+pub fn new_device_ca(common_name: &str) -> anyhow::Result<(String, String)> {
+    let key = KeyPair::generate()?;
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
+    params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    params.not_before = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
+    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(3650);
+    let cert = params.self_signed(&key)?;
+    Ok((key.serialize_pem(), cert.pem()))
+}
+/// Whether a certificate PEM's public key is the private key's.
+fn key_matches(certificate_pem: &str, key: &KeyPair) -> anyhow::Result<bool> {
+    let der = CertificateDer::pem_slice_iter(certificate_pem.as_bytes())
+        .next()
+        .context("Device CA certificate missing")??;
+    let (_, parsed) = x509_parser::parse_x509_certificate(&der)
+        .map_err(|_| anyhow::anyhow!("Device CA certificate is invalid"))?;
+    Ok(parsed.public_key().subject_public_key.data.as_ref() == key.public_key_raw())
+}
+fn sync_directory(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+/// Finish or undo a device CA rotation that stopped midway. A rotation writes
+/// the new CA as `device-ca-next*.pem`, commits by writing
+/// `device-ca-previous.pem` (a copy of the current certificate), then renames
+/// the new key and certificate over the current ones, key first. Before the
+/// commit the new files are discarded; after it the renames are completed.
+/// Only `vectory-admin` writes these files, under the data directory lock.
+pub fn settle_device_ca_rotation(dir: &Path) -> anyhow::Result<()> {
+    let next = dir.join(NEXT_DEVICE_CA);
+    let next_key = dir.join(NEXT_DEVICE_CA_KEY);
+    if !next.exists() && !next_key.exists() {
+        return Ok(());
+    }
+    if !dir.join(PREVIOUS_DEVICE_CA).exists() {
+        for file in [&next_key, &next] {
+            if file.exists() {
+                fs::remove_file(file)?;
+            }
+        }
+        return sync_directory(dir);
+    }
+    let incomplete = || {
+        anyhow::anyhow!(
+            "A device CA rotation stopped midway and its files don't match; restore the complete keys directory from backup"
+        )
+    };
+    if next_key.exists() {
+        let certificate = fs::read_to_string(&next).map_err(|_| incomplete())?;
+        let key = KeyPair::from_pem(&fs::read_to_string(&next_key)?).map_err(|_| incomplete())?;
+        if !key_matches(&certificate, &key).map_err(|_| incomplete())? {
+            return Err(incomplete());
+        }
+        fs::rename(&next_key, dir.join(DEVICE_CA_KEY))?;
+        sync_directory(dir)?;
+    }
+    if next.exists() {
+        let certificate = fs::read_to_string(&next)?;
+        let key = KeyPair::from_pem(&fs::read_to_string(dir.join(DEVICE_CA_KEY))?)?;
+        if !key_matches(&certificate, &key).map_err(|_| incomplete())? {
+            return Err(incomplete());
+        }
+        fs::rename(&next, dir.join(DEVICE_CA))?;
+        sync_directory(dir)?;
+    }
+    Ok(())
 }
 fn private_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
@@ -144,8 +271,9 @@ impl Keys {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         fs::create_dir_all(path)?;
         restrict_dir(path)?;
-        let ca_file = path.join("device-ca.pem");
-        let ca_key = path.join("device-ca-key.pem");
+        settle_device_ca_rotation(path)?;
+        let ca_file = path.join(DEVICE_CA);
+        let ca_key = path.join(DEVICE_CA_KEY);
         let signing_file = path.join("manifest-signing.key");
         let count = [&ca_file, &ca_key, &signing_file]
             .iter()
@@ -155,37 +283,40 @@ impl Keys {
             bail!("Incomplete key material; restore the complete keys directory from backup")
         }
         if count == 0 {
-            let key = KeyPair::generate()?;
-            let mut params = CertificateParams::default();
-            params.distinguished_name = DistinguishedName::new();
-            params
-                .distinguished_name
-                .push(DnType::CommonName, "Vectory device CA");
-            params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
-            params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-            params.not_before = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
-            params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(3650);
-            let cert = params.self_signed(&key)?;
+            let (key, cert) = new_device_ca("Vectory device CA")?;
             let mut secret = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut secret);
-            private_write(&ca_key, key.serialize_pem().as_bytes())?;
-            private_write(&ca_file, cert.pem().as_bytes())?;
+            private_write(&ca_key, key.as_bytes())?;
+            private_write(&ca_file, cert.as_bytes())?;
             private_write(&signing_file, &secret)?;
         }
         let ca_pem = fs::read_to_string(ca_file)?;
         let ca_key = KeyPair::from_pem(&fs::read_to_string(ca_key)?)?;
-        let der = CertificateDer::pem_slice_iter(ca_pem.as_bytes())
-            .next()
-            .context("Device CA certificate missing")??;
-        let (_, parsed) = x509_parser::parse_x509_certificate(&der)
-            .map_err(|_| anyhow::anyhow!("Device CA certificate is invalid"))?;
-        if parsed.public_key().subject_public_key.data.as_ref() != ca_key.public_key_raw()
-            || !parsed.is_ca()
-        {
+        let device_ca = DeviceCa::from_pem(&ca_pem)
+            .context("Restore a complete matching key set from backup")?;
+        if !key_matches(&ca_pem, &ca_key)? {
             bail!(
                 "Device CA certificate and private key do not match, or certificate is not a CA; restore a complete matching key set"
             )
         }
+        let previous_file = path.join(PREVIOUS_DEVICE_CA);
+        let previous_device_ca = if previous_file.exists() {
+            if fs::metadata(&previous_file)?.len() > 65536 {
+                bail!("The previous device CA file is larger than 64 KiB")
+            }
+            let pem = fs::read_to_string(&previous_file)?;
+            let previous = DeviceCa::from_pem(&pem).context(
+                "The previous device CA is unreadable; restore the complete keys directory from backup",
+            )?;
+            if previous.sha256 == device_ca.sha256 {
+                bail!(
+                    "The previous device CA is the current one; restore the complete keys directory from backup"
+                )
+            }
+            Some((pem, previous))
+        } else {
+            None
+        };
         let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key)?;
         let raw: [u8; 32] = fs::read(signing_file)?
             .try_into()
@@ -230,7 +361,17 @@ impl Keys {
             signing: SigningKey::from_bytes(&raw),
             previous_signing,
             mfa_sealing,
+            device_ca,
+            previous_device_ca,
         })
+    }
+    /// The device CA that issues every new and renewed certificate.
+    pub fn device_ca(&self) -> &DeviceCa {
+        &self.device_ca
+    }
+    /// The CA a rotation replaced, while it is still trusted.
+    pub fn previous_device_ca(&self) -> Option<&DeviceCa> {
+        self.previous_device_ca.as_ref().map(|(_, ca)| ca)
     }
     pub fn active_signing_id(&self) -> String {
         db::hash(self.signing.verifying_key().as_bytes())
@@ -336,6 +477,7 @@ impl Keys {
             fingerprint: db::hash(cert.der()),
             key_hash,
             expires,
+            ca_id: self.device_ca.sha256.clone(),
         })
     }
     pub fn envelope(&self, payload: &Value) -> Value {
@@ -355,10 +497,23 @@ impl Keys {
         for cert in CertificateDer::pem_slice_iter(self.ca_pem.as_bytes()) {
             roots.add(cert?)?;
         }
-        // Explicit host-admin supplied trust overlap permits old registered clients
-        // to renew into a replacement dedicated device CA. Registry/revocation
-        // authorization is still checked on every request, including pooled TLS.
+        // During a rotation's overlap, certificates the previous device CA
+        // issued keep working until `retire-device-ca`, so devices can renew
+        // onto the new CA. A chain alone never authenticates: the certificate's
+        // fingerprint must still be registered, active and unrevoked on every
+        // request (`device::authenticated`), including pooled connections.
+        if let Some((pem, _)) = &self.previous_device_ca {
+            for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
+                roots.add(cert?)?;
+            }
+        }
+        // The older manual overlap: an administrator-supplied bundle, trusted
+        // for as long as the variable is set.
         if let Ok(path) = std::env::var("VECTORY_PREVIOUS_DEVICE_CA") {
+            tracing::warn!(
+                %path,
+                "VECTORY_PREVIOUS_DEVICE_CA is set: device certificates from this bundle are trusted for as long as it stays set. vectory-admin rotate-device-ca tracks and retires a previous device CA instead"
+            );
             let previous = fs::read(path)?;
             if previous.len() > 65536 {
                 bail!("Previous device CA bundle is too large")

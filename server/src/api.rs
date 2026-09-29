@@ -515,7 +515,9 @@ pub async fn list_collection(
             )
         }
         "settings" => {
-            json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name,"schedule_late_start_seconds":crate::schedule::late_start_seconds(&s.settings)})
+            let mut settings = json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name,"schedule_late_start_seconds":crate::schedule::late_start_seconds(&s.settings)});
+            settings["device_ca"] = crate::device_ca::status(&mut conn, &s.keys).await?;
+            settings
         }
         _ => return Err(ApiError::missing()),
     };
