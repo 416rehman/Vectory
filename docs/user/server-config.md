@@ -43,7 +43,7 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 | `VECTORY_PREVIOUS_DEVICE_CA` | None | The older manual way to replace the device CA: a PEM file (up to 64 KiB) whose certificates the agent listener also trusts for as long as the variable is set. [`vectory-admin rotate-device-ca`](vectory-admin.md#rotate-device-ca) replaces it, tracks which devices still need the old CA and retires it. The server logs a warning while this is set. |
 | `VECTORY_DEVELOPMENT` | `false` | Local development only. Allows running without TLS, the validator or secure cookies, and then requires loopback listeners. |
 
-`RUST_LOG` controls log detail, for example `RUST_LOG=vectory_server=debug`. The default is `vectory_server=info,tower_http=warn`.
+`RUST_LOG` controls log detail, for example `RUST_LOG=vectory_server=debug`. The default is `vectory_server=info,tower_http=warn`. Adding `vectory_server::sqlite=debug` logs one line a minute about the database: how many writes ran, the share of the minute the single writer was busy (`busy_percent`), how long writes waited for it, and the size of the write-ahead log (`wal_bytes`).
 
 ### Agent downloads
 

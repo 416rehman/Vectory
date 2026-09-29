@@ -14,11 +14,99 @@ pub async fn begin_write(pool: &sqlx::SqlitePool) -> sqlx::Result<WriteTransacti
 }
 /// Every serialized writer: the process-wide writer lock plus an immediate
 /// transaction. Bind as `let (_guard, mut tx)` so the transaction ends first.
-pub async fn write_tx(
-    s: &crate::App,
-) -> sqlx::Result<(tokio::sync::MutexGuard<'_, ()>, WriteTransaction)> {
-    let guard = s.writer.lock().await;
+pub async fn write_tx(s: &crate::App) -> sqlx::Result<(WriterGuard<'_>, WriteTransaction)> {
+    let guard = writer(s).await;
     Ok((guard, begin_write(&s.pool).await?))
+}
+/// The process-wide writer lock. How long each writer waited for it and held
+/// it is counted for the once-a-minute `vectory_server::sqlite` debug line.
+pub async fn writer(s: &crate::App) -> WriterGuard<'_> {
+    let asked = std::time::Instant::now();
+    let guard = s.writer.lock().await;
+    let since = std::time::Instant::now();
+    WRITER.waited(since - asked);
+    WriterGuard {
+        _guard: guard,
+        since,
+    }
+}
+pub struct WriterGuard<'a> {
+    _guard: tokio::sync::MutexGuard<'a, ()>,
+    since: std::time::Instant,
+}
+impl Drop for WriterGuard<'_> {
+    fn drop(&mut self) {
+        WRITER.held(self.since.elapsed());
+    }
+}
+/// Writer-lock bookkeeping since the last report: fixed-size counters, read
+/// and reset once a minute. SQLite has one writer, so the share of time the
+/// lock is held says how close the server is to its write capacity.
+struct WriterStats {
+    writes: std::sync::atomic::AtomicU64,
+    wait_micros: std::sync::atomic::AtomicU64,
+    wait_max_micros: std::sync::atomic::AtomicU64,
+    held_micros: std::sync::atomic::AtomicU64,
+    held_max_micros: std::sync::atomic::AtomicU64,
+    reported: std::sync::Mutex<Option<std::time::Instant>>,
+}
+static WRITER: WriterStats = WriterStats {
+    writes: std::sync::atomic::AtomicU64::new(0),
+    wait_micros: std::sync::atomic::AtomicU64::new(0),
+    wait_max_micros: std::sync::atomic::AtomicU64::new(0),
+    held_micros: std::sync::atomic::AtomicU64::new(0),
+    held_max_micros: std::sync::atomic::AtomicU64::new(0),
+    reported: std::sync::Mutex::new(None),
+};
+fn micros(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+impl WriterStats {
+    fn waited(&self, wait: std::time::Duration) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.writes.fetch_add(1, Relaxed);
+        self.wait_micros.fetch_add(micros(wait), Relaxed);
+        self.wait_max_micros.fetch_max(micros(wait), Relaxed);
+    }
+    fn held(&self, held: std::time::Duration) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.held_micros.fetch_add(micros(held), Relaxed);
+        self.held_max_micros.fetch_max(micros(held), Relaxed);
+    }
+}
+/// Log, at debug level on the `vectory_server::sqlite` target, how busy the
+/// writer lock was since the last call and how large the WAL is, then reset
+/// the counters. The scheduler calls this once a minute.
+pub fn report_writer(data_dir: &std::path::Path) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let now = std::time::Instant::now();
+    let since = WRITER
+        .reported
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace(now);
+    let writes = WRITER.writes.swap(0, Relaxed);
+    let wait = WRITER.wait_micros.swap(0, Relaxed);
+    let wait_max = WRITER.wait_max_micros.swap(0, Relaxed);
+    let held = WRITER.held_micros.swap(0, Relaxed);
+    let held_max = WRITER.held_max_micros.swap(0, Relaxed);
+    let Some(since) = since else {
+        return;
+    };
+    let window = micros(now - since).max(1);
+    let wal_bytes = std::fs::metadata(data_dir.join("vectory.db-wal")).map_or(0, |m| m.len());
+    let ms = |us: u64| (us as f64 / 1000.0 * 10.0).round() / 10.0;
+    tracing::debug!(
+        target: "vectory_server::sqlite",
+        window_seconds = (window as f64 / 1e6).round(),
+        writes,
+        busy_percent = (held as f64 / window as f64 * 1000.0).round() / 10.0,
+        held_max_ms = ms(held_max),
+        wait_mean_ms = ms(wait / writes.max(1)),
+        wait_max_ms = ms(wait_max),
+        wal_bytes,
+        "writer lock since the last report"
+    );
 }
 /// Bring the database to this server's schema. Each migration commits with
 /// its bookkeeping row in one transaction, so a failure keeps nothing of that

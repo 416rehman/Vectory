@@ -192,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
                         "retention pruning failed; retrying next minute"
                     )
                 }
+                vectory_server::db::report_writer(&scheduler.settings.data_dir);
             }
         }
     });

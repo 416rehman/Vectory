@@ -367,7 +367,7 @@ pub async fn renew(
     Extension(peer): Extension<PeerCertificate>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let _guard = s.writer.lock().await;
+    let _guard = crate::db::writer(&s).await;
     let id = authenticated(&s, &peer).await?;
     s.limit(
         format!("renew:{id}"),
@@ -522,7 +522,7 @@ pub async fn heartbeat(
     Extension(peer): Extension<PeerCertificate>,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let _guard = s.writer.lock().await;
+    let _guard = crate::db::writer(&s).await;
     let id = authenticated(&s, &peer).await?;
     s.limit(
         format!("heartbeat:{id}"),
