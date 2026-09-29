@@ -223,6 +223,16 @@ pub fn router(s: State) -> Router {
             "/api/v1/tokens/requests/{id}/cancel",
             post(crate::token_requests::cancel),
         )
+        .route("/api/v1/releases", get(crate::install::list_releases))
+        .route(
+            "/api/v1/releases/{name}",
+            get(crate::install::download_release),
+        )
+        .route("/api/v1/agent-install", get(crate::install::details))
+        .route(
+            "/api/v1/agent-install/activity",
+            get(crate::install::activity),
+        )
         .route("/api/v1/{collection}", get(list).post(create))
         .route("/api/v1/{collection}/{id}", get(detail).put(edit_group))
         .route(
@@ -577,7 +587,6 @@ pub async fn list(
                     .collect::<Result<Vec<_>>>()?
             )
         }
-        "releases" => json!(releases(&s).await?),
         "settings" => {
             json!({"version":env!("CARGO_PKG_VERSION"),"vector_version":validation::VECTOR_VERSION,"heartbeat_seconds":60,"telemetry_retention_days":db::telemetry_retention_days(),"instance_name":s.settings.instance_name})
         }
@@ -613,31 +622,6 @@ pub async fn detail(
         "groups" => crate::groups::normalized(db::record(&mut conn, "group", &id).await?)?,
         "versions" => db::record(&mut conn, "version", &id).await?,
         "deployments" => rollout::deployment(&mut conn, &id).await?,
-        "releases" => {
-            let catalog = releases(&s).await?;
-            let metadata = catalog
-                .iter()
-                .find(|r| r["name"] == id)
-                .ok_or_else(ApiError::missing)?;
-            let bytes = tokio::fs::read(s.settings.releases_dir.join(&id))
-                .await
-                .map_err(|_| ApiError::missing())?;
-            // Hash the exact bytes being served; the listing cache is only an index.
-            if db::hash(&bytes) != text(metadata, "sha256") {
-                return Err(ApiError::conflict("Release integrity check failed"));
-            }
-            let mut response = bytes.into_response();
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            response.headers_mut().insert(
-                header::CONTENT_DISPOSITION,
-                HeaderValue::from_str(&format!("attachment; filename=\"{id}\""))
-                    .map_err(|_| ApiError::invalid("Invalid filename"))?,
-            );
-            return Ok(response);
-        }
         _ => return Err(ApiError::missing()),
     };
     Ok(Json(out).into_response())
@@ -1155,89 +1139,6 @@ pub async fn deployment_preview(
     let mut tx = s.pool.begin().await?;
     auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
     Ok(Json(rollout::preview(&mut tx, &v).await?))
-}
-async fn releases(s: &State) -> Result<Vec<Value>> {
-    let bytes = match tokio::fs::read(s.settings.releases_dir.join("catalog.json")).await {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(_) => return Err(ApiError::invalid("Release catalog unavailable")),
-    };
-    if bytes.len() > 1024 * 1024 {
-        return Err(ApiError::invalid("Release catalog is too large"));
-    }
-    let entries: Vec<Value> = serde_json::from_slice(&bytes)
-        .map_err(|_| ApiError::invalid("Release catalog is invalid"))?;
-    let mut out = Vec::new();
-    for mut e in entries.into_iter().take(100) {
-        let name = text(&e, "name");
-        if name.is_empty()
-            || name.starts_with('.')
-            || name.len() > 150
-            || !name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        {
-            continue;
-        }
-        let path = s.settings.releases_dir.join(name);
-        let meta = match tokio::fs::symlink_metadata(&path).await {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.is_file()
-            || meta.len() > 128 * 1024 * 1024
-            || e["size"].as_u64() != Some(meta.len())
-        {
-            continue;
-        }
-        if release_digest(s, &path, name, &meta).await.as_deref() != Some(text(&e, "sha256")) {
-            continue;
-        }
-        e["url"] = json!(format!("/api/v1/releases/{name}"));
-        e["signed"] = json!(false);
-        out.push(e)
-    }
-    Ok(out)
-}
-/// SHA-256 of a release file, recomputed only when its length or modification
-/// time changes, so listing the catalog does not reread every binary.
-async fn release_digest(
-    s: &State,
-    path: &std::path::Path,
-    name: &str,
-    meta: &std::fs::Metadata,
-) -> Option<String> {
-    let key = (meta.len(), meta.modified().ok()?);
-    if let Some((len, modified, sha)) = s.release_hashes.lock().ok()?.get(name)
-        && (*len, *modified) == key
-    {
-        return Some(sha.clone());
-    }
-    let path = path.to_owned();
-    let sha = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
-        let mut file = std::fs::File::open(&path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 1 << 16];
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-        Ok(hex::encode(hasher.finalize()))
-    })
-    .await
-    .ok()?
-    .ok()?;
-    let mut cache = s.release_hashes.lock().ok()?;
-    if cache.len() >= 256 {
-        cache.clear();
-    }
-    cache.insert(name.to_owned(), (key.0, key.1, sha.clone()));
-    Some(sha)
 }
 async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(
