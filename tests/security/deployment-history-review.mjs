@@ -477,12 +477,15 @@ try {
       diagnostic = null;
     }
     if (index === 35) {
+      // Stored errors always carry allowlisted diagnostic objects, so a bare
+      // string is not a shape any reader may see.
       attempt.error.diagnostics = ["Plain string diagnostic"];
-      diagnostic = "Plain string diagnostic";
+      diagnostic = null;
     }
     if (index === 42) {
+      // Nor is a free-form `summary` beside an empty list.
       attempt.error = { summary: "  Error summary  ", diagnostics: [] };
-      diagnostic = "Error summary";
+      diagnostic = null;
     }
     if (index === 49) {
       attempt.error.diagnostics[0].message = "   ";
