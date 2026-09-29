@@ -3,21 +3,48 @@ import Pagination from '@astrojs/starlight/components/Pagination.astro';
 ---
 <footer class="help-footer">
   <Pagination />
-  <p>Vectory 0.1.0-dev <span aria-hidden="true">/</span> Vector 0.58.0</p>
-  <p>These guides are included with your installation. External reference links require internet access.</p>
+  <p>Vectory 0.1.0-dev <span aria-hidden="true">/</span> Vector 0.58.0 <span aria-hidden="true">/</span> <a href="/help/#about-these-guides">About these guides</a></p>
 </footer>
 
 <script>
-  // Starlight tables scroll within the article on narrow screens. Make only
-  // overflowing tables keyboard stops, keeping ordinary reading uncluttered.
   const tables = [...document.querySelectorAll<HTMLTableElement>('.sl-markdown-content table')];
+  const narrow = window.matchMedia('(max-width: 40rem)');
+  const stacked = 'help-stacked-table';
+  // Label each value with its column for the stacked layout ("Stacked tables"
+  // in help.css), and keep table semantics with explicit roles, which a CSS
+  // display change would otherwise remove.
+  for (const table of tables) {
+    const headers = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent?.trim() ?? '');
+    table.dataset.columns = String(headers.length);
+    table.setAttribute('role', 'table');
+    table.querySelectorAll('thead, tbody').forEach((group) => group.setAttribute('role', 'rowgroup'));
+    table.querySelectorAll('tr').forEach((row) => row.setAttribute('role', 'row'));
+    table.querySelectorAll('th').forEach((cell) => cell.setAttribute('role', 'columnheader'));
+    table.querySelectorAll('tbody tr').forEach((row) =>
+      [...row.children].forEach((cell, column) => {
+        cell.setAttribute('role', 'cell');
+        cell.setAttribute('data-label', headers[column] ?? '');
+      }),
+    );
+  }
+  const overflows = (table: HTMLTableElement) => table.scrollWidth > table.clientWidth + 1;
   const updateTable = (table: HTMLTableElement) => {
-    if (table.scrollWidth > table.clientWidth + 1) table.tabIndex = 0;
+    // On narrow screens, tables with three or more columns always stack into
+    // one block per row; two-column tables stack only instead of scrolling.
+    if (Number(table.dataset.columns) >= 3) table.classList.add(stacked);
+    else {
+      table.classList.remove(stacked);
+      if (narrow.matches && overflows(table)) table.classList.add(stacked);
+    }
+    // A table that still scrolls sideways becomes a keyboard stop; others stay
+    // out of the tab order, keeping ordinary reading uncluttered.
+    if (overflows(table)) table.tabIndex = 0;
     else table.removeAttribute('tabindex');
   };
   const observer = new ResizeObserver((entries) => {
     for (const entry of entries) updateTable(entry.target as HTMLTableElement);
   });
   for (const table of tables) { updateTable(table); observer.observe(table); }
+  narrow.addEventListener('change', () => tables.forEach(updateTable));
   document.fonts.ready.then(() => tables.forEach(updateTable));
 </script>

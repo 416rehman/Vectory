@@ -1,41 +1,15 @@
-# Backup, restore, and upgrades
+# Backup, restore and upgrades
 
-Use a single server and local disk. SQLite WAL has required data in its sidecar files; copying only a live `vectory.db` is not a valid backup. `deploy/backup.py` calls SQLite's online backup API and preserves the required `keys/` and optional immutable `artifacts/` directories. It normalizes the snapshot to a standalone database and checks integrity and foreign keys. Releases are immutable external mirrors; back them up separately if not reproducible elsewhere. Keep the externally provisioned TLS key/certificate and Compose secrets separately backed up as well.
+These procedures live in the Help center, which ships with every Vectory server, and in this repository:
 
-Quiesce key rotation, migrations and external artifact writes during online backup. The tool detects a changing key/artifact inventory and aborts rather than producing a mixed set. For the strongest maintenance boundary, stop the server and run the same tool against its mounted volume. Backup destinations must be new directories. The manifest hashes detect accidental corruption/tampering but are not signatures; an attacker able to replace the backup and manifest can rewrite both. Encrypt backups at rest, restrict access, and keep an independently authenticated digest or storage integrity control.
+- [Back up the complete state](user/administer.md#back-up-the-complete-state) with `deploy/backup.py`.
+- [Restore a backup](user/administer.md#restore-a-backup), including what to do before anyone reconnects.
+- [Upgrade the server](user/administer.md#upgrade-the-server).
+- [`vectory-admin`](user/vectory-admin.md): invalidate restored access, recover device generations and rotate signing keys.
 
-```sh
-python3 deploy/backup.py backup --state /var/lib/vectory --out /private/backups/vectory-2026-09-26
-python3 deploy/backup.py restore --from /private/backups/vectory-2026-09-26 --out /private/restored-vectory
-```
+The short version:
 
-The runtime container includes Python and the same tool at `/app/operations/backup.py`. `docker compose exec server python3 /app/operations/backup.py backup --state /var/lib/vectory --out /var/lib/vectory/backup-<unique-id>` creates a consistent snapshot; promptly `docker compose cp server:/var/lib/vectory/backup-<unique-id> /private/backups/` to move a copy outside the volume. Always pass the same `--env-file` and `-f` options from the quickstart. Verify/check backup permissions on the destination host, especially on Windows where POSIX mode bits do not set an ACL.
-
-Restore while the server is stopped and into a new empty directory or new volume. Keep the current state intact for investigation/recovery. Verify checksums and database integrity, restore the complete keys directory with its database (including `mfa-sealing.key`), and restore UID/GID 10001 and private modes. Never restore an older database over newer signing/CA keys or regenerate keys as a recovery shortcut. Startup refuses missing MFA sealing material when MFA records exist.
-
-## Reconcile access before reconnecting
-
-An older database also restores older security decisions: disabled accounts can become enabled again, old passwords or roles can return, revoked device credentials can become valid, and used recovery/reset codes or enrollment tokens can reappear. Generation fencing alone does not address these changes. Keep both dashboard and agent listeners inaccessible to ordinary users/devices until the review below is complete.
-
-Confirm that at least one authorized administrator has the password and, if enabled, a working authenticator for the restored account. The following command invalidates **every saved MFA recovery code**, so do not rely on those codes as your only way to sign in afterward. With the server stopped, run as its operating-system identity:
-
-```sh
-vectory-admin --data-dir /private/restored-vectory invalidate-restored-access
-vectory-admin --data-dir /private/restored-vectory invalidate-restored-access --apply
-```
-
-The first command previews counts. The explicit `--apply` atomically removes all browser sessions, password reset codes and MFA recovery codes, and revokes all enrollment tokens, including device-recovery tokens. Token records and enrollment history remain for audit continuity. Counts include expired rows that will also be removed; the token count excludes tokens already marked revoked. Application adds a counts-only audit event. A failed write rolls back the whole operation. The command refuses a state directory held by a running server, and does not run automatically during restore.
-
-This helper preserves passwords, account roles/access, MFA enrollments, device identities and credentials, deployments, and generation counters. It **does not make an old backup safe by itself**. Start one server only in an isolated administrative network and reconcile reviewed post-backup change records: reapply offboarding and role restrictions, change restored passwords where required, reconcile authenticator enrollment changes, and re-revoke retired/compromised devices and credentials. If the relevant history is unavailable, keep affected access isolated until it can be deliberately reapproved; do not assume the restored state represents current authorization. Device identity recovery and reassignment remain explicit operations.
-
-After authenticators and account access are reviewed, users who need replacement MFA recovery codes must sign in with their working authenticator, disable MFA with a fresh authenticator code, then set it up again and store the newly issued codes. There is no administrator MFA bypass. Create new enrollment or device-recovery tokens only as needed. Verify old sessions/reset/recovery codes are rejected, then validate login/MFA, credential renewal, artifact visibility and audit/deployment state before reconnecting ordinary users or the fleet.
-
-**Anti-rollback after old backups:** agents persist highest accepted generations. An old backup may advertise a lower generation or different content for an equal generation; agents correctly reject it and preserve their current configuration. Do not delete their state, lower generation counters, or silently re-enroll to bypass this protection. Keep rollouts paused while the stopped-server maintenance program advances desired generations using reviewed local counter evidence.
-
-Run `vectory-admin --data-dir /var/lib/vectory generation-recovery-state` and save its JSON output as UTF-8. Review each restored version, artifact digest and complete policy. Fill in each affected known device's actual durable `highest_generation`, `highest_policy_generation`, and `highest_secret_revision` (the agent's highest `secret_revision` attempt, including failed attempts). Preview with `vectory-admin --data-dir /var/lib/vectory recover-generations --report /protected/reviewed.json`, then apply the same reviewed report with `--apply`. The export deliberately has null counters so an unreviewed report fails. The atomic operation advances configuration/policy counters beyond the supplied floors, preserves the secret attempt floor, resets rollout evidence and appends audit records. It rejects unknown/revoked devices, duplicate IDs, overflow and mismatched reviewed payloads. See [the complete report format](../server/README.md#recovery-after-restoring-an-older-backup). If local counters or identity are unavailable, use explicit identity recovery/reapproval; never guess or reset counters. Restart and verify fresh acknowledgments before resuming deployments. This local procedure cannot discover an offline host's counters automatically.
-
-For upgrades, take and test a snapshot, stop the old instance, retain its image digest and Compose configuration, build/pull the reviewed new image and start it against a copy of the restored state first. Check migration success and representative enrollment/heartbeat before production. If migration fails, stop; inspect logs and restore the complete pre-upgrade snapshot to a new volume with the previous image. Do not launch an older binary against a database whose migration compatibility has not been established.
-
-Manifest signing rotation is an explicit offline operation. Back up first, stop the server, then run `vectory-admin --data-dir /var/lib/vectory rotate-signing-key` as the server identity. The maintenance program acquires the same exclusive data-directory lock. Existing credentials remain bound to their previous signing key until authenticated renewal; new enrollment and renewed credentials receive the current key. Keep `keys/signing-history/` with the current key and database. At most four historical keys are retained; `vectory-admin --data-dir /var/lib/vectory prune-signing-keys` removes only keys with no unexpired, nonrevoked credential references. Never delete a key merely because a new key was created. The Compose image includes this maintenance binary; use the server's volume and UID in a one-off container after stopping the normal server. This is manifest-key rotation, not automatic device-CA replacement.
-
-Automated evidence: five backup tests cover committed uncheckpointed WAL rows, key/generation continuity, digest tampering, unexpected files, refusal to overwrite a live directory, and observed key rotation abort. Backend tests exercise reviewed generation recovery and signing-key overlap; independent TLS tests exercise old-generation rejection and explicit identity recovery. Dedicated restored-access tests cover dry-run/apply, live-instance refusal, failure rollback and preservation of account/MFA/device/deployment state. These do not prove a complete disaster-recovery drill or encrypted storage correctness; exercise the procedure in your deployment.
+- The data volume holds the database and the server's keys. Back them up together with `deploy/backup.py`, never by copying a live database file.
+- Backups contain private keys. Encrypt them and keep them off the server.
+- Restore into a new folder while the server is stopped, then follow the restore steps before reconnecting people or devices.
+- Never lower a device's generation counters or delete its state to make it accept an older server.
