@@ -5,6 +5,7 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import net from "node:net";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
 const output = resolve(
@@ -12,13 +13,18 @@ const output = resolve(
   process.env.VECTORY_DEPLOYMENT_ROUTING_OUTPUT || ".local/deployment-routing",
 );
 await mkdir(output, { recursive: true });
+// Any free port: parallel runs never collide.
+const reservation = net.createServer();
+await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
+const port = reservation.address().port;
+await new Promise((done) => reservation.close(done));
 const virtual = "\0virtual:deployment-routing-fixture";
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),
   server: {
     host: "127.0.0.1",
-    port: 5199,
+    port,
     strictPort: true,
     proxy: {},
     hmr: false,
@@ -53,7 +59,7 @@ const browser = await chromium.launch(),
   results = [],
   errors = [],
   unexpected = [];
-const origin = "http://127.0.0.1:5199/__deployment-routing";
+const origin = `http://127.0.0.1:${port}/__deployment-routing`;
 // The first load bundles the app's dependencies, which outlasts one action's
 // timeout while Vite's cache is cold (a fresh checkout or runner).
 const warmup = await browser.newPage();
@@ -699,6 +705,71 @@ try {
           "/deployments/" + id(4) + "/unassign-preview",
           "/deployments/" + id(4) + "/unassign",
         ]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "a rollout's device filter is part of its link: a reload keeps it, and Copy link shares it",
+    async () => {
+      const f = await fixture();
+      try {
+        await f.page.goto(origin + "#/deployments/" + id(1) + "?page=1");
+        const devices = f.page.getByRole("region", {
+          name: "Device results",
+          exact: true,
+        });
+        await expect(devices).toBeVisible();
+        await devices
+          .getByRole("searchbox", { name: "Search deployment devices" })
+          .or(devices.getByLabel("Search deployment devices"))
+          .fill("Device for");
+        await devices
+          .getByRole("button", { name: /^Sort by Progress/ })
+          .click();
+        await expect
+          .poll(() => new URL(f.page.url()).hash)
+          .toContain("rq=Device+for");
+        const hash = new URL(f.page.url()).hash;
+        // The list context the route carries stays beside the filter.
+        expect(hash).toMatch(/^#\/deployments\/[^?]+\?page=1&/);
+        expect(hash).toContain("rsort=state");
+        const targets = () =>
+          f.state.requests.filter((r) => r.path.endsWith(id(1) + "/targets"));
+        await expect
+          .poll(() =>
+            targets().some(
+              (r) =>
+                r.query.search === "Device for" && r.query.sort === "state",
+            ),
+          )
+          .toBe(true);
+        f.state.requests.length = 0;
+        await f.page.reload();
+        await expect(
+          devices.getByLabel("Search deployment devices"),
+        ).toHaveValue("Device for");
+        await expect
+          .poll(() =>
+            targets().some(
+              (r) =>
+                r.query.search === "Device for" && r.query.sort === "state",
+            ),
+          )
+          .toBe(true);
+        await dialog(f.page)
+          .getByRole("button", { name: "Copy deployment link", exact: true })
+          .click();
+        const link = await f.page.evaluate(() =>
+          navigator.clipboard.readText(),
+        );
+        expect(link).toBe(
+          origin +
+            "#/deployments/" +
+            id(1) +
+            "?page=1&rq=Device+for&rsort=state",
+        );
       } finally {
         await f.close();
       }
