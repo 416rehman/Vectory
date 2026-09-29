@@ -555,6 +555,54 @@ pub async fn bootstrap(
 /// clients that have not signed in to it before, within their windows.
 const ACCOUNT_CLIENT_FAILURES: u32 = 10;
 const ACCOUNT_FAILURES: u32 = 100;
+const CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const ACCOUNT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// How long a client that signed in stays exempt from the account-wide budget.
+const KNOWN_CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// Sign-in failure keys for one attempt. Every key uses the client's throttle
+/// group, so one IPv6 host cannot multiply its budget across its /64.
+struct SignInKeys {
+    account_client: String,
+    account: String,
+    known_client: String,
+}
+impl SignInKeys {
+    fn new(email: &str, group: &str) -> Self {
+        Self {
+            account_client: format!("login-fail:{email}:{group}"),
+            account: format!("login-fail:{email}"),
+            known_client: format!("login-known:{email}:{group}"),
+        }
+    }
+    /// Refuse when the budget is spent; otherwise reserve one failure before
+    /// the password is checked, so parallel attempts cannot all pass the check.
+    /// A client that recently signed in to this account keeps working while
+    /// someone elsewhere fails against it; others share the account budget.
+    fn reserve(&self, s: &crate::App) -> std::result::Result<(), u64> {
+        let mut ledger = s.sign_in_failures();
+        let blocked = ledger
+            .blocked(&self.account_client, ACCOUNT_CLIENT_FAILURES)
+            .or_else(|| {
+                (!ledger.seen(&self.known_client))
+                    .then(|| ledger.blocked(&self.account, ACCOUNT_FAILURES))
+                    .flatten()
+            });
+        if let Some(wait) = blocked {
+            return Err(wait);
+        }
+        ledger.add(&self.account_client, CLIENT_WINDOW);
+        ledger.add(&self.account, ACCOUNT_WINDOW);
+        Ok(())
+    }
+    /// The password was right: return the reservation, clear this client's
+    /// failures and remember it as a client of this account.
+    fn succeeded(&self, s: &crate::App) {
+        let mut ledger = s.sign_in_failures();
+        ledger.remove(&self.account_client);
+        ledger.refund(&self.account);
+        ledger.add(&self.known_client, KNOWN_CLIENT_WINDOW);
+    }
+}
 /// Sign-in audit with the matched account (never the attempted email) and the
 /// client address. Credentials and factors never enter audit records.
 async fn audit_signin(
@@ -572,12 +620,15 @@ async fn audit_signin(
     .await
 }
 /// Record a throttled account at most once per window for each client.
-async fn audit_throttled(s: &State, email: &str, client: &str) {
-    let key = format!("login-throttle-audit:{email}:{client}");
-    if s.seen(&key) {
-        return;
+async fn audit_throttled(s: &State, email: &str, client: &str, group: &str) {
+    let key = format!("login-throttle-audit:{email}:{group}");
+    {
+        let mut ledger = s.sign_in_failures();
+        if ledger.seen(&key) {
+            return;
+        }
+        ledger.add(&key, CLIENT_WINDOW);
     }
-    s.record_failure(key, std::time::Duration::from_secs(15 * 60));
     let _guard = s.writer.lock().await;
     let Ok(mut tx) = db::begin_write(&s.pool).await else {
         return;
@@ -624,34 +675,24 @@ pub async fn login(
     // only failures count toward an account's lockout, so signing in
     // successfully never locks anyone out.
     let client = s.client_key(&h, peer);
+    let group = crate::throttle_group(&client);
     s.limit(
         "login-global".into(),
         600,
         std::time::Duration::from_secs(60),
     )?;
     s.limit(
-        format!("login-client:{client}"),
+        format!("login-client:{group}"),
         60,
         std::time::Duration::from_secs(60),
     )?;
     let email = user_email(&v)?;
-    let account_client = format!("login-fail:{email}:{client}");
-    let account = format!("login-fail:{email}");
-    let known_client = format!("login-known:{email}:{client}");
-    // A client that recently signed in to this account keeps working while
-    // someone elsewhere fails against it; others share the account-wide budget.
-    let blocked = s
-        .failures_block(&account_client, ACCOUNT_CLIENT_FAILURES)
-        .or_else(|| {
-            (!s.seen(&known_client))
-                .then(|| s.failures_block(&account, ACCOUNT_FAILURES))
-                .flatten()
-        });
-    if let Some(wait) = blocked {
-        audit_throttled(&s, &email, &client).await;
+    let password = db::string(&v, "password", 256)?.to_owned();
+    let keys = SignInKeys::new(&email, &group);
+    if let Err(wait) = keys.reserve(&s) {
+        audit_throttled(&s, &email, &client, &group).await;
         return Err(signin_throttled(wait));
     }
-    let password = db::string(&v, "password", 256)?.to_owned();
     let row = sqlx::query("SELECT * FROM users WHERE email=?")
         .bind(&email)
         .fetch_optional(&s.pool)
@@ -667,8 +708,6 @@ pub async fn login(
         .as_ref()
         .is_some_and(|r| Some(r.get::<String, _>("password_hash")) == stored);
     if !valid || !unchanged {
-        s.record_failure(account_client, std::time::Duration::from_secs(15 * 60));
-        s.record_failure(account, std::time::Duration::from_secs(60 * 60));
         let reason = if row.is_none() {
             "unknown_account"
         } else if !valid {
@@ -692,11 +731,7 @@ pub async fn login(
         tx.commit().await?;
         return Err(ApiError::unauthorized());
     }
-    s.clear_limit(&account_client);
-    s.record_failure(
-        known_client,
-        std::time::Duration::from_secs(30 * 24 * 60 * 60),
-    );
+    keys.succeeded(&s);
     let fresh = fresh.unwrap();
     let user = public_user(&fresh);
     // Reveal MFA only after the password and live account have been verified.

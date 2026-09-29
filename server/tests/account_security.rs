@@ -585,6 +585,76 @@ async fn last_active_updates_never_break_or_wait_on_a_writer() {
     assert_ne!(last_seen(&state).await, stale);
 }
 
+async fn sign_in_from(app: &Router, address: &str, password: &str) -> StatusCode {
+    let peer: std::net::IpAddr = address.parse().unwrap();
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/login")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"email":"admin@example.test","password":password}).to_string(),
+        ))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(
+            peer, 443,
+        )));
+    app.clone().oneshot(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn parallel_wrong_passwords_get_exactly_the_failure_budget() {
+    let (_temp, state, app, _admin) = fixture().await;
+    let mut burst = tokio::task::JoinSet::new();
+    for _ in 0..40 {
+        let app = app.clone();
+        burst.spawn(async move { sign_in_from(&app, "192.0.2.7", "not-the-password").await });
+    }
+    let mut denied = 0;
+    let mut throttled = 0;
+    while let Some(status) = burst.join_next().await {
+        match status.unwrap() {
+            StatusCode::UNAUTHORIZED => denied += 1,
+            StatusCode::TOO_MANY_REQUESTS => throttled += 1,
+            other => panic!("unexpected {other}"),
+        }
+    }
+    assert_eq!((denied, throttled), (10, 30));
+    // The same budget covers the client's whole IPv6 /64, but only that /64.
+    for _ in 0..10 {
+        let status = sign_in_from(&app, "2001:db8:5:6::1", "not-the-password").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        sign_in_from(&app, "2001:db8:5:6:ffff::2", PASSWORD).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        sign_in_from(&app, "2001:db8:5:7::1", PASSWORD).await,
+        StatusCode::OK
+    );
+    // A successful sign-in refunds its reservation: signing in correctly
+    // never spends the account budget. 20 failures so far.
+    for _ in 0..3 {
+        assert_eq!(
+            sign_in_from(&app, "198.51.100.4", PASSWORD).await,
+            StatusCode::OK
+        );
+    }
+    let mut ledger = state.sign_in_failures();
+    assert!(
+        ledger
+            .blocked("login-fail:admin@example.test", 20)
+            .is_some()
+    );
+    assert!(
+        ledger
+            .blocked("login-fail:admin@example.test", 21)
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn failed_and_throttled_sign_ins_are_audited_with_account_and_client() {
     let (_temp, state, app, admin) = fixture().await;

@@ -559,7 +559,10 @@ pub async fn preview_invite(
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
     s.limit(
-        format!("invite-preview:{}", s.client_key(&h, peer)),
+        format!(
+            "invite-preview:{}",
+            crate::throttle_group(&s.client_key(&h, peer))
+        ),
         30,
         std::time::Duration::from_secs(60),
     )?;
