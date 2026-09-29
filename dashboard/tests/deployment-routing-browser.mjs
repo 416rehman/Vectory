@@ -381,7 +381,7 @@ try {
             "?page=1&action=cancel",
         );
         await expect(
-          f.page.getByRole("heading", { name: "Sign in", exact: true }),
+          f.page.getByRole("heading", { name: "Sign in to Vectory", exact: true }),
         ).toBeVisible();
         await f.page
           .getByLabel("Email address", { exact: true })
@@ -543,6 +543,9 @@ try {
             exact: true,
           }),
         ).toHaveCount(0);
+        // The session really ends: the shell's sign-in prompt first asks the
+        // server whether it is still valid and resumes silently if it is.
+        f.state.signedIn = false;
         await f.page.evaluate(
           (hash) => (location.hash = hash),
           "/deployments/" + id(3) + "?page=1",
@@ -550,9 +553,7 @@ try {
         // An expired session is handled once by the shell's sign-in prompt;
         // the page keeps what it had instead of showing its own error.
         await expect(
-          f.page.getByText("Your session ended. Sign in again to continue.", {
-            exact: true,
-          }),
+          f.page.getByText("Your session ended", { exact: true }),
         ).toBeVisible();
         await expect(
           dialog(f.page).getByRole("button", {

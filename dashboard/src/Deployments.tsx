@@ -1552,6 +1552,9 @@ function RolloutPage({
               }
               retrying={refreshing}
             />
+            <Button variant="secondary" onClick={onBack}>
+              Return to {originLabel.toLowerCase()}
+            </Button>
           </>
         )
       ) : (
