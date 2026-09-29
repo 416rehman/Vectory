@@ -271,7 +271,7 @@ async function startAgent(agent, vector, api, token, name, index) {
         "--state-dir", state,
         "--server", agentServer,
         "--ca-file", path.join(local, "pki", "ca.pem"),
-        "--id", name,
+        "--name", name,
         "--token-stdin",
         "--json",
       ],
