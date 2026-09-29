@@ -806,6 +806,8 @@ fn no_consumers(config: &Value, message: &str) -> Diagnostic {
     diagnostic
 }
 
+const BUILD_FAILURE: &str = "Vector could not build this test.";
+
 /// Per-test results from `vector test` output: names, pass/fail and bounded failure text.
 pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
     let text = format!("{}\n{}", plain_text(stdout), plain_text(stderr));
@@ -824,8 +826,26 @@ pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
         }
         block.clear();
     };
+    // A test Vector could not build never runs. Each one is a failure with
+    // Vector's own reason, never a silent absence.
+    let mut building = false;
     for line in text.lines() {
         if is_log_line(line) {
+            continue;
+        }
+        if let Some(name) = line
+            .trim_end()
+            .strip_prefix("Failed to build test '")
+            .and_then(|rest| rest.strip_suffix("':"))
+        {
+            flush(current, &mut block, &mut results);
+            results.push((name.to_owned(), false, vec![BUILD_FAILURE.to_owned()]));
+            current = Some(results.len() - 1);
+            building = true;
+            continue;
+        }
+        if building {
+            block.push(line.trim_end().to_owned());
             continue;
         }
         if !failures_started {
@@ -904,6 +924,25 @@ pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
                         .map(|line| (*line).to_owned())
                 })
                 .map(|line| bounded(&line, MAX_MESSAGE));
+            let summary = if detail.starts_with(BUILD_FAILURE) {
+                let step = lines.iter().find_map(|line| {
+                    line.strip_prefix("Transform \"")?
+                        .split_once('"')
+                        .map(|(id, _)| id.to_owned())
+                });
+                Some(bounded(
+                    &match (summary, step) {
+                        (Some(reason), Some(id)) => {
+                            format!("Could not build this test: {reason} in {id}.")
+                        }
+                        (Some(reason), None) => format!("Could not build this test: {reason}."),
+                        (None, _) => "Vector could not build this test.".to_owned(),
+                    },
+                    MAX_MESSAGE,
+                ))
+            } else {
+                summary
+            };
             let mut result = json!({"name":bounded(&name,240),"passed":passed});
             if !passed {
                 result["message"] = json!(summary.unwrap_or_else(|| "Test failed.".into()));
@@ -1187,5 +1226,34 @@ mod tests {
                 .to_string()
                 .contains("value")
         );
+    }
+
+    #[test]
+    fn tests_that_cannot_be_built_fail_with_vectors_reason() {
+        // Real `vector test` output for route conditions that don't compile.
+        let stderr = "Failed to execute tests:\nFailed to build test '503 is a server error':\n  Transform \"by_status\": \n  error[E100]: unhandled error\n    ┌─ :1:1\n    │\n  1 │ .status >= 500\n    │ ^^^^^^^^^^^^^^\n    │ │\n    │ expression can result in runtime error\n  \nFailed to build test '200 matches nothing':\n  Transform \"by_status\": \n  error[E100]: unhandled error\n  .\n";
+        let results = parse_tests(b"Running tests\n", stderr.as_bytes());
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert_eq!(results[0]["name"], "503 is a server error");
+        assert_eq!(results[0]["passed"], false);
+        assert_eq!(
+            results[0]["message"],
+            "Could not build this test: unhandled error in by_status."
+        );
+        assert!(
+            results[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains(".status >= 500")
+        );
+        assert_eq!(results[1]["name"], "200 matches nothing");
+        assert_eq!(results[1]["passed"], false);
+        // Tests that ran are unaffected.
+        let ran = parse_tests(
+            b"Running tests\ntest a ... passed\ntest b ... passed\n",
+            b"",
+        );
+        assert_eq!(ran.len(), 2);
+        assert!(ran.iter().all(|r| r["passed"] == true));
     }
 }

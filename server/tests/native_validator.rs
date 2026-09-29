@@ -723,3 +723,48 @@ async fn worker_never_sends_requests_an_author_wrote() {
     );
     child.kill().await.ok();
 }
+
+#[tokio::test]
+async fn a_test_that_cannot_be_built_is_never_reported_as_a_pass() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; unbuildable tests unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    // The route conditions can fail at runtime (E100), so Vector cannot build
+    // the tests. That used to come back as "0 of 0 tests passed".
+    let result = post(
+        &client,
+        &url,
+        "tests",
+        json!({"config": {
+            "sources": {"web": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"by_status": {"type": "route", "inputs": ["web"],
+                "route": {"server_errors": ".status >= 500"}}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["by_status.server_errors"]}},
+            "tests": [
+                {"name": "503 is a server error",
+                 "inputs": [{"insert_at": "by_status", "type": "log", "log_fields": {"status": 503}}],
+                 "outputs": [{"extract_from": "by_status.server_errors",
+                              "conditions": [{"type": "vrl", "source": ".status == 503"}]}]},
+                {"name": "200 matches nothing",
+                 "inputs": [{"insert_at": "by_status", "type": "log", "log_fields": {"status": 200}}],
+                 "no_outputs_from": ["by_status.server_errors"]}
+            ]
+        }}),
+    )
+    .await;
+    assert_eq!(result["tests_run"], true, "{result}");
+    let tests = result["tests"].as_array().unwrap();
+    assert_eq!(tests.len(), 2, "{result}");
+    for test in tests {
+        assert_eq!(test["passed"], false, "{result}");
+        let message = test["message"].as_str().unwrap();
+        assert!(
+            message.starts_with("Could not build this test"),
+            "{message}"
+        );
+        assert!(message.contains("by_status"), "{message}");
+    }
+    child.kill().await.ok();
+}
