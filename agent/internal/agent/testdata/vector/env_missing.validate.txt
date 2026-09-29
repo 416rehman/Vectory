@@ -1,0 +1,4 @@
+Failed to load ["env_missing.json"]
+-----------------------------------
+x Missing environment variable in config. name = "NO_SUCH_VECTORY_VAR"
+

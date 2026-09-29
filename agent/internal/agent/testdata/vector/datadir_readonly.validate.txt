@@ -1,0 +1,3 @@
+√ Loaded ["datadir_readonly.json"]
+√ Transforms configuration
+x data_dir "/srv/vector/readonly" is not writable

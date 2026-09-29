@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,13 +24,25 @@ type Driver interface {
 	Alive() bool
 	Stop() error
 }
+
+// Activation methods reported on the heartbeat.
+const (
+	activationReload  = "reload"
+	activationRestart = "restart"
+)
+
 type VectorDriver struct {
 	Settings Settings
+	// Dir is the agent state directory: it holds the host runtime overlay and
+	// the local Vector log. Empty disables both (tests).
+	Dir      string
+	Log      *vectorLog
 	mu       sync.Mutex
 	child    *exec.Cmd
 	lifetime io.WriteCloser
 	done     chan struct{}
 	verified bool
+	method   string
 }
 type limitedWriter struct {
 	b   bytes.Buffer
@@ -65,19 +79,27 @@ func vectorEnvironment(full bool) []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
 		key := strings.ToUpper(strings.SplitN(entry, "=", 2)[0])
-		if strings.HasPrefix(key, "VECTOR_CONFIG") || key == "VECTOR_WATCH_CONFIG" || key == "VECTOR_LOG" || key == "VECTOR_LOG_FORMAT" || key == "VECTOR_REQUIRE_HEALTHY" || key == "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION" {
+		if strings.HasPrefix(key, "VECTOR_CONFIG") || key == "VECTOR_WATCH_CONFIG" || key == "VECTOR_LOG" || key == "VECTOR_LOG_FORMAT" || key == "VECTOR_REQUIRE_HEALTHY" || key == "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION" || key == "VECTOR_GRACEFUL_SHUTDOWN_LIMIT_SECS" || key == "VECTOR_NO_GRACEFUL_SHUTDOWN_LIMIT" {
 			continue
 		}
 		env = append(env, entry)
 	}
 	return env
 }
-func vectorConfigArgs(command, path string, full bool) []string {
+
+// vectorConfigArgs lists the managed configuration and, when present, the
+// host runtime overlay. Vector merges the files and rejects conflicts.
+func vectorConfigArgs(command string, paths []string, full bool, options ...string) []string {
 	args := []string{}
 	if command != "" {
 		args = append(args, command)
 	}
-	args = append(args, "--config-json", path)
+	args = append(args, options...)
+	for _, path := range paths {
+		if path != "" {
+			args = append(args, "--config-json", path)
+		}
+	}
 	if full {
 		args = append(args, "--dangerously-allow-env-var-interpolation")
 	}
@@ -90,6 +112,45 @@ func (d *VectorDriver) checkBinary() error {
 	}
 	return nil
 }
+
+// nativeOutputLimit bounds the Vector output kept for diagnostics.
+const nativeOutputLimit = 16 << 10
+
+func (d *VectorDriver) run(ctx context.Context, command string, paths []string, options ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, d.Settings.VectorBinary, vectorConfigArgs(command, paths, d.Settings.CapabilityPolicy.FullVectorConfig, options...)...)
+	// Native providers may start children that inherit output handles. Do
+	// not let an inherited pipe extend the validation deadline indefinitely.
+	cmd.WaitDelay = time.Second
+	cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
+	out := &limitedWriter{max: nativeOutputLimit}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	err := cmd.Run()
+	return out.b.Bytes(), err
+}
+
+func dataDirFailure(path string) *VectorFailure {
+	return &VectorFailure{Phase: "prepare", Summary: "The device's Vector data directory could not be prepared", Diagnostics: []Diagnostic{{Code: "DATA_DIR_UNAVAILABLE", Field: "data_dir", Message: "The agent could not create the data directory \"" + path + "\" on this device."}}}
+}
+
+// stageOverlay writes a temporary host runtime overlay for validating a
+// candidate, so the running process's overlay is never touched by a
+// candidate that may be rejected.
+func (d *VectorDriver) stageOverlay(data []byte) (string, func(), error) {
+	if d.Dir == "" {
+		return "", func() {}, nil
+	}
+	overlay, _, err := runtimeOverlay(d.Settings, d.Dir, data)
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := filepath.Join(d.Dir, "host-runtime-stage-"+RandomID()[:16]+".json")
+	if err = AtomicWrite(path, overlay); err != nil {
+		return "", func() {}, err
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
 func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 	if e := d.checkBinary(); e != nil {
 		return e
@@ -113,27 +174,43 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 	if json.Unmarshal(data, &document) != nil {
 		return errors.New("configuration or tests must use the expected JSON structure")
 	}
-	commands := []string{"validate"}
-	if len(document.Tests) > 0 {
-		commands = append(commands, "test")
+	overlay, cleanup, e := d.stageOverlay(data)
+	defer cleanup()
+	if e != nil {
+		return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
 	}
-	for _, command := range commands {
-		cmd := exec.CommandContext(ctx, d.Settings.VectorBinary, vectorConfigArgs(command, path, d.Settings.CapabilityPolicy.FullVectorConfig)...)
-		// Native providers may start children that inherit output handles. Do
-		// not let an inherited pipe extend the validation deadline indefinitely.
-		cmd.WaitDelay = time.Second
-		cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
-		out := &limitedWriter{max: 4096}
-		cmd.Stdout = out
-		cmd.Stderr = out
-		if e := cmd.Run(); e != nil {
+	paths := []string{path, overlay}
+	timeout := &VectorFailure{Phase: "timeout", Summary: "Vector validation or configuration tests exceeded the time limit"}
+	out, err := d.run(ctx, "validate", paths)
+	if err != nil {
+		if ctx.Err() != nil {
+			return timeout
+		}
+		// Healthchecks are not a safety control: they only probe whether a
+		// destination answers right now. Refusing a configuration because a
+		// destination is down would keep a device on its old configuration,
+		// or keep Vector stopped after a restart, and block the very deploy
+		// that routes around the outage. Vector buffers and retries at
+		// runtime, so only configuration errors may reject a candidate. Rerun
+		// without healthchecks; a remaining failure is a real error.
+		checked, recheck := d.run(ctx, "validate", paths, "--skip-healthchecks")
+		if recheck != nil {
 			if ctx.Err() != nil {
-				return errors.New("Vector validation or configuration tests exceeded timeout")
+				return timeout
 			}
-			if command == "test" {
-				return errors.New("Vector configuration tests failed; inspect the protected local configuration")
+			d.Log.note("vector validate rejected the configuration", checked)
+			return &VectorFailure{Phase: "validate", Summary: "Vector rejected the configuration", Output: checked}
+		}
+		d.Log.note("vector validate: configuration valid; some health checks failed", out)
+	}
+	if len(document.Tests) > 0 {
+		out, err = d.run(ctx, "test", paths)
+		if err != nil {
+			if ctx.Err() != nil {
+				return timeout
 			}
-			return errors.New("Vector rejected configuration or environment; run local doctor for remediation")
+			d.Log.note("vector test reported failing configuration tests", out)
+			return &VectorFailure{Phase: "test", Summary: "Vector configuration tests failed", Output: out}
 		}
 	}
 	return nil
@@ -141,6 +218,9 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 func (d *VectorDriver) Alive() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.aliveLocked()
+}
+func (d *VectorDriver) aliveLocked() bool {
 	if d.done == nil || !d.verified {
 		return false
 	}
@@ -151,6 +231,20 @@ func (d *VectorDriver) Alive() bool {
 		return true
 	}
 }
+
+// ActivationMethod reports how the current process last took its config.
+func (d *VectorDriver) ActivationMethod() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.method
+}
+
+// stopGrace is how long the agent waits for the supervisor to finish
+// Vector's graceful drain before forcing it.
+func (d *VectorDriver) stopGrace() time.Duration {
+	return time.Duration(d.Settings.gracefulShutdownSeconds()+10) * time.Second
+}
+
 func (d *VectorDriver) Stop() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -161,7 +255,7 @@ func (d *VectorDriver) Stop() error {
 	_ = d.lifetime.Close()
 	select {
 	case <-d.done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(d.stopGrace()):
 		_ = d.child.Process.Kill()
 		select {
 		case <-d.done:
@@ -173,39 +267,19 @@ func (d *VectorDriver) Stop() error {
 	return nil
 }
 
-type startupWriter struct {
-	mu       sync.Mutex
-	line     []byte
-	dropping bool
-	ack      chan struct{}
-	once     sync.Once
+func (d *VectorDriver) startupTimeout() time.Duration {
+	seconds := d.Settings.StartupSeconds
+	if seconds < 3 || seconds > 120 {
+		seconds = 20
+	}
+	return time.Duration(seconds) * time.Second
 }
 
-func (w *startupWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, c := range p {
-		if c == '\n' {
-			if !w.dropping {
-				var v struct {
-					Target  string `json:"target"`
-					Message string `json:"message"`
-					Version string `json:"version"`
-				}
-				if json.Unmarshal(w.line, &v) == nil && v.Target == "vector" && v.Message == "Vector has started." && v.Version == VectorVersion {
-					w.once.Do(func() { close(w.ack) })
-				}
-			}
-			w.line = w.line[:0]
-			w.dropping = false
-		} else if len(w.line) < 8192 && !w.dropping {
-			w.line = append(w.line, c)
-		} else {
-			w.dropping = true
-		}
-	}
-	return len(p), nil
-}
+// Activate makes the managed configuration active. On Unix a live, verified
+// process is reloaded in place (SIGHUP) and success requires Vector's own
+// "Vector has reloaded." acknowledgment followed by a liveness observation;
+// otherwise, or if the reload is refused (for example a changed data_dir),
+// the process is restarted and must acknowledge startup again.
 func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if !d.Settings.Adopted {
 		return errors.New("Vector instance has not been explicitly adopted")
@@ -213,6 +287,86 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if e := d.checkBinary(); e != nil {
 		return e
 	}
+	if d.Log == nil {
+		d.Log = newVectorLog(d.Dir)
+	}
+	overlay := ""
+	if d.Dir != "" {
+		data, err := readArtifact(path)
+		if err != nil {
+			return errors.New("cannot securely read the managed configuration")
+		}
+		content, _, err := runtimeOverlay(d.Settings, d.Dir, data)
+		if err != nil {
+			return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
+		}
+		overlay = hostRuntimePath(d.Dir)
+		if err = writeRuntimeOverlay(overlay, content); err != nil {
+			return errors.New("cannot write the host runtime settings")
+		}
+	}
+	if d.canReload() {
+		if err := d.reload(ctx); err == nil {
+			return nil
+		} else if ctx.Err() != nil {
+			return err
+		}
+	}
+	return d.restart(ctx, path, overlay)
+}
+
+func (d *VectorDriver) canReload() bool {
+	if runtime.GOOS == "windows" || d.Dir == "" {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.aliveLocked()
+}
+
+// reload asks the supervisor to send SIGHUP and waits for Vector's verdict.
+func (d *VectorDriver) reload(ctx context.Context) error {
+	d.mu.Lock()
+	lifetime, done := d.lifetime, d.done
+	d.mu.Unlock()
+	since := d.Log.beginCapture()
+	if _, err := lifetime.Write([]byte{hostCommandReload}); err != nil {
+		d.Log.endCapture()
+		return errors.New("Vector supervisor is not accepting reload requests")
+	}
+	signals, reason := d.Log.await(ctx, done, d.startupTimeout(), func(s logSignals) bool {
+		return s.reloaded > since.reloaded || s.reloadFailed > since.reloadFailed
+	})
+	records := d.Log.endCapture()
+	if reason != "" || signals.reloadFailed > since.reloadFailed {
+		if reason == "cancelled" {
+			return errors.New("Vector reload cancelled")
+		}
+		return &VectorFailure{Phase: "reload", Summary: "Vector did not reload the configuration", Records: records}
+	}
+	if err := observeLiveness(ctx, done); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.method = activationReload
+	d.mu.Unlock()
+	return nil
+}
+
+func observeLiveness(ctx context.Context, done <-chan struct{}) error {
+	live := time.NewTimer(2 * time.Second)
+	defer live.Stop()
+	select {
+	case <-ctx.Done():
+		return errors.New("Vector observation cancelled")
+	case <-done:
+		return errors.New("Vector exited during startup observation")
+	case <-live.C:
+		return nil
+	}
+}
+
+func (d *VectorDriver) restart(ctx context.Context, path, overlay string) error {
 	if e := d.Stop(); e != nil {
 		return e
 	}
@@ -220,17 +374,22 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	if e != nil {
 		return e
 	}
-	cmd := exec.Command(exe, "__vector-host", d.Settings.VectorBinary, path, d.Settings.CapabilityPolicy.ConfigurationMode())
+	args := []string{"__vector-host", d.Settings.VectorBinary, path, d.Settings.CapabilityPolicy.ConfigurationMode()}
+	if overlay != "" {
+		args = append(args, overlay, strconv.Itoa(d.Settings.gracefulShutdownSeconds()))
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Env = vectorEnvironment(d.Settings.CapabilityPolicy.FullVectorConfig)
 	in, e := cmd.StdinPipe()
 	if e != nil {
 		return e
 	}
-	ack := &startupWriter{ack: make(chan struct{})}
-	cmd.Stdout = ack
+	since := d.Log.beginCapture()
+	cmd.Stdout = d.Log
 	cmd.Stderr = io.Discard
 	if e = cmd.Start(); e != nil {
 		in.Close()
+		d.Log.endCapture()
 		return errors.New("cannot start Vector supervisor")
 	}
 	done := make(chan struct{})
@@ -240,44 +399,65 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 	d.lifetime = in
 	d.done = done
 	d.mu.Unlock()
-	seconds := d.Settings.StartupSeconds
-	if seconds < 3 || seconds > 120 {
-		seconds = 20
-	}
-	timeout := time.NewTimer(time.Duration(seconds) * time.Second)
-	defer timeout.Stop()
-	select {
-	case <-ctx.Done():
+	fail := func(summary string) error {
 		_ = d.Stop()
+		return &VectorFailure{Phase: "start", Summary: summary, Records: d.Log.endCapture()}
+	}
+	_, reason := d.Log.await(ctx, done, d.startupTimeout(), func(s logSignals) bool { return s.started > since.started })
+	switch reason {
+	case "cancelled":
+		_ = d.Stop()
+		d.Log.endCapture()
 		return errors.New("Vector startup cancelled")
-	case <-done:
-		_ = d.Stop()
-		return errors.New("Vector exited before startup acknowledgment")
-	case <-timeout.C:
-		_ = d.Stop()
-		return errors.New("Vector startup acknowledgment timed out")
-	case <-ack.ack:
+	case "exited":
+		return fail("Vector exited before startup acknowledgment")
+	case "timeout":
+		return fail("Vector startup acknowledgment timed out")
 	}
-	live := time.NewTimer(2 * time.Second)
-	defer live.Stop()
-	select {
-	case <-ctx.Done():
-		_ = d.Stop()
-		return errors.New("Vector observation cancelled")
-	case <-done:
-		_ = d.Stop()
-		return errors.New("Vector exited during startup observation")
-	case <-live.C:
+	if err := observeLiveness(ctx, done); err != nil {
+		if ctx.Err() != nil {
+			_ = d.Stop()
+			d.Log.endCapture()
+			return err
+		}
+		return fail("Vector exited during startup observation")
 	}
+	d.Log.endCapture()
 	d.mu.Lock()
 	d.verified = true
+	d.method = activationRestart
 	d.mu.Unlock()
 	return nil
 }
 
-// VectorHost is internal local process supervision, never a remotely selected command.
-// Its stdin pipe is kept open by the agent; EOF terminates its exact child.
-func VectorHost(binary, path string, full bool) int {
+// Supervisor stdin protocol: EOF stops Vector gracefully; this byte reloads.
+const hostCommandReload = 'r'
+
+// VectorHostMain runs the internal supervisor for `vectory __vector-host`.
+// Arguments: <binary> <managed-config> <restricted|full> [<overlay> <graceful-seconds>].
+// The three-argument form is what older agents pass after an in-place upgrade.
+func VectorHostMain(args []string) int {
+	if len(args) != 3 && len(args) != 5 {
+		return 2
+	}
+	if args[2] != "restricted" && args[2] != "full" {
+		return 2
+	}
+	paths := []string{args[1]}
+	graceful := defaultGracefulShutdownSeconds
+	if len(args) == 5 {
+		n, err := strconv.Atoi(args[4])
+		if err != nil || n < minGracefulShutdownSeconds || n > maxGracefulShutdownSeconds || !filepath.IsAbs(args[3]) {
+			return 2
+		}
+		paths, graceful = append(paths, args[3]), n
+	}
+	return vectorHost(args[0], paths, args[2] == "full", graceful)
+}
+
+// vectorHost is internal local process supervision, never a remotely selected
+// command. Its stdin pipe is kept open by the agent; EOF stops its exact child.
+func vectorHost(binary string, paths []string, full bool, graceful int) int {
 	// Linux parent-death signals are tied to the creating thread. Keep it alive
 	// for the child's complete lifetime, not merely until exec.Start returns.
 	runtime.LockOSThread()
@@ -287,7 +467,10 @@ func VectorHost(binary, path string, full bool) int {
 		return 1
 	}
 	defer cleanup()
-	args := append(vectorConfigArgs("", path, full), "--log-format", "json", "--require-healthy", "true")
+	// No --require-healthy: the pipeline's own `healthchecks` settings decide.
+	// Healthchecks are not a safety control, and forcing them would keep
+	// Vector down whenever a destination is unreachable.
+	args := append(vectorConfigArgs("", paths, full), "--log-format", "json", "--graceful-shutdown-limit-secs", strconv.Itoa(graceful))
 	cmd := exec.Command(binary, args...)
 	cmd.Env = vectorEnvironment(full)
 	// Vector 0.58 JSON tracing uses stdout (src/trace.rs); policy excludes console
@@ -301,23 +484,42 @@ func VectorHost(binary, path string, full bool) int {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	closed := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, os.Stdin); close(closed) }()
-	select {
-	case e := <-done:
-		if e != nil {
-			return 1
+	commands := make(chan byte)
+	go func() {
+		defer close(commands)
+		buf := make([]byte, 1)
+		for {
+			if _, err := os.Stdin.Read(buf); err != nil {
+				return
+			}
+			commands <- buf[0]
 		}
-		return 0
-	case <-closed:
-		stopChild(cmd)
+	}()
+	for {
 		select {
-		case <-done:
-		case <-time.After(7 * time.Second):
-			_ = cmd.Process.Kill()
-			<-done
+		case e := <-done:
+			if e != nil {
+				return 1
+			}
+			return 0
+		case command, ok := <-commands:
+			if ok {
+				if command == hostCommandReload {
+					reloadChild(cmd)
+				}
+				continue
+			}
+			// Vector drains in-flight events for up to its graceful limit; allow
+			// a short margin before forcing the exact child.
+			stopChild(cmd)
+			select {
+			case <-done:
+			case <-time.After(time.Duration(graceful+5) * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+			}
+			return 0
 		}
-		return 0
 	}
 }
 func ProbeVector(ctx context.Context, s Settings) (string, error) {

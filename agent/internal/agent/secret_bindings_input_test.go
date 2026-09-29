@@ -12,7 +12,7 @@ import (
 )
 
 func TestSecretBindingsInputRejectsAmbiguousObjects(t *testing.T) {
-	secret := filepath.Join(t.TempDir(), "private-synthetic-secret")
+	secret := filepath.Join(privateTempDir(t), "private-synthetic-secret")
 	if err := AtomicWrite(secret, []byte("synthetic-value-never-echo")); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSecretBindingsReplacementAndExplicitClearPreserveMaintenanceState(t *te
 	f := maintenanceFixture(t)
 	settings := filepath.Join(f.dir, "settings.json")
 	before := maintenanceFields(t, settings)
-	secret := filepath.Join(t.TempDir(), "private-synthetic-secret")
+	secret := filepath.Join(privateTempDir(t), "private-synthetic-secret")
 	if err := AtomicWrite(secret, []byte("synthetic-placeholder")); err != nil {
 		t.Fatal(err)
 	}

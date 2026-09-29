@@ -154,7 +154,7 @@ func TestExtendedTelemetryAllowlistBoundsAndLabels(t *testing.T) {
 		t.Fatal("unbounded components accepted")
 	}
 	for _, bad := range []string{`component_id="one",component_id="two"`, `component_id="bad\nvalue"`, `component_id="bad space"`, `component_kind="secret-payload"`} {
-		if _, _, _, ok := componentLabels(bad); ok {
+		if _, ok := componentLabels(bad); ok {
 			t.Fatal("invalid label identity accepted")
 		}
 	}
