@@ -91,6 +91,12 @@ func (j launchdJob) do(limit time.Duration, args ...string) error {
 	return nil
 }
 
+// loaded reports whether launchd knows the job, with its description.
+func (j launchdJob) loaded(ctx context.Context) (launchctlResult, bool) {
+	result := j.launchctl(ctx, launchdStatusLimit, "print", j.target())
+	return result, result.status == 0
+}
+
 // status asks launchd about the daemon without changing it.
 func (j launchdJob) status(ctx context.Context) ServiceInfo {
 	info := ServiceInfo{Manager: "launchd", Name: launchdLabel}
@@ -99,8 +105,8 @@ func (j launchdJob) status(ctx context.Context) ServiceInfo {
 	}
 	info.Installed = true
 	info.State = "stopped"
-	result := j.launchctl(ctx, launchdStatusLimit, "print", j.target())
-	if result.status != 0 {
+	result, loaded := j.loaded(ctx)
+	if !loaded {
 		return info
 	}
 	for _, line := range strings.Split(result.stdout, "\n") {
@@ -132,12 +138,12 @@ func (j launchdJob) control(action string) error {
 		// kickstart -k stops the agent, which drains Vector within ExitTimeOut,
 		// and starts it again from the loaded definition. Setup loads an
 		// updated definition with stop and start instead.
-		if j.status(context.Background()).Enabled {
+		if _, loaded := j.loaded(context.Background()); loaded {
 			return j.do(serviceStopLimit, "kickstart", "-k", j.target())
 		}
 		return j.do(launchctlLimit, "bootstrap", "system", j.definition)
 	case "stop":
-		if !j.status(context.Background()).Enabled {
+		if _, loaded := j.loaded(context.Background()); !loaded {
 			return nil
 		}
 		return j.bootout()

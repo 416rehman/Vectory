@@ -18,12 +18,13 @@ type fakeLaunchctl struct {
 	bootout  launchctlResult
 	clock    time.Time
 	sleeping time.Duration
+	removed  bool // the definition file is gone
 }
 
 func (f *fakeLaunchctl) job() launchdJob {
 	return launchdJob{
 		definition: "/Library/LaunchDaemons/" + launchdLabel + ".plist",
-		installed:  func() bool { return true },
+		installed:  func() bool { return !f.removed },
 		now:        func() time.Time { return f.clock },
 		sleep: func(d time.Duration) {
 			f.sleeping += d
@@ -85,6 +86,11 @@ func TestLaunchdStopReportsOtherFailures(t *testing.T) {
 	stopped := &fakeLaunchctl{loaded: []bool{false}, clock: time.Now()}
 	if err := stopped.job().control("stop"); err != nil || strings.Join(stopped.calls, ",") != "print system/io.vectory.agent" {
 		t.Fatalf("stopping an unloaded job: %v %v", err, stopped.calls)
+	}
+	// A job launchd still runs is stopped even if its file was removed.
+	orphan := &fakeLaunchctl{loaded: []bool{true}, running: true, removed: true, clock: time.Now()}
+	if err := orphan.job().control("stop"); err != nil || strings.Join(orphan.calls, ",") != "print system/io.vectory.agent,bootout system/io.vectory.agent" {
+		t.Fatalf("stopping a loaded job without its file: %v %v", err, orphan.calls)
 	}
 }
 
