@@ -128,9 +128,14 @@ const operationSchema = z
     id: uuid,
     recorded_at: z.string().datetime(),
     request: inputSchema.extend({ request_id: uuid }).strict(),
+    // Set when the first secret arrived: the creation is confirmed, so the
+    // reminder only tracks the token (by ID, never its secret).
+    token_id: uuid.optional(),
+    confirmed_at: z.string().datetime().optional(),
   })
   .strict()
-  .refine((value) => value.id === value.request.request_id);
+  .refine((value) => value.id === value.request.request_id)
+  .refine((value) => !value.token_id === !value.confirmed_at);
 export type TokenCreateInput = z.infer<typeof inputSchema>;
 export type TokenRequestOperation = z.infer<typeof operationSchema>;
 export type TokenRequestStatus = z.infer<typeof TokenRequestStatusSchema>;
@@ -304,6 +309,33 @@ export function readTokenRequests(actor: string): TokenRequestRegistry {
   return result;
 }
 
+/** A creation whose first secret arrived: it never blocks another one. */
+export const confirmed = (operation: TokenRequestOperation) =>
+  !!operation.token_id;
+
+/**
+ * Confirmed reminders only track a token the token list already shows, so the
+ * oldest of them make room for a new request. Unconfirmed ones are never
+ * dropped here: their outcome is still unknown.
+ */
+function makeRoom(actor: string, operations: TokenRequestOperation[]) {
+  const spare = operations
+    .filter(confirmed)
+    .sort((a, b) =>
+      (a.confirmed_at || a.recorded_at).localeCompare(
+        b.confirmed_at || b.recorded_at,
+      ),
+    );
+  try {
+    while (keys(actor).length >= maxRecords && spare.length) {
+      const snapshot = snapshots.get(spare.shift()!);
+      if (snapshot) removeExact(snapshot);
+    }
+  } catch {
+    // The capacity check below reports what is still stored.
+  }
+}
+
 export function beginTokenRequest(
   actor: string,
   input: TokenCreateInput,
@@ -317,8 +349,9 @@ export function beginTokenRequest(
     throw Error("Sign in again before creating a token.");
   const current = readTokenRequests(actor);
   if (current.errors.length) throw Error(current.errors[0].message);
-  if (current.operations.length)
+  if (current.operations.some((operation) => !confirmed(operation)))
     throw Error("Review the saved token requests before creating another.");
+  makeRoom(actor, current.operations);
   const id = crypto.randomUUID();
   const operation = operationSchema.parse({
     actor_id: actor,
@@ -369,12 +402,50 @@ function removeExact(snapshot: { key: string; raw: string }) {
   }
   changed();
 }
-/** Call only after an acknowledged secret or an exact confirmed cancellation. */
+/**
+ * Call only after an acknowledged secret, an exact confirmed cancellation, or
+ * once the server shows that the request's token can't enroll anything more.
+ */
 export function finishTokenRequest(operation: TokenRequestOperation) {
   const snapshot = snapshots.get(operation);
   if (!snapshot || !operationSchema.safeParse(operation).success)
     throw Error(cleanupError);
   removeExact(snapshot);
+}
+/**
+ * The first secret arrived: record which token the request created (its ID,
+ * never the secret). From then on the reminder never blocks another request;
+ * the token list tells what became of it. Returns the stored operation to use
+ * from now on; the one passed in no longer matches storage.
+ */
+export function confirmTokenRequest(
+  operation: TokenRequestOperation,
+  record: { id: string },
+): TokenRequestOperation {
+  const snapshot = snapshots.get(operation);
+  if (!snapshot || !operationSchema.safeParse(operation).success)
+    throw Error(storageError);
+  if (operation.token_id) {
+    if (operation.token_id !== record.id) throw Error(cleanupError);
+    return operation;
+  }
+  const next = operationSchema.parse({
+    ...operation,
+    token_id: record.id,
+    confirmed_at: new Date().toISOString(),
+  });
+  const raw = JSON.stringify(next);
+  try {
+    if (localStorage.getItem(snapshot.key) !== snapshot.raw)
+      throw Error(storageError);
+    localStorage.setItem(snapshot.key, raw);
+    if (localStorage.getItem(snapshot.key) !== raw) throw Error(storageError);
+  } catch {
+    changed();
+    throw Error(storageError);
+  }
+  changed();
+  return parse(snapshot.key, raw, operation.actor_id, operation.id)!;
 }
 /** A corrupt payload cannot authorize creation; this only removes reviewed bytes. */
 export function dismissTokenRequestIssue(issue: TokenRequestIssue) {
@@ -406,4 +477,132 @@ export function useTokenRequests(actor: string) {
     [actor],
   );
   return readTokenRequests(actor);
+}
+
+/** A token as the token list (or a request receipt) reports it. */
+export type ListedToken = {
+  id: string;
+  name: string;
+  expires_at: string;
+  uses: number;
+  max_uses?: number | null;
+  revoked: boolean;
+  last_used_at?: string | null;
+  device_count?: number;
+  devices?: { name: string; enrolled_at: string | null }[];
+};
+/** Whether a device could still enroll with this token. */
+export function tokenCanStillEnroll(token: ListedToken, now = Date.now()) {
+  const expires = Date.parse(token.expires_at);
+  return (
+    !token.revoked &&
+    Number.isFinite(expires) &&
+    expires > now &&
+    (!token.max_uses || token.uses < token.max_uses)
+  );
+}
+
+/** "at 5:15 PM", or "on Sep 28 at 5:15 PM" for another day; "" if unknown. */
+export function when(value: string | null | undefined, now = Date.now()) {
+  const at = value ? new Date(value) : null;
+  if (!at || Number.isNaN(at.valueOf())) return "";
+  const time = at.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return at.toDateString() === new Date(now).toDateString()
+    ? `at ${time}`
+    : `on ${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })} at ${time}`;
+}
+
+/**
+ * "r16-full install command enrolled r16-full at 5:15 PM." for a token that
+ * enrolled something; null when it enrolled nothing.
+ */
+export function enrollmentNote(token: ListedToken, now = Date.now()) {
+  if (token.uses < 1 && !token.devices?.length) return null;
+  const devices = token.devices || [];
+  const total = Math.max(token.device_count ?? devices.length, devices.length);
+  if (!devices.length) {
+    // A receipt or an older server: counts without names.
+    const last = when(token.last_used_at, now);
+    return token.uses === 1
+      ? `${token.name} enrolled a device${last ? ` ${last}` : ""}.`
+      : `${token.name} enrolled ${token.uses} devices${last ? `, the last ${last}` : ""}.`;
+  }
+  // The list is most recent first; name them in the order they enrolled.
+  const names = devices
+    .slice(0, 3)
+    .map((device) => device.name)
+    .reverse();
+  if (total > names.length) names.push(`${total - names.length} more`);
+  const listed =
+    names.length > 1
+      ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`
+      : names[0];
+  const time = when(devices[0].enrolled_at || token.last_used_at, now);
+  return `${token.name} enrolled ${listed}${time ? ` ${time}` : ""}.`;
+}
+
+export type TokenRequestResolution =
+  /** The creation's response never arrived: review it before another. */
+  | { kind: "unconfirmed"; operation: TokenRequestOperation }
+  /** Confirmed, but the token list can't say what became of it yet. */
+  | { kind: "unresolved"; operation: TokenRequestOperation }
+  /** Confirmed, no device used it and it still works. */
+  | { kind: "unused"; operation: TokenRequestOperation; token: ListedToken }
+  /** Its token enrolled something or can't enroll anymore: drop it. */
+  | {
+      kind: "finished";
+      operation: TokenRequestOperation;
+      token: ListedToken;
+      note: string | null;
+    };
+
+/**
+ * What became of a stored request, from the token list. `tokens` is null
+ * while the list is loading or failed to load: nothing is dropped then.
+ */
+export function resolveTokenRequest(
+  operation: TokenRequestOperation,
+  tokens: readonly ListedToken[] | null,
+  now = Date.now(),
+): TokenRequestResolution {
+  if (!operation.token_id) return { kind: "unconfirmed", operation };
+  const token = tokens?.find((item) => item.id === operation.token_id);
+  if (!token) return { kind: "unresolved", operation };
+  if (token.uses === 0 && tokenCanStillEnroll(token, now))
+    return { kind: "unused", operation, token };
+  return {
+    kind: "finished",
+    operation,
+    token,
+    note: enrollmentNote(token, now),
+  };
+}
+export function resolveTokenRequests(
+  operations: readonly TokenRequestOperation[],
+  tokens: readonly ListedToken[] | null,
+  now = Date.now(),
+) {
+  return operations.map((operation) =>
+    resolveTokenRequest(operation, tokens, now),
+  );
+}
+
+/**
+ * What an exact request status says about an unconfirmed request: "finished"
+ * when it can't create or enroll anything more (cancelled, or its token is
+ * used, revoked or expired), "live" when its token could still enroll a
+ * device, "unknown" when the server has no result for it yet.
+ */
+export function statusOutcome(
+  status: TokenRequestStatus,
+  now = Date.now(),
+): "finished" | "live" | "unknown" {
+  if (!status.found) return "unknown";
+  if (status.state === "cancelled" || !status.record) return "finished";
+  return status.record.uses === 0 && tokenCanStillEnroll(status.record, now)
+    ? "live"
+    : "finished";
 }
