@@ -350,9 +350,9 @@ func RenderDoctor(r *DoctorReport) string {
 	b.WriteString(title + " · " + r.StateDir + "\n\n")
 	warnings, failures := 0, 0
 	for _, check := range r.Checks {
-		fmt.Fprintf(&b, "  %-5s %-16s %s\n", check.Status, check.Title, check.Detail)
+		fmt.Fprintf(&b, "  %-5s %-16s %s\n", check.Status, check.Title, IndentLines(check.Detail, 25))
 		if check.Fix != "" && check.Status != "ok" {
-			fmt.Fprintf(&b, "        %-16s Fix: %s\n", "", check.Fix)
+			fmt.Fprintf(&b, "        %-16s Fix: %s\n", "", IndentLines(check.Fix, 30))
 		}
 		switch check.Status {
 		case "warn":

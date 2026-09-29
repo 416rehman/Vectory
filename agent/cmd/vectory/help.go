@@ -56,6 +56,20 @@ func (c *cli) Int(name string, value int, arg, help string) *int {
 	c.record(name, arg, help, false)
 	return c.fs.Int(name, value, help)
 }
+
+// stringList is a flag that may be given several times.
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+// Strings declares a repeatable flag.
+func (c *cli) Strings(name, arg, help string) *[]string {
+	values := &stringList{}
+	c.record(name, arg, help, false)
+	c.fs.Var(values, name, help)
+	return (*[]string)(values)
+}
 func (c *cli) HiddenString(name, help string) *string {
 	c.record(name, "", help, true)
 	return c.fs.String(name, "", help)
@@ -148,11 +162,11 @@ func printGeneralHelp(w io.Writer) {
 		}
 	}
 	fmt.Fprintln(w, "\nOther\n  help [command]      Show help for a command\n  version             Print the agent version")
-	fmt.Fprintln(w, "\nExamples")
-	fmt.Fprintln(w, "  curl -fsSL https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh")
+	fmt.Fprintln(w, "\nExamples (Add device writes these for your server; never use curl -k, which turns certificate checks off)")
+	fmt.Fprintln(w, "  curl -fsSL --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh")
 	fmt.Fprintln(w, "  echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -")
 	fmt.Fprintln(w, "  sudo sh vectory-install.sh")
-	fmt.Fprintln(w, "  sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <from Add device>")
+	fmt.Fprintln(w, "  sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>")
 	fmt.Fprintln(w, "  sudo vectory status")
 	fmt.Fprintln(w, "\nRun 'vectory help <command>' for details. Exit codes: 0 ok, 1 failed, 2 usage error, 130 setup interrupted.")
 }

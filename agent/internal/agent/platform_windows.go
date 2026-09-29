@@ -333,7 +333,12 @@ func lockAgentFile(dir string) (func(), error) {
 	var o windows.Overlapped
 	if e = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &o); e != nil {
 		f.Close()
-		return nil, errors.New("another agent operation is running")
+		return nil, lockHeld(dir)
 	}
-	return func() { windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &o); f.Close() }, nil
+	recordLockOwner(f)
+	return func() {
+		clearLockOwner(f)
+		windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &o)
+		f.Close()
+	}, nil
 }

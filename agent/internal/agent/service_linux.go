@@ -193,6 +193,18 @@ func lastLine(s string) string {
 }
 
 func ServiceControl(action string) error {
+	if !SystemdAvailable() {
+		// No bus error and no journal hint: there is no service here at all.
+		reason := noSystemdReason("/")
+		switch action {
+		case "start", "restart":
+			return errors.New("There is no Vectory service to " + action + ": " + reason + ". Run the agent under your own supervisor with `vectory run`; `vectory status` shows the exact command.")
+		case "stop":
+			return errors.New("There is no Vectory service to stop: " + reason + ". If the agent runs as `vectory run`, stop it with Ctrl-C where it runs; `vectory status` shows its pid.")
+		case "uninstall":
+			return errors.New("No Vectory service is registered: " + reason + ". Nothing to remove.")
+		}
+	}
 	switch action {
 	case "start":
 		return systemctl("enable", "--now", ServiceName)

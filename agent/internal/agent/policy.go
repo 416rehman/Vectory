@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -21,6 +22,34 @@ type CapabilityPolicy struct {
 	AllowedFileRoots       []string `json:"allowed_file_roots"`
 	AllowedNetworkHosts    []string `json:"allowed_network_hosts"` // exact hostname:port
 	AllowedListenAddresses []string `json:"allowed_listen_addresses"`
+}
+
+// DescribeAllowances says what restricted mode allows on this host, for the
+// operator who just changed it: "files under /var/log/app; destination
+// logs.example.net:443; listener 0.0.0.0:514".
+func DescribeAllowances(p CapabilityPolicy) string {
+	var parts []string
+	add := func(one, many string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		label := many
+		if len(values) == 1 {
+			label = one
+		}
+		shown := values
+		if len(values) > 5 {
+			shown = append(slices.Clone(values[:5]), fmt.Sprintf("and %d more", len(values)-5))
+		}
+		parts = append(parts, label+" "+strings.Join(shown, ", "))
+	}
+	add("files under", "files under", p.AllowedFileRoots)
+	add("destination", "destinations", p.AllowedNetworkHosts)
+	add("listener", "listeners", p.AllowedListenAddresses)
+	if len(parts) == 0 {
+		return "nothing yet: restricted pipelines can't read files, reach destinations or open listeners here"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (p CapabilityPolicy) ConfigurationMode() string {
