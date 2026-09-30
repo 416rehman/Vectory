@@ -134,8 +134,20 @@ func TestCommandsThatNeedTheAgentStoppedNameItAndRetryIsQueued(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "vectory run, pid "+pid) || !strings.Contains(stderr, "Ctrl-C") || strings.Contains(stderr, "another agent operation is running") {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	// retry doesn't need the agent stopped: the running agent takes it.
+	// With nothing failed, retry says so and promises no attempt.
 	code, stdout, stderr := invoke("retry", "--state-dir", dir)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "Nothing to retry: no version has failed on this host.") || strings.Contains(stdout, "Retry queued") {
+		t.Fatalf("exit %d: %s %s", code, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "retry-requested")); !os.IsNotExist(err) {
+		t.Fatal("queued a retry with nothing failed", err)
+	}
+	// retry doesn't need the agent stopped: the running agent takes it.
+	generation := uint64(3)
+	if err := agent.SaveState(dir, agent.State{ApplyState: "failed", FailedGeneration: &generation, Policy: agent.Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr = invoke("retry", "--state-dir", dir)
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "Retry queued. The running agent (pid "+pid+")") {
 		t.Fatalf("exit %d: %s %s", code, stdout, stderr)
 	}
