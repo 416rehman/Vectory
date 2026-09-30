@@ -11,6 +11,7 @@ Engineering history and test evidence, kept for review and audit. These document
 | [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md) | The earlier narrative handoff, kept as a historical record. Most evidence files it names were not committed. |
 | [CAPACITY.md](CAPACITY.md) | Protocol load and fleet-read measurements, and their limits. |
 | [DEPENDENCY-AUDIT.md](DEPENDENCY-AUDIT.md) | Dependency vulnerability scans. |
+| [TAP-IMPLEMENTATION-PLAN.md](TAP-IMPLEMENTATION-PLAN.md) | The plan for opt-in event sampling: work packages, tests, wire changes and what stays unbuilt until each is proven. The decision is [ADR 0011](../adr/0011-opt-in-event-sampling.md). |
 | [TYPE-SYSTEM-REVIEW.md](TYPE-SYSTEM-REVIEW.md) | Historical review of the Vector reference and configuration types. |
 | [HELP-CENTER-EVIDENCE.md](HELP-CENTER-EVIDENCE.md) | Historical Help center verification of 2026-09-26. |
 | [WORKSTREAMS.md](WORKSTREAMS.md) | The original work breakdown. |
