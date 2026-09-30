@@ -856,13 +856,22 @@ func redactCommand(command []string) []string {
 	return out
 }
 
-// displayCommand is a command as one line an operator can read: arguments that
-// need it are quoted, and control characters (which could rewrite a terminal)
-// are replaced.
+// displayArg is one argument of a command as its platform writes it: quoted for
+// a POSIX shell, or the way a Windows command line holds it. Control
+// characters, which could rewrite a terminal, are replaced.
+func displayArg(arg string) string {
+	arg = printable(arg)
+	if runtime.GOOS == "windows" {
+		return escapeWindowsArgument(arg)
+	}
+	return quoteArg(arg)
+}
+
+// displayCommand is a command as one line an operator can read.
 func displayCommand(command []string) string {
 	parts := make([]string, len(command))
 	for i, arg := range command {
-		parts[i] = quoteArg(printable(arg))
+		parts[i] = displayArg(arg)
 	}
 	return strings.Join(parts, " ")
 }

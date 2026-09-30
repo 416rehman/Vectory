@@ -416,6 +416,38 @@ func splitWindowsCommandLine(line string) []string {
 	}
 }
 
+// escapeWindowsArgument writes an argument the way a Windows command line holds
+// it, so CommandLineToArgvW reads it back: quoted only when it is empty or has a
+// space, tab or quote, with the backslashes before a quote doubled.
+func escapeWindowsArgument(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(s, " \t\"") {
+		return s
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			slashes++
+			b.WriteByte(c)
+		case '"':
+			b.WriteString(strings.Repeat(`\`, slashes+1))
+			b.WriteByte('"')
+			slashes = 0
+		default:
+			slashes = 0
+			b.WriteByte(c)
+		}
+	}
+	b.WriteString(strings.Repeat(`\`, slashes))
+	b.WriteByte('"')
+	return b.String()
+}
+
 // parseImagePath reads a Windows service's ImagePath: a command line, whose
 // executable may be unquoted although its folder has spaces ("C:\Program
 // Files\Vector\bin\vector.exe --config ..."), which Windows accepts.

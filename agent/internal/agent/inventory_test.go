@@ -396,7 +396,62 @@ func TestInventoryHidesCredentialsInArguments(t *testing.T) {
 	if strings.Contains(joined, "hunter2") || !strings.Contains(joined, "https://***@config.example.invalid/vector.yaml") {
 		t.Fatalf("%q", joined)
 	}
-	if got := displayCommand([]string{"/usr/bin/vector", "--label", "two words", "esc\x1b[31m"}); got != "/usr/bin/vector --label "+quoteArg("two words")+" esc?[31m" {
+	if got := displayCommand([]string{"/usr/bin/vector", "--label", "two words", "esc\x1b[31m"}); got != "/usr/bin/vector --label "+displayArg("two words")+" esc?[31m" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// A command line shows the way its platform writes one: a POSIX shell's
+// quoting, or the quoting Windows programs read back.
+func TestDisplayArgumentsAreQuotedForThePlatform(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if got := displayArg(`C:\Program Files\Vector\vector.exe`); got != `"C:\Program Files\Vector\vector.exe"` {
+			t.Fatal(got)
+		}
+		if got := displayArg(`C:\ProgramData\Vector\config`); got != `C:\ProgramData\Vector\config` {
+			t.Fatalf("a Windows path with no space needs no quotes: %s", got)
+		}
+	} else {
+		if got := displayArg("two words"); got != "'two words'" {
+			t.Fatal(got)
+		}
+		if got := displayArg("/etc/vector/vector.yaml"); got != "/etc/vector/vector.yaml" {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestEscapedWindowsArgumentsSurviveASplit(t *testing.T) {
+	args := []string{`C:\Program Files\Vector\bin\vector.exe`, "--label", "two words", "", `say "hi"`, `ends with a backslash\`, `C:\dir with space\`, `C:\plain\dir\`, "tab\there", `back\\slashes and "quotes"\\`, "unicode-\u00e9\u65e5", `-c=C:\a b\c.yaml`}
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		parts[i] = escapeWindowsArgument(arg)
+	}
+	line := strings.Join(parts, " ")
+	if got := splitWindowsCommandLine(line); !reflect.DeepEqual(got, args) {
+		t.Fatalf("%s\n got %q\nwant %q", line, got, args)
+	}
+	if escapeWindowsArgument(`C:\plain\dir\`) != `C:\plain\dir\` || escapeWindowsArgument("") != `""` {
+		t.Fatal("an argument that needs no quotes gets none, and an empty one gets a pair")
+	}
+}
+
+func TestStopAdviceNamesThePlatformsServiceManager(t *testing.T) {
+	running := []RunningVector{{PID: 1}, {PID: 2, Service: "vector"}}
+	cases := map[string]string{
+		"linux":   "stop it (for example: sudo systemctl disable --now vector)",
+		"windows": "stop it (for example, in an elevated PowerShell: Stop-Service -Name vector; Set-Service -Name vector -StartupType Disabled)",
+		"darwin":  "stop it",
+	}
+	for goos, want := range cases {
+		if got := stopAdvice(running, goos); got != want {
+			t.Errorf("%s: %q, want %q", goos, got, want)
+		}
+	}
+	if got := stopAdvice([]RunningVector{{PID: 3}}, "linux"); got != "stop it" {
+		t.Errorf("no service to name: %q", got)
+	}
+	if got := stopAdvice([]RunningVector{{PID: 4, Service: "Vector Agent"}}, "windows"); !strings.Contains(got, "Stop-Service -Name 'Vector Agent';") {
+		t.Errorf("a service name with a space is quoted: %q", got)
 	}
 }
