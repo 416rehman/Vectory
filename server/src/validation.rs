@@ -1568,6 +1568,12 @@ pub fn sample_pipeline(transform: &Value, data_dir: &str, timezone: Option<&str>
         json!({"type":"remap","inputs":["vectory_samples"],"source":"sample = object!(parse_json!(string!(.message)))\n%vectory_sample = sample.i\n. = object!(sample.e)"}),
     );
     transforms.insert("vectory_step".into(), step);
+    // One line per sample, straight from the input: the worker keeps stdin
+    // open until the last one is printed (see `sample_done_marker`).
+    transforms.insert(
+        "vectory_sample_done".into(),
+        json!({"type":"remap","inputs":["vectory_sample_in"],"source":". = {\"m\": %vectory_sample}"}),
+    );
     for (index, port) in sample_ports(transform).iter().enumerate() {
         let input = if port.is_empty() {
             "vectory_step".to_owned()
@@ -1591,12 +1597,20 @@ pub fn sample_pipeline(transform: &Value, data_dir: &str, timezone: Option<&str>
         "data_dir": data_dir,
         "sources": {"vectory_samples": {"type":"stdin"}},
         "transforms": transforms,
-        "sinks": {"vectory_console": {"type":"console","inputs":["vectory_out_*"],"encoding":{"codec":"json"},"target":"stdout"}},
+        "sinks": {"vectory_console": {"type":"console","inputs":["vectory_out_*","vectory_sample_done"],"encoding":{"codec":"json"},"target":"stdout"}},
     });
     if let Some(timezone) = timezone {
         config["timezone"] = json!(timezone);
     }
     config
+}
+
+/// What the console prints once the last of `samples` samples has entered the
+/// micro-pipeline. Vector drops the events still in flight when its stdin
+/// ends (about one run in a hundred lost the last sample's outputs), so the
+/// worker holds stdin open until it sees this and the output has gone quiet.
+pub fn sample_done_marker(samples: usize) -> Vec<u8> {
+    format!("{{\"m\":{}}}", samples.saturating_sub(1)).into_bytes()
 }
 
 /// Byte offsets from a VRL runtime error, `at (37:75)`, as a 1-based line,
@@ -3570,6 +3584,17 @@ mod tests {
             pipeline["transforms"]["vectory_out_1"]["inputs"],
             json!(["vectory_step.dropped"])
         );
+        // Every sample also prints a marker that does not pass through the step.
+        assert_eq!(
+            pipeline["transforms"]["vectory_sample_done"]["inputs"],
+            json!(["vectory_sample_in"])
+        );
+        assert_eq!(
+            pipeline["sinks"]["vectory_console"]["inputs"],
+            json!(["vectory_out_*", "vectory_sample_done"])
+        );
+        assert_eq!(sample_done_marker(5), br#"{"m":4}"#.to_vec());
+        assert_eq!(sample_done_marker(1), br#"{"m":0}"#.to_vec());
         let route = json!({"type":"route","route":{"errors":".status >= 500","ok":"true"},"reroute_unmatched":false});
         assert_eq!(sample_ports(&route), vec!["errors", "ok"]);
         let exclusive = json!({"type":"exclusive_route","routes":[{"name":"a","condition":"true"},{"name":"bad name","condition":"true"}]});

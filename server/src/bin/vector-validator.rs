@@ -10,7 +10,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,15 +47,61 @@ enum Run {
     OutputLimit,
 }
 
+/// What the worker learns while Vector runs: when its output last moved,
+/// whether the settle marker was printed, and whether the process has ended.
+struct Activity {
+    began: Instant,
+    last_output_ms: AtomicU64,
+    marker_seen: AtomicBool,
+    exited: AtomicBool,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Activity {
+            began: Instant::now(),
+            last_output_ms: AtomicU64::new(0),
+            marker_seen: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+        }
+    }
+    fn now_ms(&self) -> u64 {
+        self.began.elapsed().as_millis() as u64
+    }
+    fn quiet_ms(&self) -> u64 {
+        self.now_ms()
+            .saturating_sub(self.last_output_ms.load(Ordering::SeqCst))
+    }
+}
+
+/// How long Vector's output must stay silent after the marker before stdin is
+/// closed: the last sample's outputs are then all printed.
+const SETTLE_QUIET_MS: u64 = 100;
+
+/// Whether `buffer` holds `line` as a whole line (terminated by a newline).
+fn has_line(buffer: &[u8], line: &[u8]) -> bool {
+    buffer
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .skip(1)
+        .any(|candidate| candidate == line)
+}
+
 /// Run pinned Vector with an argument array (never a shell), a scrubbed
 /// environment, a private working directory and bounded time and output.
 /// The config file path is appended as the final argument.
+///
+/// Vector drops the events still in flight when its stdin ends, so a run that
+/// feeds stdin passes `settle`: the line Vector prints once the last input has
+/// entered the pipeline. Stdin then stays open until that line has been seen
+/// and the output has been quiet for a moment, or the process has ended.
 async fn run_vector(
     worker: &Worker,
     args: &[&str],
     config: &Value,
     dir: &Path,
     stdin: Option<Vec<u8>>,
+    settle: Option<Vec<u8>>,
     time: Duration,
     output: usize,
 ) -> Result<Run, StatusCode> {
@@ -88,25 +137,55 @@ async fn run_vector(
     let input = child.stdin.take();
     let mut out_reader = child.stdout.take().unwrap().take(output as u64 + 1);
     let mut err_reader = child.stderr.take().unwrap().take(output as u64 + 1);
+    let activity = Activity::new();
     let run = async {
         let feed = async {
             if let (Some(mut pipe), Some(bytes)) = (input, stdin) {
                 // A program may exit before reading; a closed pipe is not an error.
                 let _ = pipe.write_all(&bytes).await;
+                if settle.is_some() {
+                    while !activity.exited.load(Ordering::SeqCst)
+                        && !(activity.marker_seen.load(Ordering::SeqCst)
+                            && activity.quiet_ms() >= SETTLE_QUIET_MS)
+                    {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
                 let _ = pipe.shutdown().await;
             }
             Ok::<_, std::io::Error>(())
         };
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let read = async {
-            tokio::try_join!(
-                out_reader.read_to_end(&mut stdout),
-                err_reader.read_to_end(&mut stderr)
-            )?;
+        let read_out = async {
+            let mut chunk = [0u8; 8192];
+            loop {
+                let count = out_reader.read(&mut chunk).await?;
+                if count == 0 {
+                    break;
+                }
+                stdout.extend_from_slice(&chunk[..count]);
+                activity
+                    .last_output_ms
+                    .store(activity.now_ms(), Ordering::SeqCst);
+                if let Some(marker) = &settle
+                    && has_line(&stdout, marker)
+                {
+                    activity.marker_seen.store(true, Ordering::SeqCst);
+                }
+            }
             Ok::<_, std::io::Error>(())
         };
-        let (status, _, _) = tokio::try_join!(child.wait(), feed, read)?;
+        let read_err = async {
+            err_reader.read_to_end(&mut stderr).await?;
+            Ok::<_, std::io::Error>(())
+        };
+        let wait = async {
+            let status = child.wait().await?;
+            activity.exited.store(true, Ordering::SeqCst);
+            Ok::<_, std::io::Error>(status)
+        };
+        let (status, _, _, _) = tokio::try_join!(wait, feed, read_out, read_err)?;
         Ok::<_, std::io::Error>((status, stdout, stderr))
     };
     let outcome = tokio::time::timeout(time, run).await;
@@ -203,6 +282,7 @@ async fn validate(
             &["validate", "--no-environment"],
             &current,
             dir.path(),
+            None,
             None,
             remaining,
             64 * 1024,
@@ -314,6 +394,7 @@ async fn pipeline_tests(
         &["test", "--config-json"],
         &candidate.config,
         dir.path(),
+        None,
         None,
         Duration::from_secs(5),
         128 * 1024,
@@ -443,6 +524,7 @@ async fn transform_test(
         &pipeline,
         dir.path(),
         Some(lines),
+        Some(validation::sample_done_marker(samples.len())),
         Duration::from_secs(5),
         512 * 1024,
     )
@@ -470,6 +552,7 @@ async fn transform_test(
         &["validate", "--no-environment"],
         &pipeline,
         dir.path(),
+        None,
         None,
         Duration::from_secs(5),
         64 * 1024,
