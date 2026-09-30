@@ -4,6 +4,7 @@ import {
   inventoryFilters,
   inventoryIdsPath,
   inventoryPath,
+  searchText,
   selectionNote,
   setDifference,
   toggled,
@@ -12,6 +13,21 @@ import {
 
 const group = "00000000-0000-4000-8000-0000000000a1";
 const version = "00000000-0000-4000-8000-0000000000b1";
+
+describe("search text", () => {
+  it("is trimmed and at most 100 characters, never cutting one in two", () => {
+    expect(searchText("  edge 01 ")).toBe("edge 01");
+    expect(searchText("x".repeat(150))).toHaveLength(100);
+    // An emoji is one character to the server but two to a string's length:
+    // cutting by length would leave half of one and break the address.
+    const cut = searchText("😀".repeat(150));
+    expect(Array.from(cut)).toHaveLength(100);
+    expect(() => encodeURIComponent(cut)).not.toThrow();
+    expect(() =>
+      encodeURIComponent(searchText("a" + "😀".repeat(120))),
+    ).not.toThrow();
+  });
+});
 
 describe("inventory addresses", () => {
   it("asks for the default page with nothing but its size", () => {
@@ -59,14 +75,21 @@ describe("inventory addresses", () => {
 
   it("repeats the same filters, never a page, to select every match", () => {
     const filters = { q: "web", status: "offline", group, sort: "name" };
-    expect(inventoryIdsPath({ ...filters, dir: "asc", page: 4, size: 25 })).toBe(
+    expect(
+      inventoryIdsPath({ ...filters, dir: "asc", page: 4, size: 25 }),
+    ).toBe(
       `/devices/inventory/ids?q=web&status=offline&group=${group}&sort=name&dir=asc`,
     );
   });
 
   it("starts a page empty, with zero counts the page never shows as data", () => {
     const empty = emptyInventory(2, 25);
-    expect(empty).toMatchObject({ items: [], total: 0, page: 2, page_size: 25 });
+    expect(empty).toMatchObject({
+      items: [],
+      total: 0,
+      page: 2,
+      page_size: 25,
+    });
     expect(empty.counts.status.revoked).toBe(0);
   });
 });
@@ -76,9 +99,9 @@ describe("selecting matches", () => {
     expect(selectionNote({ ids: ["a"], total: 1, truncated: false })).toBe(
       "Selected the 1 matching device.",
     );
-    expect(
-      selectionNote({ ids: Array(3), total: 3, truncated: false }),
-    ).toBe("Selected all 3 matching devices.");
+    expect(selectionNote({ ids: Array(3), total: 3, truncated: false })).toBe(
+      "Selected all 3 matching devices.",
+    );
     expect(selectionNote({ ids: [], total: 0, truncated: false })).toBe(
       "No devices match.",
     );

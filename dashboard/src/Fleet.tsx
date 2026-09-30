@@ -188,8 +188,7 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
           {
             value: "populated",
             label: "Has members",
-            count: groups.data.filter((group) => group.member_count > 0)
-              .length,
+            count: groups.data.filter((group) => group.member_count > 0).length,
           },
         ],
       },

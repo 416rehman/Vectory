@@ -52,6 +52,7 @@ import {
   type RecentItem,
 } from "./commandPaletteModel";
 import { directoryAnswers } from "./directoryCache";
+import { searchText } from "./deviceInventory";
 import type { ListDevice } from "./deviceModel";
 import { pageEntries } from "./navigation";
 import { deviceDisplayStatus, type StatusDomain } from "./status";
@@ -111,14 +112,15 @@ const read = <T,>(path: string, signal: AbortSignal) =>
   );
 /**
  * A directory read that opening the palette again within thirty seconds
- * reuses, unless something was changed from this browser in between.
+ * reuses, unless something was changed from this browser in between. What a
+ * person read is kept for that person (`userId`) only.
  */
 async function readDirectory<T>(
-  owner: string,
+  userId: string,
   path: string,
   signal: AbortSignal,
 ) {
-  const key = `${owner} ${path}`;
+  const key = `${userId} ${path}`;
   const known = directoryAnswers.recall<T>(key, Date.now(), changeCount());
   if (known !== undefined) return known;
   const changes = changeCount();
@@ -126,8 +128,6 @@ async function readDirectory<T>(
   directoryAnswers.remember(key, value, Date.now(), changes);
   return value;
 }
-/** The server's search matches this many characters at most. */
-const SEARCH_CHARACTERS = 100;
 /** Devices are found by the server, five at a time. */
 const DEVICES_SHOWN = 5;
 
@@ -205,7 +205,7 @@ function useDirectory(open: boolean, query: string, user: User) {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       read<DeviceInventoryPage>(
-        `/devices/inventory?q=${encodeURIComponent(text.slice(0, SEARCH_CHARACTERS))}&page_size=${DEVICES_SHOWN}`,
+        `/devices/inventory?q=${encodeURIComponent(searchText(text))}&page_size=${DEVICES_SHOWN}`,
         controller.signal,
       )
         .then((page) =>

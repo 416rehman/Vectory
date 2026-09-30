@@ -48,6 +48,7 @@ import {
 import {
   inventoryPath,
   readMatchingIds,
+  searchText,
   selectionNote,
   type InventoryQuery,
 } from "./deviceInventory";
@@ -174,7 +175,11 @@ export default function DeviceList({
   };
   const pageSize = PAGE_SIZES.includes(url.size) ? url.size : 25;
   const filters: InventoryQuery = query;
-  const request: InventoryQuery = { ...filters, page: url.page, size: pageSize };
+  const request: InventoryQuery = {
+    ...filters,
+    page: url.page,
+    size: pageSize,
+  };
   const { resource: inventory, data, loaded, settling } = useInventory(request);
   const stale = !!inventory.error;
   // Typing settles for a moment before it becomes the address's search; a new
@@ -188,7 +193,7 @@ export default function DeviceList({
   useEffect(() => {
     if (search.trim() === url.q) return;
     const timer = window.setTimeout(
-      () => update({ q: search.trim().slice(0, 100), page: 1 }),
+      () => update({ q: searchText(search), page: 1 }),
       250,
     );
     return () => window.clearTimeout(timer);
@@ -360,9 +365,7 @@ export default function DeviceList({
                   operable.length > 0 &&
                   operable.every((device) => selection.ids.has(device.id))
                 }
-                disabled={
-                  !loaded || stale || settling || operable.length === 0
-                }
+                disabled={!loaded || stale || settling || operable.length === 0}
                 onChange={(event) => togglePage(event.target.checked)}
               />
             ),
@@ -678,7 +681,10 @@ export default function DeviceList({
               }
               className="devices-table"
               loading={inventory.loading}
-              sort={{ column: query.sort, direction: query.dir as "asc" | "desc" }}
+              sort={{
+                column: query.sort,
+                direction: query.dir as "asc" | "desc",
+              }}
               onSortChange={(next) =>
                 update({
                   sort: next?.column || "name",

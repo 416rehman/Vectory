@@ -74,14 +74,21 @@ const sortNames: Record<string, string> = {
   events: "events_in",
 };
 
+/**
+ * A search as the server takes it: trimmed, and at most 100 characters. It
+ * counts characters, so a cut never lands inside one (an emoji is one).
+ */
+export function searchText(value: string) {
+  return Array.from(value.trim()).slice(0, 100).join("");
+}
+
 /** The filters and order alone: what "select all matching" repeats. */
 export function inventoryFilters(query: InventoryQuery) {
   const params = new URLSearchParams();
   const set = (name: string, value?: string) => {
     if (value) params.set(name, value);
   };
-  // The server matches on 100 characters at most.
-  set("q", query.q?.trim().slice(0, 100));
+  set("q", query.q === undefined ? undefined : searchText(query.q));
   set("status", query.status);
   set("view", query.view && (viewNames[query.view] ?? query.view));
   set("group", query.group);
@@ -107,7 +114,8 @@ export function readMatchingIds(
   signal?: AbortSignal,
 ): Promise<DeviceInventoryIds> {
   return withRequestDeadline(
-    (inner) => api<DeviceInventoryIds>(inventoryIdsPath(query), { signal: inner }),
+    (inner) =>
+      api<DeviceInventoryIds>(inventoryIdsPath(query), { signal: inner }),
     30000,
     signal,
   );

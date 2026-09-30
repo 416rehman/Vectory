@@ -107,8 +107,14 @@ function RunningRow({ row }: { row: OverviewRunning }) {
                 title={`${countLabel(group.count, "device")} of this version in ${group.name}`}
               >
                 {group.name}
-                <span className="overview-running-group-count">
+                <span
+                  className="overview-running-group-count"
+                  aria-hidden="true"
+                >
                   {group.count.toLocaleString()}
+                </span>
+                <span className="sr-only">
+                  , {countLabel(group.count, "device")}
                 </span>
               </a>
             ))}

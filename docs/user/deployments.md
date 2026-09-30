@@ -56,7 +56,7 @@ The editor lists **Group devices** a page at a time with a search, so a group of
 
 Groups can carry pipeline and agent-settings deployments that include future members, so editing a group can change what devices run.
 
-- The group editor previews the effect: which devices would get or lose a pipeline. For a large change it describes the devices the edit changes something on first, and counts the rest ("Adding 480 devices changes nothing on them").
+- The group editor previews the effect: which devices would get or lose a pipeline. For a large change it describes the devices the edit changes something on first, and counts the rest ("Adding 480 devices changes nothing on them"). A change to more than 500 devices waits for **Preview what changes**, because the server answers with a line for each device; saving checks every device either way.
 - If someone else changed the group while you were editing, **This group changed** shows their version next to yours. Choose **Use latest name**, **Use latest description** or **Use latest members**, or keep your edits, then **Save changes**.
 - A group change that would add devices to a canary that's still running is refused, with a link to that canary.
 
