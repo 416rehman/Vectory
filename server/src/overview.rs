@@ -7,6 +7,8 @@ use serde_json::{Map, Value, json};
 use sqlx::{Row, SqliteConnection};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// A metrics sample this recent counts as the device reporting.
+const METRICS_FRESH_SECONDS: i64 = 180;
 /// A released version still applying after this long is "stuck".
 const STUCK_AFTER_MINUTES: i64 = 10;
 /// Scheduled rollouts starting within this window appear with live ones.
@@ -65,12 +67,26 @@ pub(crate) async fn device_aggregates(
         .iter()
         .filter(|d| data_plane_issue(d).is_some())
         .count();
+    // Applied devices with no metrics sample in the last three minutes: only
+    // Vector's own log could show one of them failing to deliver.
+    let fresh_after = Utc::now() - Duration::seconds(METRICS_FRESH_SECONDS);
+    let unmeasured = live
+        .iter()
+        .filter(|d| d["status"] == "verified")
+        .filter(|d| {
+            !d["telemetry"]["sampled_at"]
+                .as_str()
+                .and_then(time)
+                .is_some_and(|at| at >= fresh_after)
+        })
+        .count();
     let versions = versions(conn, live).await?;
     let attention = attention(conn, live, &versions).await?;
     Ok(json!({
         "devices_managed": managed,
         "devices_on_desired": on_desired,
         "devices_degraded": degraded,
+        "devices_unmeasured": unmeasured,
         "versions": versions,
         "attention": attention,
     }))
@@ -475,6 +491,20 @@ async fn attention(
                     item["code"] = issue["code"].clone();
                     item["component_id"] = issue["component_id"].clone();
                 }
+            }
+            if group.cause == "unmanaged" {
+                // A local configuration adopted at setup keeps running until a
+                // pipeline is deployed.
+                item["adopted"] = json!(
+                    group
+                        .devices
+                        .iter()
+                        .filter(|d| {
+                            d["actual_sha256"].as_str().is_some_and(|s| !s.is_empty())
+                                && d["vector_running"] != false
+                        })
+                        .count()
+                );
             }
             if group.cause == "paused" {
                 item["requested"] = json!(

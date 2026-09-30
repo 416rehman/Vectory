@@ -16915,6 +16915,11 @@
             "minimum": 0,
             "description": "Security events skipped within the scanned window (at most 300 recent events)."
           },
+          "devices_unmeasured": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Applied devices (status verified) with no metrics sample in the last three minutes: their delivery cannot be measured."
+          },
           "counts": {
             "$ref": "#/components/schemas/OverviewCounts"
           },
@@ -17261,6 +17266,11 @@
             "type": "integer",
             "minimum": 0,
             "description": "Paused groups only: pauses set on the host."
+          },
+          "adopted": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unmanaged groups only: devices running a local configuration adopted at setup (Vector not reported stopped)."
           },
           "title": {
             "anyOf": [
