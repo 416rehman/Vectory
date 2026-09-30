@@ -620,7 +620,8 @@ try {
       const chip = first.locator(".overview-running-group");
       await expect(chip).toHaveCount(1);
       await expect(chip).toContainText("Edge collectors");
-      await expect(chip).toContainText("3");
+      // The count is read out with its unit, not as a bare number.
+      await expect(chip).toHaveAccessibleName("Edge collectors, 3 devices");
       await expect(chip).toHaveAttribute(
         "href",
         `#/devices?running=${version}&group=${uuid(60)}`,
@@ -640,8 +641,8 @@ try {
         "No metrics yet",
       );
       await expect(second.locator(".overview-running-group")).toHaveText([
-        "Web tier4",
-        "Edge collectors3",
+        "Web tier4, 4 devices",
+        "Edge collectors3, 3 devices",
         "and 2 more",
       ]);
       await expect(card).toContainText("Showing 2 of 5 pipeline versions.");
