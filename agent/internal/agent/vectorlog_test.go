@@ -110,6 +110,41 @@ func TestVectorLogSummariesGroupRedactAndBound(t *testing.T) {
 	}
 }
 
+// "Recent Vector errors" are the running configuration's: once Vector starts
+// or reloads another one, errors logged under the old one are not reported.
+func TestVectorLogSummaryForgetsAConfigurationVectorNoLongerRuns(t *testing.T) {
+	l := newVectorLog("")
+	now := time.Date(2026, 9, 29, 3, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	r := testRedactor(`{"sinks":{"web":{"type":"http","uri":"https://logs.example.com"}}}`)
+	l.beginCapture(true)
+	l.endCapture()
+	for i := 0; i < 3; i++ {
+		fmt.Fprintln(l, logLine("ERROR", "Error binding socket.", "web", ""))
+	}
+	if got := l.summaries(r); len(got) != 1 || got[0].Count != 3 {
+		t.Fatalf("first version: %+v", got)
+	}
+	// Another version starts: its report starts empty.
+	now = now.Add(6 * time.Minute)
+	l.beginCapture(false)
+	l.endCapture()
+	if got := l.summaries(r); len(got) != 0 {
+		t.Fatalf("errors of the replaced version reported: %+v", got)
+	}
+	// The same message under the new version counts from its own first time.
+	l.beginCapture(false)
+	fmt.Fprintln(l, logLine("ERROR", "Error binding socket.", "web", ""))
+	now = now.Add(time.Minute)
+	l.endCapture()
+	l.beginCapture(false)
+	l.endCapture()
+	fmt.Fprintln(l, logLine("ERROR", "Error binding socket.", "web", ""))
+	if got := l.summaries(r); len(got) != 1 || got[0].Count != 1 || !got[0].FirstSeen.Equal(now) {
+		t.Fatalf("new version's error: %+v", got)
+	}
+}
+
 // A pipeline's VRL log() writes to the same JSON stream as Vector's internal
 // log, under the vrl::stdlib::log target. It must never count as Vector's own
 // reload verdict.

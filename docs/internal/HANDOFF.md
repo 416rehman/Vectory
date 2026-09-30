@@ -30,19 +30,15 @@ Measured once, on 2026-09-26, with a debug build of the server (SHA-256 `68cb4de
 
 ## Open defects
 
-From the specification audit and the round-2 reviews, each re-checked against `a469266`. Severity follows the reviews: P0 breaks a hard requirement or a status claim, P1 misses a required capability or test.
+From the specification audit and the round-2 reviews. Each was re-checked against `a469266`; defects fixed on the branch since then are removed (the install command's `curl -k`, the missing trust choice, rollback during a canary, an unautomated clean install and `go test` without `-json`). Severity follows the reviews: P0 breaks a hard requirement or a status claim, P1 misses a required capability or test.
 
 | Sev. | Defect | Where |
 | --- | --- | --- |
-| P0 | For a server with a private CA, the generated Linux and macOS install command downloads the installer with `curl -k`. The page's SHA-256 check protects the bytes, but the specification forbids skipping certificate verification. | `dashboard/src/enrollmentCommands.ts` |
-| P0 | The specification asks Add device for an explicit system-trust or CA-file choice with `--ca-file=`. The dashboard instead pins the server's CA automatically with `--ca-sha256`; the choice needs an owner decision ([ADR 0010](../adr/0010-automatic-server-ca-pinning.md), proposed). | `dashboard/src/enrollmentCommands.ts` |
-| P0 | Rollback is refused while a canary is in progress (`UNSAFE_SOURCE_REMOVAL`); the operator has to cancel the rollout first. | `server/src/rollback_review.rs` |
-| P1 | The clean-install workflow (download, enroll, edit, publish, assign, activate, observe) is not automated; `tests/native-workflow.mjs` runs by hand. Compose has never been started by a workflow. `release-candidate.yml` has never run, so no package is built or installed by a workflow. | CI |
+| P1 | `release-candidate.yml` has never run, so no package is built or installed by a workflow. The `compose` job starts the stack in CI: on its first run all three services were healthy and the validator had no route to the internet, but its request to the proxy was refused in the first second and now retries, so the job has not yet passed. | CI |
 | P1 | Fault injection is missing for disk exhaustion, an interrupted download, a validation timeout, the proxy path and a real process kill at each journal boundary. | `agent/internal/agent` |
 | P1 | Device-CA rotation is only a manual stopped-server overlap (`VECTORY_PREVIOUS_DEVICE_CA`), with no command and no test. | `server/src/crypto.rs` |
 | P1 | Enrollment tokens have no preapproved-name list and no administrator-defined enrollment scope. The scheduled late-start deadline is fixed at one hour, and the outcome of cancel racing activation is undocumented. | `server/src/token_requests.rs`, `server/src/rollout.rs` |
 | P1 | Adoption does not inventory or back up the running Vector's startup arguments and configuration files. | `agent/internal/agent/setup.go` |
-| P1 | CI runs `go test` without `-json` or `-v`, so its log cannot show that each native test ran rather than skipped. | `.github/workflows/ci.yml` |
 | P1 | First run: on a host without systemd, setup reports success and the device goes offline minutes later; a first version that fails to start is shown as "Its local config, from before Vectory"; delivery failures are invisible without a metrics exporter; Add device blocks a second install command until an already-used token is revoked. | agent `setup.go`, `reconcile.go`; `server/src/data_plane.rs`; `dashboard/src/enrollmentTokenRequests.ts` |
 | P1 | Fleet scale: `GET /devices` has no paging, several pages download the whole fleet, and group membership checks are quadratic. The Overview and the rollout page disagree about a canary that applied but is not delivering. | `server/src/api.rs`, `dashboard/src` |
 | P1 | Rollout wording and flow: rollback sentences name the wrong version, Needs you keeps resolved rollbacks for a day, redeploying after a rollback takes two conflict rounds, the publish review says "Checked" beside tests Vector refused (tests never gate publishing), and the Overview does not show what runs where. | `dashboard/src`, `server/src/api.rs` |

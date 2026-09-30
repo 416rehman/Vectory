@@ -283,7 +283,12 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
   const running = runningVersionText(device);
   if (device.status === "revoked")
     return (
-      <span className="device-muted">Unknown. Device access is revoked.</span>
+      <span className="device-muted">
+        {/* What the agent last verified is known; what runs now isn't. */}
+        {running
+          ? `Revoked · last verified running ${running}`
+          : "Unknown. Device access is revoked."}
+      </span>
     );
   if (!device.desired_version_id)
     return <span className="device-muted">{unmanagedRunningText(device)}</span>;
@@ -362,6 +367,15 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
     </span>
   );
 }
+/**
+ * Refusals the agent decides itself, before Vector sees the version: the
+ * failure is the host's policy, not a Vector check.
+ */
+const agentRefusals: Record<string, string> = {
+  CAPABILITY_DENIED: "because this host's restricted mode doesn't allow it",
+  DYNAMIC_CAPABILITY_DENIED:
+    "because this host's restricted mode doesn't allow it",
+};
 function FailureDetails({
   device,
   version,
@@ -372,15 +386,16 @@ function FailureDetails({
   const attempt = currentConfigurationAttempt(device, version);
   if (!attempt?.error || !["failed", "rolled_back"].includes(attempt.state))
     return null;
+  const phrase =
+    agentRefusals[attempt.error.code] ||
+    failureStagePhrase(attempt.error.stage);
   return (
     <div className="device-failure-details" role="note">
       <div className="device-failure-details-head">
         <CircleAlert size={15} aria-hidden="true" />
         <strong>
           {attempt.state === "rolled_back" ? "Rolled back" : "Apply failed"}
-          {failureStagePhrase(attempt.error.stage)
-            ? ` ${failureStagePhrase(attempt.error.stage)}`
-            : ""}
+          {phrase ? ` ${phrase}` : ""}
         </strong>
         <small className="device-muted">
           Agent code <code>{attempt.error.code}</code>

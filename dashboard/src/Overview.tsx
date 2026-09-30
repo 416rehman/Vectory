@@ -1053,9 +1053,11 @@ function NeedsYou({
           <div>
             <strong>Nothing needs you right now</strong>
             <p>
-              {live.length
-                ? `All ${countLabel(live.length, "device")} are applied and checking in.`
-                : "Failures, offline devices and stuck rollouts will show up here."}
+              {live.length === 1
+                ? "The device is applied and checking in."
+                : live.length
+                  ? `All ${countLabel(live.length, "device")} are applied and checking in.`
+                  : "Failures, offline devices and stuck rollouts will show up here."}
             </p>
           </div>
         </div>

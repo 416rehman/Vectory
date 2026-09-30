@@ -1,13 +1,17 @@
 import { Layers, ShieldCheck } from "lucide-react";
 import type { AgentInstall } from "./api";
 import DocLink from "./DocLink";
-import { CopyButton } from "./ui";
+import { CopyButton, Field } from "./ui";
 import {
+  effectiveTrust,
   fingerprint,
   fingerprintRows,
+  pinnedCAFile,
   shortDigest,
+  trustChoices,
   type HostOS,
   type Mode,
+  type TrustChoice,
 } from "./enrollmentCommands";
 import "./enrollment-connection.css";
 
@@ -71,6 +75,108 @@ export function ModeCards({
   );
 }
 
+const trustOptions: Record<TrustChoice, { label: string; summary: string }> = {
+  pinned: {
+    label: "Pin this server's CA",
+    summary:
+      "The host trusts only the CA whose fingerprint this page shows. The command carries the certificate, so there's nothing to copy first.",
+  },
+  file: {
+    label: "A CA certificate file on the host",
+    summary:
+      "For a CA your team distributes. The agent reads the file on every connection, so keep it on the host.",
+  },
+  system: {
+    label: "The host's trusted certificates",
+    summary:
+      "For a publicly trusted certificate, or a private CA the host already trusts.",
+  },
+};
+
+/**
+ * How the host checks the agent listener before it sends the token. The
+ * command carries exactly the matching option (--ca-sha256, --ca-file PATH
+ * or --ca-file=); a typed path is only a path, never a checked connection.
+ */
+export function TrustChoices({
+  install,
+  os,
+  value,
+  onChange,
+  caFile,
+  onCaFile,
+  caFileProblem,
+}: {
+  install: AgentInstall;
+  os: HostOS;
+  value: TrustChoice | "";
+  onChange: (choice: TrustChoice) => void;
+  caFile: string;
+  onCaFile: (path: string) => void;
+  caFileProblem: string;
+}) {
+  const offered = trustChoices(install);
+  const current = effectiveTrust(install, value || undefined);
+  const example =
+    os === "windows"
+      ? "C:\\ProgramData\\Vectory\\server-ca.pem"
+      : "/etc/vectory/server-ca.pem";
+  return (
+    <fieldset className="enroll-trust">
+      <legend>How the host checks this server</legend>
+      <p className="control-muted">
+        Before it sends the token, the host checks the certificate of the agent
+        listener ({install.agent_url || "port 8443"}). That&apos;s separate from
+        your browser&apos;s trust and from the identity the device gets when it
+        enrolls.
+      </p>
+      <div className="enroll-trust-options">
+        {offered.map((choice, index) => (
+          <label className="enroll-trust-option" key={choice}>
+            <input
+              type="radio"
+              name="enroll-trust"
+              value={choice}
+              checked={current === choice}
+              onChange={() => onChange(choice)}
+            />
+            <span>
+              <strong>
+                {trustOptions[choice].label}
+                {index === 0 && (
+                  <span className="enroll-default"> · default</span>
+                )}
+              </strong>
+              <small>{trustOptions[choice].summary}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      {current === "file" && (
+        <Field
+          label="CA certificate on the host"
+          hint={
+            caFileProblem ||
+            "The PEM file of the CA that issued the agent listener's certificate. Ask whoever runs the server for it (with the development PKI, it's .local/pki/ca.pem on the server) and copy it over a channel you trust."
+          }
+        >
+          <input
+            value={caFile}
+            aria-invalid={!!caFileProblem}
+            onChange={(event) => onCaFile(event.target.value)}
+            placeholder={example}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+      )}
+      <DocLink topic="installation" section="trust-the-server-certificate">
+        How hosts check the server
+      </DocLink>
+    </fieldset>
+  );
+}
+
 export function isAbsoluteLocalFilePath(value: string, os: string): boolean {
   if (!value || value !== value.trim()) return false;
   if (os !== "windows")
@@ -129,12 +235,16 @@ export function SecurityReceipt({
   agentSha256,
   expiresAt,
   maxUses,
+  trust,
+  caFile,
 }: {
   install: AgentInstall;
   os: HostOS;
   agentSha256: string | null;
   expiresAt: string;
   maxUses: number | null;
+  trust: TrustChoice;
+  caFile: string;
 }) {
   const certificate = install.certificate;
   const expiry = new Date(expiresAt);
@@ -172,22 +282,40 @@ export function SecurityReceipt({
       <div>
         <dt>Server</dt>
         <dd>
-          {certificate?.publicly_trusted ? (
-            <>
-              Verified with the host&apos;s trusted certificate authorities; the
-              certificate is publicly trusted.
-            </>
-          ) : certificate?.ca_sha256 ? (
+          {trust === "pinned" && certificate?.ca_sha256 ? (
             <>
               CA pinned
               {certificate.ca_name ? ` (${certificate.ca_name})` : ""}. The host
               trusts no other certificate for this server, and never the first
-              one it happens to see. If setup asks you to compare, it shows this
-              SHA-256 fingerprint:
+              one it happens to see.
+              {os !== "windows" && (
+                <>
+                  {" "}
+                  The command writes this CA to <code>{pinnedCAFile}</code>, so
+                  the installer download is checked against it too.
+                </>
+              )}{" "}
+              If setup asks you to compare, it shows this SHA-256 fingerprint:
               <Fingerprint sha256={certificate.ca_sha256} />
             </>
+          ) : trust === "file" ? (
+            <>
+              Checked against the CA certificate at <code>{caFile}</code> on the
+              host, for the download and for every connection after it. Put the
+              file there before you run the command.
+            </>
+          ) : certificate?.publicly_trusted ? (
+            <>
+              Checked with the host&apos;s trusted certificates; this
+              server&apos;s certificate is publicly trusted.
+            </>
           ) : (
-            "The host must already trust this server's certificate."
+            <>
+              Checked with the host&apos;s trusted certificates. This
+              server&apos;s certificate comes from a private CA, so the host
+              must already trust it, or setup stops before it asks for the
+              token.
+            </>
           )}
         </dd>
       </div>

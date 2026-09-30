@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -18,6 +19,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -97,6 +99,55 @@ func TestProbePinnedCAVerifiesChainHostnameAndSendsNothingSecret(t *testing.T) {
 	_, err = ProbePinnedCA(context.Background(), server.URL, wrong[:])
 	if ce, ok := AsConnectionError(err); !ok || ce.Code != "TLS_PIN_MISMATCH" || ce.Delivery != NotSent {
 		t.Fatal("wrong pin accepted or misclassified", err)
+	}
+}
+
+func TestPinMismatchPrintsBothFingerprintsInFullWithTheFirstDifference(t *testing.T) {
+	ca := makeCA(t)
+	server := chainServer(t, ca, nil, false, http.NotFoundHandler())
+	actual, _ := hex.DecodeString(fingerprint(ca.cert))
+	// A pin that differs only in byte 16: the short form hid exactly this.
+	pin := bytes.Clone(actual)
+	pin[15] ^= 0x90
+	_, err := ProbePinnedCA(context.Background(), server.URL, pin)
+	ce, ok := AsConnectionError(err)
+	if !ok || ce.Code != "TLS_PIN_MISMATCH" {
+		t.Fatal("mismatch not classified", err)
+	}
+	lines := strings.Split(ce.Message, "\n")
+	want := []string{
+		"The server's certificates don't match the pinned CA:",
+		"expected " + Fingerprint(pin),
+		"received " + Fingerprint(actual) + "  (first difference at byte 16)",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("message:\n%s\nwant:\n%s", ce.Message, strings.Join(want, "\n"))
+	}
+	if strings.Contains(ce.Message, "...") || !strings.Contains(ce.Fix, "full fingerprint on Add device") {
+		t.Fatalf("the comparison must use full fingerprints: %q / %q", ce.Message, ce.Fix)
+	}
+	// Printed as one error, the fix follows the aligned lines, never the last one.
+	if got := ce.Error(); !strings.HasSuffix(got, "byte 16)\n"+ce.Fix) {
+		t.Fatalf("error text: %q", got)
+	}
+	if got := IndentLines("a\nb", 3); got != "a\n   b" {
+		t.Fatalf("indent: %q", got)
+	}
+}
+
+func TestUntrustedCAFixShowsTheFullFingerprintInAddDeviceRows(t *testing.T) {
+	ca := makeCA(t)
+	leaf := makeCA(t).cert
+	e := classifyCertificate(&url.URL{Scheme: "https", Host: "localhost:8443"}, x509.UnknownAuthorityError{Cert: leaf}, []*x509.Certificate{leaf, ca.cert})
+	pairs := strings.Split(Fingerprint(certificateSHA256(ca.cert)), ":")
+	// Four rows of eight pairs, as Add device shows them: every byte is there
+	// to compare, and none of it is a pin to paste.
+	rows := []string{}
+	for i := 0; i < 32; i += 8 {
+		rows = append(rows, "  "+strings.Join(pairs[i:i+8], ":"))
+	}
+	if e.Code != "TLS_UNKNOWN_AUTHORITY" || !strings.HasSuffix(e.Fix, "row by row:\n"+strings.Join(rows, "\n")) || !strings.Contains(e.Fix, "full fingerprint on Add device") || strings.Contains(e.Fix, "...") {
+		t.Fatalf("fix: %q", e.Fix)
 	}
 }
 

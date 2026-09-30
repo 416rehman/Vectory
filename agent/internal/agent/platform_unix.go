@@ -178,7 +178,8 @@ func lockAgentFile(dir string) (func(), error) {
 	}
 	if e = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); e != nil {
 		f.Close()
-		return nil, errors.New("another agent operation is running")
+		return nil, lockHeld(dir)
 	}
-	return func() { unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
+	recordLockOwner(f)
+	return func() { clearLockOwner(f); unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
 }

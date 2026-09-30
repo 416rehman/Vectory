@@ -83,6 +83,8 @@ export function deviceApplicationExplanation(
 ) {
   if (device.status === "offline")
     return "This is the assigned version. Current operation cannot be confirmed while the device is offline.";
+  if (device.status === "revoked")
+    return "This device's access is revoked, so it no longer checks in: what it runs now is unknown.";
   if (device.status === "verified")
     return "The agent verified that this version is active.";
   if (device.sync_paused || device.local_paused)

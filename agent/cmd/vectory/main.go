@@ -192,7 +192,7 @@ func (c *cli) fail(err error) int {
 		}
 		c.output(document)
 	} else {
-		fmt.Fprintln(c.stderr, "vectory:", err.Error())
+		fmt.Fprintln(c.stderr, "vectory:", agent.IndentLines(err.Error(), len("vectory: ")))
 	}
 	return exitFailed
 }

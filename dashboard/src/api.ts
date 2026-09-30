@@ -663,6 +663,10 @@ export type Device = {
   groups?: DeviceGroups;
   /** `GET /devices/{id}` from servers offering wake-ups. */
   wake?: WakeProjection;
+  /** SHA-256 of the running agent build, from the latest check-in. */
+  agent_sha256?: string;
+  /** The agent's state directory on the host, from the latest check-in. */
+  state_dir?: string;
 };
 /**
  * Whether the device's agent holds a wait right now, so a change reaches it
@@ -1462,6 +1466,8 @@ export type Token = {
   uses: number;
   max_uses?: number | null;
   name_prefix?: string | null;
+  /** Set when the token enrolls only this device name (newer servers). */
+  device_name?: string;
   revoked: boolean;
   created_at: string;
   recovery_device_id?: string;
@@ -1518,6 +1524,16 @@ export const AgentInstallSchema = z.object({
       publicly_trusted: z.boolean(),
       ca_sha256: sha256Hex.nullable(),
       ca_fingerprint: z.string().max(95).nullable().optional(),
+      // Public, like the fingerprint. Only base64 lines between the markers,
+      // so a command can carry it in single quotes.
+      ca_pem: z
+        .string()
+        .max(16384)
+        .regex(
+          /^-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]{1,76}\n)+-----END CERTIFICATE-----\n?$/,
+        )
+        .nullable()
+        .optional(),
       ca_name: z.string().max(200).nullable().optional(),
       ca_issuer: z.string().max(200).nullable().optional(),
       ca_not_after: z.string().nullable().optional(),

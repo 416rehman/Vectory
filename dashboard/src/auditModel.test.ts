@@ -192,6 +192,28 @@ describe("readable audit rows", () => {
       outcomes: "2 applied, 1 rolled back",
     });
   });
+  it("counts one device's steps once, by its latest result", () => {
+    const at = (id: string, outcome: string, created_at: string) => ({
+      ...event(id, "device.apply_state", outcome, "web-01"),
+      created_at,
+    });
+    // Newest first, as the audit list shows them, or oldest first.
+    for (const items of [
+      [
+        at("2", "verified_applied", "2026-09-29T10:01:00Z"),
+        at("1", "desired", "2026-09-29T10:00:00Z"),
+      ],
+      [
+        at("1", "desired", "2026-09-29T10:00:00Z"),
+        at("2", "verified_applied", "2026-09-29T10:01:00Z"),
+      ],
+    ])
+      expect(deviceResultsSummary(items)).toEqual({
+        title: "2 results for 1 device",
+        devices: "web-01",
+        outcomes: "1 applied",
+      });
+  });
   it("names a refused enrollment", () => {
     expect(
       auditEventLabel({ action: "device.enroll", outcome: "failure" }),

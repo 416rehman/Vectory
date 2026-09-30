@@ -55,7 +55,12 @@ const sentence = (text: string) => (/[.!?…]$/.test(text) ? text : `${text}.`);
 
 /** "Reason (component, line 1, column 2). Fix." for one finding. */
 export function describeDiagnostic(diagnostic: Diagnostic) {
-  const place = diagnosticPlace(diagnostic);
+  // The agent's own findings name their component already ('Sink "out"
+  // (http) sends to …'): say it once.
+  const named =
+    !!diagnostic.component_id &&
+    diagnostic.message.includes(`"${diagnostic.component_id}"`);
+  const place = diagnosticPlace(diagnostic).slice(named ? 1 : 0);
   const message = diagnostic.message.replace(/\.$/, "");
   const reason = sentence(
     place.length ? `${message} (${place.join(", ")})` : message,

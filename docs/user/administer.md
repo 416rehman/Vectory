@@ -55,9 +55,9 @@ A reset link changes only the password. Disabled accounts can't use reset links.
 1. In **People & security**, choose **Set up authenticator** and confirm your password.
 2. Scan the QR code with your authenticator app, or expand **Can't scan the code?** and choose **Copy setup key**. The QR code is generated in your browser, without any outside service.
 3. Enter the app's current six-digit code and choose **Enable two-factor authentication**. The setup expires after 10 minutes.
-4. Save the eight single-use recovery codes somewhere safe, outside Vectory. They can't be shown again.
+4. Save the eight single-use recovery codes somewhere safe, outside Vectory. They can't be shown again. Each shows in groups of four characters so you can type it from paper; the spaces are optional.
 
-From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code instead**.
+From then on, sign-in asks for your password, then a code from the app. If you don't have the app, choose **Use a recovery code**. After a recovery-code sign-in, Vectory says how many codes are left, for example "You used a recovery code; 7 left", and suggests generating new ones under **People & security** when two or fewer remain.
 
 > [!IMPORTANT]
 > **Keep recovery codes somewhere else**

@@ -75,6 +75,14 @@ const iso = (offset = 0) =>
 const tokenId = "8b64e164-3e33-4574-b8f9-829d7b77c2b7";
 const secret = "synthetic-unused-enrollment-secret-0123456789abcdef";
 const pin = "1f3c" + "0".repeat(56) + "9ab0";
+// A synthetic CA certificate: only its PEM shape matters here.
+const caPem = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
+  "U3ludGhldGljU3ludGhldGljU3ludGhldGlj==",
+  "-----END CERTIFICATE-----",
+  "",
+].join("\n");
 const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
 const windowsSha = "e".repeat(64);
 const deviceId = "5e7a9c2d-0000-4000-8000-000000000001";
@@ -99,6 +107,7 @@ const agentInstall = (overrides = {}) => ({
     publicly_trusted: false,
     ca_sha256: pin,
     ca_fingerprint: null,
+    ca_pem: caPem,
     ca_name: "Synthetic agent CA",
     ca_issuer: "Synthetic agent CA",
     ca_not_after: iso(86400000 * 30),
@@ -410,15 +419,22 @@ try {
         expect(f.state.tokenRequest.max_uses).toBe(1);
         expect(f.state.tokenRequest.expires_hours).toBe(1);
         const text = await commandText(f.page);
+        // The download is verified against the server's CA; nothing turns a
+        // certificate check off.
         expect(text).toBe(
           [
-            "curl -fsSLk https://vectory.example.test:8443/agent/v1/install.sh -o vectory-install.sh",
-            `echo '${installerSha}  vectory-install.sh' | sha256sum -c - &&`,
-            "  sudo sh vectory-install.sh \\",
-            "    --mode restricted \\",
-            "    --create-user",
+            `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
+            "curl -fsSL --cacert vectory-ca.pem \\",
+            "  -o vectory-install.sh \\",
+            "  https://vectory.example.test:8443/agent/v1/install.sh &&",
+            `echo '${installerSha}  vectory-install.sh' \\`,
+            "  | sha256sum -c - &&",
+            "sudo sh vectory-install.sh \\",
+            "  --mode restricted \\",
+            "  --create-user",
           ].join("\n"),
         );
+        expect(text).not.toMatch(/(^|\s)-[A-Za-z]*k[A-Za-z]*(\s|$)|--insecure/);
         await expect(f.page.locator("body")).not.toContainText(secret);
         await f.page.getByRole("button", { name: "Show", exact: true }).click();
         await expect(f.page.locator(".enroll-secret code")).toHaveText(secret);
@@ -439,7 +455,7 @@ try {
           .getByLabel("Run the agent as a systemd service", { exact: true })
           .uncheck();
         expect(await commandText(f.page)).toContain(
-          "sudo sh vectory-install.sh \\\n    --mode full \\\n    --name edge-42 \\\n    --service none",
+          "sudo sh vectory-install.sh \\\n  --mode full \\\n  --name edge-42 \\\n  --service none",
         );
         expect(f.state.posts).toBe(1);
         await f.page
@@ -494,6 +510,60 @@ try {
         ).toBeEnabled();
       } finally {
         f.state.releaseToken?.();
+        await f.context.close();
+      }
+    },
+  );
+  await check(
+    "at 1440 px no line of the install command is cut off beside Copy, for any certificate choice",
+    async () => {
+      const f = await fixture({ width: 1440 });
+      try {
+        await f.createCommand();
+        await f.advanced();
+        const measure = () =>
+          f.page
+            .locator(".enroll-command")
+            .first()
+            .evaluate((block) => {
+              const pre = block.querySelector("pre");
+              const button = block.querySelector("button");
+              return {
+                scrollWidth: pre.scrollWidth,
+                clientWidth: pre.clientWidth,
+                preRight: pre.getBoundingClientRect().right,
+                copyLeft: button.getBoundingClientRect().left,
+              };
+            });
+        for (const [label, path] of [
+          ["Pin this server's CA", ""],
+          ["The host's trusted certificates", ""],
+          ["A CA certificate file on the host", "/etc/vectory/server-ca.pem"],
+        ]) {
+          await f.page
+            .getByRole("radio", { name: new RegExp(`^${label}`) })
+            .check();
+          if (path)
+            await f.page
+              .getByLabel("CA certificate on the host", { exact: true })
+              .fill(path);
+          const measured = await measure();
+          geometry.push({
+            width: 1440,
+            state: `command-${label}`,
+            ...measured,
+          });
+          // Every line fits, so nothing needs scrolling to be read, and the
+          // Copy button sits beside the text, never over it.
+          expect(measured.scrollWidth).toBeLessThanOrEqual(
+            measured.clientWidth,
+          );
+          expect(measured.copyLeft).toBeGreaterThanOrEqual(measured.preRight);
+        }
+        expect(await commandText(f.page)).toContain(
+          "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
+        );
+      } finally {
         await f.context.close();
       }
     },
@@ -602,7 +672,7 @@ try {
         ).toBeChecked();
         await f.createCommand();
         expect(await commandText(f.page)).toContain(
-          "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh \\\n    --mode restricted \\\n    --create-user",
+          "  | shasum -a 256 -c - &&\nsudo sh vectory-install.sh \\\n  --mode restricted \\\n  --create-user",
         );
         await f.page
           .getByRole("radio", { name: "Windows", exact: true })
@@ -704,7 +774,7 @@ try {
       try {
         await f.createCommand();
         expect(await commandText(f.page)).toMatch(
-          /^curl -fsSL https:\/\/vectory\.example\.test:8443\/agent/,
+          /^curl -fsSL \\\n {2}-o vectory-install\.sh \\\n {2}https:\/\/vectory\.example\.test:8443\/agent/,
         );
         await expect(f.page.getByRole("definition").nth(1)).toContainText(
           "publicly trusted",

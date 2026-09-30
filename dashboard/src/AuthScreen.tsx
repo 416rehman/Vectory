@@ -38,6 +38,8 @@ import {
   formatCountdown,
   useCountdown,
 } from "./authControls";
+import { MfaStatusSchema } from "./mfaActionModel";
+import { notifyToast } from "./toast";
 import { passwordIssue } from "./passwordStrength";
 import { Button, Spinner } from "./ui";
 import { Brand } from "./Brand";
@@ -175,9 +177,7 @@ export default function AuthScreen({
   const secretInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   // Focus after a failed request waits until the form is enabled again.
-  const focusNext = useRef<React.RefObject<HTMLInputElement | null> | null>(
-    null,
-  );
+  const focusNext = useRef<(() => HTMLElement | null | undefined) | null>(null);
   const throttle = useCountdown(throttledUntil);
   const throttled = throttle !== null && throttle > 0;
   const instance = status?.instance_name?.trim() || "Vectory";
@@ -232,7 +232,7 @@ export default function AuthScreen({
     if (busy || checking || !focusNext.current) return;
     const target = focusNext.current;
     focusNext.current = null;
-    requestAnimationFrame(() => target.current?.focus());
+    requestAnimationFrame(() => target()?.focus());
   }, [busy, checking]);
   useEffect(() => {
     if (throttle === 0) {
@@ -295,6 +295,39 @@ export default function AuthScreen({
     setFields({});
     setAlert("");
     setUnconfirmed(null);
+  }
+  /** Typing in a field clears its own error; the other fields keep theirs. */
+  function edited(key: keyof Fields) {
+    setFields((current) =>
+      current[key] ? { ...current, [key]: undefined } : current,
+    );
+  }
+  /** The first field of a form that says what's wrong with it. */
+  const firstInvalid = (form: HTMLFormElement) => () =>
+    form.querySelector<HTMLElement>('[aria-invalid="true"]');
+  /** After a refused submit, focus moves to the first field to fix. */
+  function focusFirstInvalid(form: HTMLFormElement) {
+    const target = firstInvalid(form);
+    requestAnimationFrame(() => target()?.focus());
+  }
+  /** After a recovery-code sign-in, say how many codes are left. */
+  async function announceRecoveryCode() {
+    let left: number | null = null;
+    try {
+      const status = await withRequestDeadline(
+        (signal) => api("/mfa", { signal }, MfaStatusSchema),
+        30000,
+      );
+      left = status.recovery_codes_remaining ?? null;
+    } catch {
+      // The count is a convenience; the sign-in already succeeded.
+    }
+    notifyToast(
+      left === null
+        ? "You used a recovery code. Each one works once."
+        : `You used a recovery code; ${left} left.${left <= 2 ? " Generate new ones under People & security." : ""}`,
+      { tone: "info" },
+    );
   }
   function toSignIn(next?: Notice, signInEmail?: string) {
     if (signInEmail !== undefined) setEmail(signInEmail);
@@ -460,7 +493,7 @@ export default function AuthScreen({
         )
       )
         setAlert((failure as Error).message);
-      focusNext.current = passwordInput;
+      focusNext.current = () => passwordInput.current;
     } finally {
       if (requests.finish(request)) setBusy(false);
     }
@@ -507,6 +540,7 @@ export default function AuthScreen({
       if (!authUserMatches(session.user, intended))
         throw new Error("The returned account did not match this sign-in.");
       adopt(session);
+      if (recovery) void announceRecoveryCode();
     } catch (failure) {
       if (!requests.current(request)) return;
       setCode("");
@@ -545,7 +579,7 @@ export default function AuthScreen({
         });
       } else if (!applyThrottle(failure, "Too many attempts for this account."))
         setAlert((failure as Error).message);
-      focusNext.current = codeInput;
+      focusNext.current = () => codeInput.current;
     } finally {
       if (requests.finish(request)) setBusy(false);
     }
@@ -553,6 +587,7 @@ export default function AuthScreen({
 
   async function setUp(event: React.FormEvent) {
     event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
     if (initialized !== false || connectionError) return;
     const intended = email.trim();
     const problems: Fields = {};
@@ -567,6 +602,7 @@ export default function AuthScreen({
       problems.confirm = "The passwords don't match.";
     if (Object.keys(problems).length) {
       setFields(problems);
+      focusFirstInvalid(form);
       return;
     }
     const request = requests.claim();
@@ -646,13 +682,17 @@ export default function AuthScreen({
           secret:
             "That setup secret doesn't match this server's. Copy it again and check for extra characters.",
         });
-        secretInput.current?.focus();
-      } else if (failed === "PASSWORD_TOO_WEAK")
+        focusNext.current = firstInvalid(form);
+      } else if (failed === "PASSWORD_TOO_WEAK") {
         setFields({ password: message });
-      else if (failed === "EMAIL_INVALID")
+        focusNext.current = firstInvalid(form);
+      } else if (failed === "EMAIL_INVALID") {
         setFields({ email: "Enter a valid email address." });
-      else if (failed === "NAME_INVALID") setFields({ name: message });
-      else if (!applyThrottle(failure, "Too many setup attempts."))
+        focusNext.current = firstInvalid(form);
+      } else if (failed === "NAME_INVALID") {
+        setFields({ name: message });
+        focusNext.current = firstInvalid(form);
+      } else if (!applyThrottle(failure, "Too many setup attempts."))
         setAlert(message);
     } finally {
       if (requests.finish(request)) setBusy(false);
@@ -661,6 +701,7 @@ export default function AuthScreen({
 
   async function resetPassword(event: React.FormEvent) {
     event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
     if (view.kind !== "reset") return;
     const resetCode = (view.code || code).trim().toLowerCase();
     const problems: Fields = {};
@@ -673,6 +714,7 @@ export default function AuthScreen({
       problems.confirm = "The passwords don't match.";
     if (Object.keys(problems).length) {
       setFields(problems);
+      focusFirstInvalid(form);
       return;
     }
     const request = requests.claim();
@@ -728,14 +770,17 @@ export default function AuthScreen({
 
   async function acceptInvite(event: React.FormEvent) {
     event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
     if (view.kind !== "invite" || !invite || invite === "invalid") return;
     const weak = passwordIssue(password, [invite.email, invite.name]);
     if (weak) {
       setFields({ password: weak });
+      focusFirstInvalid(form);
       return;
     }
     if (password !== confirm) {
       setFields({ confirm: "The passwords don't match." });
+      focusFirstInvalid(form);
       return;
     }
     const request = requests.claim();
@@ -872,9 +917,14 @@ export default function AuthScreen({
             : `Welcome, ${user.name.split(/\s+/)[0] || user.name}`,
         )}
         <p className="signin-lede">
-          {setup
-            ? "You're signed in as the first administrator. Three quick steps secure your workspace:"
-            : `Your account is ready. You're signed in as ${user.email}.`}
+          {setup ? (
+            "You're signed in as the first administrator. Three quick steps secure your workspace:"
+          ) : (
+            <>
+              Your account is ready. You&apos;re signed in as{" "}
+              <span className="auth-email">{user.email}</span>.
+            </>
+          )}
         </p>
         <ol className="checklist">
           <li>
@@ -953,7 +1003,7 @@ export default function AuthScreen({
           {view.email ? (
             <>
               {" "}
-              as <strong>{view.email}</strong>
+              as <strong className="auth-email">{view.email}</strong>
             </>
           ) : null}
           . Other browsers were signed out.
@@ -994,9 +1044,10 @@ export default function AuthScreen({
                     value={code}
                     aria-invalid={invalid || undefined}
                     aria-describedby={describedBy}
-                    onChange={(event) =>
-                      setCode(event.target.value.replace(/\s+/g, ""))
-                    }
+                    onChange={(event) => {
+                      setCode(event.target.value.replace(/\s+/g, ""));
+                      edited("code");
+                    }}
                   />
                 )}
               </AuthField>
@@ -1012,7 +1063,10 @@ export default function AuthScreen({
               name="new-password"
               autoComplete="new-password"
               value={password}
-              onChange={setPassword}
+              onChange={(value) => {
+                setPassword(value);
+                edited("password");
+              }}
               error={fields.password}
               autoFocus={fromLink}
               showStrength
@@ -1024,7 +1078,10 @@ export default function AuthScreen({
               name="confirm-password"
               autoComplete="new-password"
               value={confirm}
-              onChange={setConfirm}
+              onChange={(value) => {
+                setConfirm(value);
+                edited("confirm");
+              }}
               error={fields.confirm}
               revealed={revealed}
               onReveal={setRevealed}
@@ -1085,7 +1142,7 @@ export default function AuthScreen({
         {title(`Join ${invite.instance_name?.trim() || instance}`)}
         <p className="signin-lede">
           Welcome, {invite.name.split(/\s+/)[0] || invite.name}. Choose a
-          password for <strong>{invite.email}</strong>.
+          password for <strong className="auth-email">{invite.email}</strong>.
         </p>
         {alertBox}
         {checking && (
@@ -1109,7 +1166,10 @@ export default function AuthScreen({
               name="new-password"
               autoComplete="new-password"
               value={password}
-              onChange={setPassword}
+              onChange={(value) => {
+                setPassword(value);
+                edited("password");
+              }}
               error={fields.password}
               autoFocus
               showStrength
@@ -1122,7 +1182,10 @@ export default function AuthScreen({
               name="confirm-password"
               autoComplete="new-password"
               value={confirm}
-              onChange={setConfirm}
+              onChange={(value) => {
+                setConfirm(value);
+                edited("confirm");
+              }}
               error={fields.confirm}
               revealed={revealed}
               onReveal={setRevealed}
@@ -1156,7 +1219,8 @@ export default function AuthScreen({
                 This server reads it from the file set by{" "}
                 <code>VECTORY_BOOTSTRAP_SECRET_FILE</code>. {command.where}
               </p>
-              <CopyLine value={command.command} label="Command" />
+              {/* Wraps on a phone, so the whole path shows without scrolling. */}
+              <CopyLine value={command.command} label="Command" wrap />
             </>
           ) : hint?.source === "environment" ? (
             <p>
@@ -1187,7 +1251,10 @@ export default function AuthScreen({
               autoComplete="off"
               mono
               value={secret}
-              onChange={(value) => setSecret(value.replace(/[\r\n]/g, ""))}
+              onChange={(value) => {
+                setSecret(value.replace(/[\r\n]/g, ""));
+                edited("secret");
+              }}
               error={fields.secret}
               inputRef={secretInput}
               hint="Surrounding spaces and line breaks are ignored."
@@ -1204,7 +1271,10 @@ export default function AuthScreen({
                   value={name}
                   aria-invalid={invalid || undefined}
                   aria-describedby={describedBy}
-                  onChange={(event) => setName(event.target.value)}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    edited("name");
+                  }}
                 />
               )}
             </AuthField>
@@ -1219,7 +1289,10 @@ export default function AuthScreen({
                   value={email}
                   aria-invalid={invalid || undefined}
                   aria-describedby={describedBy}
-                  onChange={(event) => setEmail(event.target.value)}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    edited("email");
+                  }}
                 />
               )}
             </AuthField>
@@ -1228,7 +1301,10 @@ export default function AuthScreen({
               name="new-password"
               autoComplete="new-password"
               value={password}
-              onChange={setPassword}
+              onChange={(value) => {
+                setPassword(value);
+                edited("password");
+              }}
               error={fields.password}
               showStrength
               identity={[email, name]}
@@ -1240,7 +1316,10 @@ export default function AuthScreen({
               name="confirm-password"
               autoComplete="new-password"
               value={confirm}
-              onChange={setConfirm}
+              onChange={(value) => {
+                setConfirm(value);
+                edited("confirm");
+              }}
               error={fields.confirm}
               revealed={revealed}
               onReveal={setRevealed}
@@ -1299,7 +1378,7 @@ export default function AuthScreen({
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}
-                    placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx"
+                    placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
                     value={code}
                     aria-invalid={invalid || undefined}
                     aria-describedby={describedBy}

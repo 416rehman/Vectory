@@ -15,6 +15,8 @@ Deploying a new version of a pipeline to devices that run an older version of it
 
 After a rollback, deploying a fix of the same pipeline also replaces the rolled-back rollout and its rollback, at the rollback's priority, so every device takes the fix in one review. If an assignment still outranks some devices, the button reads **Deploy to 2 of 3 devices** and asks you to confirm what stays behind, for example "edge-nyc-02 keeps Edge syslog processing v1 (priority 101 rollback)".
 
+From a device's page (**Deploy a pipeline**), another pipeline that only this device follows is replaced by default, so the review doesn't stop at a priority choice: it says "Replaces edge-syslog v1: only this device follows it, so nothing else changes." **Keep edge-syslog v1 as well** brings the choice back. A pipeline other devices also follow is never replaced this way.
+
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
 ## Review the target set
@@ -32,6 +34,8 @@ The review also blocks devices that can't run the version, and says why:
 
 - **Full mode needed.** The version uses something only full-mode devices allow. Only the host can [switch modes](agents.md#switch-between-restricted-and-full-mode).
 - **Wrong Vector version.** The device doesn't report a Vector 0.58.x release.
+
+When restricted devices must first approve a destination, listener or file root the version uses, the review says which ones, and each row says the host refuses the version until then. **Commands for the host** gives the commands for each host, made from what its agent reports: its state directory, and whether a service or `vectory run` keeps the agent running. They use [`vectory allow`](agents.md#update-restricted-allowances), which adds to what the host already allows.
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 

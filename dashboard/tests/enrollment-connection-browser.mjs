@@ -79,6 +79,14 @@ const user = (role) => ({
   revision: 1,
 });
 const pin = "ab".repeat(32);
+// A synthetic CA certificate: only its PEM shape matters here.
+const caPem = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
+  "U3ludGhldGljU3ludGhldGljU3ludGhldGlj==",
+  "-----END CERTIFICATE-----",
+  "",
+].join("\n");
 const agentInstall = {
   agent_url: "https://vectory.example.test:8443",
   agent_url_configured: true,
@@ -89,6 +97,7 @@ const agentInstall = {
     publicly_trusted: false,
     ca_sha256: pin,
     ca_fingerprint: null,
+    ca_pem: caPem,
     ca_name: "Synthetic agent CA",
     ca_issuer: "Synthetic agent CA",
     ca_not_after: null,
@@ -207,6 +216,8 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
     if (path === "/tokens" && method === "POST") {
       state.posts++;
       state.tokenBody = request.postDataJSON();
+      // A held creation keeps the page pending until the check releases it.
+      if (state.hold) await state.hold;
       const record = {
         id: id(10 + state.posts),
         name: state.tokenBody.name,
@@ -242,7 +253,7 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
       .getByRole("button", { name: "Create install command", exact: true })
       .click();
     await expect(page.locator(".enroll-command pre").first()).toContainText(
-      "sudo sh vectory-install.sh \\\n    --mode restricted",
+      "sudo sh vectory-install.sh \\\n  --mode restricted",
     );
     await expect(page.locator("body")).not.toContainText(
       "synthetic-unused-enrollment-token",
@@ -377,6 +388,100 @@ try {
           .first()
           .click();
         await expect(f.page).toHaveURL(/#\/enrollment$/);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await check(
+    "Each certificate choice puts its exact option in the commands, and the choices lock while a token is created",
+    async () => {
+      const f = await fixture();
+      try {
+        const install = () =>
+          f.page.locator(".enroll-command pre").first().innerText();
+        const setup = async () => {
+          const manual = f.page.locator(".enroll-manual");
+          if (!(await manual.evaluate((details) => details.open)))
+            await manual.locator("summary").click();
+          return manual.locator("pre").innerText();
+        };
+        const insecure =
+          /(^|\s)(-[A-Za-z]*k[A-Za-z]*|--insecure|--no-check-certificate|-SkipCertificateCheck)(\s|$)/;
+        await f.page.locator(".enroll-advanced > summary").click();
+        const radios = f.page.locator('input[name="enroll-trust"]');
+        await expect(radios).toHaveCount(3);
+        // Pinning this server's private CA is the default.
+        await expect(
+          f.page.getByRole("radio", { name: /^Pin this server's CA/ }),
+        ).toBeChecked();
+        // The choices lock while the token is being created.
+        let release;
+        f.state.hold = new Promise((resolve) => (release = resolve));
+        await f.page.getByRole("radio", { name: /^Restricted/ }).check();
+        await f.page
+          .getByRole("button", { name: "Create install command", exact: true })
+          .click();
+        await expect.poll(() => f.state.posts).toBe(1);
+        for (const radio of await radios.all())
+          await expect(radio).toBeDisabled();
+        release();
+        f.state.hold = null;
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toBeVisible();
+        for (const radio of await radios.all())
+          await expect(radio).toBeEnabled();
+        // Pinned: the command carries the CA for curl; setup gets the fingerprint.
+        let text = await install();
+        expect(text).toContain("-----BEGIN CERTIFICATE-----");
+        expect(text).toContain("curl -fsSL --cacert vectory-ca.pem \\");
+        expect(text).not.toContain("--ca-file");
+        expect(text).not.toMatch(insecure);
+        expect(await setup()).toContain(`--ca-sha256 ${pin}`);
+        // A CA file on the host: exactly that path, for curl and for setup.
+        await f.page
+          .getByRole("radio", { name: /^A CA certificate file on the host/ })
+          .check();
+        await f.page
+          .getByLabel("CA certificate on the host", { exact: true })
+          .fill("/etc/vectory/server-ca.pem");
+        text = await install();
+        expect(text).toContain(
+          "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
+        );
+        expect(text).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
+        expect(text).not.toContain("BEGIN CERTIFICATE");
+        expect(text).not.toMatch(insecure);
+        let manual = await setup();
+        expect(manual).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
+        expect(manual).not.toContain("--ca-sha256");
+        await expect(f.page.getByRole("definition").nth(1)).toContainText(
+          "/etc/vectory/server-ca.pem",
+        );
+        // The host's trusted certificates: an explicit, empty --ca-file=.
+        await f.page
+          .getByRole("radio", { name: /^The host's trusted certificates/ })
+          .check();
+        text = await install();
+        expect(text).toMatch(/^curl -fsSL \\\n/);
+        expect(text).toContain("  --ca-file= \\");
+        expect(text).not.toMatch(insecure);
+        manual = await setup();
+        expect(manual).toContain("  --ca-file= \\");
+        expect(manual).not.toContain("--ca-sha256");
+        // Windows: PowerShell checks the file hash and runs setup; it makes
+        // no web request, so it has no certificate check to skip.
+        await f.page
+          .getByRole("radio", { name: "Windows", exact: true })
+          .check();
+        await expect(
+          f.page.locator(".enroll-command pre").first(),
+        ).toContainText("--ca-file=");
+        expect(await install()).not.toMatch(
+          /Invoke-WebRequest|SkipCertificateCheck|ServerCertificateValidationCallback/,
+        );
+        expect(f.state.posts).toBe(1);
       } finally {
         await f.close();
       }

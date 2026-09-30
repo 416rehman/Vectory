@@ -72,6 +72,78 @@
   font-size: 12.5px;
   line-height: 1.5;
 }
+.enroll-trust {
+  min-width: 0;
+  margin: 2px 0 18px;
+  padding: 0;
+  border: 0;
+}
+.enroll-trust legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-trust > p {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.enroll-trust-options {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.enroll-trust-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background-color 0.15s var(--ease);
+}
+.enroll-trust-option + .enroll-trust-option {
+  border-top: 1px solid var(--line);
+}
+.enroll-trust-option:hover {
+  background: var(--surface-hover);
+}
+.enroll-trust-option:has(input:checked) {
+  background: var(--accent-soft);
+}
+.enroll-trust:disabled .enroll-trust-option {
+  cursor: default;
+}
+.enroll-trust-option input {
+  margin-top: 3px;
+}
+.enroll-trust-option strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+}
+.enroll-trust-option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.enroll-default {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 450;
+}
+.enroll-trust .field {
+  margin-top: 12px;
+}
+.enroll-trust > a {
+  display: inline-flex;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
 .enroll-receipt {
   display: grid;
   gap: 10px;

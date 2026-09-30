@@ -154,7 +154,8 @@ export function PasswordField({
               Caps Lock is on
             </p>
           )}
-          {showStrength && (
+          {/* The error already says what's wrong with it: never twice. */}
+          {showStrength && !error && (
             <PasswordMeter password={value} identity={identity} />
           )}
         </>

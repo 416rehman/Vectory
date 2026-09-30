@@ -1520,6 +1520,18 @@
                       }
                     ]
                   },
+                  "device_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Bind the token to one device name (Add device, when a name is typed). Normalized to lowercase; must start with name_prefix. Servers before this field ignore it: the receipt echoes it only when it applies."
+                  },
                   "request_id": {
                     "type": "string",
                     "format": "uuid"
@@ -19534,6 +19546,16 @@
             "type": "boolean",
             "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
           },
+          "agent_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the agent build running on the device, from its latest check-in; absent when the agent does not report it. Compared with the release catalog to say a device already runs a build."
+          },
+          "state_dir": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Where the agent keeps its state on the device, from its latest check-in; absent when the agent does not report it. The deploy dialog puts it in the host commands it writes."
+          },
           "check_in_seconds": {
             "type": "integer",
             "minimum": 10,
@@ -21688,6 +21710,13 @@
               }
             ]
           },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,99}$",
+            "description": "Enrolls only this device name (normalized to lowercase). Absent: any unique name."
+          },
           "revoked": {
             "type": "boolean"
           },
@@ -21861,6 +21890,13 @@
               }
             ]
           },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,99}$",
+            "description": "Enrolls only this device name (normalized to lowercase). Absent: any unique name."
+          },
           "revoked": {
             "type": "boolean"
           },
@@ -21876,6 +21912,7 @@
           "uses",
           "max_uses",
           "name_prefix",
+          "device_name",
           "revoked",
           "created_at"
         ],
@@ -22430,6 +22467,19 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "ca_pem": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 16384,
+                        "pattern": "^-----BEGIN CERTIFICATE-----\\n(?:[A-Za-z0-9+/=]{1,76}\\n)+-----END CERTIFICATE-----\\n?$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The CA certificate itself (PEM), public like its fingerprint. Add device writes it on the host so the command that fetches the installer verifies the server against it."
                   },
                   "ca_name": {
                     "anyOf": [
@@ -23355,6 +23405,16 @@
           "vector_running": {
             "type": "boolean",
             "description": "Whether the Vector process the agent supervises is running. Sent only to servers that list the vector_running feature."
+          },
+          "agent_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the running agent executable. Sent only to servers that list the agent_sha256 feature."
+          },
+          "state_dir": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "The agent state directory, an absolute local path (POSIX, or a Windows drive path) and not a secret. Sent only to servers that list the state_dir feature."
           }
         },
         "required": [
@@ -23458,7 +23518,7 @@
               "type": "string",
               "pattern": "^[a-z0-9_]{1,64}$"
             },
-            "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running), and wake while it holds GET /agent/v1/wait. Agents send those fields, and wait, only when listed, so older servers keep their strict validation. Unknown names are ignored."
+            "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running, agent_sha256, state_dir), and wake while it holds GET /agent/v1/wait. Agents send those fields, and wait, only when listed, so older servers keep their strict validation. Unknown names are ignored."
           }
         },
         "required": [
@@ -27008,6 +27068,16 @@
           "vector_running": {
             "type": "boolean",
             "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
+          },
+          "agent_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the agent build running on the device, from its latest check-in; absent when the agent does not report it. Compared with the release catalog to say a device already runs a build."
+          },
+          "state_dir": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Where the agent keeps its state on the device, from its latest check-in; absent when the agent does not report it. The deploy dialog puts it in the host commands it writes."
           },
           "check_in_seconds": {
             "type": "integer",

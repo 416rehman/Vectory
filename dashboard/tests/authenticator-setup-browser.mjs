@@ -76,6 +76,9 @@ const recoveryCodes = Array.from(
   { length: 8 },
   (_, i) => `${String(i + 1).padStart(8, "0")}-00000000-00000000-00000000`,
 );
+/** How the page shows a recovery code: in groups of four, to type from paper. */
+const grouped = (code) => code.replace(/-/g, "").match(/.{4}/g).join(" ");
+const shownCodes = recoveryCodes.map(grouped);
 const user = {
   id: "11111111-1111-4111-8111-111111111111",
   name: "Synthetic MFA user",
@@ -85,7 +88,12 @@ const user = {
   revision: 1,
 };
 let page, state, failure;
-const secrets = new Set([syntheticPassword, ...seeds, ...recoveryCodes]);
+const secrets = new Set([
+  syntheticPassword,
+  ...seeds,
+  ...recoveryCodes,
+  ...shownCodes,
+]);
 function safe(message) {
   let text = String(message);
   for (const secret of secrets)
@@ -474,6 +482,11 @@ try {
       await expect(setupDialog()).toContainText(
         /This QR code expires in (10:00|9:\d\d)/,
       );
+      // The caption's address moves to its own line whole instead of
+      // breaking inside (at a hyphen) when it fits.
+      await expect(
+        setupDialog().locator(".authenticator-account .auth-email"),
+      ).toHaveText(user.email);
       await page.screenshot({
         path: resolve(output, "authenticator-setup-desktop-synthetic.png"),
         animations: "disabled",
@@ -588,7 +601,7 @@ try {
         .getByRole("list", { name: "Recovery codes" })
         .innerText();
       expect(
-        recoveryCodes.every((value) => displayed.includes(value)),
+        shownCodes.every((value) => displayed.includes(value)),
         "all eight synthetic recovery codes are handed off",
       ).toBe(true);
       await expect(recovery).toContainText(user.email);
@@ -600,7 +613,7 @@ try {
       expect(copied.split("\n")[0]).toContain(
         `Vectory recovery codes for ${user.email} on Synthetic isolated fixture`,
       );
-      expect(recoveryCodes.every((value) => copied.includes(value))).toBe(true);
+      expect(shownCodes.every((value) => copied.includes(value))).toBe(true);
       // The blob URL must outlive the click: revoking it at once can cancel
       // the save in some browsers.
       await page.evaluate(() => {
@@ -642,7 +655,7 @@ try {
         .getByRole("list", { name: "Recovery codes" })
         .innerText();
       expect(
-        recoveryCodes.every((value) => reopened.includes(value)),
+        shownCodes.every((value) => reopened.includes(value)),
         "the original eight codes remain in memory for deliberate reopening",
       ).toBe(true);
       await recovery

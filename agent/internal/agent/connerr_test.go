@@ -59,9 +59,11 @@ func TestConnectionFailuresAreClassifiedWithDelivery(t *testing.T) {
 	if ce.Code != "TLS_UNKNOWN_AUTHORITY" || ce.Delivery != NotSent || !strings.Contains(ce.Message, "test device CA") || !strings.Contains(ce.Fix, "--ca-sha256") || hits.Load() != 0 {
 		t.Fatal("unknown authority misclassified or request sent", ce)
 	}
-	// The fingerprint hint is for comparison only and cannot be pasted as a pin.
-	if strings.Contains(ce.Fix, hex.EncodeToString(certificateSHA256(ca.cert))) || !strings.Contains(ce.Fix, "...") {
-		t.Fatal("the unverified fingerprint was offered as a complete pin", ce.Fix)
+	// The fingerprint hint is for comparison only and cannot be pasted as a pin:
+	// it is whole, in Add device's rows of eight pairs, but never one value.
+	sum := certificateSHA256(ca.cert)
+	if strings.Contains(ce.Fix, hex.EncodeToString(sum)) || strings.Contains(ce.Fix, Fingerprint(sum)) || !strings.Contains(ce.Fix, FingerprintRows(sum, "  ")) {
+		t.Fatal("the unverified fingerprint was offered as a complete pin, or not in full", ce.Fix)
 	}
 
 	caFile := filepath.Join(t.TempDir(), "ca.pem")
