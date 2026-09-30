@@ -54,12 +54,12 @@ The sidebar has four destinations:
 
 | Destination | What you do there |
 | --- | --- |
-| [**Overview**](/#/overview) | See fleet health, what needs attention and recent activity. |
+| [**Overview**](/#/overview) | See fleet health, what runs where, what needs attention and recent activity. |
 | [**Pipelines**](/#/configurations) | Build, check and publish pipelines. |
-| [**Devices**](/#/devices) | Add devices, organize groups and apply agent settings. |
+| [**Devices**](/#/devices) | Find and select devices, add them, organize groups and apply agent settings. |
 | [**Activity**](/#/deployments) | Follow deployments and schedules, review issues and read the audit log. |
 
-Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device or pipeline from anywhere. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Single-key shortcuts**, **Keyboard shortcuts**, **Help center** (this site) and **Sign out**.
+Press **Ctrl K** (**⌘ K** on a Mac) to jump to a page, device, group or pipeline from anywhere. It searches devices on the server, so it finds one in a fleet of any size. Your account menu, at the bottom of the sidebar, holds **Settings**, **People & security**, the appearance choice (**Light**, **Dark** or **Auto**), **Single-key shortcuts**, **Keyboard shortcuts**, **Help center** (this site) and **Sign out**.
 
 When you aren't typing in a field, single keys act on the page: **R** refreshes its data, **/** searches it, **?** lists every shortcut, **[** collapses the sidebar, and **G** then a letter goes to a page (**G** then **D** opens Devices). If you use speech input or type with a switch, turn off **Single-key shortcuts** in your account menu so a stray word doesn't refresh or leave the page. This browser remembers the choice. **Ctrl K** and **Ctrl S** (**⌘ K**, **⌘ S**) keep working.
 

@@ -568,15 +568,57 @@ a.overview-kpi-tile:focus-visible {
   line-height: var(--leading-sm);
   overflow-wrap: anywhere;
 }
-.overview-running-where a {
+.overview-running-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.overview-running-where > a {
   color: var(--accent-text);
   font-weight: var(--weight-medium);
   text-decoration: none;
 }
-.overview-running-where a:hover,
+.overview-running-where > a:hover,
 .overview-running-note a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+/* The groups a version's devices are in, each leading to those devices. */
+.overview-running-groups {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.overview-running-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+a.overview-running-group:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+a.overview-running-group:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.overview-running-group[data-more] {
+  border-style: dashed;
+}
+.overview-running-group-count {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
 }
 .overview-running-note a {
   color: inherit;

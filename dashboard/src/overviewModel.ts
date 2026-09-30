@@ -175,11 +175,23 @@ export function unmanagedDetail(count: number, adopted: number) {
   return `${adopted.toLocaleString()} ${adopted === 1 ? "runs" : "run"} a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.`;
 }
 
-/** "Edge collectors", "Edge collectors and Web tier", "A, B, C and 2 more". */
-export function groupList(names: string[], more = 0) {
-  if (more > 0) return `${names.join(", ")} and ${more.toLocaleString()} more`;
-  if (names.length <= 2) return names.join(" and ");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+/**
+ * The groups a version's devices are in, busiest first. Each leads to the
+ * devices of that group that run this version; `count` is how many.
+ */
+export function runningGroups(
+  row: Pick<OverviewRunning, "version_id" | "groups" | "more_groups">,
+) {
+  return {
+    chips: row.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      count: group.device_count,
+      href: `#/devices?running=${encodeURIComponent(row.version_id)}&group=${encodeURIComponent(group.id)}`,
+    })),
+    /** Groups beyond the ones listed. */
+    more: row.more_groups,
+  };
 }
 /**
  * Events in and out per second across a version's devices: "14.0 → 4.5/s".

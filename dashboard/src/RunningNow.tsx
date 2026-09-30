@@ -1,7 +1,7 @@
 import type { OverviewRunning } from "./api";
 import {
   countLabel,
-  groupList,
+  runningGroups,
   runningNotes,
   runningRate,
 } from "./overviewModel";
@@ -64,10 +64,7 @@ export default function RunningNow({
 
 function RunningRow({ row }: { row: OverviewRunning }) {
   const rate = runningRate(row);
-  const groups = groupList(
-    row.groups.map((group) => group.name),
-    row.more_groups,
-  );
+  const groups = runningGroups(row);
   return (
     <li className="overview-running-item" data-state={row.state}>
       <div className="overview-running-head">
@@ -99,7 +96,29 @@ function RunningRow({ row }: { row: OverviewRunning }) {
         <a href={`#/devices?running=${encodeURIComponent(row.version_id)}`}>
           {countLabel(row.device_count, "device")}
         </a>
-        {groups && <span> ({groups})</span>}
+        {groups.chips.length > 0 && (
+          <span className="overview-running-groups">
+            <span className="sr-only"> in the groups </span>
+            {groups.chips.map((group) => (
+              <a
+                key={group.id}
+                className="overview-running-group"
+                href={group.href}
+                title={`${countLabel(group.count, "device")} of this version in ${group.name}`}
+              >
+                {group.name}
+                <span className="overview-running-group-count">
+                  {group.count.toLocaleString()}
+                </span>
+              </a>
+            ))}
+            {groups.more > 0 && (
+              <span className="overview-running-group" data-more="">
+                and {groups.more.toLocaleString()} more
+              </span>
+            )}
+          </span>
+        )}
       </p>
       {runningNotes(row).map((note) => (
         <p

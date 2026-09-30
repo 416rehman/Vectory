@@ -1,9 +1,51 @@
 import {
   APIError,
+  api,
+  withRequestDeadline,
+  type GroupMemberPage,
   type GroupMembershipPreview,
   type GroupMembershipState,
 } from "./api";
 import { assignmentName, policySummary } from "./deploymentReviewModel";
+
+/** Members read per page when looking for ones the server no longer knows. */
+const MEMBER_PAGE = 100;
+/** Pages read from the end of a group's members, at most. */
+const MEMBER_PAGES = 5;
+
+/**
+ * The members of a group that are no longer devices the server knows: a
+ * device removed before the server took it out of its groups. The member
+ * list puts them last, so the end of it finds them without listing a group
+ * of thousands. `members` is how many the group holds; at most five pages
+ * are read, so a group full of them reports the last few hundred.
+ */
+export async function readUnavailableMembers(
+  groupId: string,
+  members: number,
+  signal: AbortSignal,
+) {
+  const last = Math.max(1, Math.ceil(members / MEMBER_PAGE));
+  const found: string[] = [];
+  for (let page = last; page >= 1 && page > last - MEMBER_PAGES; page--) {
+    const answer = await withRequestDeadline(
+      (inner) =>
+        api<GroupMemberPage>(
+          `/groups/${encodeURIComponent(groupId)}/members?page=${page}&page_size=${MEMBER_PAGE}`,
+          { signal: inner },
+        ),
+      15000,
+      signal,
+    );
+    const here = answer.items
+      .filter((item) => item.status === "unavailable")
+      .map((item) => item.id);
+    found.unshift(...here);
+    // A page with a known device ends the run of unavailable ones.
+    if (here.length < answer.items.length) break;
+  }
+  return found;
+}
 
 /** Quiet retries of a busy preview, one a second, before it shows an error. */
 export const BUSY_PREVIEW_RETRIES = 3;
