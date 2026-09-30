@@ -306,9 +306,11 @@ a.rollout-fix-link {
 .deployment-targets td:nth-child(2) {
   min-width: 380px;
 }
-.deployment-targets td:last-child {
+/* Failure reasons wrap inside the column; table cells default to one line.
+   Nested under .control-table so the wrapping wins whichever stylesheet the
+   build loads last. */
+.control-table .deployment-targets td:last-child {
   width: 34%;
-  /* Failure reasons wrap inside the column; table cells default to one line. */
   white-space: normal;
 }
 .deployment-targets a {
