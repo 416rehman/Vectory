@@ -618,7 +618,7 @@ async fn the_next_stage_can_be_released_early_while_delivery_is_still_measured()
         audit[0]["details"]["summary"]
             .as_str()
             .unwrap()
-            .contains("delivery still being measured")
+            .contains("delivery on the canary was still being measured")
     );
 }
 
