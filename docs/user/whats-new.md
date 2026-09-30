@@ -4,6 +4,8 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 
 ## In this update
 
+- **Quick with thousands of devices.** Devices, group editing, the deploy dialog and the command palette read a page at a time and search on the server, and the Overview reads counts instead of a row per device. Select every device a search finds, across pages. See [Find devices](telemetry.md#find-devices).
+- **What runs where.** The Overview's **Running now** lists each pipeline version devices run, on how many devices and in which groups, with events in and out per second and what it is doing now, such as a canary that is measuring delivery. See [Read the Overview](telemetry.md#read-the-overview).
 - **One-command device install.** On Linux and macOS, **Add device** gives you one command that downloads the agent from your server, checks its SHA-256, pins your server's certificate and starts the service. Windows uses the same `vectory setup` from PowerShell. Agents ship inside the server image, so there's no release step.
 - **Readable agent CLI.** `vectory setup`, `--help` for every command, a human-readable `status`, `doctor` checks that test the connection to your server, and `vectory logs`.
 - **Real reasons for failures.** Issues and device pages show Vector's own message, with secrets removed. Vector gets a data directory automatically when a pipeline doesn't set one.

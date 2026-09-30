@@ -11,14 +11,7 @@ import {
   type GroupSummary,
   type User,
 } from "./api";
-import {
-  Button,
-  ErrorBox,
-  Field,
-  Modal,
-  SearchBox,
-  useResource,
-} from "./ui";
+import { Button, ErrorBox, Field, Modal, SearchBox, useResource } from "./ui";
 import { deploymentRoute } from "./deploymentRouting";
 import DevicePicker from "./DevicePicker";
 import GroupOverview from "./GroupOverview";
@@ -31,6 +24,7 @@ import {
   type GroupOperation,
 } from "./groupRequests";
 import { setDifference, toggled, withIds } from "./deviceInventory";
+import { readUnavailableMembers } from "./groupMembership";
 import "./group-editor.css";
 
 /** A group holds this many devices at most; the server refuses more. */
@@ -78,6 +72,8 @@ export default function GroupEditor({
   const [search, setSearch] = useState("");
   // Names of the devices seen while choosing, for the comparison lists.
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+  // Saved members that are not devices any more: listed by id so they can go.
+  const [unavailable, setUnavailable] = useState<readonly string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [blockedByCanary, setBlockedByCanary] = useState(false);
@@ -93,7 +89,9 @@ export default function GroupEditor({
   const allowed = can(user, "operate");
   const recovery = useGroupOperations(user.id);
   const pendingCreate =
-    !base && !group && (recovery.operations.length > 0 || recovery.errors.length > 0);
+    !base &&
+    !group &&
+    (recovery.operations.length > 0 || recovery.errors.length > 0);
   const compatible = !base || base.revision !== undefined;
   // What is saved, as a set: every comparison below is one pass, never a scan
   // of one list per member of the other.
@@ -119,6 +117,26 @@ export default function GroupEditor({
     setDescription(detail.data.description);
     setIds(new Set(detail.data.device_ids));
   }, [base, detail.data]);
+  // Members the server no longer knows sort last in its member list; the end
+  // of it finds them without listing a group of thousands.
+  useEffect(() => {
+    setUnavailable([]);
+    if (!base || base.device_ids.length === 0) return;
+    const controller = new AbortController();
+    readUnavailableMembers(
+      base.id,
+      new Set(base.device_ids).size,
+      controller.signal,
+    ).then(
+      (found) => {
+        if (!controller.signal.aborted) setUnavailable(found);
+      },
+      () => {
+        /* Saving still names anything the server refuses. */
+      },
+    );
+    return () => controller.abort();
+  }, [base]);
   useEffect(() => {
     mounted.current = true;
     const navigate = (event: Event) => {
@@ -331,8 +349,11 @@ export default function GroupEditor({
       } else setReview("uncertain");
     }
   }
+  // A device that isn't there is named by its exact id, never a shortened one.
+  const unavailableIds = useMemo(() => new Set(unavailable), [unavailable]);
   const deviceName = (id: string) =>
-    names.get(id) || `Device ${id.slice(0, 8)}…`;
+    names.get(id) ||
+    (unavailableIds.has(id) ? id : `Device ${id.slice(0, 8)}…`);
   // Against the latest saved group, when its edits collide with yours.
   const latestIds = useMemo(() => new Set(latest?.device_ids), [latest]);
   const { added, removed } = useMemo(
@@ -686,6 +707,61 @@ export default function GroupEditor({
                   </Button>
                 }
               />
+              {unavailable.length > 0 && (
+                <section
+                  className="group-unavailable"
+                  aria-labelledby="group-unavailable-heading"
+                >
+                  <h4 id="group-unavailable-heading">
+                    Devices no longer available ({unavailable.length}
+                    {unavailable.length >= 500 ? "+" : ""})
+                  </h4>
+                  <p className="control-muted">
+                    These members aren&apos;t enrolled devices any more. Untick
+                    one to take it out of the group.
+                  </p>
+                  <ul>
+                    {unavailable.slice(0, LISTED).map((id) => (
+                      <li key={id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            disabled={!editable}
+                            checked={ids.has(id)}
+                            onChange={() =>
+                              setIds((previous) => toggled(previous, id))
+                            }
+                          />
+                          <span>
+                            <strong>{id}</strong>
+                            <small>Device unavailable</small>
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                  {unavailable.length > LISTED && (
+                    <p className="control-muted">
+                      and {(unavailable.length - LISTED).toLocaleString()} more
+                    </p>
+                  )}
+                  <Button
+                    variant="ghost compact"
+                    disabled={
+                      !editable || !unavailable.some((id) => ids.has(id))
+                    }
+                    onClick={() =>
+                      setIds((previous) => {
+                        const next = new Set(previous);
+                        for (const id of unavailable) next.delete(id);
+                        return next;
+                      })
+                    }
+                  >
+                    Remove all unavailable
+                  </Button>
+                </section>
+              )}
               {base && allowed && compatible && !review && (
                 <GroupMembershipEffects group={base} ids={ids} />
               )}

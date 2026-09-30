@@ -4,13 +4,13 @@ import {
   checklist,
   countLabel,
   formatRate,
-  groupList,
   healthLabels,
   healthOrder,
   healthStates,
   monitoringTarget,
   niceCeiling,
   quietSummary,
+  runningGroups,
   runningNotes,
   runningRate,
   telemetryFromCounts,
@@ -272,14 +272,39 @@ describe("what runs where", () => {
     ...extra,
   });
 
-  it("lists the groups a version runs in without running past three", () => {
-    expect(groupList([])).toBe("");
-    expect(groupList(["Edge collectors"])).toBe("Edge collectors");
-    expect(groupList(["Edge collectors", "Web tier"])).toBe(
-      "Edge collectors and Web tier",
-    );
-    expect(groupList(["A", "B", "C"])).toBe("A, B and C");
-    expect(groupList(["A", "B", "C"], 2)).toBe("A, B, C and 2 more");
+  it("lists the groups a version runs in, each leading to that version's devices there", () => {
+    expect(runningGroups(running({ groups: [], more_groups: 0 }))).toEqual({
+      chips: [],
+      more: 0,
+    });
+    expect(
+      runningGroups(
+        running({
+          version_id: "v 1",
+          groups: [
+            { id: "g1", name: "Edge collectors", device_count: 3 },
+            { id: "g2", name: "Web tier", device_count: 1 },
+          ],
+          more_groups: 4,
+        }),
+      ),
+    ).toEqual({
+      chips: [
+        {
+          id: "g1",
+          name: "Edge collectors",
+          count: 3,
+          href: "#/devices?running=v%201&group=g1",
+        },
+        {
+          id: "g2",
+          name: "Web tier",
+          count: 1,
+          href: "#/devices?running=v%201&group=g2",
+        },
+      ],
+      more: 4,
+    });
   });
 
   it("shows events in and out, never a zero for an unknown rate", () => {

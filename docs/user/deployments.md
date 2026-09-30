@@ -17,6 +17,12 @@ After a rollback, deploying a fix of the same pipeline also replaces the rolled-
 
 Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md#validate-test-publish) first.
 
+### Choose devices in a large fleet
+
+The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
+
+Each device you tick one by one can have its own value for a pipeline variable. The default you set applies to devices you add in bulk.
+
 ## Review the target set
 
 The target set is every device you selected, plus the members of every group you selected, minus exclusions. The review lists the actual devices, so check it rather than the counts.
@@ -35,11 +41,22 @@ The review also blocks devices that can't run the version, and says why:
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 
+## Edit a group
+
+[**Devices → Groups**](/#/groups) lists each group with its description and how many devices it holds. The list doesn't load the members; open a group and choose **Edit members** to see them.
+
+The editor lists **Group devices** a page at a time with a search, so a group of thousands edits as quickly as one of ten.
+
+- Tick a device to add it and untick it to remove it. **Select all 300 matching** adds every device a search finds; **Remove all** empties the group.
+- The editor counts your changes against the saved group, for example **12 added · 3 removed since it was saved**. **Undo device changes** returns to the saved members.
+- A group holds up to 10,000 devices. Saving more is refused, and the editor says how many to remove.
+- Devices you revoke leave every group.
+
 ## Review changes to a group
 
 Groups can carry pipeline and agent-settings deployments that include future members, so editing a group can change what devices run.
 
-- The group editor previews the effect: which devices would get or lose a pipeline.
+- The group editor previews the effect: which devices would get or lose a pipeline. For a large change it describes the devices the edit changes something on first, and counts the rest ("Adding 480 devices changes nothing on them").
 - If someone else changed the group while you were editing, **This group changed** shows their version next to yours. Choose **Use latest name**, **Use latest description** or **Use latest members**, or keep your edits, then **Save changes**.
 - A group change that would add devices to a canary that's still running is refused, with a link to that canary.
 
@@ -122,7 +139,7 @@ The Overview's **Needs you** lists what still needs a person, most urgent first:
 
 [**Activity → Deployments**](/#/deployments) lists every deployment. Search by pipeline, deployment name, version or status, and filter the **Status** column to what needs attention, what's in progress or what finished. [**Scheduled**](/#/schedules) lists upcoming, completed, cancelled and missed schedules, in your browser's time zone.
 
-Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering** and counts with the failures. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
+Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
 Before a schedule starts, **Update scheduled devices** compares its saved device list with current group membership. Review who is added and removed, then confirm. If anything changes while you review, refresh the review and confirm again.
 
