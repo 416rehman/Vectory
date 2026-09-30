@@ -495,7 +495,7 @@ describe("correlated enrollment token responses", () => {
     const scoped = {
       ...input,
       allowed_names: ["lab-01", "lab-02"],
-      labels: { site: "berlin", rack: "r12" },
+      labels: { site: "berlin", rack: "a7" },
     };
     const op = beginTokenRequest(actor, scoped);
     expect(op.request.allowed_names).toEqual(["lab-01", "lab-02"]);
@@ -503,7 +503,7 @@ describe("correlated enrollment token responses", () => {
     const stored = {
       ...record(),
       allowed_names: ["lab-01", "lab-02"],
-      labels: { rack: "r12", site: "berlin" },
+      labels: { rack: "a7", site: "berlin" },
     };
     expect(
       checkTokenCreation(op, { ...receipt(op.id), record: stored }).record,

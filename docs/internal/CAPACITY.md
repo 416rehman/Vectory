@@ -1,8 +1,37 @@
 # Measured protocol load and limits
 
-The final 2026-09-26 Go HTTP/2 experiment reached all 100, 1,000 and 10,000 authenticated protocol identities with zero request failures after connection-admission fixes. The earlier HTTP/1.1 experiment failed at 10,000 and is preserved below. **There is no production fleet-capacity claim.** Clients and debug server shared a Windows development host; other development work was not suspended. These are short protocol simulations, not isolated hardware benchmarks or native-agent/Vector qualification.
+RUN2_SUMMARY
 
-## Go HTTP/2 rerun after admission fixes
+## Release build: 10,000 devices, a rollout and churn (2026-09-29)
+
+**Build.** `cargo build --release` (thin LTO, one codegen unit, stripped) of the server sources at `4d60c2b`, SHA-256 `RUN2_SHA`, measured from commit `RUN2_COMMIT` (no server changes in between). Run 1 below used the sources of `21bd03f`, before the fix it found (SHA-256 `c6a64fdb204ffd4c7542a55b4c3313ad0685d1921992c19e67a763a19b13a377`).
+
+**Host.** A Linux 6.18 virtual machine with 4 vCPUs (Intel Xeon at 2.10 GHz), 15.7 GiB of RAM, no swap and a virtio disk, shared with other development work. The load generator ran on the same host over loopback, so the server, the load generator and anything else running share the four vCPUs; every table below says how busy the host was. Both runs started when the one-minute load average had dropped under 3 (after waiting 9 and 7 minutes); other work resumed during them.
+
+**Harness.** `tests/load/capacity.py` with the Go driver `tests/load/fleet` (Go 1.24.7), described in [the load test README](../../tests/load/README.md). 10,000 identities were seeded offline, signed by the server's own device CA and registered as enrollment registers them. Each simulated device has its own key, certificate and HTTP/2 connection pool over TLS 1.3, checks every signed manifest (signature, device, nonce, generation), and sends a full telemetry sample: all 17 device-level numbers at full precision and three components, about 2 KB per check-in. The run:
+
+- starts at a 60-second check-in interval (0 to 60 seconds of initial jitter, then 0.8 to 1.2 times the interval);
+- at 120 seconds creates an all-at-once deployment of one pipeline (1,229-byte artifact) to all 10,000 devices through the dashboard API. Each device downloads the artifact at its next check-in, checks the digest, and reports the apply in a follow-up check-in two seconds later, as the agent does;
+- from 30 seconds to the end enrolls new devices through `POST /agent/v1/enroll` at 5 a second (half the server-wide limit, from ten loopback source addresses), each followed by its first check-in;
+- then steps the interval down to 30, 15, 10 and 5 seconds, 150 seconds each, to find where the server saturates.
+
+Simulated devices never run Vector: their `verified_applied` reports are fixture input, not activation evidence.
+
+### Run 1: a deployment to 10,000 listed devices exhausted memory (fixed)
+
+Before the deployment, from 60 to 120 seconds, the server handled 165 check-ins a second and 5 enrollments a second without an error. The median per-second p99 latency was 37 ms (worst second 123 ms). The server used 0.37 vCPU and 519 to 536 MiB of RSS, the load generator 0.15 vCPU, and the whole host 1.3 busy vCPUs (load average 2.4 to 3.6). The writer lock was busy 43 to 46% of each minute, with a mean wait of 7.5 ms.
+
+The deployment request took 27.8 seconds. During it the server's RSS rose from 536 MiB to 8.4 GiB, and to 11.5 GiB during the next scheduler tick. No check-in succeeded afterwards: every one got HTTP 503 (all 128 agent request slots were waiting for the writer lock) or HTTP 408 after 15 seconds, no device learned about the deployment, and the host ran out of memory (load average 27 to 30). The server was stopped 13 minutes into the run at 11.5 GiB RSS.
+
+The cause: `resolve`, which runs under the writer lock on every deployment change and scheduler tick, copied the whole deployment record once for every device it wins. The record carries its selector, here 10,000 device IDs (a deployment reviewed in the dashboard also stores the reviewed target list), so one pass allocated about 8 GB and took longer than a check-in may wait. Commit `4d60c2b` borrows the record instead. `winners_among` still copies for the deployment preview, group edits, rollback review and assignment removal, which see the same growth when they cover thousands of devices: see "Open limits" below.
+
+### Run 2: after the fix
+
+RUN2_BODY
+
+## Go HTTP/2 rerun after admission fixes (2026-09-26, debug build, Windows)
+
+The final 2026-09-26 Go HTTP/2 experiment reached all 100, 1,000 and 10,000 authenticated protocol identities with zero request failures after connection-admission fixes. The earlier HTTP/1.1 experiment failed at 10,000 and is preserved below. Clients and debug server shared a Windows development host; other development work was not suspended. These are short protocol simulations, not isolated hardware benchmarks or native-agent/Vector qualification.
 
 The server SHA256 was `68cb4de673a3d3d6b05a2b522b4c3b966507e4feffbe1bb888afc6988b8da177`; the Go 1.26.8 driver SHA256 was `2d780587b65d68daeb7022c25bfa88725d841bf7d4e53db0475713563ac267e7`. All successful responses negotiated HTTP/2.0 over TLS 1.3. Each identity used a unique certificate, private connection pool and the Go DefaultTransport-clone pattern used by the real agent. Connection admission defaults to 16,384 accepted connections, with separate limits of 128 concurrent TLS handshakes, 128 parsed requests, 16 HTTP/2 streams per connection and a 15-second request deadline. The previously shared authenticated/anonymous rate tables were also separated. These limits bound resources; the maximum is not a supported fleet-size promise.
 
