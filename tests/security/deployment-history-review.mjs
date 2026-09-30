@@ -1093,14 +1093,28 @@ try {
       value.state_counts.verified_applied || 0,
     );
   }
+  // A target row without its wake state, which is live rather than history:
+  // no agent waits in this fixture.
+  function historical(row) {
+    const { wake, ...rest } = row;
+    if (wake !== undefined) assert.deepEqual(wake, { listening: false });
+    return rest;
+  }
   // One target row. A canary gate adds a per-target reason to a paused or
   // active deployment's rows.
   function targetProjection(target, gated = false) {
-    const { gate_reason, delivery, ...rest } = target;
+    const { gate_reason, delivery, wake, ...rest } = target;
     if (gated)
       assert(gate_reason === null || gateReasons.includes(gate_reason));
     else assert.equal(gate_reason, undefined);
     assert.deepEqual(Object.keys(rest).sort(), targetKeys);
+    // Present while the server offers wake-ups: whether the device's agent
+    // holds a wait at this instant. Nothing else, and never evidence of
+    // delivery.
+    if (wake !== undefined) {
+      assert.deepEqual(Object.keys(wake), ["listening"]);
+      assert.equal(typeof wake.listening, "boolean");
+    }
     assert(!JSON.stringify(target).includes(marker));
     assert(uuidShape.test(target.device_id));
     assert(
@@ -1431,7 +1445,7 @@ try {
           const expected = targets.find(
             (t) => t.device_id === target.device_id,
           );
-          assert.deepEqual(target, expected);
+          assert.deepEqual(historical(target), expected);
           seen.push(target.device_id);
         }
       }
@@ -1479,7 +1493,7 @@ try {
       for (const search of [target.device_id, "%_[]\\target'"]) {
         const result = await get(targetRoute(parent.id, { search }));
         assert.equal(result.total, 1);
-        assert.deepEqual(result.items[0], target);
+        assert.deepEqual(historical(result.items[0]), target);
       }
       for (const search of [
         marker,
