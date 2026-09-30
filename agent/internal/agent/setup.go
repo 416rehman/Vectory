@@ -44,8 +44,12 @@ type SetupOptions struct {
 	ServiceUser        string
 	CreateUser         bool
 	KeepExistingVector bool
-	DashboardURL       string
-	DryRun             bool
+	// AdoptExisting adopts a Vector that ran here as it is, although it loaded
+	// configuration the agent doesn't manage (several files, a directory,
+	// includes): the agent then manages only its one file.
+	AdoptExisting bool
+	DashboardURL  string
+	DryRun        bool
 	// Token is called only when enrollment is actually needed, after every
 	// check that doesn't need it has passed.
 	Token func() (string, error)
@@ -80,6 +84,10 @@ type SetupResult struct {
 	// NeedsAttention: setup finished, but nothing keeps the agent running
 	// and the operator didn't choose that with --service none (exit 3).
 	NeedsAttention bool `json:"needs_attention,omitempty"`
+	// Adoption is what setup learned about a Vector that ran here: how it was
+	// started, the configuration files it loads with their checksums, and where
+	// they are backed up.
+	Adoption *AdoptionInventory `json:"adoption,omitempty"`
 }
 
 // SetupError is returned when a step fails; the step carries the explanation.
@@ -163,6 +171,9 @@ type serviceHost struct {
 	// settle is how long a process must keep running to count (0: 6 s).
 	detectVector func(context.Context) ([]RunningVector, bool)
 	settle       time.Duration
+	// collect reads how the running Vector processes were started (nil: this
+	// host's way).
+	collect func(context.Context, []RunningVector) []VectorStartup
 }
 
 // transientVector is how long setup waits before it takes a running Vector
@@ -408,6 +419,9 @@ func (r *setupRun) restartIfStopped(ops serviceOps, result SetupResult, err erro
 func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, error) {
 	options := r.options
 	r.result.DryRun = options.DryRun
+	if options.AdoptExisting && options.KeepExistingVector {
+		return r.fail("existing", "Existing", "--adopt-existing hands the workload of a running Vector to Vectory, and --keep-existing-vector leaves it running beside Vectory: the two contradict each other.", "Pass only one of them.")
+	}
 	defaults := DefaultPaths()
 
 	platform := DetectPlatform(ctx)
@@ -571,17 +585,23 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		case !checked:
 			r.add("existing", "info", "Existing", "Couldn't check for another running Vector on this platform.", "Stop any other Vector before you deploy a pipeline to this host.")
 		case len(running) > 0 && !options.KeepExistingVector:
-			stop := "stop it"
-			for _, v := range running {
-				if v.Service != "" {
-					stop = "stop it (for example: sudo systemctl disable --now " + v.Service + ")"
-					break
-				}
+			stop := stopAdvice(running)
+			// How it was started and which files it loads is recorded, and the
+			// files are copied, before setup says anything else about it.
+			inventory := r.inventoryRunning(ctx, running, dir)
+			if len(inventory.Blocking()) > 0 && !options.AdoptExisting {
+				detail, fix := inventory.refusal("Vector is already running here: "+describeRunning(running)+". Setup won't take it over, and the agent manages exactly one JSON file, so adopting it would drop what these load:", managed, stop)
+				return r.fail("existing", "Existing", detail, fix)
 			}
-			return r.fail("existing", "Existing", "Vector is already running here: "+describeRunning(running)+". Setup won't take it over.",
-				"To hand its workload to Vectory, save its configuration as JSON at "+managed+", "+stop+", then run this command again. To leave it running untouched beside Vectory, add --keep-existing-vector.")
+			return r.fail("existing", "Existing", "Vector is already running here: "+describeRunning(running)+". Setup won't take it over.", inventory.runningFix(managed, stop, options.AdoptExisting && len(inventory.Blocking()) > 0))
 		case len(running) > 0:
 			r.add("existing", "info", "Existing", describeRunning(running)+" keeps running untouched.", "Stop it before you deploy a pipeline to this host.")
+		}
+		if len(running) == 0 {
+			// Nothing runs now: an earlier run may have recorded what did.
+			if detail, fix, refuse := r.recordedAdoption(dir, managed); refuse {
+				return r.fail("existing", "Existing", detail, fix)
+			}
 		}
 		if err := CheckFreshStateDirectory(dir); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose an empty --state-dir.")
@@ -589,6 +609,8 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		if err := checkManagedDirectory(managed, dir, !options.DryRun); err != nil {
 			return r.failErr("paths", "Paths", err, "Choose a --managed-config path in a directory of its own.")
 		}
+	} else if options.AdoptExisting {
+		r.add("existing", "info", "Existing", "This host is already set up, so --adopt-existing has nothing to adopt.", "")
 	}
 	workload := managed + " (empty until you deploy)"
 	if data, err := os.ReadFile(managed); err == nil {

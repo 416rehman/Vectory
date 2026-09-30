@@ -26,7 +26,13 @@ in once and exits 3, because nothing keeps the agent running: run it under
 your own supervisor with the command setup prints, and pass --service none
 to say you will. Copy the whole command from Add device: it carries your
 server's CA certificate for curl (vectory-ca.pem). Never use curl -k, which
-turns certificate checks off; pass --cacert with your CA instead.`,
+turns certificate checks off; pass --cacert with your CA instead.
+Setup never takes over a Vector that is running. It records how that Vector
+was started, copies every configuration file it loads into the state
+directory (adoption-inventory, private to this account) and stops. When the
+Vector loads several files, a directory, includes or configuration chosen by
+an environment variable, setup names them: merge them into the one JSON file
+the agent manages, or adopt them as they are with --adopt-existing.`,
 	examples: []string{
 		"curl -fsSL --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
 		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
@@ -54,6 +60,7 @@ func defineSetup(c *cli) func() int {
 	account := c.String("service-user", defaults.ServiceUser, "NAME", "Account the service runs as")
 	createUser := c.Bool("create-user", "Create the service account if it's missing (no login shell)")
 	keep := c.Bool("keep-existing-vector", "Continue although another Vector is running; it's left untouched")
+	adopt := c.Bool("adopt-existing", "Adopt the Vector that ran here as it is: the agent manages one JSON file and doesn't run the other files it loaded (backed up)")
 	tokenFile := c.String("token-file", "", "PATH", "Read the enrollment token from a private file")
 	tokenStdin := c.Bool("token-stdin", "Read the enrollment token from standard input")
 	dashboard := c.HiddenString("dashboard-url", "dashboard address for the device link (set by the installer)")
@@ -70,9 +77,13 @@ func defineSetup(c *cli) func() int {
 			fmt.Fprintln(c.stderr, "vectory setup: choose one of --token-file or --token-stdin")
 			return exitUsage
 		}
+		if *adopt && *keep {
+			fmt.Fprintln(c.stderr, "vectory setup: choose one of --adopt-existing or --keep-existing-vector")
+			return exitUsage
+		}
 		options := agent.SetupOptions{
 			Server: *server, CASHA256: *pin, Name: *name, Mode: *mode, Service: *service,
-			CreateUser: *createUser, KeepExistingVector: *keep, DashboardURL: *dashboard, DryRun: *dryRun,
+			CreateUser: *createUser, KeepExistingVector: *keep, AdoptExisting: *adopt, DashboardURL: *dashboard, DryRun: *dryRun,
 		}
 		if c.supplied("state-dir") {
 			options.StateDir = *c.state

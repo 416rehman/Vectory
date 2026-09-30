@@ -142,6 +142,11 @@ func CheckFreshStateDirectory(dir string) error {
 		return err
 	}
 	for _, entry := range entries {
+		// adoption-inventory is the copy of an existing Vector's configuration
+		// that setup made before the agent was installed.
+		if entry.Name() == adoptionInventoryDir && entry.IsDir() {
+			continue
+		}
 		if entry.Name() != "agent.lock" && entry.Name() != "adoption-backup.json" && !strings.HasPrefix(entry.Name(), atomicTempPrefix) {
 			return errors.New("state directory contains unrelated files; choose a dedicated Vectory state directory")
 		}
