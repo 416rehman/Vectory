@@ -140,7 +140,7 @@ export default function DevicePicker({
       id: "name",
       header: "Device",
       cell: (device) => (
-        <span className="device-name-cell">
+        <span className="device-picker-name">
           <strong>{device.name}</strong>
           <small>{details(device)}</small>
         </span>
