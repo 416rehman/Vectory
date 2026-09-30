@@ -57,11 +57,11 @@ Run Compose from the `deploy` folder so it picks up `compose.yaml` and `.env` au
 
 ```sh
 docker compose config --quiet
-docker compose up -d --build
+docker compose up -d --build --wait --wait-timeout 300
 docker compose ps
 ```
 
-You should see `server`, `proxy` and `validator` running, with `server` and `validator` reported as healthy. Compose starts the server only after the validator's health check passes, so the first start can take a few seconds longer. If a service is not running or healthy, read the logs:
+`--wait` returns once every service is healthy, and fails if one is not. You should see `server`, `proxy` and `validator` running and reported as healthy; the proxy is healthy once a request through it reaches the server. Compose starts the server only after the validator's health check passes and the proxy only after the server's, so the first start can take a little longer. If a service is not running or healthy, read the logs:
 
 ```sh
 docker compose logs --tail 100 server proxy validator
