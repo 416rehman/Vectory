@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deviceViews,
   freshFlow,
   freshRate,
   groupsByDevice,
@@ -176,6 +177,35 @@ describe("delivery health", () => {
     expect(
       freshFlow(device({ telemetry: { sampled_at: ago(600) } }), now),
     ).toBeNull();
+  });
+  it("lists held devices among those that need attention, and filters them by their own state", () => {
+    const held = device({
+      status: "rolled_back",
+      apply_state: "rolled_back",
+      held_on_previous_version: true,
+    });
+    expect(matchesView(held, "failing", now)).toBe(true);
+    expect(matchesView(held, "drift", now)).toBe(true);
+    expect(matchesStatus(held, "held")).toBe(true);
+    expect(matchesStatus(held, "failed")).toBe(false);
+    // A real failure stays failed, and sorts before a hold, which sorts
+    // before a device that only needs to catch up.
+    const failed = device({ status: "failed" });
+    expect(matchesStatus(failed, "held")).toBe(false);
+    expect(statusRank(failed)).toBeLessThan(statusRank(held));
+    expect(statusRank(held)).toBeLessThan(statusRank(device({})));
+    expect(versionMarker(held)).toMatchObject({
+      tone: "warning",
+      text: "Previous version running",
+    });
+    expect(versionMarker(failed)?.tone).toBe("danger");
+  });
+  it("names the quick view for what it holds", () => {
+    const view = deviceViews.find((item) => item.value === "failing");
+    expect(view?.label).toBe("Needs attention");
+    // The tooltip lists what the view contains, in the words the badges use.
+    for (const word of ["Failed", "not delivering", "held", "check"])
+      expect(view?.hint).toContain(word);
   });
   it("lists degraded devices as failing and filters them by their own state", () => {
     expect(matchesView(degraded, "failing", now)).toBe(true);

@@ -3058,13 +3058,14 @@
           "enum": [
             "failed",
             "degraded",
+            "held",
             "check_required",
             "stuck",
             "offline",
             "paused",
             "unmanaged"
           ],
-          "description": "degraded: verified on the desired version, with an open DATA_PLANE_* issue measured on it."
+          "description": "degraded: verified on the desired version, with an open DATA_PLANE_* issue measured on it. held: the desired version failed, but the device verifiably keeps running an earlier one and delivers on it (severity warning; failed keeps the devices that have no working version)."
         },
         "severity": {
           "enum": [
@@ -5311,6 +5312,10 @@
           ],
           "additionalProperties": false,
           "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
+        },
+        "held_on_previous_version": {
+          "const": true,
+          "description": "Present only, and true, on a device whose status is failed or rolled_back but which verifiably keeps running an earlier version (its managed file still matches the digest the agent verified for it), whose Vector is not reported stopped, and which has no open delivery issue measured on that version. It is held there, not failed: status stays what the agent reported. Absent otherwise, and on older servers."
         },
         "secret_names": {
           "type": "array",
@@ -13255,6 +13260,10 @@
           "additionalProperties": false,
           "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
         },
+        "held_on_previous_version": {
+          "const": true,
+          "description": "Present only, and true, on a device whose status is failed or rolled_back but which verifiably keeps running an earlier version (its managed file still matches the digest the agent verified for it), whose Vector is not reported stopped, and which has no open delivery issue measured on that version. It is held there, not failed: status stays what the agent reported. Absent otherwise, and on older servers."
+        },
         "secret_names": {
           "type": "array",
           "maxItems": 64,
@@ -13730,6 +13739,10 @@
               "type": "integer",
               "minimum": 0
             },
+            "held": {
+              "type": "integer",
+              "minimum": 0
+            },
             "updating": {
               "type": "integer",
               "minimum": 0
@@ -13762,6 +13775,7 @@
           "required": [
             "applied",
             "degraded",
+            "held",
             "updating",
             "check",
             "failed",
@@ -13811,7 +13825,7 @@
         "views"
       ],
       "additionalProperties": false,
-      "description": "Devices matching q, group, version, desired_version and running_version (every filter but status and view), by status and by view, so each chip can show what picking it would list. status buckets are the Devices page's: applied (verified), degraded (applied but not delivering), updating (applying), check (verification_unknown), failed (failed, rolled_back, conflict), offline (offline, awaiting_first_check_in), paused (paused, pause_requested), unmanaged; a state added later counts as updating. Views never count revoked devices."
+      "description": "Devices matching q, group, version, desired_version and running_version (every filter but status and view), by status and by view, so each chip can show what picking it would list. status buckets are the Devices page's: applied (verified), degraded (applied but not delivering), held (its newest version failed; it still runs an earlier one and delivers on it, see Device.held_on_previous_version), updating (applying), check (verification_unknown), failed (failed, rolled_back, conflict), offline (offline, awaiting_first_check_in), paused (paused, pause_requested), unmanaged; a state added later counts as updating. Views never count revoked devices."
     },
     "DeviceInventoryPage": {
       "type": "object",
@@ -13929,7 +13943,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "The state the device's badge shows: its status, degraded while applied but not delivering, pause_requested until the agent acknowledges a pause, or unavailable."
+          "description": "The state the device's badge shows: its status, degraded while applied but not delivering, held while its newest version failed and it keeps running an earlier one, pause_requested until the agent acknowledges a pause, or unavailable."
         }
       },
       "required": [
@@ -14029,6 +14043,10 @@
               "type": "integer",
               "minimum": 0
             },
+            "held": {
+              "type": "integer",
+              "minimum": 0
+            },
             "updating": {
               "type": "integer",
               "minimum": 0
@@ -14057,6 +14075,7 @@
           "required": [
             "applied",
             "degraded",
+            "held",
             "updating",
             "check",
             "failed",
@@ -14250,9 +14269,10 @@
             "failed",
             "rolled_back",
             "check_required",
+            "held",
             "offline"
           ],
-          "description": "Most urgent first: not delivering, failed, rolled back, check required, offline."
+          "description": "Most urgent first: not delivering, failed, rolled back, check required, held on the previous version, offline."
         },
         "status": {
           "type": "string"

@@ -8,6 +8,7 @@ import {
 export type HealthBucket =
   | "applied"
   | "degraded"
+  | "held"
   | "updating"
   | "check"
   | "failed"
@@ -17,6 +18,7 @@ export type HealthBucket =
 export const healthOrder: HealthBucket[] = [
   "applied",
   "degraded",
+  "held",
   "updating",
   "check",
   "failed",
@@ -27,6 +29,7 @@ export const healthOrder: HealthBucket[] = [
 export const healthLabels: Record<HealthBucket, string> = {
   applied: deviceStatuses.verified.label,
   degraded: deviceStatuses.degraded.label,
+  held: deviceStatuses.held.label,
   updating: deviceStatuses.applying.label,
   check: deviceStatuses.verification_unknown.label,
   failed: deviceStatuses.failed.label,
@@ -39,6 +42,8 @@ export const healthStates: Record<HealthBucket, string[]> = {
   applied: ["verified"],
   // Applied, but an open data-plane issue says it isn't delivering.
   degraded: ["degraded"],
+  // The newest version failed; the device still runs an earlier one and delivers.
+  held: ["held"],
   updating: ["applying"],
   check: ["verification_unknown"],
   failed: ["failed", "rolled_back", "conflict"],
