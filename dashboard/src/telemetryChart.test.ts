@@ -9,9 +9,11 @@ import {
   niceMax,
   readableSlot,
   seriesPath,
+  telemetryPollMs,
   timeline,
 } from "./telemetryChart";
 import {
+  TELEMETRY_RANGES,
   TelemetryHistorySchema,
   TelemetrySummarySchema,
   describeDiagnostic,
@@ -203,5 +205,20 @@ describe("runtime contract shapes", () => {
     expect(describeDiagnostic({ ...warning, message: "Cut short…" })).toBe(
       "Cut short…",
     );
+  });
+});
+
+describe("how often a range's history is read", () => {
+  it("polls an hour quickly, a day every minute and a week every five", () => {
+    expect(telemetryPollMs["1h"]).toBe(15_000);
+    expect(telemetryPollMs["24h"]).toBe(60_000);
+    expect(telemetryPollMs["7d"]).toBe(300_000);
+  });
+  it("never polls a longer range faster, and covers every range", () => {
+    const every = TELEMETRY_RANGES.map((range) => telemetryPollMs[range]);
+    expect(every.every((ms) => Number.isInteger(ms) && ms >= 15_000)).toBe(
+      true,
+    );
+    expect(every).toEqual([...every].sort((a, b) => a - b));
   });
 });
