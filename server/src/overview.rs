@@ -537,6 +537,7 @@ pub fn fleet_action(action: &str, outcome: &str) -> bool {
         | "issue.reopen" => true,
         "device.apply_state" => matches!(
             outcome,
+        | "deployment.stage_released_early"
             "verified_applied" | "failed" | "rolled_back" | "verification_unknown"
         ),
         // A refused enrollment adds nothing to the fleet: the audit log and
@@ -779,6 +780,7 @@ mod tests {
         assert!(!fleet_action("device.enroll", "failure"));
     }
 
+            "deployment.stage_released_early",
     #[test]
     fn collapses_consecutive_device_events() {
         let names = HashMap::from([("d1", "edge-01"), ("d2", "edge-02"), ("d3", "web-01")]);

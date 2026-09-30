@@ -285,8 +285,7 @@ a.rollout-fix-link {
   margin-top: 3px;
   color: var(--muted);
 }
-.deployment-membership-note,
-.rollout-recorded-note {
+.deployment-membership-note {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;

@@ -32,6 +32,8 @@ export type DeploymentCreateRequest = {
     batch_size: number;
     observation_seconds: number;
     failure_threshold: number;
+    /** The devices to release first (canary rollouts only). */
+    canary_device_ids?: string[];
   };
   request_id?: string;
 };
@@ -88,6 +90,7 @@ const createOperationSchema = z
             batch_size: z.number().int().min(1).max(10000),
             observation_seconds: z.number().int().min(0).max(86400),
             failure_threshold: z.number().int().min(0).max(10000),
+            canary_device_ids: z.array(z.string().uuid()).max(100).optional(),
           })
           .strict(),
         request_id: z.string().uuid().optional(),

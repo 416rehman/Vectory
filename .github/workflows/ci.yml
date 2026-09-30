@@ -1117,6 +1117,12 @@ jobs:
         run: node tests/publish-tests-browser.mjs
         env:
           VECTORY_PUBLISH_TESTS_OUTPUT: artifacts/browsers/publish-tests
+      - name: Check the canary lane, its delivery table and the canary choice
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/canary-lane-browser.mjs
+        env:
+          VECTORY_CANARY_LANE_OUTPUT: artifacts/browsers/canary-lane
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}

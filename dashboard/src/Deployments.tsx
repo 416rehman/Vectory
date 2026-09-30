@@ -108,6 +108,7 @@ import { relativeTime } from "./time";
 import { useHashQuery } from "./urlState";
 import {
   DeviceTimeline,
+  EarlyReleaseNote,
   FailureGroups,
   bufferFill,
   ProgressBar,
@@ -124,8 +125,11 @@ import CanaryGate from "./CanaryGate";
 import {
   gateReasonLabels,
   hasCanaryGate,
+  observationDuration,
+  readCanaryGate,
   readGateReason,
 } from "./canaryGateModel";
+import { earlyRelease, nameList, type EarlyRelease } from "./canaryWatch";
 import type { Notify } from "./toast";
 
 const knownStatuses = new Set<string>(deploymentLifecycle);
@@ -145,10 +149,17 @@ function subtitle(d: DeploymentSummary) {
       ? `Version ${d.version_number}`
       : "Published version unavailable";
 }
-function strategy(d: DeploymentSummary) {
+/** "Canary edge-nyc-02, then batches of 10"; `canary` names the devices, once known. */
+function strategy(d: DeploymentSummary, canary: string | null = null) {
+  const size = d.rollout.canary_size;
+  const first = !canary
+    ? `Canary of ${size}`
+    : size === 1
+      ? `Canary ${canary}`
+      : `Canary of ${size} (${canary})`;
   const kind =
     d.rollout.kind === "canary"
-      ? `Canary of ${d.rollout.canary_size}, then batches of ${d.rollout.batch_size}`
+      ? `${first}, then batches of ${d.rollout.batch_size}`
       : "All at once";
   return d.scheduled_at ? `Scheduled · ${kind}` : kind;
 }
@@ -1216,7 +1227,9 @@ function RolloutPage({
     [retryScope, setRetryScope] = useState<RolloutFailure | null | undefined>(
       undefined,
     ),
-    [clockOffset, setClockOffset] = useState(0);
+    [clockOffset, setClockOffset] = useState(0),
+    // What the release-now dialog was opened for, kept while it is open.
+    [earlySnapshot, setEarlySnapshot] = useState<EarlyRelease | null>(null);
   const assignmentReturnFocus = useRef<HTMLElement | null>(null);
   // The rollout is a page, not a dialog: a dialog opened from it hands focus
   // back to the control that opened it.
@@ -1355,10 +1368,12 @@ function RolloutPage({
     setBlockedByCanary(false);
     setRollbackPreview(null);
     setRollbackRejected(false);
+    setEarlySnapshot(name === "release-next-stage" ? early : null);
     setAction(name);
   }
   const actionLabel = (name: string) =>
     ({
+      "release-next-stage": "Release next stage now",
       pause: "Pause rollout",
       resume: "Resume rollout",
       cancel:
@@ -1493,7 +1508,9 @@ function RolloutPage({
             ? "Rollout paused. Released devices keep what they received."
             : action === "resume"
               ? "Rollout resumed."
-              : "Rollout cancelled. Released devices keep what they received.",
+              : action === "release-next-stage"
+                ? "The next stage was released early. The rollout and the audit log record who released it."
+                : "Rollout cancelled. Released devices keep what they received.",
         );
       }
     } catch (e) {
@@ -1601,6 +1618,31 @@ function RolloutPage({
   const operate = can(user, "operate") && !error && !!deployment;
   const locked = committing || actionUncertain || checkingStatus;
   const status = deployment?.status || "";
+  // The next stage may go early while the released devices have applied and
+  // are delivering and the check on them is still running.
+  const early = operate
+    ? earlyRelease({
+        status,
+        gate:
+          deployment && hasCanaryGate(deployment)
+            ? readCanaryGate(deployment)
+            : null,
+        lanes: lanes.data?.stages || [],
+        watch: lanes.data?.canary_watch,
+      })
+    : null;
+  // The canary devices, by name, once the lanes say who they are.
+  const canaryLane =
+    lanes.data?.stages[0]?.kind === "canary" ? lanes.data.stages[0] : null;
+  const canaryNames =
+    canaryLane && canaryLane.devices.some((device) => device.device_name)
+      ? nameList(
+          canaryLane.devices
+            .slice(0, 2)
+            .map((device) => device.device_name || "an unnamed device"),
+          canaryLane.size,
+        )
+      : null;
   const candidate = [
     "active",
     "paused",
@@ -1631,11 +1673,6 @@ function RolloutPage({
   const multiStage =
     (lanes.data?.stages.length || 0) > 1 ||
     deployment?.rollout.kind === "canary";
-  const lastWave =
-    !!lanes.data &&
-    !lanes.data.stages.some(
-      (lane) => lane.state === "queued" || lane.state === "stopped",
-    );
   const removeAssignment = (opener?: HTMLElement | null) => {
     assignmentReturnFocus.current = opener || null;
     setAction(null);
@@ -1815,7 +1852,7 @@ function RolloutPage({
                       <Layers size={14} aria-hidden="true" />
                       {deployment.policy
                         ? subtitle(deployment)
-                        : strategy(deployment)}
+                        : strategy(deployment, canaryNames)}
                     </li>
                     <li>
                       <ArrowUpDown size={14} aria-hidden="true" />
@@ -2007,12 +2044,6 @@ function RolloutPage({
                     stopped={!live}
                     label="Device progress"
                   />
-                  {hasCanaryGate(deployment) && (
-                    <p className="control-muted rollout-recorded-note">
-                      Recorded progress: historical results; current readiness
-                      is shown below.
-                    </p>
-                  )}
                 </>
               )}
               {(deployment.state_counts.removed || 0) > 0 &&
@@ -2035,9 +2066,9 @@ function RolloutPage({
                   <h2 id="rollout-stages">Stages</h2>
                   {deployment.rollout.kind === "canary" && (
                     <span className="control-muted">
-                      Each stage waits for every released device to verify
+                      Each stage waits for every released device to apply
                       {deployment.rollout.observation_seconds
-                        ? `, then observes for ${deployment.rollout.observation_seconds} s`
+                        ? `, then observes for ${observationDuration(deployment.rollout.observation_seconds)}`
                         : ""}
                       .
                     </span>
@@ -2048,11 +2079,13 @@ function RolloutPage({
                   nextAdmissionAt={lanes.data.next_admission_at}
                   observationSeconds={deployment.rollout.observation_seconds}
                   clockOffset={clockOffset}
-                  failureThreshold={
-                    deployment.rollout.kind === "canary"
-                      ? deployment.rollout.failure_threshold
+                  watch={lanes.data.canary_watch}
+                  onReleaseEarly={
+                    early
+                      ? (opener) => begin("release-next-stage", opener)
                       : null
                   }
+                  releaseDisabled={locked}
                   navigate={navigate}
                 />
               </section>
@@ -2061,9 +2094,7 @@ function RolloutPage({
               <CanaryGate
                 deployment={deployment}
                 readError={Boolean(error)}
-                onRefresh={reload}
-                clockOffset={clockOffset}
-                lastWave={lastWave}
+                watch={lanes.data?.canary_watch}
               />
             )}
             {deployment.rolled_back_by && (
@@ -2174,6 +2205,7 @@ function RolloutPage({
           rollbackPreview={rollbackPreview}
           rollbackRejected={rollbackRejected}
           onRollbackChange={rollbackReviewChanged}
+          early={earlySnapshot}
           revision={revision}
           onCancelFirst={
             live && can(user, "operate")
@@ -2491,6 +2523,7 @@ function ActionDialog({
   rollbackPreview,
   rollbackRejected,
   onRollbackChange,
+  early,
   revision,
   onCancelFirst,
   label,
@@ -2512,6 +2545,8 @@ function ActionDialog({
   rollbackPreview: RollbackPreview | null;
   rollbackRejected: boolean;
   onRollbackChange(value: RollbackPreview | null): void;
+  /** What releasing the next stage now skips, for that dialog's wording. */
+  early: EarlyRelease | null;
   revision: number;
   onCancelFirst?: () => void;
   label(name: string): string;
@@ -2538,9 +2573,11 @@ function ActionDialog({
           ? "Check what each device runs afterwards, then confirm."
           : action === "resume"
             ? "Release this change to the devices still waiting."
-            : action === "pause"
-              ? "Stop releasing to more devices. Devices that already received it keep it."
-              : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
+            : action === "release-next-stage"
+              ? "Don't wait for this stage to finish. The release is recorded as early."
+              : action === "pause"
+                ? "Stop releasing to more devices. Devices that already received it keep it."
+                : "Stop releasing to more devices. Devices that already received it keep it. Rollback is separate."
       }
     >
       <div className="modal-body">
@@ -2585,6 +2622,8 @@ function ActionDialog({
             invalidated={rollbackRejected}
             onChange={onRollbackChange}
           />
+        ) : action === "release-next-stage" ? (
+          <EarlyReleaseNote early={early} />
         ) : (
           <p>
             <strong>{deployment && title(deployment)}</strong>
@@ -2616,7 +2655,9 @@ function ActionDialog({
               ? "Check current status"
               : rollback && rollbackPreview?.ready
                 ? `Roll back ${rollbackPreview.eligible_devices.length} device${rollbackPreview.eligible_devices.length === 1 ? "" : "s"}`
-                : label(action)}
+                : action === "release-next-stage"
+                  ? "Release now"
+                  : label(action)}
           </Button>
         )}
       </div>

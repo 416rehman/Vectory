@@ -397,4 +397,21 @@ describe("release settings", () => {
     ).toBe("canary");
     expect(scheduledAt(defaultRelease)).toBeNull();
   });
+  it("names the canary devices only for a canary, and only when some are chosen", () => {
+    const canary = { ...defaultRelease, strategy: "canary" as const };
+    const chosen = ["00000000-0000-4000-8000-000000000001"];
+    expect(rolloutFor(canary, chosen).canary_device_ids).toEqual(chosen);
+    expect(rolloutFor(canary, []).canary_device_ids).toBeUndefined();
+    expect(rolloutFor(canary)).not.toHaveProperty("canary_device_ids");
+    // An all-at-once release has no canary to name; a scheduled canary does.
+    expect(rolloutFor(defaultRelease, chosen)).not.toHaveProperty(
+      "canary_device_ids",
+    );
+    expect(
+      rolloutFor(
+        { ...defaultRelease, strategy: "scheduled", scheduledKind: "canary" },
+        chosen,
+      ).canary_device_ids,
+    ).toEqual(chosen);
+  });
 });
