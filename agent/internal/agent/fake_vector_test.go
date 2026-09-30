@@ -52,6 +52,12 @@ func fakeVectorMain(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
 		return 2
 	}
+	// Started with options and no subcommand, as a running Vector is: stay up
+	// until the test that started it ends the process.
+	if strings.HasPrefix(args[0], "-") && args[0] != "--version" && args[0] != "-V" {
+		time.Sleep(time.Hour)
+		return 0
+	}
 	switch args[0] {
 	case "--version", "-V":
 		fmt.Fprintf(stdout, "vector %s (stand-in)\n", config.Version)

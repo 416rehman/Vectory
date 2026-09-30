@@ -1,0 +1,2 @@
+[i]  Inventory    Adopting the Vector that ran here as it is: the agent manages only <managed>. Its 2 configuration files stay where they are (backed up in <state>/adoption-inventory/<time>), and no Vector started by Vectory reads them.
+                  Vector loads 2 configuration files: <conf>/10-sources.yaml, <conf>/20-sinks.yaml.

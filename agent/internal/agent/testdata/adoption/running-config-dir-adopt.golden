@@ -1,0 +1,3 @@
+[i]  Inventory    Vector started with: /usr/bin/vector --config-dir <conf>; configuration files: <conf>/10-sources.yaml (sha256 2f69f4e8c932…), <conf>/20-sinks.yaml (sha256 9668a900538f…), backed up to <state>/adoption-inventory/<time>.
+[!!] Existing     Vector is already running here: vector.service (pid 812). Setup won't take it over.
+                  You chose to adopt it as it is (--adopt-existing): stop it (for example: sudo systemctl disable --now vector.service), then run this command again with the same flag. Its configuration is backed up in <state>/adoption-inventory/<time>.
