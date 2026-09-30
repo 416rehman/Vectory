@@ -4,7 +4,7 @@ Proposed 2026-09-30. Nothing described here is built. The design was measured on
 
 ## Verdict
 
-**Ship only on Linux and macOS first.** Not on Windows in version 1. Linux is measured here; macOS is enabled only after the same measurements (Appendix A, experiments C6, D6, E1 to E3) pass on a native macOS runner. One prerequisite comes first (work package 0 in the [implementation plan](../internal/TAP-IMPLEMENTATION-PLAN.md)).
+**Ship only on Linux and macOS first.** Not on Windows in version 1. Linux is measured here; macOS is enabled only after the same measurements (Appendix A, experiments C5, C6, E1 to E5 and F3) pass on a native macOS runner. One prerequisite comes first (work package 0 in the [implementation plan](../internal/TAP-IMPLEMENTATION-PLAN.md)).
 
 1. **The mechanism works and stays out of the deployment path.** Reloads that only add or remove an `api` block in the runtime overlay opened and closed Vector's API twice each with no lost or duplicated events, in 1 to 5 ms where Vector did not rate-limit the log line that times it. The managed file, its digest, last-known-good and the journal are never touched.
 2. **Vector 0.58.0 imposes three hard constraints, all measured.** A reload can only enable the API on `127.0.0.1:8686`, whatever address is configured. A failed bind stops Vector. Streams already attached survive the API's removal until Vector exits. So a random port is impossible, a busy port is an outage, and "the window closed" needs proof and, when another client is attached, a restart.
@@ -35,7 +35,7 @@ Proposed 2026-09-30. Nothing described here is built. The design was measured on
 - Restricted mode allows a loopback `api` block, and full mode allows any. The [security model](../user/security.md) lists "a loopback-only `api`" among restricted-mode global settings, and [ADR 0005](0005-restricted-mode-by-default.md) describes the allowlist.
 - The agent already loads a second config file next to the managed one, the runtime overlay (`runtimeOverlay`, `writeRuntimeOverlay` and `vectorConfigArgs` in `hostruntime.go` and `vector.go`; `host-runtime.json` in the state directory). It exists so the managed file stays byte-identical to its verified digest. `VectorDriver.Activate` regenerates it from scratch on every apply and restart.
 - Unix reloads Vector with SIGHUP (`reloadChild` in `process_linux.go`, `process_darwin.go`). Windows never reloads: `VectorDriver.canReload` returns false and `reloadChild` is empty in `process_windows.go`.
-- `settings.json` is written only by locked local maintenance (`lockSettingsMaintenance`, `loadSettingsDocument`, `settingsDocument.save` in `settings_update.go`), and only from CLI commands.
+- `settings.json` is written only by local commands: locked maintenance (`lockSettingsMaintenance`, `loadSettingsDocument`, `settingsDocument.save` in `settings_update.go`) and, for a fresh installation, `InstallWithOptions`.
 - The signed manifest is verified by `VerifyEnvelope` (`protocol.go`), which decodes with `json.Unmarshal` into `Manifest` (`types.go`): unknown fields are ignored, so an additive signed field is backward compatible.
 - Sample sets are stored in browser `localStorage` (`vectory.samples.v1:<user>:<pipeline>`), and "Create unit test" (`unitTestFromSample` in `dashboard/src/sampleTests.ts`) writes into the draft, which becomes immutable revisions, published versions, exports and backups.
 
@@ -76,7 +76,7 @@ The object is a new `Settings.EventSampling` field in `agent/internal/agent/type
 
 **Why.** Every other host consent already works this way: `install --allow-full-vector-config` (`ConfigureFullVector` in `reconcile.go`), `configure-secrets`, `configure-metrics`. The stopped-agent rule gives grant and change an explicit checkpoint. Reusing `settings.json` keeps one place that says what the host allowed, one ownership-preserving writer and one status view.
 
-**While it is allowed.** The device page shows an "Event sampling" card: "Allowed on this host", the mode, the caps and the last session. While a request is open it shows "A sampling window can be open on this host until 14:03:20. Any user on that machine can read its events until then." The card states that the host owner set it and that Vectory cannot change it. `vectory status` and `vectory doctor` print the same facts. The agent reports the state in the heartbeat's `sampling` block. That report is unsigned and only steers the UI; the agent enforces consent on every request.
+**While it is allowed.** The device page shows an "Event sampling" card: "Allowed on this host", the mode, the caps and the last session. While a request is open it shows "A sampling window can be open on this host until 14:03:20. Any user on that machine can read its events until then." The card states that the host operator set it and that Vectory cannot change it. `vectory status` and `vectory doctor` print the same facts. The agent reports the state in the heartbeat's `sampling` block. That report is unsigned and only steers the UI; the agent enforces consent on every request.
 
 **How a host revokes.**
 
@@ -100,14 +100,14 @@ A compromised agent process or a local administrator can edit `settings.json`. T
 
 1. **Preconditions,** all checked under the agent's single goroutine (`Run` in `reconcile.go`), so no apply can overlap: consent present; not paused (local or remote); no `journal.json`; apply state settled (`verified_applied`); managed file digest equals `State.LastGoodSHA256`; Vector alive and verified (`Driver.Alive`); the managed file contains no `api` key at all; the component ID passes the ID rule (section 4) and exists in the managed file; the request's side fits the component kind; rate limits allow it.
 2. **Port probe.** Bind and release `127.0.0.1:8686`. If that fails, refuse with `PORT_IN_USE`. This matters because a failed bind at reload stops Vector (C6).
-3. **Candidate.** The overlay is the ordinary overlay content plus `{"api":{"enabled":true,"address":"127.0.0.1:8686"}}`. `vector validate` runs on the managed file and a staged copy of that overlay (`VectorDriver.Validate` already stages one).
+3. **Candidate.** The overlay is the ordinary overlay content plus `{"api":{"enabled":true,"address":"127.0.0.1:8686"}}`. `vector validate --skip-healthchecks` runs on the managed file and a staged copy of that overlay (`VectorDriver.Validate` already stages one). The pipeline was validated when it was applied, and a health check would contact its sinks for no reason.
 4. **Open.** A new driver method writes the overlay with `writeRuntimeOverlay`, sends the reload byte to the supervisor and waits for "Vector has reloaded." plus the liveness observation (`VectorDriver.reload`). It never calls `Activate`, which would regenerate the overlay without the block. The agent then proves the window is open by a TCP connect and `GET /health` returning `{"ok":true}`, and takes a baseline of the connection table.
 5. **Sample** (section 4), polling every 500 ms for pause, Vector exit and foreign clients.
-6. **Close.** Kill the tap. If the managed file no longer matches `State.LastGoodSHA256` (someone edited it during the window), a reload would activate unverified content: with sync enabled the agent first restores the last-known-good file through the ordinary drift repair (`startExisting`), and while paused it stops Vector instead and lets supervision, which honors the pause, restart it later. Otherwise write the overlay without the block and reload, then prove closure: a connect to 8686 is refused, and after the tap has exited no established socket has local port 8686. Linux reads `/proc/net/tcp`. macOS reads `/usr/sbin/netstat -anp tcp`. If the table cannot be read, closure is unproven and the agent restarts Vector.
-7. **Enforce.** If any client is still attached, restart Vector through the ordinary verified path (`Driver.Stop` then `Driver.Activate`) and report `closed_by: foreign_client` and `vector_restarted: true`. A client that connects during the window, before close, aborts the session at the next poll and the events are discarded.
+6. **Close.** Kill the tap. If the managed file no longer matches `State.LastGoodSHA256` (someone edited it during the window), a reload would activate unverified content: with sync enabled the agent first restores the last-known-good file the way recovery does (`goodPath`, verified digest and capability check, then `AtomicWrite`, as `startExisting` and `rollbackWith` do), and while paused it stops Vector instead and lets supervision, which honors the pause, restart it later. Otherwise write the overlay without the block and reload, then prove closure: a connect to 8686 is refused, and after the tap has exited no established socket has local port 8686. Linux reads `/proc/net/tcp`. macOS reads `/usr/sbin/netstat -anp tcp`. If the table cannot be read, closure is unproven and the agent restarts Vector.
+7. **Enforce.** If any client is still attached, restart Vector through the ordinary recovery path (`Driver.Stop`, then `startExisting`, which checks policy, validates and activates the last-known-good file) and report `closed_by: foreign_client` and `vector_restarted: true`. This restart happens even while paused, because the file is unchanged and the alternative is an open stream. A client that connects during the window, before close, aborts the session at the next poll and the events are discarded.
 8. **Report.** The result goes out in the heartbeat and the upload.
 
-**It touches nothing that carries deployment evidence.** The managed file, `State.LastGoodSHA256`, `AppliedTemplateSHA256`, the journal and the template digest are never written. A crash at any step leaves at worst an overlay with the block on disk. That block dies at the next `Activate`, which rebuilds the overlay from scratch, and an agent crash already closes the supervisor's stdin, which stops Vector (`vectorHost` in `vector.go`), which closes the API. Test A-07 injects a crash at every step.
+**It touches nothing that carries deployment evidence.** The managed file, `State.LastGoodSHA256`, `AppliedTemplateSHA256`, the journal and the template digest are never written. A crash at any step leaves at worst an overlay with the block on disk. That block dies at the next `Activate`, which rebuilds the overlay from scratch, and an agent crash already closes the supervisor's stdin, which stops Vector (`vectorHost` in `vector.go`), which closes the API. macOS has no parent-death signal (`process_darwin.go`), so a supervisor killed as well could leave Vector running with the block loaded; N-01 injects that case. Test A-07 injects a crash at every step.
 
 **Windows: unsupported in version 1, with no second consent.** There is no reload, so opening the window is a restart (where the address would be honored) and closing it is a second restart. Two restarts per session interrupt delivery, and the specification says restart is not lossless or duplicate-free (section 8, line 207). A "consent to restart" would be a different and heavier decision than event visibility. The consent command refuses on Windows, and the heartbeat reports `platform` as the reason sampling is unavailable, so the dashboard says "Event sampling isn't available on Windows yet."
 
@@ -121,7 +121,7 @@ A compromised agent process or a local administrator can edit `settings.json`. T
 
 **If the port is busy or squatted.** The probe refuses without touching Vector. A local user who binds 8686 between the probe and Vector's bind makes the reload stop Vector; the agent's supervision restarts it with the ordinary backoff and the overlay is regenerated without the block. That is an availability cost a local user can impose only during a requested window. The plan measures it (A-15).
 
-**If the pipeline already defines an `api` block.** Sampling refuses with `PIPELINE_DEFINES_API` and the device page says so. The overlay cannot help: `enabled` ORs across files, the address comes from the pipeline, and a different address is refused (C2 to C4, G2 to G4). If the pipeline's block is enabled, the API is already open and permanent, which is exactly the exposure this ADR exists to avoid. That is why work package 0 makes restricted mode refuse `api` in pipelines. Full mode stays as it is (publishers there are trusted with the host), but sampling stays unavailable and the device page warns "This pipeline turns on Vector's own API. Anyone on this host can read its events."
+**If the pipeline already defines an `api` block.** Sampling refuses with `PIPELINE_DEFINES_API` and the device page says so. The overlay cannot help: `enabled` ORs across files, the address comes from the pipeline, and a different address is refused (C2 to C4, G2 to G4). If the pipeline's block is enabled, the API is already open and permanent, which is exactly the exposure this ADR exists to avoid. That is why work package 0 makes restricted mode refuse `api` in pipelines. Full mode stays as it is (publishers there are trusted with the host, and can already bind the API to any interface), but sampling stays unavailable and the device page warns "This pipeline turns on Vector's own API. Anyone on this host can read its events."
 
 ## 3. Request and authorization
 
@@ -146,7 +146,7 @@ The payload already carries the device UUID, the agent's fresh nonce, `issued_at
 5. The component ID matches `^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$`, exists in the managed file, and the side fits its kind (sources: `outputs`; transforms: either; sinks: `inputs`).
 6. The section 2 preconditions, rate limits and platform.
 
-The server never trusts the reported consent: it only avoids creating requests that would be refused. The agent's checks stand alone. A compromised server can sign any request, so consent, caps, the agent's own rate limits, the ID rule and redaction are what bound it, not the signature. Restoring an older server backup could lower the server's sampling generation; the agent then refuses new requests as stale, and `vectory-admin`'s generation fence (`server/src/maintenance.rs`) is extended to raise it from the reported `highest_generation`.
+The server never trusts the reported consent: it only avoids creating requests that would be refused. The agent's checks stand alone. A compromised server can sign any request, so consent, caps, the agent's own rate limits, the ID rule and redaction are what bound it, not the signature. Restoring an older server backup could lower the server's sampling generation; the agent then refuses new requests as stale, and `vectory-admin`'s generation fence (`server/src/maintenance.rs`) is extended to raise it from the reported `highest_generation`. A compromised server can also push a device's generation to its maximum and so end sampling there. The floor is local, so the remedy is local: `vectory configure-sampling --allow` clears it, as capability changes already clear retry suppression (`commitSettingsWithRetryReset`). That is safe, because a request is single-use by nonce and short-lived, and the floor only keeps a request delivered in several manifests from running twice.
 
 ## 4. Execution and redaction
 
@@ -162,7 +162,7 @@ The ID rule exists because Vector accepts IDs that tap reads as patterns: a comp
 
 **Limits.** Wall clock `max_seconds` plus 5 s (context deadline, `WaitDelay` 1 s, then kill). Raw bytes read at most 1 MiB. At most 100 events, 16 KiB each, `max_bytes` after redaction (default 128 KiB, cap 512 KiB). Stderr keeps 4 KiB. One session at a time, on the agent's single goroutine.
 
-**Why not a direct gRPC client.** It would add a protobuf and gRPC stack (size and supply-chain surface) to a binary whose selling point is small and pure Go, and duplicate a client that ships in the pinned, digest-verified binary the agent already executes for validation. The client's measured cost is 30 to 35 MB of memory and 1 to 2% of a core when abused.
+**Why not a direct gRPC client.** It would add a protobuf and gRPC stack (size and supply-chain surface) to a binary whose selling point is small and pure Go, and duplicate a client that ships in the pinned, digest-verified binary the agent already executes for validation. The client's measured cost is 31 to 42 MB of memory, and CPU of about 1% of a core when polite and 12 to 22% when it streams every event.
 
 **What leaves the host.** One upload (section 5): the component's ID, kind and type; the side; the mode; the redacted events; counts (seen, kept, non-log, truncated, redactions by rule); timestamps; how the session ended. Log events only: metric and trace events (shape `{"metric":...}`, F1f) are counted and dropped in version 1.
 
@@ -189,7 +189,7 @@ The ID rule exists because Vector accepts IDs that tap reads as patterns: a comp
 
 **Route.** `POST /agent/v1/samples` on the agent listener (mTLS, same authentication as `heartbeat`; identity comes from the certificate, never the body). The body is at most 1 MiB by the existing limit and the server refuses more than 512 KiB of sample (413 `PAYLOAD_TOO_LARGE`). Rate limit 6 a minute per device. The handler validates structure and bounds in memory before it takes the writer lock, and holds the lock only for one state transition.
 
-**Replay protection.** The upload is bound to a request the server created: `id` (a server UUID), `generation`, and the device from the certificate. The request state is a one-way machine (`requested`, `delivered`, then one of `complete`, `empty`, `refused`, `aborted`, `cancelled`, `expired`). A first upload moves `delivered` to a final state. A second upload for the same request is answered `409 CONFLICT` and stores nothing; an upload for another device's request is `404` (object-level authorization); an upload after expiry or cancellation is `410 SAMPLING_EXPIRED`. Nothing an agent sends can move a request backwards.
+**Replay protection.** The upload is bound to a request the server created: `id` (a server UUID), `generation`, and the device from the certificate. The request state is a one-way machine (`requested`, `delivered`, then one of `complete`, `empty`, `refused`, `aborted`, `cancelled`, `expired`). A first upload moves `delivered` to a final state, and the server keeps the digest of the accepted body in memory beside the sample. A second upload of the same body is answered `200` (the agent's retry after a lost response) and changes nothing; a different body for the same request is `409 CONFLICT` and stores nothing; an upload for another device's request is `404` (object-level authorization); an upload after expiry or cancellation is `410 SAMPLING_EXPIRED`. Nothing an agent sends can move a request backwards.
 
 **Storage.** Memory only, in a bounded map inside the server process: at most 32 samples and 16 MiB in total, one per device, 4 per user. Kept for 15 minutes after completion, then dropped and the request reads `expired`. Dropped at once when the device is revoked, the requester's account is disabled, the requester presses "Delete now", or the server stops. A restart loses stored samples by design; open requests survive in the database and finish normally. Nothing is written to SQLite, to a file, to the audit log or to a server log.
 
@@ -203,7 +203,7 @@ The ID rule exists because Vector accepts IDs that tap reads as patterns: a comp
 
 ## 6. What a malicious or compromised party can do
 
-The full table (mitigation and residual risk per row) is the new section of the [threat model](../security/THREAT-MODEL.md#event-sampling). The rows: a compromised server, an operator with a stolen session, a curious local user on the host, a network attacker, a pipeline author who names a component, a compromised device, another operator reading a sample, and a local user who squats the port. The residual risks, stated plainly:
+The full table (mitigation and residual risk per row) is the new section of the [threat model](../security/THREAT-MODEL.md#event-sampling). The rows: a compromised server, an operator with a stolen session, another operator or an administrator reading a sample, a curious local user on the host, a local user who squats the port, a network attacker, a pipeline author who names a component, a compromised device, and someone who steals a backup. The residual risks, stated plainly:
 
 - **A compromised server** can sign requests for any consenting device. It is bounded by consent, host caps, the agent's own rate limits (at most 12 sessions an hour), the ID rule and redaction; in `values` mode it can still collect redacted events from any component of a consenting device.
 - **A stolen operator session** can request and read samples for consenting devices until the session is revoked; the rate limits and the audit trail apply.
@@ -214,15 +214,15 @@ The full table (mitigation and residual risk per row) is the new section of the 
 
 **Where it starts.**
 
-- **Canvas node:** the inspector of a selected component gets "Sample events…" next to "Test with samples" (`dashboard/src/SyntheticTester.tsx` lives there). On a source it samples `outputs`; on a transform it offers `outputs` or `inputs`; on a sink `inputs`.
-- **Canvas edge:** the connection's menu offers "Sample events on this connection…", which samples the outputs of the connection's source component. Route outputs cannot be told apart (tap reports the component, not the output), so on a route the panel says "All outputs of this route".
+- **Canvas node:** the inspector of a selected component gets "Sample events…" next to "Test with samples" (`dashboard/src/PipelineSettings.tsx` mounts `SyntheticTester`). On a source it samples `outputs`; on a transform it offers `outputs` or `inputs`; on a sink `inputs`.
+- **Canvas edge:** the connection's action menu (`PipelineEdge.tsx`, `CanvasActionMenu.tsx`) offers "Sample events on this connection…", which samples the outputs of the connection's source component. Route outputs cannot be told apart (tap reports the component, not the output), so on a route the panel says "All outputs of this route".
 - **Device page:** the "Event sampling" card has "Sample events…", which asks for the component from the device's running pipeline.
 
 From the canvas, the panel first asks for a device and lists only devices running this pipeline, with the reason next to any device that cannot sample.
 
 **The request.** Component and side (prefilled), how many events (up to the host's cap) and how long, a required reason (8 to 200 characters), and a note: "Redacted on the device and kept for 15 minutes, for you only." The button is "Start sampling".
 
-**What the panel shows, in order.** "Waiting for edge-01 to check in" (usually a few seconds when the device holds a wait, up to its check-in interval otherwise), "Sampling window open on edge-01 · 12 s left", "Redacting and uploading", then the result. Cancel is available until the window opens; afterwards it discards the result, and the on-host window ends at its own bound.
+**What the panel shows, in order.** It can only show what the server knows, which is when it delivered the request, not when the window opened. "Waiting for edge-01 to check in" (usually a few seconds when the device holds a wait, up to its check-in interval otherwise), then "edge-01 has the request. Its window closes by 14:03:20 at the latest.", then the result. Cancel stops delivery until the device has the request; afterwards it discards the result, and the on-host window ends at its own bound.
 
 **The viewer.** A scope banner: "Showing up to 20 events from remap on edge-01, redacted on the device. Kept for 14:32 more, visible only to you. Redaction is best effort: check the events before you copy them anywhere." In `shape` mode: "This host hides values. You're seeing field names and types only." Events render as text in a JSON tree with a raw toggle. `«redacted»`, `«truncated N bytes»`, `«hash:…»` and shape placeholders are chips with a tooltip naming the rule, and a summary line counts them ("12 values redacted: 4 by field name, 8 by pattern, 0 secrets; 2 truncated"). Nothing is ever interpreted as HTML.
 
@@ -238,7 +238,7 @@ From the canvas, the panel first asks for a device and lists only devices runnin
 | Pipeline turns on the API | "This pipeline turns on Vector's own API, so sampling can't open a separate window. Remove the `api` setting and deploy again." |
 | Component can't be sampled | "Rename this component to use letters, digits, `_` or `-` to sample it." |
 | Port in use | "Another program on edge-01 is using port 8686, which Vector needs for a sampling window. Stop that program or try again later." |
-| Rate limit | "Sampling on edge-01 is limited to 12 a hour. Try again in 4 min." |
+| Rate limit | "Sampling on edge-01 is limited to 12 an hour. Try again in 4 min." |
 | Another window open | "A sampling window is already open on edge-01 (started by Ana). Try again when it closes." |
 | Component idle | "No events reached remap in 30 seconds. It may be idle, or nothing upstream is sending. Try a longer window or sample another component." |
 | Another client attached | "Another program connected to Vector's API during the window, so the window was closed by restarting Vector. No events were kept." |
@@ -321,11 +321,11 @@ The server allowlists every key and bound and rejects unknown keys, like telemet
 | `GET /devices/{id}/sampling` | any signed-in role | Consent and capability as last reported, the open request and the last one, metadata only | 404 `NOT_FOUND` |
 | `GET /devices/{id}/sampling/{request_id}` | any signed-in role | One request's metadata and state | 404 `NOT_FOUND` |
 | `GET /devices/{id}/sampling/{request_id}/events` | the requester | The redacted events | 404 `NOT_FOUND` (anyone else), 410 `SAMPLING_EXPIRED` |
-| `POST /devices/{id}/sampling/{request_id}/cancel` | the requester, admin | Cancel; before the window opens it stops delivery, afterwards it discards the result | 404, 409 `CONFLICT` if already final |
+| `POST /devices/{id}/sampling/{request_id}/cancel` | the requester, admin | Cancel; until the device has the request it stops delivery, afterwards it discards the result | 404, 409 `CONFLICT` if already final |
 | `DELETE /devices/{id}/sampling/{request_id}/events` | the requester | "Delete now" | 404 |
 | `POST /devices/{id}/sampling/{request_id}/promote` | the requester | Record that events were copied (`kind`: `vrl_sample` or `unit_test`, `count`) | 404, 400 |
 
-`SamplingRequest` is `{id, request_id, device_id, requester:{id,name}, component_id, side, max_events, max_seconds, reason, state, code?, closed_by?, events?, bytes?, redactions?, vector_restarted?, created_at, expires_at, finished_at?}`. `GET /devices/{id}` gains a read-only `sampling` projection (`allowed`, `mode`, caps, `unavailable`). `GET /settings` gains `event_sampling: {enabled}`.
+`SamplingRequest` is `{id, request_id, device_id, requester:{id,name}, component_id, side, max_events, max_seconds, reason, state, code?, closed_by?, events?, bytes?, redactions?, vector_restarted?, created_at, start_by, finish_by, finished_at?}`. `GET /devices/{id}` gains a read-only `sampling` projection (`allowed`, `mode`, caps, `unavailable`). `GET /settings` gains `event_sampling: {enabled}`.
 
 **Old agents and old servers.** An old agent never reports `sampling`, so the server treats the device as unsupported (`SAMPLING_UNAVAILABLE`, `agent_too_old`) and never puts a `sampling` object in its manifest. A new agent talking to an old server never sees `event_sampling` in `features`, so it sends no `sampling` field, uploads nothing and ignores nothing it needs to. An old agent that did receive a `sampling` object would ignore it (unknown JSON fields are ignored by `json.Unmarshal`), and the server never sends it one.
 
@@ -360,7 +360,7 @@ Each behavior above has a test in one of five layers. The IDs are used in the [i
 - S-04 Rate limits per user and per device.
 - S-05 Gating: host not allowed, old agent, offline, revoked device.
 - S-06 The manifest carries the object only for the authenticated device, only while `requested` or `delivered` and unexpired, signed, with the nonce; state transitions.
-- S-07 Upload: device authentication, another device's request 404, size 413, second upload 409, expired and cancelled 410, malformed structure, depth and size limits.
+- S-07 Upload: device authentication, another device's request 404, size 413, the same body twice 200 and a different body 409, expired and cancelled 410, malformed structure, depth and size limits.
 - S-08 Storage: a canary in an event is absent from the database file and WAL after upload; the 15-minute purge; revoke purges; restart drops; only the requester reads (another operator and an administrator get 404); capacity bounds.
 - S-09 Audit: the actions and their allowlisted details; the canary is absent from the audit log, an audit export and the server log.
 - S-10 Backup and restore: the archive has no canary; the restore fence raises the sampling generation.
@@ -399,14 +399,14 @@ Each behavior above has a test in one of five layers. The IDs are used in the [i
 ## Consequences
 
 - **Prerequisite.** Restricted mode must stop accepting a pipeline `api` block before sampling ships: `CapabilityPolicy.Check` in `policy.go`, `requires_full_mode` in `rollout.rs`, the dashboard's device compatibility check, and the lists in [security.md](../user/security.md) and [ADR 0005](0005-restricted-mode-by-default.md). A pipeline that sets `api` will then need a full-mode device; the release note says so. No starter pipeline or fixture uses an `api` block (only editor tests do).
-- **The "events never pass through Vectory" statements need one qualification:** "unless the host owner turns on event sampling", with the redaction limits stated. That covers [security.md](../user/security.md) and the specification's sections 9 and 11, which should record that host-approved, bounded sampling is allowed by them.
+- **The "events never pass through Vectory" statements need one qualification:** "unless the host operator turns on event sampling", with the redaction limits stated. That covers [security.md](../user/security.md) and the specification's sections 9 and 11, which should record that host-approved, bounded sampling is allowed by them.
 - **Copies are durable once promoted.** Draft revisions, versions and backups keep events written into unit tests. The promotion dialog and audit event exist for that reason.
 - **Vector upgrades need a re-measurement.** Sampling depends on 0.58's address, bind and stream behavior. The agent supports the 0.58 series; any bump reruns experiments A to G (they are scripted in the plan).
 - **The server gains an instance switch and a bounded in-memory store,** and the agent gains a session engine on its single goroutine. The plan lists files and owners.
 
 ## Open risks
 
-- **macOS is unmeasured.** The same experiments must pass on a native runner; the connection reader differs.
+- **macOS is unmeasured.** The same experiments must pass on a native runner; the connection reader differs, and without a parent-death signal an orphaned Vector could keep a window open.
 - **The bind race.** A local user who binds 8686 between the probe and Vector's bind stops Vector. Bounded by consent, the requested window and Vector's restart; not eliminated.
 - **Foreign readers before detection.** Up to 500 ms of raw events, plus whatever a client had streamed before the agent's next poll.
 - **Heuristic redaction.** See section 4. Free text is the open case.

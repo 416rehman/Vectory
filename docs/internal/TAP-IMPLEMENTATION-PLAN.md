@@ -53,7 +53,7 @@ Files: `contracts/CONTRACT.md`, `contracts/generate.mjs`, generated `contracts/o
 
 **Migrations reserved: 0140 to 0149.** Used: 0140, 0141, 0142. Held and unused: 0143 to 0149.
 
-Sketch (final SQL is the owner's; the constraints are the point):
+Sketch (the package writes the final SQL; the constraints are the point):
 
 ```sql
 -- 0140_event_sampling_requests.sql: metadata only. No column can hold event content.
@@ -97,7 +97,7 @@ Files the package owns:
 | File | Work |
 | --- | --- |
 | `server/migrations/0140_*.sql`, `0141_*.sql`, `0142_*.sql` | As above. |
-| `server/src/sampling.rs` (new) | The request lifecycle and one-way state machine; the bounded in-memory sample store (32 samples, 16 MiB, one per device, 4 per user, 15-minute TTL, purge on revoke, user disable and shutdown); the seven dashboard handlers; the upload handler with a body cap enforced while reading; the manifest object builder; the heartbeat `sampling` validator; the expiry sweep; the promotion audit. |
+| `server/src/sampling.rs` (new) | The request lifecycle and one-way state machine; the bounded in-memory sample store (32 samples, 16 MiB, one per device, 4 per user, 15-minute TTL, purge on revoke, user disable and shutdown); the seven dashboard handlers; the upload handler with a body cap enforced while reading and the accepted body's digest kept in memory, so a retry of the same body answers 200; the manifest object builder; the heartbeat `sampling` validator; the expiry sweep; the promotion audit. |
 | `server/src/api.rs`, `server/src/lib.rs`, `server/src/main.rs` | Mount the routes with `authorize(..., &["operator"], true)` for mutations; agent route on the agent listener; `VECTORY_EVENT_SAMPLING` (`on` default, `off` removes routes and the feature); hold the store in `App`. |
 | `server/src/device.rs` | `HEARTBEAT_FEATURES` gains `event_sampling` only when enabled; the signed payload gains `sampling` for the authenticated device's open request (state `requested` to `delivered`); parse and persist the heartbeat `sampling` block into `sampling_devices`; project `Device.sampling`. |
 | `server/src/wake.rs` (on the integration branch) | `Registry::nudge(device)` answers a parked wait `changed:true` without a generation change, paced like other wakes; the wait's entry query also treats a `requested` sampling row as changed. `delivered` rows do not, so there is no loop. |
@@ -114,7 +114,7 @@ All new files sit in `agent/internal/agent/` unless noted. `reconcile.go` and `v
 
 | Package | Files | Work | Tests |
 | --- | --- | --- | --- |
-| 3a Consent | `types.go` (`Settings.EventSampling`), `sampling_consent.go`, `sampling_settings.go`, `agent/cmd/vectory/commands.go` (`configure-sampling`), `agent/cmd/vectory/help.go`, `status.go`, `doctor.go` | Decode fail-closed (absent, malformed, unknown fields, out-of-range means off). `ConfigureSampling` and `DisableSampling` through `lockSettingsMaintenance`, `loadSettingsDocument` and `settingsDocument.save`. The command prints the consent text, needs a typed yes or `--yes`, refuses on Windows and on platforms not yet enabled. `setup`, `install`, `enroll` unchanged. | A-01, A-02, A-03, N-02 |
+| 3a Consent | `types.go` (`Settings.EventSampling`), `sampling_consent.go`, `sampling_settings.go`, `agent/cmd/vectory/commands.go` (`configure-sampling`), `agent/cmd/vectory/help.go`, `status.go`, `doctor.go` | Decode fail-closed (absent, malformed, unknown fields, out-of-range means off). `ConfigureSampling` and `DisableSampling` through `lockSettingsMaintenance`, `loadSettingsDocument` and `settingsDocument.save`. The command prints the consent text, needs a typed yes or `--yes`, refuses on Windows and on platforms not yet enabled. `--allow` also clears the local sampling generation floor in `state.json`, prepared like the retry-suppression reset in `commitSettingsWithRetryReset`. `setup`, `install`, `enroll` unchanged. | A-01, A-02, A-03, N-02 |
 | 3b Redactor | `sampling_redact.go` | Rules 1 to 6 of ADR section 4 on top of `redactor` (`diagnose.go`), reading bound secrets with `readLocalSecret`, learning credential leaves and full-mode environment values through `learnConfiguration`. Streaming, per event. A distinct output type is the only thing the uploader accepts. | A-11 |
 | 3c Connection reader | `sampling_conn_linux.go` (`/proc/net/tcp`), `sampling_conn_darwin.go` (`/usr/sbin/netstat -anp tcp`), `sampling_conn_other.go` (reports unsupported) | Count established sockets whose local port is 8686 and identify the tap's own by its ephemeral port. Parse errors are errors, never "none". | A-09 (unit), N-01 |
 | 3d Window | `vector.go` (one new `VectorDriver` method that writes the overlay with or without the block and reloads through the existing `reload`), `sampling_window.go` | Port probe; candidate validation with a staged overlay; open, prove open; close, drift rule, prove closed; enforcement by `Stop` then `Activate`. Never calls `Activate` to open. | A-07, A-08, A-09, A-15 |
@@ -129,14 +129,14 @@ All new files sit in `agent/internal/agent/` unless noted. `reconcile.go` and `v
 | `dashboard/src/api.ts` (additive), `samplingModel.ts` (state machine and the copy table of ADR section 7) | Types and calls for the seven routes; one place for every refusal text; request identity kept the way the other keyed mutations keep it (`request_id`, exact-status read after an uncertain result). |
 | `DeviceSampling.tsx`, `DeviceDetail.tsx` | The "Event sampling" card: not allowed, allowed (mode, caps, last session), window banner, platform and pipeline refusals, "Sample events…". |
 | `SampleEventsPanel.tsx`, `SampleViewer.tsx` | Request form (component, side, count, window, required reason), progress, the scope banner, the tree and raw views, chips with tooltips, counts, "Delete now", restore after reload within the TTL. Events render as text only. |
-| `PipelineDetails.tsx`, `SyntheticTester.tsx`, `PipelineEdge.tsx`, `CanvasActionMenu.tsx` | The node action beside "Test with samples" and the edge action, with the device picker that lists only devices running this pipeline and the reason next to each device that cannot sample. |
+| `PipelineSettings.tsx` (mounts `SyntheticTester.tsx`), `PipelineEdge.tsx`, `CanvasActionMenu.tsx` | The node action beside "Test with samples" and the edge action, with the device picker that lists only devices running this pipeline and the reason next to each device that cannot sample. |
 | `SamplePromotion.tsx`, `sampleStore.ts`, `sampleTests.ts` | "Use as VRL sample": an ephemeral, device-sourced set excluded from `writeSamples` until "Keep in this browser". "Create unit test": the preview and edit step, then `unitTestFromSample` per event into the draft, then `promote`. Shape placeholders become example values. |
 | `dashboard/src/*.css`, help-center links | Styles in the design system's tokens; light, dark and 390 px. |
 | Tests | vitest: model, copy completeness, no persistence. Playwright `dashboard/tests/sampling-browser.mjs`: B-01 to B-05, with the port free-check the other harnesses use. |
 
 ## WP5: docs, operations, CI (security and release)
 
-- `docs/user/event-sampling.md` (new) and updates to `security.md` (qualify "Your events stay yours": unless the host owner turns on sampling; say what redaction does not guarantee and which hosts must not allow it), `cli.md`, `agents.md`, `troubleshooting.md`, `glossary.md`, `whats-new.md`; `CHANGELOG.md`.
+- `docs/user/event-sampling.md` (new) and updates to `security.md` (qualify "Your events stay yours": unless the host operator turns on sampling; say what redaction does not guarantee and which hosts must not allow it), `cli.md`, `agents.md`, `troubleshooting.md`, `glossary.md`, `whats-new.md`; `CHANGELOG.md`.
 - `docs/internal/REQUIREMENTS.md` rows and `docs/internal/CAPACITY.md`: the ADR appendix's cost table is the seed; add rates above 12,000 events/s when measured.
 - `docs/product-specification.md` (lead): one sentence in sections 9 and 11 that host-approved, bounded sampling per ADR 0011 is allowed.
 - `deploy/compose.yaml` and `deploy/Dockerfile`: no core dumps for the server process (`ulimit core=0`), and a documented note on swap, because samples live in server memory.
