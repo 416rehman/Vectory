@@ -109,7 +109,8 @@ See [Keep credentials on the device](resources.md#keep-credentials-on-the-device
 | Offline target | The device needs to reconnect before it can apply anything. |
 | Applies on its next check-in | Its agent isn't waiting for changes: an older agent, wake-ups turned off on the host (`--no-wake`) or on the server (`VECTORY_AGENT_WAKE_LIMIT=0`), or a network that cuts idle connections. It still applies at its next check-in. |
 | Scheduled | The start time, and whether the schedule was missed. |
-| Canary waiting | The canary devices: each must report **Applied** with a fresh check-in for the whole observation period. |
+| Canary waiting | **Canary gate** names what it is waiting for, for example "Waiting for edge-nyc-02 to apply" or "Measuring delivery on edge-nyc-02 (2 of 3 samples)". Each canary device must report **Applied** with a fresh check-in for the whole observation period. If the canary has applied and is delivering, **Release next stage now** goes ahead without waiting. |
+| Held on previous version | The newest version failed on this device, but it still runs its previous version and delivers on it. Fix the pipeline and deploy again, or roll the rollout back. The device page has the failure. |
 | Sync paused | Whether the pause was set on the rollout, in agent settings or on the host (`vectory resume` clears only a host pause). |
 | Priority conflict | Two different pipelines at the same priority. Choose a higher priority, or remove the deployment you don't need. |
 | Target set changed | Group membership changed since you reviewed. Review again and confirm. |
@@ -138,7 +139,7 @@ The device reads **Not delivering**: the version applied and Vector runs it, but
 2. Fix the destination, or the component's address, credentials or program. For a quick recovery, roll the pipeline back to its last working version.
 3. Watch the device. The issue closes by itself after three clean checks (about three check-in intervals), and the device returns to **Applied**.
 
-A canary rollout checks this before it releases more devices. While Vectory takes its first measurements the gate reads **Measuring delivery**; a canary that isn't delivering counts as a failure against the rollout's failure threshold, and the rollout page shows why. A device without metrics is judged on its apply state alone.
+A canary rollout checks this before it releases more devices. While Vectory takes its first measurements the gate reads **Measuring delivery on** the device, with how many samples it has; a canary that isn't delivering counts as a failure against the rollout's failure threshold, and the rollout page shows why. A device without metrics is judged on its apply state alone.
 
 These checks need metrics: see [Enable real metrics](telemetry.md#enable-real-metrics). Without them the device page reads **Delivery health: not measured**, and only a sink that fails requests shows up, from Vector's own log: the same sink issue opens after two check-ins, its message ending "measured from Vector's log (no metrics)". On the host, `sudo vectory status` shows the failing sink under **Vector** and what to check next. A filter or route that drops events on purpose never counts as a delivery problem.
 

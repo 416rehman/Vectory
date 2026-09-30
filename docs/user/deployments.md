@@ -59,24 +59,44 @@ Vectory never raises a priority for you. **No current priority conflict** means 
 | Rollout | What happens |
 | --- | --- |
 | **All at once** | Every target gets the version now. |
-| **Canary, then batches** | A few devices first. After an observation period, if they apply cleanly, the rest follow in batches. |
+| **Canary, then batches** | A few devices first. After an observation period, if they apply cleanly, the rest follow in batches. **Canary size** is how many go first; you choose which when you review. |
 | **Scheduled** | The deployment starts at the time you choose. The target list is fixed when you schedule it. |
 
 For a first canary, try one device, a batch size that suits your fleet and a few minutes of observation.
 
 Only **Applied** counts toward a canary. Offline, failed and unconfirmed devices hold the rollout, and if more devices fail than you allow, the rollout stops before releasing more.
 
-While a canary runs, **Canary gate** shows what each released device still needs:
+### Choose which devices go first
 
-| Gate message | What to check |
+In the review, **Canary devices: edge-nyc-02** names who is released first, and why. With no choice from you, Vectory picks the devices that are online, healthy and reporting metrics (so their delivery can be measured), then online devices without metrics, and last the ones that are failing, paused or not checking in. Among equally ready devices, the order of their IDs decides, as it always has, so the choice is repeatable.
+
+To pick your own, open the list, choose devices by name among the ones in the review and choose **Apply**. The review runs again with your choice, and its **Stage** column marks each device **Canary** or **Then**. Choose fewer than the canary size and Vectory adds the most ready devices; leave the choice alone and it stays Vectory's. A device you name that isn't checking in, is paused or is failing gets a warning: the rollout waits for it. A scheduled rollout that you didn't name canary devices for chooses again when it starts, from the devices that are ready then.
+
+### Watch the canary
+
+While a canary runs, its lane shows what each canary device delivers now beside the average of the 10 minutes before its release: events in and out per second, errors per minute and buffer fill. A device with nothing recorded before its release, such as a newly enrolled one, reads **No baseline yet**; one that reports no metrics reads **Metrics are off**. Missing numbers are never shown as zero.
+
+**Canary gate** says in one line what the rollout is waiting for, naming the devices, from the same evidence as the lanes and the progress bar:
+
+| Gate says | What to check |
 | --- | --- |
-| **Another assignment is effective** | Something with a higher priority now wins on this device. |
-| **Waiting for a fresh heartbeat** | The device hasn't checked in recently. An earlier success doesn't count. |
-| **Configuration sync is paused** | A pause set on the host or in agent settings. Only the host can clear a host pause. |
-| **Current application is not verified** | The device doesn't report **Applied** for this version. |
-| **Device is unavailable** | The device was revoked or replaced. A replacement identity isn't counted. |
+| **Measuring delivery on edge-nyc-02 (2 of 3 samples)** | It applied. Vectory checks a few metrics samples to confirm events are delivered before it starts observing. |
+| **Waiting for edge-nyc-02 to apply** | The device doesn't report **Applied** for this version. |
+| **Waiting for edge-nyc-02 to check in** | The device hasn't checked in recently. An earlier success doesn't count. |
+| **Sync is paused on edge-nyc-02** | A pause set on the host or in agent settings. Only the host can clear a host pause. |
+| **Another assignment is effective on edge-nyc-02** | Something with a higher priority now wins on this device. |
+| **edge-nyc-02 was revoked or replaced** | A replacement identity isn't counted. |
+| **edge-nyc-02 applied but isn't delivering** | Its metrics show events aren't getting through. It counts as a failure against your threshold. |
 
-**Observation in progress** means Vectory is watching fresh evidence for the whole period; it isn't a countdown. Pausing the rollout, or losing evidence, restarts the observation.
+When devices wait for different reasons, the gate leads with what has to happen first and lists the rest with their counts.
+
+**Observation in progress** means Vectory is watching fresh evidence for the whole period. The lane of the stage being observed carries the one countdown. Pausing the rollout, or losing evidence, restarts the observation.
+
+### Release the next stage early
+
+While the released devices have applied and are delivering, and the delivery check or the observation period is still running, the stage being waited on offers **Release next stage now**. It asks first, for example: "Release to the remaining 2 devices now? The delivery check on edge-nyc-02 is still measuring." Operators and administrators can use it.
+
+Vectory never skips a check that failed: a device that hasn't applied, has gone quiet, is paused or isn't delivering holds the rollout, and the server refuses the release. A release that goes ahead is recorded on the rollout (**Released early by Alex**) and in the audit log as **Next stage released early**, with the stage and what the gate showed at that moment (for example, delivery still being measured on one canary device). Later stages still wait for their own checks.
 
 ## Read the apply states
 
@@ -104,6 +124,22 @@ While a device is **Waiting for agent**, its row says how soon: **connected, usu
 
 An offline device's last state is history, not the present. It becomes current again when the device checks in.
 
+### Read a device's health
+
+The Overview's **Fleet health** and the **Status** of the [Devices](/#/devices) page use one word per state:
+
+| State | What it says | What to do |
+| --- | --- | --- |
+| **Applied** | Running its assigned version, verified by the agent. | Nothing. |
+| **Not delivering** | Applied, but its metrics show events aren't getting through. | [Follow the issue](troubleshooting.md#a-pipeline-applies-but-delivers-nothing). |
+| **Held on previous version** | The newest version failed on this device, but it still runs the version before it, checked by the agent, and delivers on it. Nothing is broken on the host; the new version just didn't take effect. | Fix the pipeline and deploy again, or roll the rollout back. |
+| **Updating** | A new version is on its way. | Wait for a final state. |
+| **Check required** | Applied, but the agent couldn't confirm what Vector runs. | Look at the device. |
+| **Failed** | The version was rejected or couldn't be applied, and the device has no working version to fall back on, or the one it runs isn't delivering. | Read the device's issue, fix the cause, then retry. |
+| **Offline**, **Sync paused**, **No pipeline** | No check-in for three intervals, a pause, or nothing assigned. | [Reconnect the device](troubleshooting.md#a-device-is-offline-or-never-connects), resume sync where it was paused, or deploy a pipeline. |
+
+The Devices page's **Needs attention** filter lists the devices that want a look: failed or rolled back, held on their previous version, not delivering, in conflict or waiting for a check. Hover it to see what it holds. A held device also counts as not on its desired version.
+
 ## Follow a rollout
 
 Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Loaded in Vector** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Loaded in Vector** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. The page's address is its link: share it with anyone who has an account.
@@ -118,7 +154,7 @@ The page leads with the one action that fits:
 | Devices failed for another reason | **Retry failed**. |
 | It's paused | **Resume**. |
 
-The Overview's **Needs you** lists what still needs a person, most urgent first: devices that aren't delivering, then failed applies, then rollouts that stopped by themselves. A device problem and the rollout it stopped read as one item, with **Roll back** when the server can review that rollback. A rolled-back rollout is resolved: it leaves **Needs you** and stays in **Recent changes**. **Dismiss** hides a stopped rollout for you in this browser; if it fails again, it comes back.
+The Overview's **Needs you** lists what still needs a person, most urgent first: devices that aren't delivering, then failed applies, then rollouts that stopped by themselves, then everything else, including devices held on their previous version (amber: they still deliver). A device problem and the rollout it stopped read as one item, with **Roll back** when the server can review that rollback. A rolled-back rollout is resolved: it leaves **Needs you** and stays in **Recent changes**. **Dismiss** hides a stopped rollout for you in this browser; if it fails again, it comes back.
 
 ## Find a deployment or device result
 
