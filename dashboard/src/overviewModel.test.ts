@@ -10,10 +10,13 @@ import {
   niceCeiling,
   healthBucket,
   healthCounts,
+  healthLabels,
+  healthOrder,
   quietSummary,
   rolloutProgress,
   unmanagedDetail,
 } from "./overviewModel";
+import { deviceDisplayStatus, deviceStatuses } from "./status";
 
 const now = Date.parse("2026-09-29T03:00:00.000Z");
 const delivery = {
@@ -48,6 +51,7 @@ describe("fleet health buckets", () => {
     expect(counts).toEqual({
       applied: 2,
       degraded: 1,
+      held: 0,
       updating: 1,
       check: 1,
       failed: 2,
@@ -76,6 +80,38 @@ describe("fleet health buckets", () => {
         data_plane: { version_id: "v2", issues: [] },
       }),
     ).toBe("applied");
+  });
+
+  it("reads a failed device that keeps a working earlier version as held, never failed", () => {
+    for (const status of ["failed", "rolled_back"]) {
+      const held = { status, held_on_previous_version: true };
+      expect(healthBucket(held)).toBe("held");
+      expect(deviceDisplayStatus(held)).toBe("held");
+      // Without the server's word it is what the agent reported.
+      expect(healthBucket({ status })).toBe("failed");
+      expect(healthBucket({ status, held_on_previous_version: false })).toBe(
+        "failed",
+      );
+    }
+    // The flag never changes any other state.
+    for (const status of ["verified", "applying", "offline", "paused"])
+      expect(healthBucket({ status, held_on_previous_version: true })).not.toBe(
+        "held",
+      );
+    const { counts } = healthCounts([
+      { status: "failed" },
+      { status: "failed", held_on_previous_version: true },
+      { status: "rolled_back", held_on_previous_version: true },
+      { status: "verified" },
+    ]);
+    expect(counts).toMatchObject({ applied: 1, held: 2, failed: 1 });
+    // One word per state, in the bar, the legend and the badge.
+    expect(healthLabels.held).toBe("Held on previous version");
+    expect(healthLabels.held).toBe(deviceStatuses.held.label);
+    // Held sits beside Not delivering in the bar's order, before updating.
+    expect(healthOrder.indexOf("held")).toBe(
+      healthOrder.indexOf("degraded") + 1,
+    );
   });
 
   it("never reads a new, unknown state as healthy", () => {

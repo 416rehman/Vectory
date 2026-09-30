@@ -1123,6 +1123,12 @@ jobs:
         run: node tests/canary-lane-browser.mjs
         env:
           VECTORY_CANARY_LANE_OUTPUT: artifacts/browsers/canary-lane
+      - name: Check that a device held on its previous version reads the same everywhere
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/health-held-browser.mjs
+        env:
+          VECTORY_HEALTH_HELD_OUTPUT: artifacts/browsers/health-held
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}

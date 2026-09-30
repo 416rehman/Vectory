@@ -1,5 +1,9 @@
 /** Pure device-list logic: quick views, version labels and sort keys. */
-import { connectionState, type DeviceStatusInput } from "./status";
+import {
+  connectionState,
+  deviceDisplayStatus,
+  type DeviceStatusInput,
+} from "./status";
 import {
   healthBucket,
   healthOrder,
@@ -34,8 +38,17 @@ export type ListDevice = DeviceStatusInput & {
 
 export type DeviceView =
   "failing" | "drift" | "offline" | "paused" | "no_telemetry";
-export const deviceViews: { value: DeviceView; label: string }[] = [
-  { value: "failing", label: "Failing" },
+export const deviceViews: {
+  value: DeviceView;
+  label: string;
+  /** What the view contains, for its tooltip. */
+  hint?: string;
+}[] = [
+  {
+    value: "failing",
+    label: "Needs attention",
+    hint: "Failed or rolled back, not delivering, held on the previous version, in conflict, or waiting for a check.",
+  },
   { value: "drift", label: "Not on desired version" },
   { value: "offline", label: "Offline" },
   { value: "paused", label: "Paused" },
@@ -124,6 +137,8 @@ export function versionMarker(device: ListDevice): VersionMarker | null {
     return device.status === "verified"
       ? { tone: "success", icon: "check", text: "Running" }
       : { tone: "neutral", icon: "check", text: "Running at last report" };
+  if (deviceDisplayStatus(device) === "held")
+    return { tone: "warning", icon: "check", text: "Previous version running" };
   if (["failed", "rolled_back"].includes(device.status))
     return {
       tone: "danger",
@@ -147,6 +162,7 @@ const statusOrder: (HealthBucket | "revoked")[] = [
   "failed",
   "degraded",
   "check",
+  "held",
   "offline",
   "updating",
   "paused",

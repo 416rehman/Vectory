@@ -565,7 +565,8 @@
 [data-bucket="updating"] {
   --bucket: var(--mark-info);
 }
-[data-bucket="check"] {
+[data-bucket="check"],
+[data-bucket="held"] {
   --bucket: var(--mark-warning);
 }
 [data-bucket="failed"] {
@@ -587,13 +588,22 @@
   border-radius: 2px;
   background: var(--bucket, var(--mark-empty));
 }
-/* Degraded shares amber with "Check required"; stripes keep them apart. */
+/* Degraded and held share amber with "Check required"; stripes and dots
+   keep them apart, and the legend names each. */
 .health-bar-segment[data-bucket="degraded"] {
   background: repeating-linear-gradient(
     135deg,
     var(--bucket) 0 3px,
     color-mix(in srgb, var(--bucket) 45%, transparent) 3px 6px
   );
+}
+.health-bar-segment[data-bucket="held"] {
+  background: radial-gradient(
+      circle at 3px 3px,
+      var(--bucket) 0 1.6px,
+      transparent 1.7px
+    )
+    0 0 / 6px 6px color-mix(in srgb, var(--bucket) 55%, transparent);
 }
 
 /* Icon + text labels in tabs (section tabs and in-page tab lists). */

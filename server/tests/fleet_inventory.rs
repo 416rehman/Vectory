@@ -420,7 +420,7 @@ async fn inventory_pages_filters_sorts_and_counts_like_the_devices_page() {
     );
     assert_eq!(
         page["counts"],
-        json!({"status":{"applied":6,"degraded":1,"updating":1,"check":1,"failed":2,"offline":2,"paused":1,"unmanaged":1,"revoked":1},
+        json!({"status":{"applied":6,"degraded":1,"held":0,"updating":1,"check":1,"failed":2,"offline":2,"paused":1,"unmanaged":1,"revoked":1},
             "views":{"failing":4,"not_on_desired":4,"offline":2,"paused":1,"no_telemetry":10}})
     );
     // A page row is exactly the row GET /devices shows.
@@ -479,7 +479,7 @@ async fn inventory_pages_filters_sorts_and_counts_like_the_devices_page() {
     assert_eq!(db["total"], 2);
     assert_eq!(
         db["counts"]["status"],
-        json!({"applied":0,"degraded":0,"updating":1,"check":1,"failed":2,"offline":0,"paused":0,"unmanaged":0,"revoked":0})
+        json!({"applied":0,"degraded":0,"held":0,"updating":1,"check":1,"failed":2,"offline":0,"paused":0,"unmanaged":0,"revoked":0})
     );
     assert_eq!(db["counts"]["views"]["failing"], 3);
 
@@ -962,7 +962,7 @@ async fn slim_overview_drops_devices_and_adds_the_fleet_numbers() {
     assert_eq!(counts["total"], 15);
     assert_eq!(
         counts["health"],
-        json!({"applied":6,"degraded":1,"updating":1,"check":1,"failed":2,"offline":2,"paused":1,"unmanaged":1})
+        json!({"applied":6,"degraded":1,"held":0,"updating":1,"check":1,"failed":2,"offline":2,"paused":1,"unmanaged":1})
     );
     assert_eq!(
         counts["connection"],

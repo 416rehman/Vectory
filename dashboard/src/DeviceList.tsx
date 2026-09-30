@@ -473,6 +473,7 @@ export default function DeviceList({
                     options={deviceViews.map((item) => ({
                       value: item.value,
                       label: item.label,
+                      hint: item.hint,
                       // No counts until a read succeeds: never a fake zero.
                       count: devices.updatedAt
                         ? viewCounts[item.value]

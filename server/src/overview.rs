@@ -268,6 +268,7 @@ async fn attention(
     versions: &Value,
 ) -> Result<Vec<Value>> {
     let mut failed: BTreeMap<(Option<&str>, &str), Vec<&Value>> = BTreeMap::new();
+    let mut held: BTreeMap<Option<&str>, Vec<&Value>> = BTreeMap::new();
     let mut unknown: BTreeMap<Option<&str>, Vec<&Value>> = BTreeMap::new();
     let mut degraded: BTreeMap<Option<&str>, Vec<&Value>> = BTreeMap::new();
     let (mut offline, mut paused, mut unmanaged, mut applying) =
@@ -275,6 +276,11 @@ async fn attention(
     for device in devices {
         let version = device["desired_version_id"].as_str();
         match text(device, "status") {
+            // The newest version failed, but the device still runs an earlier
+            // one and delivers on it: held there, not failed.
+            "failed" | "rolled_back" if device["held_on_previous_version"] == true => {
+                held.entry(version).or_default().push(*device)
+            }
             state @ ("failed" | "rolled_back") => {
                 failed.entry((version, state)).or_default().push(*device)
             }
@@ -314,6 +320,16 @@ async fn attention(
             state: Some("degraded"),
             devices: list,
             since,
+        });
+    }
+    for (version_id, list) in held {
+        groups.push(Group {
+            cause: "held",
+            severity: "warning",
+            version_id,
+            state: Some("held"),
+            devices: list,
+            since: None,
         });
     }
     for (version_id, list) in unknown {
@@ -448,7 +464,7 @@ async fn attention(
                 .version_id
                 .map(|id| versions[id].clone())
                 .unwrap_or(Value::Null);
-            let deployment = matches!(group.cause, "failed" | "degraded")
+            let deployment = matches!(group.cause, "failed" | "degraded" | "held")
                 .then(|| shared(&group.devices))
                 .flatten();
             let mut item = json!({
@@ -463,7 +479,7 @@ async fn attention(
                 "configuration_name": version["configuration_name"],
                 "state": group.state,
                 "since": group.since,
-                "reason": if group.cause == "failed" { reason(&group.devices) } else { None },
+                "reason": if matches!(group.cause, "failed" | "held") { reason(&group.devices) } else { None },
                 "rollback_available": deployment.as_ref().is_some_and(|id| available.contains(id)),
                 "deployment_id": deployment,
             });
@@ -521,6 +537,7 @@ pub fn fleet_action(action: &str, outcome: &str) -> bool {
         | "deployment.unassign"
         | "deployment.rollback"
         | "deployment.release"
+        | "deployment.stage_released_early"
         | "deployment.activate"
         | "deployment.missed"
         | "deployment.refresh_targets"
@@ -537,7 +554,6 @@ pub fn fleet_action(action: &str, outcome: &str) -> bool {
         | "issue.reopen" => true,
         "device.apply_state" => matches!(
             outcome,
-        | "deployment.stage_released_early"
             "verified_applied" | "failed" | "rolled_back" | "verification_unknown"
         ),
         // A refused enrollment adds nothing to the fleet: the audit log and
@@ -764,6 +780,7 @@ mod tests {
         for action in [
             "deployment.create",
             "deployment.release",
+            "deployment.stage_released_early",
             "configuration.publish",
             "device.enroll",
             "group.update",
@@ -780,7 +797,6 @@ mod tests {
         assert!(!fleet_action("device.enroll", "failure"));
     }
 
-            "deployment.stage_released_early",
     #[test]
     fn collapses_consecutive_device_events() {
         let names = HashMap::from([("d1", "edge-01"), ("d2", "edge-02"), ("d3", "web-01")]);

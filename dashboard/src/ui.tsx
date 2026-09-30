@@ -1148,7 +1148,8 @@ export function QuickFilters<T extends string>({
   onChange,
 }: {
   label: string;
-  options: { value: T; label: string; count?: number }[];
+  /** `hint` says what the filter contains, in a tooltip. */
+  options: { value: T; label: string; count?: number; hint?: string }[];
   value: T | "";
   onChange: (value: T | "") => void;
 }) {
@@ -1156,7 +1157,7 @@ export function QuickFilters<T extends string>({
     <div className="quick-filters" role="group" aria-label={label}>
       {options.map((option) => {
         const active = option.value === value;
-        return (
+        const button = (
           <button
             key={option.value}
             type="button"
@@ -1168,6 +1169,13 @@ export function QuickFilters<T extends string>({
               <span className="quick-filter-count">{option.count}</span>
             )}
           </button>
+        );
+        return option.hint ? (
+          <Tooltip key={option.value} content={option.hint} side="bottom">
+            {button}
+          </Tooltip>
+        ) : (
+          button
         );
       })}
     </div>

@@ -304,6 +304,22 @@ pub async fn list_devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         .map(|listed| listed.row)
         .collect())
 }
+/// Whether a device whose newest version failed keeps running an earlier one:
+/// the version it verifiably runs (its file still matches the digest the agent
+/// verified) is not the desired one, its Vector is not reported stopped, and no
+/// open delivery issue is measured on the version it runs.
+fn held_on_previous(device: &Value, running: Option<&str>, desired: Option<&str>) -> bool {
+    let (Some(running), Some(desired)) = (running, desired) else {
+        return false;
+    };
+    let summary = &device["data_plane"];
+    let failing = summary["version_id"].as_str() == Some(running)
+        && summary["issues"]
+            .as_array()
+            .is_some_and(|issues| !issues.is_empty());
+    running != desired && device["vector_running"] != false && !failing
+}
+
 /// One stored device projected for the API, and the version it verifiably
 /// runs right now.
 fn project(
@@ -415,6 +431,14 @@ fn project(
                 _ => "applying",
             }
         });
+        // A device that could not take its newest version but verifiably keeps
+        // running an earlier one, and delivers on it, is held on that version
+        // rather than failed: its status stays what the agent reported.
+        if matches!(text(&d, "status"), "failed" | "rolled_back")
+            && held_on_previous(&d, running_now.as_deref(), desired_version_id.as_deref())
+        {
+            d["held_on_previous_version"] = json!(true);
+        }
         // Assignment metadata comes from the control plane, never device-reported data.
         for (field, column) in [
             ("assignment", assignment_id),
