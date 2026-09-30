@@ -232,7 +232,7 @@ Allow one more attempt at a version the agent rejected, after fixing the cause.
 sudo vectory retry
 ```
 
-While the agent runs, the request is queued and the agent tries the failed version again within a few seconds: `Retry queued. The running agent (pid 812) tries the failed version again within a few seconds`. With the agent stopped, it tries at its next start. **Retry application** on the device page does the same from the dashboard.
+While the agent runs, the request is queued and the agent tries the failed version again within a few seconds: `Retry queued. The running agent (pid 812) tries the failed version again within a few seconds`. With the agent stopped, it tries at its next start. When no version has failed on the host, it says `Nothing to retry` and changes nothing. **Retry application** on the device page does the same from the dashboard.
 
 ## allow
 

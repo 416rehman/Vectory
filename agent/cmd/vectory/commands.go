@@ -62,7 +62,7 @@ func init() {
 			define: definePause(true)},
 		{name: "resume", group: "Day to day", summary: "Apply changes from the server again", usage: "resume [--state-dir PATH]", define: definePause(false)},
 		{name: "retry", group: "Day to day", summary: "Allow a failed configuration to be tried again", usage: "retry [--state-dir PATH]",
-			about:  "Lifts this host's hold on the version that failed, so the agent tries it again. While the agent runs, the request is queued and the agent tries again within a few seconds; when it is stopped, it tries at its next start. Retry on the device page does the same from the dashboard.",
+			about:  "Lifts this host's hold on the version that failed, so the agent tries it again. While the agent runs, the request is queued and the agent tries again within a few seconds; when it is stopped, it tries at its next start. When nothing has failed here, it says so and changes nothing. Retry on the device page does the same from the dashboard.",
 			define: defineRetry},
 		{name: "allow", group: "Day to day", summary: "Approve a destination, listener or file root in restricted mode",
 			usage:    "allow [--network HOST:PORT]... [--listener ADDR:PORT]... [--file-root PATH]... [--state-dir PATH]",
@@ -538,6 +538,16 @@ func defineRetry(c *cli) func() int {
 	c.StateDir()
 	c.JSON("Print one JSON document")
 	return func() int {
+		// Only a version that failed here is held back; without one, a retry
+		// would change nothing, so it says so instead of promising an attempt.
+		if nothingFailed(*c.state) {
+			if *c.json {
+				c.output(map[string]any{"status": "ok", "command": "retry", "nothing_failed": true})
+			} else {
+				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `vectory status` shows what it runs.")
+			}
+			return exitOK
+		}
 		err := agent.Retry(*c.state)
 		var held *agent.LockHeldError
 		switch {
@@ -562,6 +572,17 @@ func defineRetry(c *cli) func() int {
 		}
 		return exitOK
 	}
+}
+
+// nothingFailed reports whether this host's state records no failed version,
+// so a retry has nothing to lift. A missing or unreadable state is left to
+// Retry, which explains it.
+func nothingFailed(dir string) bool {
+	if info, err := os.Lstat(filepath.Join(dir, "state.json")); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	state, err := agent.LoadState(dir)
+	return err == nil && state.FailedGeneration == nil && state.FailedEffectiveSHA256 == ""
 }
 
 func defineAllow(c *cli) func() int {
