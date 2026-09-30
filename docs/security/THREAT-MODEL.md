@@ -24,7 +24,7 @@ Assets include control-plane signing/device-CA and MFA sealing keys, sessions, e
 
 ## Event sampling
 
-Proposed in [ADR 0011](../adr/0011-opt-in-event-sampling.md); nothing is built. Sampling lets an Operator read redacted events from one component of one device, and only where the host owner allowed it with `vectory configure-sampling`. This section is the checklist an independent reviewer should attack before and after the code exists. Event content is the most sensitive data Vectory would ever hold; it is not telemetry.
+Proposed in [ADR 0011](../adr/0011-opt-in-event-sampling.md); nothing is built. Sampling lets an Operator read redacted events from one component of one device, and only where the host operator allowed it with `vectory configure-sampling`. This section is the checklist an independent reviewer should attack before and after the code exists. Event content is the most sensitive data Vectory would ever hold; it is not telemetry.
 
 Assets added: the host's consent (`event_sampling` in `settings.json`), the per-device sampling generation, the runtime overlay's `api` block, redacted events in server memory for 15 minutes, and the audit metadata about them.
 
