@@ -147,6 +147,65 @@ The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed
 
 If you didn't replace Vector yourself, don't approve the change. Find out why the file changed first.
 
+## Adopt a Vector that already runs
+
+Setup never takes over a Vector that is running. It records how that Vector was started, keeps a copy of every configuration file it loads, and stops, so nothing changes until you choose. Run the setup command while the old Vector still runs, then run it again once you've stopped it.
+
+<!-- steps -->
+1. Run the command from **Add device** with the old Vector still running. Setup waits 6 seconds, in case it's a short test run, then prints what it found (shown wrapped here; setup prints it on one line):
+
+   ```text
+   [i]  Inventory    Vector started with: /usr/bin/vector --config-dir /etc/vector/conf.d;
+                     configuration files: /etc/vector/conf.d/10-sources.yaml (sha256 2f69f4e8c932…),
+                     /etc/vector/conf.d/20-sinks.yaml (sha256 9668a900538f…), backed up to
+                     /var/lib/vectory-agent/adoption-inventory/20260930T101500Z.
+   ```
+
+2. Read what it says next. A Vector that loads one plain file needs only the [usual handover](installation.md#keep-an-existing-workload). Anything else stops setup with the files named ([below](#when-setup-stops-for-a-running-vector)).
+3. Stop the old Vector, for example `sudo systemctl disable --now vector.service`, and run the same command again. Add `--adopt-existing` if setup told you to.
+
+Setup changes nothing of the old Vector: not its process, its files or its service. Its only writes are the copies below.
+
+### What setup records
+
+| Item | Where setup reads it |
+| --- | --- |
+| How Vector started | The running process: `/proc` on Linux, the kernel's process arguments on macOS, the process parameters on Windows. Also the service's own definition: the systemd `ExecStart`, the launchd job, the Windows service's `ImagePath`. |
+| The files it loads | `--config`, `--config-dir`, `--config-toml`, `--config-json` and `--config-yaml`, the `VECTOR_CONFIG*` variables for the options you left out, globs and comma lists, and the files of a directory as Vector reads them. With none of these, Vector's default path. |
+| What each file pulls in | `include` keys, a `provider`, secret backends and `SECRET[...]` references, and environment variables the file reads. Setup reads these and expands none of them. |
+| A copy of each file | In `adoption-inventory` in the state directory, with its SHA-256. |
+
+The copies sit in one folder per inventory, named by its UTC time, with an `inventory.json` that lists every file with its checksum. Only the account that ran setup can read them (mode `0700`; on Windows, an ACL for that account and SYSTEM), because they can hold the credentials the originals hold. Running setup again over an unchanged Vector keeps the same folder.
+
+`vectory setup --json` prints the same inventory under `adoption`. `uninstall --purge` deletes the copies with the rest of the state, so move them elsewhere first if you still need them.
+
+### When setup stops for a running Vector
+
+Setup stops when the Vector's topology depends on more than the one JSON file the agent manages. It names each finding:
+
+| Setup found | What it says | What to do |
+| --- | --- | --- |
+| Several files, a directory or a glob | `Vector loads 2 configuration files: /etc/vector/conf.d/10-sources.yaml, /etc/vector/conf.d/20-sinks.yaml.` | Merge them into one JSON file, or [adopt them as they are](#adopt-what-vector-loads-as-it-is). |
+| A file that includes others | `/etc/vector/vector.yaml names other files with include (extra.yaml). Vector 0.58 doesn't read includes, so something else assembles this configuration, and the agent doesn't.` | Merge what that tool assembles into one JSON file, or adopt it as it is. |
+| A provider | `/etc/vector/vector.yaml fetches more configuration from a provider (http), which the agent doesn't manage.` | Save what the provider serves into the JSON file, or adopt it as it is. |
+| Configuration chosen by an environment variable | `Its configuration is chosen by the VECTOR_CONFIG_DIR environment variable of vector.service, which the agent doesn't pass to the Vector it starts.` | Merge the files it names, or adopt them as they are. |
+| A process setup can't read | `How Vector (pid 812) was started couldn't be read, so the configuration it loads is unknown.` or `The environment of Vector (pid 812) couldn't be read, so configuration chosen through VECTOR_CONFIG or VECTOR_CONFIG_DIR can't be ruled out.` | Run setup with `sudo` (an elevated shell on Windows). |
+| A path setup can't follow | `vector.yaml (-c) is relative, and the working directory of the process is unknown.` or `… uses **, a recursive wildcard that setup doesn't expand.` | Run setup with `sudo`. List the files of a `**` wildcard one by one, or adopt it as it is. |
+| A file it can't copy | `/etc/vector/vector.yaml can't be read: permission denied.` or `… is larger than an inventory keeps (8 MiB a file, 64 MiB in all).` | Run setup with `sudo`. Copy an oversized file yourself, then adopt. |
+
+The fix in the message says the same in one line: merge what it loads into one JSON file at the managed path, or adopt it as it is, and either way stop the old Vector and run the command again with `--adopt-existing`.
+
+Setup notes these and goes on: a secret backend (the agent keeps credentials in [device secrets](resources.md#keep-credentials-on-the-device)), environment variables a file reads (the agent starts Vector without the old process's environment), a file that doesn't exist, and a file without a `.toml`, `.yaml` or `.json` extension, which Vector reads as TOML.
+
+### Adopt what Vector loads as it is
+
+`--adopt-existing` says the agent manages only its one JSON file. The other files stay where they are, and stay backed up, but no Vector the agent starts reads them, so whatever they configured stops when the old Vector stops.
+
+- Stop the old Vector first. Setup won't take over a running one, with or without the flag.
+- Run the same command again with `--adopt-existing`. Setup remembers what it recorded, so it doesn't need the old Vector to be running.
+- Without the flag, setup stops again and names the files, even if you merged them into the managed file: it can't see what a merge left out.
+- The flag can't be combined with `--keep-existing-vector`, which leaves the old Vector running beside the agent.
+
 ## Recover a device identity
 
 Use recovery when a device's credentials are lost or can no longer renew. It creates a new device identity; the old one is revoked. An offline device or a failed pipeline doesn't need recovery: see [A device is offline](troubleshooting.md#a-device-is-offline-or-never-connects) first.
@@ -186,3 +245,19 @@ Delete any downloaded token file afterwards. If creating the token was interrupt
 `--purge` needs the exact state directory. It leaves Vector and the managed configuration in place; delete them yourself if you no longer need them. If the purge is interrupted, run the same command again.
 
 To keep the agent but drop its identity, run `sudo vectory unenroll` instead. It deletes the local credentials; still revoke the device in the dashboard.
+
+## What the agent survives
+
+Each row is a failure the agent is tested against on Linux, macOS and Windows. The tests are in `agent/internal/agent`; run one by name with `go test -run NAME`.
+
+| Failure | What the agent does | Test |
+| --- | --- | --- |
+| The process is killed, or the power fails, at any step of an apply | The next start restores the last verified configuration. A managed file is never half written, and the last working copy is never lost. The interrupted version waits for a retry. | `TestKillAtEveryApplyBoundaryRecoversDeterministically` kills a real agent process at each of the seven stages and restarts it. |
+| The disk is full | Nothing is half written and the running configuration is untouched. The device page and `vectory status` say which disk is full and how to fix it, and the next check-in after space returns applies the same version with no manual step. | `TestDiskFullAtEveryWriteOfAnApply` and `TestRestartAfterAFullDiskRecoversACompleteConfiguration` |
+| A download is cut off, cut short or altered | Nothing is applied and the partial file is removed. The diagnostic says what happened, and the agent tries again at its next check-in, never in a loop. | `TestInterruptedOrAlteredDownloadActivatesNothing` and `TestCheckInRetryIsBounded` |
+| `vector validate` doesn't finish in time | The version is rejected as unverified, never treated as valid. The validating process is killed and Vector keeps running the old configuration. | `TestValidationTimeoutRejectsTheVersionAndKeepsTheOldConfiguration`, and with a real Vector `TestNativeValidationTimeoutKillsVectorAndKeepsTheOldConfiguration` |
+| An outbound proxy is in the way | Enrollment and check-ins go through an HTTP proxy with `CONNECT`, with the server pin intact. A proxy that refuses, asks for a sign-in or inspects TLS fails with a message that names the proxy. | `TestEnrollmentAndCheckInGoThroughAConnectProxy`, `TestProxyThatRefusesOrNeedsSignInIsNamed` and `TestProxyThatInspectsTLSFailsThePin` |
+
+A kill leaves the files the agent had already synced exactly as a power cut does. What no test can show is a disk that acknowledges a sync it didn't perform.
+
+Access is kept too. On Linux and macOS, local maintenance (`allow`, `install`, `configure-metrics`, `configure-secrets`, `re-adopt`) replaces the agent settings and the state file and keeps their owner, group, mode (`0600` or `0640`) and extended attributes: `TestMaintenanceKeepsOwnerGroupModeAndAttributesOfWhatItReplaces`. What the agent writes as it runs is private to the writing account, whatever it replaces: `TestAtomicWriteNeverLoosensAccess`. A file the service account owns stays its own when root replaces it: `TestRootReplacementKeepsTheServiceAccountsOwnership`. A setup or upgrade run as root leaves every file and folder the agent keeps in its state directory private (`0600` and `0700`), so the Vector process's group can read none of them: `TestSetupAndUpgradeLeaveOnlyPrivateFiles`.

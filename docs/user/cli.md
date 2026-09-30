@@ -68,6 +68,7 @@ Copy the whole command from **Add device** rather than typing it: it carries you
 | `--service auto` | Service manager to register with: `auto`, `systemd`, `launchd`, `windows` or `none`. `none` means you keep the agent running yourself. |
 | `--service-user NAME`, `--create-user` | Account the service runs as, and whether to create it. |
 | `--keep-existing-vector` | Continue even though another Vector is running. Setup leaves that Vector untouched. |
+| `--adopt-existing` | Adopt the Vector that ran here as it is, although it loaded several files, a directory, includes or configuration chosen by an environment variable. The agent manages only its one JSON file; the others stay where they are, backed up. Can't be combined with `--keep-existing-vector`. |
 | `--dry-run` | Check everything and show the plan without changing anything. |
 | `--no-wake` | Check in on schedule only: turn wake-ups off (see [run](#run)). Saved as a local setting; `--no-wake=false` turns them back on. |
 | `--json` | Print the result as JSON for scripts. |
@@ -82,7 +83,7 @@ If the server's certificates don't match the pin, `setup` stops before sending a
 
 Compare them with the fingerprint on **Add device** and copy the command again. If it still doesn't match, the address may lead to a different server; don't continue. Without a pin, if this host doesn't trust the server's CA, `setup` prints the certificate's fingerprint in the same rows of eight pairs as **Add device**, to compare. It never pins what it was sent.
 
-`setup` never adopts a Vector that is already running. If it finds one, it waits 6 seconds and checks again, so a short test run (such as the server's validator on a shared host) doesn't count. If Vector still runs, it stops and explains how to hand it over; `--keep-existing-vector` continues without touching it.
+`setup` never adopts a Vector that is already running. If it finds one, it waits 6 seconds and checks again, so a short test run (such as the server's validator on a shared host) doesn't count. If Vector still runs, setup records how it was started, copies every configuration file it loads into `adoption-inventory` in the state directory, prints the files with their SHA-256 (and returns them under `adoption` with `--json`), and stops. When that Vector loads several files, a directory, included files, a provider or configuration chosen by an environment variable, setup names them and how to merge or adopt them: see [Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs). `--keep-existing-vector` continues without touching the running Vector, and records and copies nothing.
 
 Before it asks for the token, `setup` checks that the service account can run Vector and the agent. A Vector under a private home folder, such as `/root/.vector/bin/vector`, is refused with the folder that blocks it: install Vector system-wide or pass `--vector-binary`.
 
