@@ -1683,7 +1683,7 @@ function RolloutPage({
       deploymentRoute(false, target, { search: "", status: "all", page: 1 }),
     );
   const failures = lanes.data?.failures || [];
-  // Devices that still run this version and aren't delivering (P1-6).
+  // Devices that still run this version and aren't delivering.
   const notDelivering = deployment?.rolled_back_by
     ? []
     : failures.filter((failure) => failure.state === "degraded");
