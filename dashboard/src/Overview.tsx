@@ -1,6 +1,5 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
-  ArrowRight,
   ChartNoAxesCombined,
   Check,
   CircleAlert,
@@ -64,7 +63,6 @@ import {
   type ActivityItem,
   type Part,
 } from "./activityModel";
-import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
 import {
   StoppedRolloutItem,

@@ -3,119 +3,71 @@ import {
   completeSeries,
   checklist,
   countLabel,
-  deliveryUnmeasured,
-  fleetTelemetry,
   formatRate,
+  groupList,
+  healthLabels,
+  healthOrder,
+  healthStates,
   monitoringTarget,
   niceCeiling,
-  healthBucket,
-  healthCounts,
   quietSummary,
-  rolloutProgress,
+  runningNotes,
+  runningRate,
+  telemetryFromCounts,
   unmanagedDetail,
 } from "./overviewModel";
-
-const now = Date.parse("2026-09-29T03:00:00.000Z");
-const delivery = {
-  code: "DATA_PLANE_SINK_ERRORS",
-  component_id: "archive",
-  title: "archive can't deliver events",
-};
-const at = (secondsAgo: number) =>
-  new Date(now - secondsAgo * 1000).toISOString();
+import { deviceStatuses } from "./status";
+import type { OverviewCounts, OverviewRunning } from "./api";
 
 describe("fleet health buckets", () => {
-  it("places every device in one bucket and leaves revoked identities out", () => {
-    const devices = [
-      { status: "verified" },
-      { status: "verified" },
-      { status: "applying" },
-      { status: "failed" },
-      { status: "rolled_back" },
-      { status: "verification_unknown" },
-      { status: "offline" },
-      { status: "paused", sync_paused: true, pause_acknowledged: false },
-      { status: "unmanaged" },
-      { status: "revoked" },
-      {
-        status: "verified",
-        desired_version_id: "v2",
-        data_plane: { version_id: "v2", issues: [delivery] },
-      },
-    ];
-    const { counts, total } = healthCounts(devices);
-    expect(total).toBe(10);
-    expect(counts).toEqual({
-      applied: 2,
-      degraded: 1,
-      updating: 1,
-      check: 1,
-      failed: 2,
-      offline: 1,
-      paused: 1,
-      unmanaged: 1,
-    });
-    expect(healthBucket({ status: "revoked" })).toBeNull();
-  });
-
-  it("reads a verified device with an open delivery issue as degraded", () => {
-    const device = {
-      status: "verified",
-      desired_version_id: "v2",
-      data_plane: { version_id: "v2", issues: [delivery] },
-    };
-    expect(healthBucket(device)).toBe("degraded");
-    // Measured on another version, or not applied: not a current problem.
-    expect(healthBucket({ ...device, desired_version_id: "v3" })).toBe(
-      "applied",
-    );
-    expect(healthBucket({ ...device, status: "applying" })).toBe("updating");
-    expect(
-      healthBucket({
-        ...device,
-        data_plane: { version_id: "v2", issues: [] },
-      }),
-    ).toBe("applied");
-  });
-
-  it("never reads a new, unknown state as healthy", () => {
-    expect(healthBucket({ status: "adopted_elsewhere" })).toBe("updating");
-  });
-
-  it("counts a device that never checked in as not connected", () => {
-    expect(healthBucket({ status: "awaiting_first_check_in" })).toBe("offline");
+  it("names every bucket and the device states it stands for", () => {
+    // The server counts the buckets; these are the words and links for them.
+    expect(healthOrder).toHaveLength(8);
+    for (const bucket of healthOrder) {
+      expect(healthLabels[bucket]).toBeTruthy();
+      expect(healthStates[bucket].length).toBeGreaterThan(0);
+      for (const state of healthStates[bucket])
+        expect(Object.keys(deviceStatuses)).toContain(state);
+    }
+    // "Failing" stands for every way an apply can end badly.
+    expect(healthStates.failed).toEqual(["failed", "rolled_back", "conflict"]);
+    expect(healthStates.degraded).toEqual(["degraded"]);
   });
 });
 
 describe("fleet telemetry", () => {
-  const device = (
-    id: string,
-    secondsAgo: number | null,
-    events?: number | null,
-    errors?: number | null,
-    status = "verified",
-  ) => ({
-    id,
-    name: id,
-    status,
-    telemetry:
-      secondsAgo === null
-        ? undefined
-        : { sampled_at: at(secondsAgo), events_per_second: events, errors },
+  const telemetry = (
+    extra: Partial<OverviewCounts["telemetry"]> = {},
+  ): OverviewCounts["telemetry"] => ({
+    eligible: 5,
+    reporting: 3,
+    stale: 1,
+    disabled: 0,
+    events_in_per_second: 200.5,
+    events_in_devices: 2,
+    events_out_per_second: null,
+    events_out_devices: 0,
+    errors: 2,
+    errors_per_minute: null,
+    newest_sample_at: "2026-09-29T02:59:55.000Z",
+    ...extra,
   });
 
-  it("sums only fresh samples and reports coverage", () => {
-    const summary = fleetTelemetry(
-      [
-        device("a", 10, 120.5, 2),
-        device("b", 30, 80, 0),
-        device("c", 600, 999, 50),
-        device("d", null),
-        device("e", 5, null, null),
-        device("f", 5, 1000, 1, "revoked"),
-      ],
-      now,
-    );
+  it("reads what the server summed, with coverage and the busiest devices", () => {
+    const summary = telemetryFromCounts(telemetry(), [
+      {
+        id: "a",
+        name: "a",
+        events_in_per_second: 120.5,
+        events_out_per_second: null,
+      },
+      {
+        id: "b",
+        name: "b",
+        events_in_per_second: 80,
+        events_out_per_second: 79,
+      },
+    ]);
     expect(summary).toMatchObject({
       eligible: 5,
       reporting: 3,
@@ -126,77 +78,34 @@ describe("fleet telemetry", () => {
       // Older agents report neither delivery nor error rates.
       eventsOutPerSecond: null,
       errorsPerMinute: null,
+      freshest: "2026-09-29T02:59:55.000Z",
     });
-    expect(summary.top.map((item) => item.id)).toEqual(["a", "b"]);
-    expect(summary.freshest).toBe(at(5));
-  });
-
-  it("adds delivery and error rates when agents report them", () => {
-    const summary = fleetTelemetry(
-      [
-        {
-          id: "a",
-          name: "a",
-          status: "verified",
-          telemetry: {
-            sampled_at: at(3),
-            events_per_second: 10,
-            events_out_per_second: 9.5,
-            errors_per_minute: 1.5,
-          },
-        },
-        {
-          id: "b",
-          name: "b",
-          status: "verified",
-          effective_policy: { telemetry_enabled: false },
-        },
-      ],
-      now,
-    );
-    expect(summary).toMatchObject({
-      eventsOutPerSecond: 9.5,
-      outDevices: 1,
-      errorsPerMinute: 1.5,
-      disabled: 1,
-    });
+    expect(summary.top).toEqual([
+      { id: "a", name: "a", eventsPerSecond: 120.5, eventsOutPerSecond: null },
+      { id: "b", name: "b", eventsPerSecond: 80, eventsOutPerSecond: 79 },
+    ]);
   });
 
   it("keeps missing telemetry missing instead of zero", () => {
-    const summary = fleetTelemetry(
-      [device("a", null), device("b", 900, 5)],
-      now,
+    const summary = telemetryFromCounts(
+      telemetry({
+        reporting: 0,
+        events_in_per_second: null,
+        events_in_devices: 0,
+        errors: null,
+        newest_sample_at: null,
+      }),
+      [],
     );
     expect(summary.reporting).toBe(0);
     expect(summary.eventsPerSecond).toBeNull();
     expect(summary.errors).toBeNull();
+    expect(summary.freshest).toBeNull();
     // A real zero from a reporting device stays zero.
-    expect(fleetTelemetry([device("z", 1, 0, 0)], now).eventsPerSecond).toBe(0);
-  });
-});
-
-describe("rollout progress", () => {
-  it("splits target states into verified, in flight, waiting and problems", () => {
     expect(
-      rolloutProgress({
-        verified_applied: 3,
-        desired: 1,
-        written: 1,
-        pending: 2,
-        failed: 1,
-        rolled_back: 1,
-        verification_unknown: 1,
-        removed: 4,
-      }),
-    ).toEqual({
-      total: 10,
-      verified: 3,
-      inFlight: 2,
-      waiting: 2,
-      attention: 1,
-      failed: 2,
-    });
-    expect(rolloutProgress({}).total).toBe(0);
+      telemetryFromCounts(telemetry({ events_in_per_second: 0 }), [])
+        .eventsPerSecond,
+    ).toBe(0);
   });
 });
 
@@ -293,62 +202,157 @@ describe("fleet series", () => {
 });
 
 describe("delivery Vectory can and can't measure", () => {
-  const orders = { configuration_id: "p1", configuration_name: "Orders" };
-  const web = { configuration_id: "p2", configuration_name: "Web" };
-  const fresh = { sampled_at: at(30) };
-  const stale = { sampled_at: at(600) };
-  it("counts applied devices without a fresh metrics sample", () => {
-    const devices = [
-      { status: "verified", desired_version: orders, telemetry: fresh },
-      { status: "verified", desired_version: orders, telemetry: stale },
-      { status: "verified", desired_version: web },
-      { status: "failed", desired_version: web },
-    ];
-    expect(deliveryUnmeasured(devices, now)).toBe(2);
+  it("says so in the quiet summary only where delivery goes unmeasured", () => {
     expect(quietSummary(2)).toBe("Nothing is failing that Vectory can measure");
     expect(quietSummary(0)).toBe("Nothing is failing");
-    expect(deliveryUnmeasured([devices[0]], now)).toBe(0);
   });
-  it("offers monitoring for the pipeline most devices without metrics run", () => {
+  const row = (
+    id: string,
+    name: string | null,
+    devices: number,
+    reporting: number,
+  ) => ({
+    configuration_id: id,
+    configuration_name: name,
+    device_count: devices,
+    devices_reporting: reporting,
+  });
+  it("offers monitoring for the pipeline most running devices have no metrics from", () => {
     expect(
-      monitoringTarget(
-        [
-          { status: "verified", desired_version: orders, telemetry: fresh },
-          { status: "verified", desired_version: web },
-          { status: "failed", desired_version: web },
-          { status: "verified", desired_version: orders },
-          { status: "revoked", desired_version: orders },
-        ],
-        now,
-      ),
-    ).toEqual({ id: "p2", name: "Web", count: 2 });
-    expect(monitoringTarget([{ status: "unmanaged" }], now)).toBeNull();
+      monitoringTarget([
+        row("p1", "Orders", 4, 4),
+        // Two versions of one pipeline: their silent devices add up.
+        row("p2", "Web", 3, 1),
+        row("p2", "Web", 2, 1),
+        row("p3", "Audit", 2, 1),
+      ]),
+    ).toEqual({ id: "p2", name: "Web", count: 3 });
+    // Every running device reports, or the silent ones run no named pipeline.
+    expect(monitoringTarget([row("p1", "Orders", 2, 2)])).toBeNull();
+    expect(monitoringTarget([row("p1", null, 2, 0)])).toBeNull();
+    expect(monitoringTarget([])).toBeNull();
   });
   it("says what runs on devices without a pipeline", () => {
-    const fresh = { status: "unmanaged" };
-    const adopted = {
-      status: "unmanaged",
-      actual_sha256: "a".repeat(64),
-      vector_running: true,
-    };
-    expect(unmanagedDetail([fresh])).toBe(
+    expect(unmanagedDetail(1, 0)).toBe(
       "Vector starts on it when you deploy a pipeline.",
     );
-    expect(unmanagedDetail([fresh, fresh])).toBe(
+    expect(unmanagedDetail(2, 0)).toBe(
       "Vector starts on them when you deploy a pipeline.",
     );
-    expect(unmanagedDetail([adopted])).toBe(
+    expect(unmanagedDetail(1, 1)).toBe(
       "A local configuration adopted at setup keeps running until you deploy one.",
     );
-    expect(unmanagedDetail([adopted, fresh, fresh])).toBe(
+    expect(unmanagedDetail(3, 3)).toBe(
+      "Local configurations adopted at setup keep running until you deploy one.",
+    );
+    expect(unmanagedDetail(3, 1)).toBe(
       "1 runs a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.",
     );
-    // Stopped, or on a managed version: not an adopted workload that runs.
+    expect(unmanagedDetail(4, 2)).toBe(
+      "2 run a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.",
+    );
+  });
+});
+
+describe("what runs where", () => {
+  const running = (extra: Partial<OverviewRunning> = {}): OverviewRunning => ({
+    configuration_id: "c1",
+    configuration_name: "Edge syslog processing",
+    version_id: "v1",
+    version: 1,
+    device_count: 3,
+    devices_reporting: 3,
+    groups: [{ id: "g1", name: "Edge collectors", device_count: 3 }],
+    more_groups: 0,
+    events_in_per_second: 14,
+    events_out_per_second: 4.5,
+    state: "running",
+    not_delivering: 0,
+    canary: null,
+    ...extra,
+  });
+
+  it("lists the groups a version runs in without running past three", () => {
+    expect(groupList([])).toBe("");
+    expect(groupList(["Edge collectors"])).toBe("Edge collectors");
+    expect(groupList(["Edge collectors", "Web tier"])).toBe(
+      "Edge collectors and Web tier",
+    );
+    expect(groupList(["A", "B", "C"])).toBe("A, B and C");
+    expect(groupList(["A", "B", "C"], 2)).toBe("A, B, C and 2 more");
+  });
+
+  it("shows events in and out, never a zero for an unknown rate", () => {
+    expect(runningRate(running())).toBe("14.0 → 4.5/s");
+    expect(runningRate(running({ events_out_per_second: null }))).toBe(
+      "14.0/s in",
+    );
+    expect(runningRate(running({ events_in_per_second: null }))).toBe(
+      "4.5/s out",
+    );
     expect(
-      unmanagedDetail([
-        { ...adopted, vector_running: false },
-        { status: "verified", desired_version_id: "v1" },
-      ]),
-    ).toBe("Vector starts on it when you deploy a pipeline.");
+      runningRate(
+        running({ events_in_per_second: null, events_out_per_second: null }),
+      ),
+    ).toBeNull();
+    // A real zero from reporting devices stays a zero.
+    expect(
+      runningRate(
+        running({ events_in_per_second: 0, events_out_per_second: 0 }),
+      ),
+    ).toBe("0 → 0/s");
+  });
+
+  it("says nothing extra about a version that simply runs", () => {
+    expect(runningNotes(running())).toEqual([]);
+  });
+
+  it("names devices that aren't delivering and the canary that is measuring", () => {
+    expect(
+      runningNotes(
+        running({
+          state: "not_delivering",
+          not_delivering: 1,
+          canary: {
+            deployment_id: "d1",
+            phase: "measuring",
+            device_count: 1,
+            device_names: ["edge-nyc-02"],
+          },
+        }),
+      ),
+    ).toEqual([
+      {
+        text: "1 not delivering",
+        tone: "danger",
+        href: "#/devices?running=v1&status=degraded",
+      },
+      {
+        text: "canary on edge-nyc-02 · measuring delivery",
+        tone: "info",
+        href: "#/deployments/d1",
+      },
+    ]);
+  });
+
+  it("says where a canary runs however many devices it holds", () => {
+    const canary = (count: number, names: string[]) =>
+      runningNotes(
+        running({
+          state: "canary",
+          canary: {
+            deployment_id: "d1",
+            phase: "observing",
+            device_count: count,
+            device_names: names,
+          },
+        }),
+      )[0].text;
+    expect(canary(2, ["edge-1", "edge-2"])).toBe(
+      "canary on edge-1 and edge-2 · observing for problems",
+    );
+    expect(canary(7, ["edge-1", "edge-2", "edge-3"])).toBe(
+      "canary on 7 devices · observing for problems",
+    );
   });
 });
