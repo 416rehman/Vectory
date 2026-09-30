@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addRecent,
+  deviceSubtitle,
   fuzzyMatch,
   highlightParts,
   matchEntry,
@@ -116,6 +117,53 @@ describe("command palette search", () => {
       title: `edge-${String(i).padStart(2, "0")}`,
     }));
     expect(rankEntries(many, "edge", 5)[0].items).toHaveLength(5);
+  });
+
+  it("keeps what the server matched even when the row doesn't show why", () => {
+    // Found by its pipeline, which the row's name and platform don't contain.
+    const byPipeline: PaletteEntry = {
+      key: "device:9",
+      kind: "device",
+      title: "cache-9",
+      subtitle: "linux / amd64",
+    };
+    expect(matchEntry("syslog", byPipeline)).toBeNull();
+    const found = { ...byPipeline, matched: true };
+    expect(matchEntry("syslog", found)).toEqual({ score: 100, ranges: [] });
+    // A title that matches still ranks above one that only the server matched.
+    const named: PaletteEntry = {
+      ...found,
+      key: "device:8",
+      title: "syslog-1",
+    };
+    const [devices] = rankEntries([found, named], "syslog");
+    expect(devices.items.map((item) => item.title)).toEqual([
+      "syslog-1",
+      "cache-9",
+    ]);
+    expect(devices.items[0].ranges).toEqual([[0, 6]]);
+  });
+});
+
+describe("device rows", () => {
+  it("say the platform and the pipeline the device is assigned", () => {
+    expect(
+      deviceSubtitle({
+        os: "linux",
+        arch: "amd64",
+        desired_version: { configuration_name: "Edge syslog", number: 3 },
+      }),
+    ).toBe("linux / amd64 · Edge syslog v3");
+    expect(
+      deviceSubtitle({
+        os: "darwin",
+        desired_version: { configuration_name: "Edge syslog" },
+      }),
+    ).toBe("darwin · Edge syslog");
+    expect(deviceSubtitle({ os: "linux", arch: "arm64" })).toBe(
+      "linux / arm64",
+    );
+    expect(deviceSubtitle({ desired_version: null })).toBe("Device");
   });
 });
 

@@ -73,6 +73,7 @@ import {
   resolveTokenRequests,
   useTokenRequests,
 } from "./enrollmentTokenRequests";
+import { readWatchedDevices } from "./enrollmentWatch";
 import "./control.css";
 import "./enrollment-page.css";
 import type { Notify } from "./toast";
@@ -131,9 +132,9 @@ const idle: Watch = {
 };
 
 /**
- * Polls enrollment activity and the inventory every two seconds while a
- * command waits for its device (more slowly while a connected agent waits to
- * be started). A poll never overlaps a slower one.
+ * Polls enrollment activity and the device it enrolled every two seconds
+ * while a command waits for its device (more slowly while a connected agent
+ * waits to be started). A poll never overlaps a slower one.
  */
 function useEnrollmentWatch(
   command: Command | null,
@@ -154,32 +155,32 @@ function useEnrollmentWatch(
       const controller = new AbortController();
       running = controller;
       try {
-        const [activity, devices] = await Promise.all([
-          unsupported
-            ? Promise.resolve(null)
-            : withRequestDeadline(
-                (signal) =>
-                  api(
-                    `/agent-install/activity?since=${encodeURIComponent(since)}`,
-                    { signal },
-                    EnrollmentActivitySchema,
-                  ),
-                30000,
-                controller.signal,
-              ).catch((error) => {
-                // An older server has no activity feed; the inventory still works.
-                if (error instanceof APIError && error.status === 404) {
-                  unsupported = true;
-                  return null;
-                }
-                throw error;
-              }),
-          withRequestDeadline(
-            (signal) => api<Device[]>("/devices", { signal }),
-            30000,
-            controller.signal,
-          ),
-        ]);
+        const activity = unsupported
+          ? null
+          : await withRequestDeadline(
+              (signal) =>
+                api(
+                  `/agent-install/activity?since=${encodeURIComponent(since)}`,
+                  { signal },
+                  EnrollmentActivitySchema,
+                ),
+              30000,
+              controller.signal,
+            ).catch((error) => {
+              // An older server has no activity feed; the inventory still works.
+              if (error instanceof APIError && error.status === 404) {
+                unsupported = true;
+                return null;
+              }
+              throw error;
+            });
+        // The feed names the device this command enrolled: read that one.
+        const devices = await readWatchedDevices({
+          events: activity ? activity.events : null,
+          tokenId,
+          listAll: unsupported,
+          signal: controller.signal,
+        });
         if (!stopped)
           setWatch((previous) => ({
             events: activity ? activity.events : previous.events,

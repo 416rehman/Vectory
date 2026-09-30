@@ -29,10 +29,11 @@ import {
 import {
   api,
   can,
+  changeCount,
   withRequestDeadline,
   type DeploymentPage,
-  type Device,
-  type Group,
+  type DeviceInventoryPage,
+  type GroupSummary,
   type PipelineLibraryPage,
   type User,
 } from "./api";
@@ -40,6 +41,7 @@ import { helpHref } from "./DocLink";
 import { runCommand } from "./commands";
 import {
   addRecent,
+  deviceSubtitle,
   highlightParts,
   kindLabels,
   parseRecents,
@@ -49,6 +51,8 @@ import {
   type PaletteKind,
   type RecentItem,
 } from "./commandPaletteModel";
+import { directoryAnswers } from "./directoryCache";
+import type { ListDevice } from "./deviceModel";
 import { pageEntries } from "./navigation";
 import { deviceDisplayStatus, type StatusDomain } from "./status";
 import { describeDeployment } from "./deploymentStatus";
@@ -86,15 +90,14 @@ export function rememberRecent(userId: string, item: RecentItem) {
   }
 }
 
+/** What the palette knows without a query: small lists, never the fleet. */
 type Directory = {
-  devices: Device[];
-  groups: Group[];
+  groups: GroupSummary[];
   pipelines: PipelineLibraryPage["items"];
   deployments: DeploymentPage["items"];
   people: User[];
 };
 const emptyDirectory: Directory = {
-  devices: [],
   groups: [],
   pipelines: [],
   deployments: [],
@@ -106,16 +109,47 @@ const read = <T,>(path: string, signal: AbortSignal) =>
     15000,
     signal,
   );
+/**
+ * A directory read that opening the palette again within thirty seconds
+ * reuses, unless something was changed from this browser in between.
+ */
+async function readDirectory<T>(
+  owner: string,
+  path: string,
+  signal: AbortSignal,
+) {
+  const key = `${owner} ${path}`;
+  const known = directoryAnswers.recall<T>(key, Date.now(), changeCount());
+  if (known !== undefined) return known;
+  const changes = changeCount();
+  const value = await read<T>(path, signal);
+  directoryAnswers.remember(key, value, Date.now(), changes);
+  return value;
+}
+/** The server's search matches this many characters at most. */
+const SEARCH_CHARACTERS = 100;
+/** Devices are found by the server, five at a time. */
+const DEVICES_SHOWN = 5;
 
-/** Load the entities the palette can find, once per opening, then per query. */
+/**
+ * Load the entities the palette can find: the small lists once per opening
+ * (reused for 30 seconds), then the server's answers for each query. Devices
+ * are never listed here; the server searches them.
+ */
 function useDirectory(open: boolean, query: string, user: User) {
   const [directory, setDirectory] = useState<Directory>(emptyDirectory);
   const [loading, setLoading] = useState(false);
+  // The devices the server found for the text it was last asked about.
+  const [found, setFound] = useState<{ text: string; devices: ListDevice[] }>({
+    text: "",
+    devices: [],
+  });
   const admin = can(user, "admin");
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     setLoading(true);
+    setFound({ text: "", devices: [] });
     const settle = <K extends keyof Directory>(
       key: K,
       promise: Promise<Directory[K]>,
@@ -129,33 +163,66 @@ function useDirectory(open: boolean, query: string, user: User) {
           /* The palette still works for pages and actions. */
         });
     void Promise.all([
-      settle("devices", read<Device[]>("/devices", controller.signal)),
-      settle("groups", read<Group[]>("/groups", controller.signal)),
+      settle(
+        "groups",
+        readDirectory<GroupSummary[]>(
+          user.id,
+          "/groups?slim=1",
+          controller.signal,
+        ),
+      ),
       settle(
         "pipelines",
-        read<PipelineLibraryPage>(
+        readDirectory<PipelineLibraryPage>(
+          user.id,
           "/configurations/library?state=active&page_size=50",
           controller.signal,
         ).then((page) => page.items),
       ),
       settle(
         "deployments",
-        read<DeploymentPage>(
+        readDirectory<DeploymentPage>(
+          user.id,
           "/deployments/history?page_size=20",
           controller.signal,
         ).then((page) => page.items),
       ),
       admin
-        ? settle("people", read<User[]>("/users", controller.signal))
+        ? settle(
+            "people",
+            readDirectory<User[]>(user.id, "/users", controller.signal),
+          )
         : Promise.resolve(),
     ]).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [open, admin]);
+  }, [open, admin, user.id]);
+  const text = query.trim();
+  // Devices: the server searches its inventory and answers with a few rows.
+  useEffect(() => {
+    if (!open || text.length < 2) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      read<DeviceInventoryPage>(
+        `/devices/inventory?q=${encodeURIComponent(text.slice(0, SEARCH_CHARACTERS))}&page_size=${DEVICES_SHOWN}`,
+        controller.signal,
+      )
+        .then((page) =>
+          setFound({ text, devices: page.items as unknown as ListDevice[] }),
+        )
+        .catch(() => {
+          // The palette still works for everything else.
+          if (!controller.signal.aborted) setFound({ text, devices: [] });
+        });
+    }, 180);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, text]);
   // Server-side search reaches pipelines and deployments beyond the first page.
   useEffect(() => {
-    const text = query.trim();
     if (!open || text.length < 2) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -191,8 +258,10 @@ function useDirectory(open: boolean, query: string, user: User) {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, query]);
-  return { directory, loading };
+  }, [open, text]);
+  // Waiting for the server's answer about the text now typed.
+  const searching = open && text.length >= 2 && found.text !== text;
+  return { directory, found, searching, loading };
 }
 
 const kindIcons: Record<RecentItem["kind"], LucideIcon> = {
@@ -241,7 +310,11 @@ export default function CommandPalette({
   const list = useRef<HTMLDivElement>(null);
   const listId = useId();
   const coarse = useMediaQuery("(pointer: coarse)");
-  const { directory, loading } = useDirectory(open, query, user);
+  const { directory, found, searching, loading } = useDirectory(
+    open,
+    query,
+    user,
+  );
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -368,15 +441,17 @@ export default function CommandPalette({
       return [...recent, ...pages, ...actions];
     }
     const entities: Item[] = [
-      ...directory.devices.map((device): Item => ({
+      ...found.devices.map((device): Item => ({
         key: `device:${device.id}`,
         kind: "device",
         title: device.name,
-        subtitle:
-          [device.os, device.arch].filter(Boolean).join(" / ") || "Device",
+        subtitle: deviceSubtitle(device),
         keywords: Object.entries(device.labels || {})
           .flat()
           .join(" "),
+        // Rows the server found for these very words stay; rows found for
+        // earlier words stay only while they still match.
+        matched: found.text === text,
         icon: Server,
         href: `#/devices/${device.id}`,
         status: { domain: "device", value: deviceDisplayStatus(device) },
@@ -408,7 +483,7 @@ export default function CommandPalette({
         key: `group:${group.id}`,
         kind: "group",
         title: group.name,
-        subtitle: `${group.device_ids.length} ${group.device_ids.length === 1 ? "device" : "devices"}`,
+        subtitle: `${group.member_count} ${group.member_count === 1 ? "device" : "devices"}`,
         keywords: group.description,
         icon: Layers,
         href: `#/groups?q=${encodeURIComponent(group.name)}`,
@@ -451,7 +526,16 @@ export default function CommandPalette({
       })),
     ];
     return [...pages, ...actions, ...entities];
-  }, [query, recents, directory, user, currentPage, theme, sidebarCollapsed]);
+  }, [
+    query,
+    recents,
+    directory,
+    found,
+    user,
+    currentPage,
+    theme,
+    sidebarCollapsed,
+  ]);
 
   const groups = useMemo(
     () => rankEntries(items, query, query.trim() ? 5 : 20),
@@ -487,7 +571,8 @@ export default function CommandPalette({
     if (item.run) item.run();
     else if (item.href) navigate(item.href.replace(/^#\//, ""));
   }
-  const noResults = query.trim() && !flat.length;
+  // Not "no results" while the server is still looking for devices.
+  const noResults = query.trim() && !flat.length && !searching;
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -566,7 +651,9 @@ export default function CommandPalette({
                 }
               }}
             />
-            {loading && <Spinner size={15} label="Loading results" />}
+            {(loading || searching) && (
+              <Spinner size={15} label="Loading results" />
+            )}
             <kbd className="kbd palette-esc">Esc</kbd>
           </div>
           <div
