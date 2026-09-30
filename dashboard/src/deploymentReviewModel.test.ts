@@ -253,8 +253,8 @@ describe("conflict rows", () => {
     expect(rows[1]).toMatchObject({ kind: "higher_priority", priority: 200 });
     expect(rows[1].assignments[0].id).toBe(id(8));
   });
-  // Round-2 operator review P1-3: after a rollback, the device follows the
-  // rollback one priority up; the cancelled rollout is only still bound.
+  // After a rollback, the device follows the rollback one priority up; the
+  // cancelled rollout is only still bound.
   it("names the rollback the device follows, what else is bound, and one replace for every tier", () => {
     const rollback = described({
       id: id(20),
