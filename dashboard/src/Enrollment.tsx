@@ -74,6 +74,7 @@ import {
   parseLabels,
   parsePreapprovedNames,
   scopeText,
+  usesBelowNames,
 } from "./enrollmentScope";
 import {
   resolveTokenRequests,
@@ -474,12 +475,7 @@ export function Enrollment({
     (Number.isInteger(Number(maxUses)) &&
       Number(maxUses) >= 1 &&
       Number(maxUses) <= 100000);
-  // A use limit below the list's length leaves some names unable to enroll.
-  const namesBeyondUses =
-    !!preapproved.value &&
-    !!maxUses &&
-    usesValid &&
-    Number(maxUses) < preapproved.value.length;
+  const namesWarning = usesBelowNames(preapproved.value, maxUses);
   const hoursValid = Number.isInteger(hours) && hours >= 1 && hours <= 720;
   const ready =
     !!install?.agent_url &&
@@ -1032,9 +1028,8 @@ export function Enrollment({
                     preapproved.error ||
                     (!nameListed
                       ? "Add this device's name to the list."
-                      : namesBeyondUses
-                        ? `Only ${Number(maxUses)} of these ${preapproved.value?.length} names can enroll: raise Devices it can enroll, or leave it empty.`
-                        : "One per line or separated by commas. Each name can enroll once.")
+                      : namesWarning ||
+                        "One per line or separated by commas. Each name can enroll once.")
                   }
                 >
                   <textarea

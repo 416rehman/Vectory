@@ -110,6 +110,19 @@ export function parseLabels(text: string): Parsed<Record<string, string>> {
   return { value: labels, error: "" };
 }
 
+/**
+ * A warning when a token's use limit is below the number of names it lists,
+ * so that some listed names could never enroll; empty otherwise. `maxUses`
+ * is the form's text: empty means no limit.
+ */
+export function usesBelowNames(names: string[] | null, maxUses: string) {
+  const uses = Number(maxUses);
+  if (!names || !maxUses.trim() || !Number.isInteger(uses) || uses < 1)
+    return "";
+  if (uses >= names.length) return "";
+  return `Only ${uses} of these ${names.length} names can enroll: raise Devices it can enroll, or leave it empty.`;
+}
+
 /** Whether a stored scope equals a requested one; absent and null match. */
 export function sameScope(
   a: {
