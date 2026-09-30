@@ -2795,10 +2795,10 @@ async fn release_next_stage(db: &mut SqliteConnection, mut d: Value, actor: &str
         ));
     }
     resolve(db).await?;
-    let what = if gate == "measuring" {
-        "delivery still being measured"
+    let waiting_on = if gate == "measuring" {
+        format!("delivery on the {stage} was still being measured")
     } else {
-        "still being observed"
+        format!("the {stage} was still being observed")
     };
     db::insert(
         db,
@@ -2807,7 +2807,7 @@ async fn release_next_stage(db: &mut SqliteConnection, mut d: Value, actor: &str
             "id":db::id(),"actor":actor,"action":"deployment.stage_released_early","target":id,
             "outcome":"success","created_at":db::now(),
             "details":{
-                "summary":format!("Released the next stage early: the {stage} was {what}. {newly} more {} released.", if newly == 1 { "device" } else { "devices" }),
+                "summary":format!("Released the next stage early while {waiting_on}. {newly} more {} released.", if newly == 1 { "device" } else { "devices" }),
                 "stage":stage,"gate_state":gate,
                 "released_count":released,"verified_count":proof.verified,
                 "measuring_count":measuring,"next_released_count":newly
