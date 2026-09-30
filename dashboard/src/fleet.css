@@ -72,48 +72,6 @@
   width: 100%;
   margin-bottom: 12px;
 }
-.fleet-members {
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-.fleet-members > label {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 15px;
-  border-bottom: 1px solid var(--line);
-  cursor: pointer;
-}
-.fleet-members > label:last-child {
-  border-bottom: 0;
-}
-.fleet-members > label:hover {
-  background: var(--surface-hover);
-}
-.fleet-members > label > span:first-of-type {
-  flex: 1;
-  min-width: 0;
-}
-.fleet-members strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
-.fleet-members small {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 4px;
-}
-.fleet-members > p {
-  padding: 18px;
-  font-size: 13px;
-  color: var(--muted);
-  margin: 0;
-}
 .metrics-workspace {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -128,8 +86,5 @@
   }
   .metrics-workspace {
     padding: 17px;
-  }
-  .fleet-members > label {
-    flex-wrap: wrap;
   }
 }

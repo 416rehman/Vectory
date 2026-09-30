@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Clock, Repeat2, Search } from "lucide-react";
 import {
+  api,
   boundedPost as post,
+  withRequestDeadline,
   type AssignmentDescription,
   type BindingSuggestions,
   type Deployment,
   type DeploymentPreview,
   type Device,
-  type Group,
+  type GroupSummary,
   type Policy,
   type Version,
 } from "./api";
 import { Button, CopyButton, ErrorBox, Field, Modal, useResource } from "./ui";
 import DocLink from "./DocLink";
+import DevicePicker from "./DevicePicker";
+import { readMatchingIds } from "./deviceInventory";
 import { DataTable } from "./DataTable";
 import { deploymentRoute } from "./deploymentRouting";
 import { assertDeploymentReceipt } from "./deploymentReceipt";
@@ -221,6 +225,15 @@ type Outcome = {
   takes: boolean;
 };
 
+/** Rows kept by name for devices seen while choosing; the oldest go first. */
+const KNOWN_ROWS = 2000;
+/** Devices named in the opening selection whose rows are read one by one. */
+const OPENING_ROWS = 25;
+/** Groups listed at once; a search narrows the rest. */
+const GROUPS_SHOWN = 50;
+/** Devices a device-specific value can be typed for. */
+const VALUE_ROWS = 500;
+
 export default function TargetDialog({
   userId,
   open,
@@ -229,6 +242,7 @@ export default function TargetDialog({
   policy,
   onDone,
   initialDeviceIds = [],
+  initialDevices = [],
   preserveExistingSettings = false,
   pipelineName,
   initialStrategy,
@@ -242,6 +256,8 @@ export default function TargetDialog({
   policy?: Policy;
   onDone: (message: string) => void;
   initialDeviceIds?: string[];
+  /** Rows the caller already has for `initialDeviceIds`. */
+  initialDevices?: Device[];
   preserveExistingSettings?: boolean;
   /** The pipeline's display name, when the caller knows it. */
   pipelineName?: string;
@@ -257,14 +273,33 @@ export default function TargetDialog({
   const [recovery, setRecovery] = useState<DeploymentOperation | null>(
     initialRegistry.operations[0] || null,
   );
-  const devices = useResource<Device[]>("/devices", []),
-    groups = useResource<Group[]>("/groups", []);
-
+  // Groups by name and member count; their members are read when one is chosen.
+  const groups = useResource<GroupSummary[]>("/groups?slim=1", [], 0, {
+    interval: 60000,
+  });
+  // The devices this dialog has seen, by id: the ones picked one by one, the
+  // ones it was opened with. A fleet is never held here, only what is chosen.
+  const [known, setKnown] = useState<ReadonlyMap<string, Device>>(
+    () => new Map(initialDevices.map((device) => [device.id, device])),
+  );
+  const keepRows = useCallback(
+    (rows: Device[]) =>
+      setKnown((previous) => {
+        const next = new Map(previous);
+        for (const row of rows) {
+          next.delete(row.id);
+          next.set(row.id, row);
+        }
+        while (next.size > KNOWN_ROWS)
+          next.delete(next.keys().next().value as string);
+        return next;
+      }),
+    [],
+  );
   const [selected, setSelected] = useState<string[]>(initialDeviceIds),
     [groupIds, setGroupIds] = useState<string[]>([]),
     [exclude, setExclude] = useState<string[]>([]),
     [search, setSearch] = useState(""),
-    [devicePage, setDevicePage] = useState(1),
     [bindingInputs, setBindingInputs] = useState<BindingInputs>({
       defaults: {},
       devices: {},
@@ -313,18 +348,87 @@ export default function TargetDialog({
   // preview carries it, so the review never shows a bare "Version 1".
   const knownPipelineName =
     pipelineName || preview?.configuration_name || undefined;
-  const effective = useMemo(
-    () =>
-      new Set(
-        [
-          ...selected,
-          ...groups.data
-            .filter((g) => groupIds.includes(g.id))
-            .flatMap((g) => g.device_ids),
-        ].filter((id) => !exclude.includes(id)),
-      ),
-    [selected, groupIds, exclude, groups.data],
+  // A chosen group's members, read once when it is chosen. The server reads
+  // the group again when it reviews and sends, so this only counts.
+  const [members, setMembers] = useState<
+    Record<string, { ids: string[]; truncated: boolean }>
+  >({});
+  const [membersError, setMembersError] = useState("");
+  const groupsLoading = groupIds.some((id) => !(id in members));
+  useEffect(() => {
+    const wanted = groupIds.filter((id) => !(id in members));
+    if (!wanted.length) return;
+    const controller = new AbortController();
+    for (const id of wanted)
+      readMatchingIds({ group: id }, controller.signal).then(
+        (found) => {
+          if (controller.signal.aborted) return;
+          setMembersError("");
+          setMembers((previous) => ({
+            ...previous,
+            [id]: { ids: found.ids, truncated: found.truncated },
+          }));
+        },
+        (failure) => {
+          if (!controller.signal.aborted)
+            setMembersError(
+              `Couldn't read the group's devices. ${(failure as Error).message}`,
+            );
+        },
+      );
+    return () => controller.abort();
+    // Members are read for groups newly chosen, not again for each change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupIds]);
+  const fromGroups = useMemo(
+    () => new Set(groupIds.flatMap((id) => members[id]?.ids ?? [])),
+    [groupIds, members],
   );
+  const excluded = useMemo(() => new Set(exclude), [exclude]);
+  const effective = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of selected) if (!excluded.has(id)) ids.add(id);
+    for (const id of fromGroups) if (!excluded.has(id)) ids.add(id);
+    return ids;
+  }, [selected, fromGroups, excluded]);
+  // The rows known for what is chosen: enough for names, notes and per-device
+  // values, never the whole selection when it is large.
+  const chosenRows = useMemo(
+    () =>
+      [...effective].flatMap((id) => {
+        const row = known.get(id);
+        return row ? [row] : [];
+      }),
+    [effective, known],
+  );
+  // Devices the dialog was opened with are named before anything is typed.
+  useEffect(() => {
+    const missing = initialDeviceIds
+      .filter((id) => !known.has(id))
+      .slice(0, OPENING_ROWS);
+    if (!missing.length) return;
+    const controller = new AbortController();
+    void Promise.allSettled(
+      missing.map((id) =>
+        withRequestDeadline(
+          (signal) =>
+            api<Device>(`/devices/${encodeURIComponent(id)}`, { signal }),
+          15000,
+          controller.signal,
+        ),
+      ),
+    ).then((results) => {
+      if (controller.signal.aborted) return;
+      keepRows(
+        results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        ),
+      );
+    });
+    return () => controller.abort();
+    // Once, for the devices named when the dialog opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const declarations = version?.variables || [];
   const scheduled = release.strategy === "scheduled";
   const persistent = !scheduled && mode === "persistent";
@@ -493,10 +597,12 @@ export default function TargetDialog({
   }
 
   const blockers = (preview?.blockers || []) as PreviewBlocker[];
+  const previewed = useMemo(
+    () => new Map((preview?.devices || []).map((device) => [device.id, device])),
+    [preview],
+  );
   const deviceName = (id: string) =>
-    preview?.devices.find((device) => device.id === id)?.name ||
-    devices.data.find((device) => device.id === id)?.name ||
-    id;
+    previewed.get(id)?.name || known.get(id)?.name || id;
   const blockersByDevice = new Map<string, string[]>();
   for (const blocker of blockers) {
     if (blocker.resource !== (policy ? "policy" : "configuration")) continue;
@@ -515,16 +621,15 @@ export default function TargetDialog({
   // Until the component list is read, what the pipeline needs is unknown.
   const capabilityUnknown =
     !!version && !(agentCatalog && agentCatalog !== "failed");
-  const restrictedTargets: Device[] = (
-    preview?.devices ||
-    devices.data.filter((device) => effective.has(device.id))
-  ).filter((device: Device) => {
-    const latest = devices.data.find((known) => known.id === device.id);
-    return (
-      device.configuration_mode !== "full" ||
-      (latest && latest.configuration_mode !== "full")
-    );
-  });
+  const restrictedTargets: Device[] = (preview?.devices || chosenRows).filter(
+    (device: Device) => {
+      const latest = known.get(device.id);
+      return (
+        device.configuration_mode !== "full" ||
+        (latest && latest.configuration_mode !== "full")
+      );
+    },
+  );
   const capabilityBlocked =
     requirements.length > 0 && restrictedTargets.length > 0;
   // Restricted devices also refuse destinations, listeners and paths their
@@ -541,14 +646,11 @@ export default function TargetDialog({
     restrictedTargets.length > 0;
   const settingsMismatch: Device[] =
     policy && preserveExistingSettings
-      ? (
-          preview?.devices ||
-          devices.data.filter((device) => effective.has(device.id))
-        ).filter((device: Device) => {
+      ? (preview?.devices || chosenRows).filter((device: Device) => {
           const same = (current?: Policy) =>
             current?.heartbeat_seconds === policy.heartbeat_seconds &&
             current?.telemetry_enabled === policy.telemetry_enabled;
-          const latest = devices.data.find((known) => known.id === device.id);
+          const latest = known.get(device.id);
           return (
             !same(device.effective_policy) ||
             (latest && !same(latest.effective_policy))
@@ -775,33 +877,28 @@ export default function TargetDialog({
       setBusy(false);
     }
   }
-  const visibleDevices = devices.data.filter(
-    (d) =>
-      d.status !== "revoked" &&
-      (d.name + " " + d.os).toLowerCase().includes(search.toLowerCase()),
-  );
-  const devicePageSize = 100;
-  const devicePageCount = Math.max(
-    1,
-    Math.ceil(visibleDevices.length / devicePageSize),
-  );
-  const currentDevicePage = Math.min(devicePage, devicePageCount);
-  const devicePageStart = (currentDevicePage - 1) * devicePageSize;
-  const listedDevices = visibleDevices.slice(
-    devicePageStart,
-    devicePageStart + devicePageSize,
-  );
-  function chooseDevice(id: string) {
-    const includedByGroup = groups.data.some(
-      (g) => groupIds.includes(g.id) && g.device_ids.includes(id),
-    );
+  function chooseDevice(device: Device) {
+    const id = device.id;
+    keepRows([device]);
     if (effective.has(id)) {
       setSelected((old) => old.filter((item) => item !== id));
-      if (includedByGroup) setExclude((old) => [...new Set([...old, id])]);
+      if (fromGroups.has(id)) setExclude((old) => [...new Set([...old, id])]);
     } else {
       setExclude((old) => old.filter((item) => item !== id));
       setSelected((old) => [...new Set([...old, id])]);
     }
+    resetReview();
+  }
+  /** Everything a search matched, chosen at once. */
+  function chooseMatching(ids: string[]) {
+    const added = new Set(ids);
+    setExclude((old) => old.filter((item) => !added.has(item)));
+    setSelected((old) => [...new Set([...old, ...ids])]);
+    resetReview();
+  }
+  function clearDevices() {
+    setSelected([]);
+    setExclude([]);
     resetReview();
   }
   const resource = policy ? "policy" : "configuration";
@@ -959,12 +1056,15 @@ export default function TargetDialog({
       value: reviewedBindings?.defaults?.[name],
     };
   };
-  const checkIn = Math.max(
-    10,
-    ...devices.data
-      .filter((device) => effective.has(device.id))
-      .map((device) => device.check_in_seconds || 60),
-  );
+  // The longest check-in among the devices the plan covers: the reviewed
+  // devices once there are any, otherwise the ones seen so far.
+  const planned = preview?.devices || chosenRows;
+  const checkIn = planned.length
+    ? planned.reduce(
+        (longest, device) => Math.max(longest, device.check_in_seconds || 60),
+        10,
+      )
+    : 60;
   const plan = releaseValid
     ? releasePlan({
         kind: usesCanary(release) ? "canary" : "all",
@@ -1029,6 +1129,14 @@ export default function TargetDialog({
   const chosenGroups = groups.data.filter((group) =>
     groupIds.includes(group.id),
   );
+  // Groups that match the search, the chosen ones first, a screenful at a time.
+  const matchingGroups = groups.data.filter((group) =>
+    group.name.toLowerCase().includes(search.toLowerCase()),
+  );
+  const shownGroups = [
+    ...matchingGroups.filter((group) => groupIds.includes(group.id)),
+    ...matchingGroups.filter((group) => !groupIds.includes(group.id)),
+  ].slice(0, GROUPS_SHOWN);
   const groupNames =
     chosenGroups.length === 0
       ? ""
@@ -1162,8 +1270,8 @@ export default function TargetDialog({
             <span>2</span>Review and send
           </li>
         </ol>
-        {(error || devices.error || groups.error) && (
-          <ErrorBox message={error || devices.error || groups.error} />
+        {(error || groups.error || membersError) && (
+          <ErrorBox message={error || groups.error || membersError} />
         )}
         {!!settingsMismatch.length && (
           <ErrorBox
@@ -1221,10 +1329,7 @@ export default function TargetDialog({
                 aria-label="Find targets"
                 placeholder="Search devices or groups"
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setDevicePage(1);
-                }}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </label>
             {groups.data.length > 0 && (
@@ -1237,96 +1342,71 @@ export default function TargetDialog({
                   {groupIds.length > 0 && `, ${groupIds.length} selected`}
                 </summary>
                 <div className="target-group-options">
-                  {groups.data
-                    .filter((g) =>
-                      g.name.toLowerCase().includes(search.toLowerCase()),
-                    )
-                    .map((g) => (
-                      <label className="target-option" key={g.id}>
-                        <input
-                          type="checkbox"
-                          checked={groupIds.includes(g.id)}
-                          onChange={() => toggle(g.id, groupIds, setGroupIds)}
-                        />
-                        <span>
-                          <strong>{g.name}</strong>
-                          <small>{devicesText(g.device_ids.length)}</small>
-                        </span>
-                      </label>
-                    ))}
+                  {shownGroups.map((g) => (
+                    <label className="target-option" key={g.id}>
+                      <input
+                        type="checkbox"
+                        checked={groupIds.includes(g.id)}
+                        onChange={() => toggle(g.id, groupIds, setGroupIds)}
+                      />
+                      <span>
+                        <strong>{g.name}</strong>
+                        <small>{devicesText(g.member_count)}</small>
+                      </span>
+                    </label>
+                  ))}
+                  {matchingGroups.length > shownGroups.length && (
+                    <p className="control-muted">
+                      Showing {shownGroups.length} of{" "}
+                      {matchingGroups.length.toLocaleString()} groups. Search to
+                      narrow the list.
+                    </p>
+                  )}
+                  {!matchingGroups.length && (
+                    <p className="control-muted">
+                      No groups match your search.
+                    </p>
+                  )}
                 </div>
               </details>
             )}
             <div className="target-device-list">
               <h3>Devices</h3>
-              {listedDevices.map((d) => (
-                <label className="target-option" key={d.id}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${d.name}`}
-                    checked={effective.has(d.id)}
-                    onChange={() => chooseDevice(d.id)}
-                  />
-                  <span>
-                    <strong>{d.name}</strong>
-                    <small>
-                      {d.os} · {statusText(d)} ·{" "}
-                      {d.configuration_mode === "full"
-                        ? "Full Vector mode"
-                        : "Restricted mode"}
-                    </small>
-                  </span>
-                  <span className="target-option-now">
-                    <small>Now</small>
-                    {nowText(d)}
-                  </span>
-                </label>
-              ))}
-              {!visibleDevices.length && (
-                <p className="control-muted">
-                  {devices.data.length
-                    ? "No devices match your search."
-                    : "Add a device before deploying."}
-                </p>
-              )}
+              <DevicePicker
+                label="Devices"
+                search={search}
+                isChecked={(device) => effective.has(device.id)}
+                onToggle={chooseDevice}
+                onRows={keepRows}
+                onMatching={(found, rows) => {
+                  keepRows(rows);
+                  chooseMatching(found.ids);
+                }}
+                note={(device) =>
+                  device.configuration_mode === "full"
+                    ? "Full Vector mode"
+                    : "Restricted mode"
+                }
+                extra={{ id: "now", header: "Now", cell: nowText }}
+                actions={
+                  <Button
+                    variant="ghost compact"
+                    disabled={
+                      !selected.length && !exclude.length && !groupIds.length
+                    }
+                    onClick={clearDevices}
+                  >
+                    Clear selection
+                  </Button>
+                }
+              />
             </div>
-            {visibleDevices.length > devicePageSize && (
-              <nav
-                className="target-device-pagination"
-                aria-label="Device selection pages"
-              >
-                <span aria-live="polite">
-                  Showing {devicePageStart + 1}–
-                  {Math.min(
-                    devicePageStart + devicePageSize,
-                    visibleDevices.length,
-                  )}{" "}
-                  of {visibleDevices.length} devices
-                </span>
-                <div>
-                  <Button
-                    variant="secondary compact"
-                    disabled={currentDevicePage === 1}
-                    onClick={() => setDevicePage(currentDevicePage - 1)}
-                  >
-                    Previous devices
-                  </Button>
-                  <span>
-                    Page {currentDevicePage} of {devicePageCount}
-                  </span>
-                  <Button
-                    variant="secondary compact"
-                    disabled={currentDevicePage === devicePageCount}
-                    onClick={() => setDevicePage(currentDevicePage + 1)}
-                  >
-                    Next devices
-                  </Button>
-                </div>
-              </nav>
-            )}
             <div className="target-selection-summary">
-              {effective.size} {effective.size === 1 ? "device" : "devices"}{" "}
-              selected
+              {effective.size.toLocaleString()}{" "}
+              {effective.size === 1 ? "device" : "devices"} selected
+              {groupsLoading && !membersError && (
+                <span>, reading the groups&apos; devices…</span>
+              )}
               {exclude.length > 0 && (
                 <span>, {exclude.length} excluded from selected groups</span>
               )}
@@ -1358,9 +1438,7 @@ export default function TargetDialog({
                 )}
                 <DeploymentVariableFields
                   declarations={declarations}
-                  devices={devices.data.filter((device) =>
-                    effective.has(device.id),
-                  )}
+                  devices={chosenRows.slice(0, VALUE_ROWS)}
                   inputs={bindingInputs}
                   persistent={persistent}
                   onChange={(next) => {
@@ -1369,6 +1447,16 @@ export default function TargetDialog({
                     setError("");
                   }}
                 />
+                {effective.size > Math.min(chosenRows.length, VALUE_ROWS) && (
+                  <p className="control-muted">
+                    Each device has its own value here when you pick it one by
+                    one. The default applies to the other{" "}
+                    {(
+                      effective.size - Math.min(chosenRows.length, VALUE_ROWS)
+                    ).toLocaleString()}{" "}
+                    selected devices.
+                  </p>
+                )}
                 {bindingAttempted &&
                   effective.size > 0 &&
                   bindingResult.errors.length > 0 && (
@@ -1905,10 +1993,8 @@ export default function TargetDialog({
           busy={busy}
           disabled={
             !effective.size ||
-            devices.loading ||
-            groups.loading ||
-            !!devices.error ||
-            !!groups.error ||
+            groupsLoading ||
+            !!membersError ||
             (!preview && !releaseValid) ||
             (!!preview && (capabilityBlocked || capabilityUnknown)) ||
             // Nothing selected could run it: the note above says why.

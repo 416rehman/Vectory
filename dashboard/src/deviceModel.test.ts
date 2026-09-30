@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  deviceViews,
   freshFlow,
   freshRate,
-  groupsByDevice,
-  matchesStatus,
-  matchesView,
+  isDeviceView,
   runsDesired,
-  searchText,
-  statusRank,
   versionLabel,
   versionMarker,
   type ListDevice,
@@ -73,51 +70,23 @@ describe("running vs desired", () => {
 });
 
 describe("quick views", () => {
-  it("selects failing, drifting, offline, paused and silent devices", () => {
-    expect(matchesView(device({ status: "rolled_back" }), "failing", now)).toBe(
-      true,
-    );
-    expect(matchesView(device({ status: "applying" }), "drift", now)).toBe(
-      true,
-    );
-    expect(matchesView(device({}), "drift", now)).toBe(false);
-    expect(
-      matchesView(
-        device({ status: "offline", last_seen: ago(900) }),
-        "offline",
-        now,
-      ),
-    ).toBe(true);
-    expect(matchesView(device({ last_seen: null }), "offline", now)).toBe(true);
-    expect(matchesView(device({ sync_paused: true }), "paused", now)).toBe(
-      true,
-    );
-    expect(
-      matchesView(
-        device({ telemetry: { sampled_at: ago(600), events_per_second: 1 } }),
-        "no_telemetry",
-        now,
-      ),
-    ).toBe(true);
-    expect(matchesView(device({}), "no_telemetry", now)).toBe(false);
-    // Revoked identities never appear in operational views.
-    expect(
-      matchesView(device({ status: "revoked" }), "no_telemetry", now),
-    ).toBe(false);
-  });
-
-  it("filters by health bucket or revoked", () => {
-    expect(matchesStatus(device({ status: "rolled_back" }), "failed")).toBe(
-      true,
-    );
-    expect(matchesStatus(device({ status: "revoked" }), "revoked")).toBe(true);
-    expect(matchesStatus(device({}), "")).toBe(true);
-    expect(matchesStatus(device({}), "offline")).toBe(false);
+  it("names the views the address can carry", () => {
+    // The server applies them; its own name for drift is not an address value.
+    expect(deviceViews.map((view) => view.value)).toEqual([
+      "failing",
+      "drift",
+      "offline",
+      "paused",
+      "no_telemetry",
+    ]);
+    expect(isDeviceView("drift")).toBe(true);
+    expect(isDeviceView("not_on_desired")).toBe(false);
+    expect(isDeviceView("")).toBe(false);
   });
 });
 
 describe("list helpers", () => {
-  it("keeps stale rates out and sorts problems first", () => {
+  it("keeps stale rates out", () => {
     expect(freshRate(device({}), now)).toBe(12.5);
     expect(
       freshRate(
@@ -125,36 +94,6 @@ describe("list helpers", () => {
         now,
       ),
     ).toBeNull();
-    expect(statusRank(device({ status: "failed" }))).toBeLessThan(
-      statusRank(device({})),
-    );
-    expect(statusRank(device({ status: "revoked" }))).toBeGreaterThan(
-      statusRank(device({})),
-    );
-  });
-
-  it("searches names, labels, versions and groups", () => {
-    const text = searchText(
-      device({ labels: { region: "eu-west" }, vector_version: "0.58.0" }),
-      ["Web tier"],
-    );
-    for (const term of [
-      "edge-01",
-      "eu-west",
-      "orders v3",
-      "0.58.0",
-      "web tier",
-    ])
-      expect(text).toContain(term);
-    const groups = groupsByDevice([
-      { id: "g2", name: "Web tier", device_ids: ["d1"] },
-      { id: "g1", name: "Edge", device_ids: ["d1", "d2"] },
-    ]);
-    expect(groups.get("d1")?.map((group) => group.name)).toEqual([
-      "Edge",
-      "Web tier",
-    ]);
-    expect(groups.get("d3")).toBeUndefined();
   });
 });
 
@@ -176,11 +115,5 @@ describe("delivery health", () => {
     expect(
       freshFlow(device({ telemetry: { sampled_at: ago(600) } }), now),
     ).toBeNull();
-  });
-  it("lists degraded devices as failing and filters them by their own state", () => {
-    expect(matchesView(degraded, "failing", now)).toBe(true);
-    expect(matchesStatus(degraded, "degraded")).toBe(true);
-    expect(matchesStatus(degraded, "applied")).toBe(false);
-    expect(statusRank(degraded)).toBeLessThan(statusRank(device({})));
   });
 });

@@ -21,6 +21,22 @@
   flex-direction: column;
   min-height: 0;
 }
+/* What differs from the saved group, with a way back. */
+.group-changes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.group-changes strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
 .group-editor-form > .modal-body {
   min-height: 0;
   overflow-y: auto;

@@ -1,11 +1,21 @@
 import { ArrowRight } from "lucide-react";
-import type { DeploymentPage, DeploymentSummary, Device, Group } from "./api";
+import type {
+  DeploymentPage,
+  DeploymentSummary,
+  Group,
+  GroupSummary,
+} from "./api";
 import { ErrorBox, Spinner, StatusBadge, useResource } from "./ui";
 import { deviceDisplayStatus, statusLabel } from "./status";
 import { relativeTime } from "./time";
 import { deploymentRoute } from "./deploymentRouting";
 import { appliedText, describeDeployment, interval } from "./deploymentStatus";
 import { runningName } from "./deploymentReviewModel";
+import { healthOrder, healthStates } from "./overviewModel";
+import { useInventory } from "./useInventory";
+
+/** Members listed by name before "and N more". */
+const LISTED = 50;
 
 function assignmentTitle(d: DeploymentSummary) {
   if (d.policy)
@@ -24,10 +34,11 @@ const route = (id: string) =>
  */
 export default function GroupOverview({
   group,
-  devices,
+  memberCount,
 }: {
-  group: Group;
-  devices: Device[];
+  group: Group | GroupSummary;
+  /** How many devices the group holds, when the caller knows. */
+  memberCount: number | null;
 }) {
   const params = new URLSearchParams({
     group_id: group.id,
@@ -44,15 +55,32 @@ export default function GroupOverview({
       page_size: 12,
     },
   );
-  const members = group.device_ids
-    .map((id) => devices.find((device) => device.id === id))
-    .filter((device): device is Device => !!device)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const missing = group.device_ids.length - members.length;
+  // The first members by name, and the state counts of all of them, from the
+  // inventory: a group of thousands is never downloaded to be summarised.
+  const inventory = useInventory(
+    { group: group.id, sort: "name", dir: "asc", page: 1, size: LISTED },
+    30000,
+  );
+  const members = inventory.data.items;
+  const total = inventory.data.total;
+  const held = inventory.data.counts.status;
+  // Members the fleet no longer knows: the group's count less every state.
+  const missing =
+    memberCount === null
+      ? 0
+      : Math.max(
+          0,
+          memberCount -
+            Object.values(held).reduce((sum, count) => sum + count, 0),
+        );
   const counts = new Map<string, number>();
-  for (const device of members) {
-    const state = deviceDisplayStatus(device);
-    counts.set(state, (counts.get(state) || 0) + 1);
+  for (const bucket of [...healthOrder, "revoked" as const]) {
+    const count = held[bucket];
+    if (!count) continue;
+    counts.set(
+      bucket === "revoked" ? "revoked" : healthStates[bucket][0],
+      count,
+    );
   }
   // Current assignments: still able to deliver something to members.
   const current = history.data.items.filter(
@@ -66,7 +94,11 @@ export default function GroupOverview({
       <section aria-labelledby="group-overview-members">
         <div className="group-overview-head">
           <h3 id="group-overview-members">
-            {members.length === 1 ? "1 device" : `${members.length} devices`}
+            {inventory.loaded
+              ? total === 1
+                ? "1 device"
+                : `${total.toLocaleString()} devices`
+              : "Members"}
           </h3>
           <div className="group-overview-counts">
             {[...counts].map(([state, count]) => (
@@ -79,9 +111,19 @@ export default function GroupOverview({
             ))}
           </div>
         </div>
-        {members.length ? (
+        {inventory.resource.error && (
+          <ErrorBox
+            message={inventory.resource.error}
+            retry={inventory.resource.reload}
+          />
+        )}
+        {!inventory.loaded && !inventory.resource.error ? (
+          <p className="loading" role="status">
+            <Spinner /> Loading members
+          </p>
+        ) : members.length ? (
           <ul className="group-overview-devices">
-            {members.slice(0, 50).map((device) => {
+            {members.map((device) => {
               return (
                 <li key={device.id}>
                   <a href={`#/devices/${encodeURIComponent(device.id)}`}>
@@ -108,8 +150,13 @@ export default function GroupOverview({
             No members yet. Add devices on the Members tab.
           </p>
         )}
-        {members.length > 50 && (
-          <p className="control-muted">And {members.length - 50} more.</p>
+        {total > members.length && (
+          <p className="control-muted">
+            And {(total - members.length).toLocaleString()} more.{" "}
+            <a href={`#/devices?group=${encodeURIComponent(group.id)}`}>
+              View all devices
+            </a>
+          </p>
         )}
         {missing > 0 && (
           <p className="control-muted">
