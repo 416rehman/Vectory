@@ -160,11 +160,7 @@ func defineSetup(c *cli) func() int {
 		if err != nil || !human {
 			return code
 		}
-		connected := "Connected"
-		if result.NeedsAttention {
-			// The device exists, but its agent isn't running.
-			connected = "Device"
-		}
+		connected := closingLabel(result)
 		if result.DeviceURL != "" {
 			fmt.Fprintf(c.stdout, "%s: %s\n", connected, result.DeviceURL)
 		} else if result.Device != nil && !result.DryRun {
@@ -190,6 +186,22 @@ func setupExitCode(result agent.SetupResult, err error, interrupted bool) int {
 		return exitAttention
 	}
 	return exitOK
+}
+
+// closingLabel is "Connected" only when this run saw the agent check in (its
+// own check-in, or a service or running agent that did); otherwise the line
+// only points at the device. An upgrade that leaves an existing workload for
+// the operator to start never checked in.
+func closingLabel(result agent.SetupResult) string {
+	if result.NeedsAttention {
+		return "Device"
+	}
+	for _, step := range result.Steps {
+		if step.Status == "ok" && (step.ID == "checkin" || step.ID == "service") {
+			return "Connected"
+		}
+	}
+	return "Device"
 }
 
 var stepMarks = map[string]string{"ok": "[ok]", "info": "[i] ", "warn": "[!!]", "fail": "[!!]", "plan": "[..]"}

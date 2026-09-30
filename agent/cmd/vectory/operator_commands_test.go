@@ -159,6 +159,28 @@ func TestCommandsThatNeedTheAgentStoppedNameItAndRetryIsQueued(t *testing.T) {
 	}
 }
 
+func TestSetupSaysConnectedOnlyAfterACheckIn(t *testing.T) {
+	step := func(id, status string) agent.SetupStep { return agent.SetupStep{ID: id, Status: status} }
+	for _, c := range []struct {
+		want   string
+		result agent.SetupResult
+	}{
+		// Its own check-in, or a service that checked in.
+		{"Connected", agent.SetupResult{Steps: []agent.SetupStep{step("enroll", "ok"), step("checkin", "ok")}}},
+		{"Connected", agent.SetupResult{Steps: []agent.SetupStep{step("enroll", "ok"), step("service", "ok")}}},
+		// An upgrade that leaves an existing workload to start checked nothing.
+		{"Device", agent.SetupResult{Steps: []agent.SetupStep{step("enroll", "ok"), step("service", "info")}}},
+		// Nothing keeps the agent running.
+		{"Device", agent.SetupResult{NeedsAttention: true, Steps: []agent.SetupStep{step("checkin", "ok"), step("service", "warn")}}},
+		// An older build still runs beside the upgraded one.
+		{"Device", agent.SetupResult{Steps: []agent.SetupStep{step("enroll", "ok"), step("service", "warn")}}},
+	} {
+		if got := closingLabel(c.result); got != c.want {
+			t.Fatalf("%+v: %q, want %q", c.result, got, c.want)
+		}
+	}
+}
+
 func TestLogsForAStateDirectoryWithoutAnAgentSaySo(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nonexistent")
 	code, _, stderr := invoke("logs", "--state-dir", missing)
