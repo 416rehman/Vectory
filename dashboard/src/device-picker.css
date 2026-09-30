@@ -5,8 +5,13 @@
   gap: var(--space-2);
   min-width: 0;
 }
+/* A page of devices scrolls inside its own box, so the pager and the buttons
+   under it stay where they are. The table's horizontal overflow is clipped,
+   which alone lets rows run past max-height and over what follows. */
 .device-picker .data-table-scroll {
+  --table-sticky-top: 0px;
   max-height: 22rem;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }

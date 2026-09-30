@@ -405,13 +405,20 @@ try {
       const reads = requests
         .slice(before)
         .filter((r) => r.path === "/devices/inventory");
-      assert.ok(
-        reads.length <= 2,
-        `typing seven characters read the inventory ${reads.length} times`,
+      // Seven keys ask the server once, for the finished text: never for a
+      // half-typed one. (The page's own refresh of the list it already shows
+      // may land in the same moments, so it is allowed one read.)
+      const asked = reads
+        .filter((r) => /[?&]q=/.test(r.query))
+        .map((r) => new URLSearchParams(r.query).get("q"));
+      assert.deepEqual(
+        asked,
+        ["web-001"],
+        "typing seven characters asks the server once, for the whole text",
       );
       assert.ok(
-        reads.every((r) => /[?&]q=/.test(r.query) || r.query === ""),
-        "a read for a search carries it",
+        reads.length <= 3,
+        `typing seven characters read the inventory ${reads.length} times`,
       );
       assert.ok(
         latencies.search_to_rows_ms < 5000,
@@ -598,7 +605,9 @@ try {
             ms < INPUT_LATENCY_MS,
             `${name} took ${Math.round(ms)} ms with ${large.member_count.toLocaleString()} members`,
           );
-      // Leave without saving: the saved group is untouched.
+      // Leave without saving, agreeing to discard the edit: the saved group
+      // is untouched.
+      page.once("dialog", (prompt) => prompt.accept());
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(page.getByRole("dialog")).toHaveCount(0);
     },
