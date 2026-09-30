@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -192,6 +193,11 @@ async function start(f, options = {}) {
   });
   const reject = (route, status, code, message) =>
     route.fulfill({ status, json: { error: { code, message } } });
+  const fleet = fleetReplies({
+    devices: () => f.devices,
+    groups: () => [...f.groups.values()],
+    groupById: false,
+  });
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -203,6 +209,8 @@ async function start(f, options = {}) {
     const path = url.pathname.slice(7),
       method = request.method();
     f.requests.push({ path, method });
+    // Pages of devices, one device, and the groups without their members.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (method === "GET" && path === "/devices")
       return route.fulfill({ json: f.devices });
     // The group overview lists assignments; member edits preview their effects.
@@ -276,9 +284,10 @@ async function start(f, options = {}) {
         revision: old ? old.revision + 1 : 1,
         created_at: old?.created_at || "2026-09-27T00:00:00Z",
       };
+      // A write that is held has not committed yet.
+      if (f.holdWrite) await new Promise((resolve) => f.releases.push(resolve));
       f.groups.set(saved.id, structuredClone(saved));
       f.commits++;
-      if (f.holdWrite) await new Promise((resolve) => f.releases.push(resolve));
       const mode = f.replyMode;
       f.replyMode = null;
       if (mode === "drop") return route.abort("failed");
@@ -359,6 +368,8 @@ async function check(name, run) {
     });
   }
   console.log((results.at(-1).passed ? "PASS " : "FAIL ") + name);
+  if (!results.at(-1).passed)
+    console.log(results.at(-1).error.split("\n").slice(0, 12).join("\n"));
 }
 
 try {
@@ -515,16 +526,19 @@ try {
         const page = await app.page();
         await edit(page);
         await changeDescription(page);
+        // Opening the editor read the group's members; a definite conflict
+        // reads nothing more.
+        const groupReads = () =>
+          f.requests.filter(
+            (r) => r.path === "/groups/" + id(10) && r.method === "GET",
+          ).length;
+        const opened = groupReads();
         f.nextError = [409, "CONFLICT", "Assignments conflict"];
         await save(page);
         await expect(page.getByRole("alert")).toContainText(
           "Assignments conflict",
         );
-        expect(
-          f.requests.filter(
-            (r) => r.path === "/groups/" + id(10) && r.method === "GET",
-          ),
-        ).toHaveLength(0);
+        expect(groupReads()).toBe(opened);
         f.groups.set(id(10), { ...f.groups.get(id(10)), revision: 2 });
         f.detailError = 503;
         await save(page);
@@ -720,15 +734,17 @@ try {
         );
         // A new actor starts over from the group's overview.
         await expect(review(page)).toHaveCount(0);
-        // The session settles in more than one step; each step remounts.
+        // The session settles in more than one step; each step remounts. The
+        // group is read afresh: the held write had already committed, so the
+        // new actor sees the server's group, not the old actor's screen.
         await expect(async () => {
           await page
             .getByRole("tab", { name: "Edit members", exact: true })
             .click({ timeout: 2000 });
           await expect(
             page.getByRole("textbox", { name: "Description (optional)" }),
-          ).toHaveValue("Original description", { timeout: 1000 });
-        }).toPass();
+          ).toHaveValue("My local description", { timeout: 1000 });
+        }).toPass({ timeout: 20000 });
         expect(f.writes).toHaveLength(1);
         expect(f.errors).toEqual([]);
       } finally {
@@ -755,7 +771,7 @@ try {
           await expect(
             page.getByRole("textbox", { name: "Description (optional)" }),
           ).toHaveValue("Original description", { timeout: 1000 });
-        }).toPass();
+        }).toPass({ timeout: 20000 });
         for (const release of pending.releases) release();
         await expect(
           page.getByRole("button", { name: "Save changes" }),

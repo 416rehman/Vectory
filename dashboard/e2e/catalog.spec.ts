@@ -192,7 +192,7 @@ test("full Vector catalog configures Kafka and S3 using generated forms", async 
   );
   await page
     .getByRole("dialog")
-    .getByRole("checkbox", { name: /^Select / })
+    .getByRole("checkbox", { name: /^Select (?!devices on this page)/ })
     .first()
     .check();
   const review = page.getByRole("button", {
