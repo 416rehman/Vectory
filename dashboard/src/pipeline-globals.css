@@ -48,6 +48,15 @@
   color: var(--muted);
   font-size: 13px;
 }
+/* The test a publish review sent you to, until you leave it. */
+.pipeline-global-body
+  .pipeline-schema-array
+  > .schema-array-entry[data-selected] {
+  border-radius: var(--ed-radius-sm, 6px);
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .pipeline-global-docs {
   display: inline-block;
   margin-top: 24px;

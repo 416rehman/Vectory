@@ -632,6 +632,8 @@ describe("where a version's secrets are shown", () => {
         verdict: "Vector 0.58 accepted this pipeline.",
         problems: [],
         rejection: null,
+        tests: { state: "none" },
+        onRunTests: () => {},
         onGoToProblem: () => {},
       }),
     );

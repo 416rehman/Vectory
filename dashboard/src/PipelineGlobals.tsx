@@ -77,6 +77,7 @@ export default function PipelineGlobals({
   onClose,
   editable,
   initialSection = "general",
+  initialTest,
 }: {
   config: Config;
   variables: VariableDeclaration[];
@@ -85,6 +86,8 @@ export default function PipelineGlobals({
   onClose: () => void;
   editable: boolean;
   initialSection?: PipelineSection;
+  /** Opens the Tests section on this test (1-based), as a review found it failing. */
+  initialTest?: number;
 }) {
   const [section, setSection] = useState<string>(initialSection),
     [busy, setBusy] = useState(false),
@@ -92,6 +95,42 @@ export default function PipelineGlobals({
     [result, setResult] = useState<PipelineTestRun | null>(null);
   const pending = useRef(new Set<string>()),
     request = useRef(0);
+  // Select the test a review sent you to: scroll to it and put the cursor in
+  // it. The dialog focuses its first field as it opens, so wait for the list.
+  useEffect(() => {
+    if (!initialTest || initialSection !== "tests") return;
+    let frames = 0,
+      frame = 0;
+    const seek = () => {
+      // The first list in the section is the tests; the lists inside each
+      // test come after it.
+      const entry = document
+        .querySelector(".pipeline-global-body .pipeline-schema-array")
+        ?.querySelectorAll<HTMLElement>(":scope > .schema-array-entry")[
+        initialTest - 1
+      ];
+      if (!entry) {
+        if (++frames < 30) frame = requestAnimationFrame(seek);
+        return;
+      }
+      entry.scrollIntoView({ block: "center" });
+      entry
+        .querySelector<HTMLElement>(
+          'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled), select:not(:disabled)',
+        )
+        ?.focus({ preventScroll: true });
+      entry.dataset.selected = "true";
+      entry.addEventListener(
+        "focusout",
+        () => {
+          delete entry.dataset.selected;
+        },
+        { once: true },
+      );
+    };
+    frame = requestAnimationFrame(seek);
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const pendingChange = useCallback((id: string, dirty: boolean) => {
     if (dirty) pending.current.add(id);
     else pending.current.delete(id);
@@ -270,6 +309,7 @@ export default function PipelineGlobals({
                   expected={
                     Array.isArray(config.tests) ? config.tests.length : 0
                   }
+                  steps={Object.keys(config.transforms || {})}
                 />
               )}
             </div>

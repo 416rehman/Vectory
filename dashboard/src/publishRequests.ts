@@ -15,6 +15,12 @@ const requestFields = {
       (value) => bytes(value) <= 2000,
       "Use a publication message of at most 2000 UTF-8 bytes.",
     ),
+  /**
+   * Publish although a test failed, could not be built or did not run. Sent
+   * only when the person chose "Publish anyway"; a recovered request repeats
+   * it exactly, because the server binds the whole body to the request key.
+   */
+  acknowledge_test_failures: z.literal(true).optional(),
 };
 const requestSchema = z.object(requestFields).strict();
 const operationSchema = z

@@ -1111,6 +1111,12 @@ jobs:
         run: node tests/target-recovery-browser.mjs
         env:
           VECTORY_TARGET_RECOVERY_OUTPUT: artifacts/browsers/target-recovery
+      - name: Check the publish review runs the tests and says how they went
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/publish-tests-browser.mjs
+        env:
+          VECTORY_PUBLISH_TESTS_OUTPUT: artifacts/browsers/publish-tests
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}
