@@ -5,7 +5,7 @@ import {
   type Group,
   type GroupMembershipPreview,
 } from "./api";
-import { Spinner } from "./ui";
+import { Button, Spinner } from "./ui";
 import { setDifference } from "./deviceInventory";
 import {
   membershipEffects,
@@ -16,6 +16,12 @@ import {
 
 /** Devices described one by one before the rest are summed up. */
 const LISTED = 50;
+/**
+ * An edit that changes more devices than this is previewed when asked: the
+ * server answers with a line per device, which nobody needs after a click on
+ * "Remove all".
+ */
+export const AUTO_PREVIEW = 500;
 
 /**
  * What saving this membership edit would change on each added or removed
@@ -34,17 +40,22 @@ export default function GroupMembershipEffects({
   // The edit is what differs from the saved group: that is what a new preview
   // waits for, however many devices the group holds.
   const saved = useMemo(() => new Set(group.device_ids), [group.device_ids]);
-  const { key, changed } = useMemo(() => {
+  const { key, changed, count } = useMemo(() => {
     const { added, removed } = setDifference(ids, saved);
     return {
       key: `${added.sort().join(",")}|${removed.sort().join(",")}`,
       changed: added.length > 0 || removed.length > 0,
+      count: added.length + removed.length,
     };
   }, [ids, saved]);
+  // A very large edit waits for a click, for this exact edit.
+  const [asked, setAsked] = useState("");
+  const large = count > AUTO_PREVIEW;
+  const wanted = changed && (!large || asked === key);
   useEffect(() => {
     setPreview(null);
     setError("");
-    if (!changed || group.revision === undefined) return;
+    if (!wanted || group.revision === undefined) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       setLoading(true);
@@ -86,7 +97,7 @@ export default function GroupMembershipEffects({
     };
     // The selection key captures every membership change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, group.id, group.revision]);
+  }, [key, wanted, group.id, group.revision]);
   if (!changed) return null;
   const name = (id: string, fallback: string | null) => fallback || id;
   // A few devices read one by one; a large edit says what matters (the
@@ -99,6 +110,17 @@ export default function GroupMembershipEffects({
       aria-labelledby="group-effects-heading"
     >
       <h4 id="group-effects-heading">What changes when you save</h4>
+      {large && !wanted && (
+        <>
+          <p className="control-muted">
+            This changes {count.toLocaleString()} devices. Saving checks every
+            one of them. A preview asks the server what changes on each.
+          </p>
+          <Button variant="secondary compact" onClick={() => setAsked(key)}>
+            Preview what changes
+          </Button>
+        </>
+      )}
       {loading && !preview && (
         <p className="control-muted" role="status">
           <Spinner /> Checking each device…

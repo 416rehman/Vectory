@@ -598,7 +598,8 @@ export default function TargetDialog({
 
   const blockers = (preview?.blockers || []) as PreviewBlocker[];
   const previewed = useMemo(
-    () => new Map((preview?.devices || []).map((device) => [device.id, device])),
+    () =>
+      new Map((preview?.devices || []).map((device) => [device.id, device])),
     [preview],
   );
   const deviceName = (id: string) =>
