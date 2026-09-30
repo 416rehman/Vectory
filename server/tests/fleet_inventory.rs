@@ -1074,9 +1074,27 @@ async fn the_overview_counts_applied_devices_it_cannot_measure_and_adopted_confi
     .await;
     let run = Some(version.as_str());
     // Applied and reporting: measured.
-    insert(&s, "measured", applied(&version, SHA1, 5.0), run, None, false, false).await;
+    insert(
+        &s,
+        "measured",
+        applied(&version, SHA1, 5.0),
+        run,
+        None,
+        false,
+        false,
+    )
+    .await;
     // Applied with no sample, or only an old one: delivery can't be measured.
-    insert(&s, "silent", merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})), run, None, false, false).await;
+    insert(
+        &s,
+        "silent",
+        merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})),
+        run,
+        None,
+        false,
+        false,
+    )
+    .await;
     insert(
         &s,
         "stale",
@@ -1091,13 +1109,53 @@ async fn the_overview_counts_applied_devices_it_cannot_measure_and_adopted_confi
     )
     .await;
     // Not applied, or revoked: never counted.
-    insert(&s, "failed", json!({"last_seen":db::now(),"apply_state":"failed","reported_generation":0}), run, None, false, false).await;
-    insert(&s, "retired", merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})), run, None, false, true).await;
+    insert(
+        &s,
+        "failed",
+        json!({"last_seen":db::now(),"apply_state":"failed","reported_generation":0}),
+        run,
+        None,
+        false,
+        false,
+    )
+    .await;
+    insert(
+        &s,
+        "retired",
+        merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})),
+        run,
+        None,
+        false,
+        true,
+    )
+    .await;
     // Without a pipeline: a local configuration adopted at setup keeps running
     // unless Vector isn't running.
-    let unmanaged = json!({"last_seen":db::now(),"apply_state":"unmanaged","reported_generation":0});
-    insert(&s, "adopted", merged(unmanaged.clone(), json!({"actual_sha256":SHA2})), None, None, false, false).await;
-    insert(&s, "adopted-stopped", merged(unmanaged.clone(), json!({"actual_sha256":SHA2,"vector_running":false})), None, None, false, false).await;
+    let unmanaged =
+        json!({"last_seen":db::now(),"apply_state":"unmanaged","reported_generation":0});
+    insert(
+        &s,
+        "adopted",
+        merged(unmanaged.clone(), json!({"actual_sha256":SHA2})),
+        None,
+        None,
+        false,
+        false,
+    )
+    .await;
+    insert(
+        &s,
+        "adopted-stopped",
+        merged(
+            unmanaged.clone(),
+            json!({"actual_sha256":SHA2,"vector_running":false}),
+        ),
+        None,
+        None,
+        false,
+        false,
+    )
+    .await;
     insert(&s, "bare", unmanaged, None, None, false, false).await;
     let app = api::router(s.clone());
     for uri in ["/api/v1/overview?slim=1", "/api/v1/overview"] {
