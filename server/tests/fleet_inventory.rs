@@ -1049,6 +1049,78 @@ async fn slim_overview_drops_devices_and_adds_the_fleet_numbers() {
 }
 
 #[tokio::test]
+async fn the_overview_counts_applied_devices_it_cannot_measure_and_adopted_configurations() {
+    let temp = tempfile::tempdir().unwrap();
+    let s = initialize(Settings {
+        data_dir: temp.path().join("state"),
+        bootstrap_secret: "unused-fleet-inventory-bootstrap".into(),
+        cookie_secure: false,
+        dashboard_dir: temp.path().join("dist"),
+        releases_dir: temp.path().join("releases"),
+        instance_name: "Fleet inventory".into(),
+        validation_url: None,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let admin = actor(&s, "admin").await;
+    let (pipeline, version) = (db::id(), db::id());
+    record(&s, "configuration", json!({"id":pipeline,"name":"Edge syslog","description":"","config":{},"graph":{"nodes":[],"edges":[]}})).await;
+    record(
+        &s,
+        "version",
+        json!({"id":version,"configuration_id":pipeline,"number":1,"sha256":SHA1}),
+    )
+    .await;
+    let run = Some(version.as_str());
+    // Applied and reporting: measured.
+    insert(&s, "measured", applied(&version, SHA1, 5.0), run, None, false, false).await;
+    // Applied with no sample, or only an old one: delivery can't be measured.
+    insert(&s, "silent", merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})), run, None, false, false).await;
+    insert(
+        &s,
+        "stale",
+        merged(
+            applied(&version, SHA1, 5.0),
+            json!({"telemetry":{"sampled_at":"2026-01-01T00:00:00Z","events_per_second":9.0}}),
+        ),
+        run,
+        None,
+        false,
+        false,
+    )
+    .await;
+    // Not applied, or revoked: never counted.
+    insert(&s, "failed", json!({"last_seen":db::now(),"apply_state":"failed","reported_generation":0}), run, None, false, false).await;
+    insert(&s, "retired", merged(applied(&version, SHA1, 5.0), json!({"telemetry":null})), run, None, false, true).await;
+    // Without a pipeline: a local configuration adopted at setup keeps running
+    // unless Vector isn't running.
+    let unmanaged = json!({"last_seen":db::now(),"apply_state":"unmanaged","reported_generation":0});
+    insert(&s, "adopted", merged(unmanaged.clone(), json!({"actual_sha256":SHA2})), None, None, false, false).await;
+    insert(&s, "adopted-stopped", merged(unmanaged.clone(), json!({"actual_sha256":SHA2,"vector_running":false})), None, None, false, false).await;
+    insert(&s, "bare", unmanaged, None, None, false, false).await;
+    let app = api::router(s.clone());
+    for uri in ["/api/v1/overview?slim=1", "/api/v1/overview"] {
+        let overview = get(&app, &admin, uri).await;
+        assert_eq!(overview["devices_unmeasured"], 2, "{uri}");
+        let groups = overview["attention"].as_array().unwrap();
+        let unmanaged = groups
+            .iter()
+            .find(|group| group["cause"] == "unmanaged")
+            .unwrap();
+        assert_eq!(unmanaged["count"], 3, "{uri}");
+        assert_eq!(unmanaged["adopted"], 1, "{uri}");
+        assert!(
+            groups
+                .iter()
+                .filter(|group| group["cause"] != "unmanaged")
+                .all(|group| group.get("adopted").is_none()),
+            "{uri}: only the unmanaged group says how many adopted a local configuration"
+        );
+    }
+}
+
+#[tokio::test]
 async fn running_now_rolls_up_what_devices_report() {
     let f = fleet().await;
     let slim = get(&f.app, &f.admin, "/api/v1/overview?slim=1").await;
