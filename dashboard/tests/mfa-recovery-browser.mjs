@@ -66,7 +66,16 @@ const recoveryCodes = Array.from(
   (_, i) =>
     `${String(i).repeat(8)}-${String(i).repeat(8)}-${String(i).repeat(8)}-${String(i).repeat(8)}`,
 );
-const privateValues = [syntheticPassword, unused, used, seed, ...recoveryCodes];
+/** How the page shows a recovery code: in groups of four, to type from paper. */
+const grouped = (code) => code.replace(/-/g, "").match(/.{4}/g).join(" ");
+const privateValues = [
+  syntheticPassword,
+  unused,
+  used,
+  seed,
+  ...recoveryCodes,
+  ...recoveryCodes.map(grouped),
+];
 const redact = (text) =>
   privateValues.reduce(
     (out, value) => out.replaceAll(value, "[synthetic credential]"),
@@ -474,7 +483,11 @@ try {
         page.getByText("Your recovery codes weren't shown. Generate new ones."),
       ).toBeVisible();
       const html = await page.content();
-      expect(recoveryCodes.some((code) => html.includes(code))).toBe(false);
+      expect(
+        [...recoveryCodes, ...recoveryCodes.map(grouped)].some((code) =>
+          html.includes(code),
+        ),
+      ).toBe(false);
       expect(
         state.requests.filter(
           (request) => request.path === "/mfa/recovery-codes",

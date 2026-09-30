@@ -111,8 +111,8 @@ func verifyPinnedChain(target *url.URL, chain []*x509.Certificate, pin []byte, n
 	if pinned == nil {
 		return nil, &ConnectionError{
 			Code:     "TLS_PIN_MISMATCH",
-			Message:  fmt.Sprintf("The server's certificates don't match the pinned CA (expected %s, received %s).", ShortFingerprint(pin), ShortFingerprint(certificateSHA256(chain[len(chain)-1]))),
-			Fix:      "Copy the command again from Add device. If it still doesn't match, this address may lead to a different server; don't continue.",
+			Message:  "The server's certificates don't match the pinned CA:\n" + FingerprintMismatch(pin, certificateSHA256(chain[len(chain)-1])),
+			Fix:      "Compare them with the full fingerprint on Add device, and copy the command again from there. If it still doesn't match, this address may lead to a different server; don't continue.",
 			Delivery: NotSent,
 		}
 	}

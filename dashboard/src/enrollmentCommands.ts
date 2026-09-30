@@ -7,6 +7,12 @@ import type { AgentInstall, Release } from "./api";
 export type HostOS = "linux" | "darwin" | "windows";
 export type Mode = "restricted" | "full";
 export type ServiceChoice = "auto" | "none";
+/**
+ * How the host checks the server before it sends the token: pin the
+ * server's CA by the fingerprint this page shows, trust a CA certificate file
+ * already on the host, or trust the host's own certificate store.
+ */
+export type TrustChoice = "pinned" | "file" | "system";
 
 export type SetupChoices = {
   os: HostOS;
@@ -22,6 +28,12 @@ export type SetupChoices = {
   capabilityPolicy: string;
   /** Empty: setup finds Vector on PATH or in the usual locations. */
   vectorBinary?: string;
+  /** Absent: the first of trustChoices(), the server's default. */
+  trust?: TrustChoice;
+  /** The CA certificate (PEM) on the host, for trust "file". */
+  caFile?: string;
+  /** Empty: the installer's default directory (Linux and macOS). */
+  installDir?: string;
 };
 
 /** The same defaults `vectory setup`, the service definitions and the docs use. */
@@ -121,50 +133,135 @@ export function continued(head: string, args: string[], indent = "  ") {
   return [head, ...lines.map((line) => `${indent}${line}`)].join(" \\\n");
 }
 
-/** How devices will trust the agent listener, from the server's own chain. */
-export type Trust = {
-  server: string;
-  /** Hex SHA-256 of the CA to pin; null when public trust applies. */
-  pin: string | null;
-};
-export function trustFor(install: AgentInstall): Trust | null {
-  if (!install.agent_url) return null;
+/**
+ * How hosts can check this server, the default first. Pinning needs a
+ * private CA that this page can show; a publicly trusted certificate is
+ * checked with the host's own certificate store.
+ */
+export function trustChoices(install: AgentInstall): TrustChoice[] {
   const certificate = install.certificate;
-  const pin =
-    certificate && !certificate.publicly_trusted ? certificate.ca_sha256 : null;
-  return { server: install.agent_url, pin };
+  return certificate?.ca_sha256 && !certificate.publicly_trusted
+    ? ["pinned", "file", "system"]
+    : ["system", "file"];
 }
-
-function trustArguments(trust: Trust) {
-  return [
-    "--server",
-    trust.server,
-    ...(trust.pin ? ["--ca-sha256", trust.pin] : []),
-  ];
+/** The choice in effect: the operator's when this server offers it. */
+export function effectiveTrust(
+  install: AgentInstall,
+  choice?: TrustChoice,
+): TrustChoice {
+  const offered = trustChoices(install);
+  return choice && offered.includes(choice) ? choice : offered[0];
 }
 
 /**
- * The one-command install for Linux and macOS: download the installer, check
- * its SHA-256 from this authenticated page, then run it. With a private CA the
- * download itself skips TLS verification (-k): the checksum is the proof, and
- * the installer then pins the CA for everything after it.
+ * The setup options for the chosen trust, exactly: --ca-sha256 with the
+ * fingerprint, --ca-file with the host's CA certificate, or --ca-file= for
+ * the host's certificate store. Null when the choice is incomplete.
+ */
+export function trustArguments(
+  install: AgentInstall,
+  choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
+): string[] | null {
+  switch (effectiveTrust(install, choices.trust)) {
+    case "pinned":
+      return ["--ca-sha256", install.certificate!.ca_sha256!];
+    case "file": {
+      const path = choices.caFile?.trim();
+      return path ? ["--ca-file", quote(path, choices.os)] : null;
+    }
+    default:
+      return ["--ca-file="];
+  }
+}
+
+/** The installer file, and the CA certificate a pinned command writes next to it. */
+export const installerFile = "vectory-install.sh";
+export const pinnedCAFile = "vectory-ca.pem";
+
+/**
+ * The one-command install for Linux and macOS: fetch the installer with
+ * certificate verification on, check its SHA-256 from this authenticated
+ * page, then run it. Nothing turns verification off:
+ * - pinned: the command writes this server's CA certificate (public, shown on
+ *   this page like its fingerprint) to vectory-ca.pem, and curl verifies the
+ *   server against it. curl's own --pinnedpubkey can't do this: curl still
+ *   refuses a CA it doesn't know unless -k turns the check off.
+ * - file: curl and setup trust the CA certificate at the host path.
+ * - system: curl and setup trust the host's certificate store.
+ * Each step ends in &&, which continues the command in every POSIX shell
+ * (sh, dash, bash, zsh), so the installer runs only when the download and
+ * the checksum both succeed.
  */
 export function installerCommand(
   install: AgentInstall,
   choices: SetupChoices,
 ): string | null {
+  const [mode, ...rest] = pairs(setupArguments(choices));
+  const installDir = choices.installDir?.trim();
+  return installerRun(
+    install,
+    choices,
+    [
+      ...mode,
+      ...(installDir ? ["--install-dir", quote(installDir, choices.os)] : []),
+    ],
+    rest.flat(),
+  );
+}
+
+/**
+ * Download the installer with verification on, check its SHA-256, and run it
+ * with `head`, the trust arguments, then `tail`. Upgrade agent runs it again
+ * with only what the enrolled device needs.
+ */
+export function installerRun(
+  install: AgentInstall,
+  choices: Pick<SetupChoices, "os" | "trust" | "caFile">,
+  head: string[],
+  tail: string[],
+): string | null {
   if (choices.os === "windows" || !install.installer || !install.agent_url)
     return null;
-  const trusted = !!install.certificate?.publicly_trusted;
+  const trust = effectiveTrust(install, choices.trust);
+  const lines: string[] = [];
+  let cacert = "";
+  if (trust === "pinned") {
+    const pem = install.certificate?.ca_pem?.trimEnd();
+    if (!pem) return null;
+    lines.push(`printf '%s\\n' '${pem}' > ${pinnedCAFile} &&`);
+    cacert = ` --cacert ${pinnedCAFile}`;
+  } else if (trust === "file") {
+    const path = choices.caFile?.trim();
+    if (!path) return null;
+    cacert = ` --cacert ${quote(path, choices.os)}`;
+  }
   const check =
     choices.os === "darwin" ? "shasum -a 256 -c -" : "sha256sum -c -";
-  // A line ending in && continues the command in every POSIX shell, so the
-  // pasted block runs the installer only when the checksum line succeeds.
-  return [
-    `curl -fsSL${trusted ? "" : "k"} ${install.agent_url}/agent/v1/install.sh -o vectory-install.sh`,
-    `echo '${install.installer.sha256}  vectory-install.sh' | ${check} &&`,
-    continued("  sudo sh vectory-install.sh", setupArguments(choices), "    "),
-  ].join("\n");
+  const installerTrust =
+    trust === "pinned" ? [] : trustArguments(install, choices)!;
+  lines.push(
+    `curl -fsSL${cacert} \\`,
+    `  -o ${installerFile} \\`,
+    `  ${install.agent_url}/agent/v1/install.sh &&`,
+    // Split at the pipe, so no line hides under the Copy button.
+    `echo '${install.installer.sha256}  ${installerFile}' \\`,
+    `  | ${check} &&`,
+    continued(`sudo sh ${installerFile}`, [
+      ...head,
+      ...installerTrust,
+      ...tail,
+    ]),
+  );
+  return lines.join("\n");
+}
+
+/** ["--mode", "full", "--create-user"] as [["--mode", "full"], ["--create-user"]]. */
+function pairs(args: string[]) {
+  const out: string[][] = [];
+  for (const arg of args)
+    if (arg.startsWith("--") || !out.length) out.push([arg]);
+    else out[out.length - 1].push(arg);
+  return out;
 }
 
 /** Setup with an agent that is already on the host. */
@@ -172,9 +269,15 @@ export function setupCommand(
   install: AgentInstall,
   choices: SetupChoices,
 ): string | null {
-  const trust = trustFor(install);
+  if (!install.agent_url) return null;
+  const trust = trustArguments(install, choices);
   if (!trust) return null;
-  const args = [...trustArguments(trust), ...setupArguments(choices)];
+  const args = [
+    "--server",
+    install.agent_url,
+    ...trust,
+    ...setupArguments(choices),
+  ];
   return choices.os === "windows"
     ? `.\\vectory.exe setup ${args.join(" ")}`
     : continued("sudo vectory setup", args);
@@ -188,15 +291,19 @@ export function setupCommand(
  */
 export function runCommand(
   install: Pick<AgentInstall, "default_install_dir">,
-  choices: Pick<SetupChoices, "os" | "stateDir">,
+  choices: Pick<SetupChoices, "os" | "stateDir" | "installDir">,
   installed: boolean,
 ) {
   const stateDir =
     choices.stateDir.trim() || platformDefaults(choices.os).stateDir;
   if (choices.os === "windows")
     return `.\\vectory.exe run --state-dir ${quote(stateDir, "windows")}`;
+  const directory =
+    choices.installDir?.trim() ||
+    install.default_install_dir ||
+    "/usr/local/bin";
   const agent = installed
-    ? `${(install.default_install_dir || "/usr/local/bin").replace(/\/+$/, "")}/vectory`
+    ? quote(`${directory.replace(/\/+$/, "")}/vectory`, choices.os)
     : "vectory";
   return `sudo ${agent} run --state-dir ${quote(stateDir, choices.os)}`;
 }
@@ -241,14 +348,7 @@ export function fingerprintRows(sha256: string) {
     rows.push(pairs.slice(index, index + 8).join(":"));
   return rows;
 }
-/** "1F:3C:...:9A:B0", exactly as `vectory setup` prints the pin. */
-export function shortFingerprint(sha256: string) {
-  const pairs = sha256.toUpperCase().match(/../g) || [];
-  return pairs.length > 4
-    ? `${pairs.slice(0, 2).join(":")}:...:${pairs.slice(-2).join(":")}`
-    : pairs.join(":");
-}
-/** The full colon-separated fingerprint. */
+/** The full colon-separated fingerprint, as the agent prints it. */
 export function fingerprint(sha256: string) {
   return (sha256.toUpperCase().match(/../g) || []).join(":");
 }

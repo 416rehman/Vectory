@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/vectory/vectory/agent/internal/agent"
@@ -52,7 +53,7 @@ func init() {
 			usage: "enroll --server URL [--ca-sha256 HEX | --ca-file PATH] [--name NAME] [flags]",
 			about: "Verifies the server first, then exchanges the token for this device's own identity. The token is read from a hidden prompt unless you use --token-file or --token-stdin. If the server may have received a request, run the same command again: it retries that request, and a new token is fine.",
 			examples: []string{
-				"sudo vectory enroll --server https://vectory.example.com:8443 --ca-sha256 1F3C...9AB0",
+				"sudo vectory enroll --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>",
 				"sudo vectory enroll --server https://vectory.example.com:8443 --name web-01 --token-file /run/secrets/vectory-token",
 			},
 			define: defineEnroll(false)},
@@ -60,7 +61,14 @@ func init() {
 			usage: "pause [--state-dir PATH]", about: "The current configuration keeps running and the agent keeps checking in. The dashboard can't lift this pause.",
 			define: definePause(true)},
 		{name: "resume", group: "Day to day", summary: "Apply changes from the server again", usage: "resume [--state-dir PATH]", define: definePause(false)},
-		{name: "retry", group: "Day to day", summary: "Allow a failed configuration to be tried again", usage: "retry [--state-dir PATH]", define: defineRetry},
+		{name: "retry", group: "Day to day", summary: "Allow a failed configuration to be tried again", usage: "retry [--state-dir PATH]",
+			about:  "Lifts this host's hold on the version that failed, so the agent tries it again. While the agent runs, the request is queued and the agent tries again within a few seconds; when it is stopped, it tries at its next start. When nothing has failed here, it says so and changes nothing. Retry on the device page does the same from the dashboard.",
+			define: defineRetry},
+		{name: "allow", group: "Day to day", summary: "Approve a destination, listener or file root in restricted mode",
+			usage:    "allow [--network HOST:PORT]... [--listener ADDR:PORT]... [--file-root PATH]... [--state-dir PATH]",
+			about:    "Adds to this host's restricted-mode allowances and keeps everything already allowed. Only a host operator can do this; the dashboard can't. Run it while the agent is stopped. A version this host refused is tried again when the agent starts. The change is noted in `vectory logs`.",
+			examples: []string{"sudo vectory service-stop && sudo vectory allow --network logs.example.net:443 && sudo vectory service-start", "sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx"},
+			define:   defineAllow},
 		{name: "logs", group: "Day to day", summary: "Show Vector's own log on this host",
 			usage:    "logs [--lines N] [--follow] [--raw | --json] [--state-dir PATH]",
 			about:    "Prints Vector's recent log lines (startup, reloads, component warnings and errors) from the agent's rotated log file. It never shows your events. Works while the service runs. --json prints one JSON object per line: Vector's records as they are, and the agent's notes with the same timestamp, target and message keys.",
@@ -142,6 +150,7 @@ func defineRun(name string) func(c *cli) func() int {
 	return func(c *cli) func() int {
 		c.StateDir()
 		c.JSON("Log one JSON object per line")
+		verbose := c.Bool("verbose", "Also log every check-in, not only what changed")
 		once := c.HiddenBool("once", "one reconciliation, then stop the owned Vector (tests only)")
 		noWake := new(bool)
 		if name == "run" {
@@ -176,8 +185,8 @@ func defineRun(name string) func(c *cli) func() int {
 			switch {
 			case name == "service":
 				err = service(ctx, dir, report)
-			case *noWake && !*once:
-				err = agent.RunWithoutWake(ctx, dir, report)
+			case (*noWake || *verbose) && !*once:
+				err = agent.RunContinuous(ctx, dir, *noWake, *verbose, report)
 			default:
 				err = agent.Run(ctx, dir, *once, report)
 			}
@@ -321,6 +330,11 @@ func defineInstall(c *cli) func() int {
 		}
 		settings, _ := agent.LoadSettings(*c.state)
 		fmt.Fprintf(c.stdout, "Installed in %s · Vector at %s · %s mode.\n", *c.state, settings.VectorBinary, settings.CapabilityPolicy.ConfigurationMode())
+		if opts.CapabilityPolicy != nil {
+			// The file replaced the allowance lists: say what they are now.
+			fmt.Fprintf(c.stdout, "This host allows %s.\n", agent.DescribeAllowances(settings.CapabilityPolicy))
+			agent.NoteLocally(*c.state, "Host operator replaced the allowances: "+agent.DescribeAllowances(settings.CapabilityPolicy)+" (vectory install --capability-policy)")
+		}
 		if _, _, err := agent.ReadIdentity(*c.state); err != nil {
 			fmt.Fprintln(c.stdout, "Next: enroll this host with the command from Add device (vectory enroll --server URL ...).")
 		}
@@ -446,6 +460,10 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			default:
 				value, err = promptSecret("Enrollment token (input hidden): ")
 			}
+			if err == nil {
+				// A short or mangled paste never reaches the server.
+				err = agent.CheckEnrollmentToken(value)
+			}
 			if err != nil {
 				return c.fail(err)
 			}
@@ -464,7 +482,7 @@ func defineEnroll(recover bool) func(c *cli) func() int {
 			if recover {
 				verb = "Recovered"
 			}
-			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with sudo vectory run, or run it as a service with sudo vectory setup.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server)
+			fmt.Fprintf(c.stdout, "%s as %s (device %s) with %s.\nNext: start the agent with %s, or run it as a service with sudo vectory setup.\n", verb, settings.Name, shortID(credentials.DeviceID), settings.Server, agent.RunCommandFor(dir))
 			return exitOK
 		}
 	}
@@ -506,6 +524,10 @@ func defineLogs(c *cli) func() int {
 	raw := c.Bool("raw", "Print the log file's lines unchanged")
 	c.JSON("Print one JSON object per line")
 	return func() int {
+		// A mistyped --state-dir is "no agent here", not "no Vector log yet".
+		if err := agent.CheckInstalled(*c.state); err != nil {
+			return c.fail(err)
+		}
 		ctx, stop := interruptible()
 		defer stop()
 		format := agent.LogText
@@ -526,16 +548,121 @@ func defineRetry(c *cli) func() int {
 	c.StateDir()
 	c.JSON("Print one JSON document")
 	return func() int {
-		if err := agent.Retry(*c.state); err != nil {
+		// Only a version that failed here is held back; without one, a retry
+		// would change nothing, so it says so instead of promising an attempt.
+		if nothingFailed(*c.state) {
+			if *c.json {
+				c.output(map[string]any{"status": "ok", "command": "retry", "nothing_failed": true})
+			} else {
+				fmt.Fprintln(c.stdout, "Nothing to retry: no version has failed on this host. `vectory status` shows what it runs.")
+			}
+			return exitOK
+		}
+		err := agent.Retry(*c.state)
+		var held *agent.LockHeldError
+		switch {
+		case errors.As(err, &held) && held.Owner != nil && (held.Owner.Command == "run" || held.Owner.Command == "service"):
+			// The agent runs: leave the request for it, as pause does.
+			if err := agent.QueueRetry(*c.state); err != nil {
+				return c.fail(err)
+			}
+			if *c.json {
+				c.output(map[string]any{"status": "ok", "command": "retry", "queued": true, "agent_pid": held.Owner.PID})
+			} else {
+				fmt.Fprintf(c.stdout, "Retry queued. The running agent (pid %d) tries the failed version again within a few seconds; `vectory logs` and the device page show the result.\n", held.Owner.PID)
+			}
+			return exitOK
+		case err != nil:
 			return c.fail(err)
 		}
 		if *c.json {
 			c.output(map[string]string{"status": "ok", "command": "retry"})
 		} else {
-			fmt.Fprintln(c.stdout, "Retry allowed. Start the agent; it tries the failed configuration again at its next check-in.")
+			fmt.Fprintln(c.stdout, "Retry allowed. Start the agent; it tries the failed version again at its first check-in.")
 		}
 		return exitOK
 	}
+}
+
+// nothingFailed reports whether this host's state records no failed version,
+// so a retry has nothing to lift. A missing or unreadable state is left to
+// Retry, which explains it.
+func nothingFailed(dir string) bool {
+	if info, err := os.Lstat(filepath.Join(dir, "state.json")); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	state, err := agent.LoadState(dir)
+	return err == nil && state.FailedGeneration == nil && state.FailedEffectiveSHA256 == ""
+}
+
+func defineAllow(c *cli) func() int {
+	c.StateDir()
+	network := c.Strings("network", "HOST:PORT", "A destination pipelines may send to, exactly host:port (repeat for more)")
+	listener := c.Strings("listener", "ADDR:PORT", "An address pipelines may listen on (repeat for more)")
+	roots := c.Strings("file-root", "PATH", "A directory pipelines may read and write under (repeat for more)")
+	c.JSON("Print one JSON document")
+	return func() int {
+		if len(*network)+len(*listener)+len(*roots) == 0 {
+			fmt.Fprintln(c.stderr, "vectory allow: name at least one --network, --listener or --file-root")
+			return exitUsage
+		}
+		dir := *c.state
+		if err := agent.CheckInstalled(dir); err != nil {
+			return c.fail(err)
+		}
+		before, err := agent.LoadSettings(dir)
+		if err != nil {
+			return c.fail(err)
+		}
+		add := agent.CapabilityPolicy{AllowedNetworkHosts: *network, AllowedListenAddresses: *listener, AllowedFileRoots: *roots}
+		ctx, stop := interruptible()
+		defer stop()
+		// The same locked, access-preserving writer as install: only a host
+		// operator changes local policy, and nothing already allowed goes away.
+		if err := agent.InstallWithOptions(ctx, dir, agent.InstallOptions{AddAllowances: &add}); err != nil {
+			return c.fail(err)
+		}
+		after, err := agent.LoadSettings(dir)
+		if err != nil {
+			return c.fail(err)
+		}
+		added := agent.CapabilityPolicy{
+			AllowedNetworkHosts:    newEntries(before.CapabilityPolicy.AllowedNetworkHosts, after.CapabilityPolicy.AllowedNetworkHosts),
+			AllowedListenAddresses: newEntries(before.CapabilityPolicy.AllowedListenAddresses, after.CapabilityPolicy.AllowedListenAddresses),
+			AllowedFileRoots:       newEntries(before.CapabilityPolicy.AllowedFileRoots, after.CapabilityPolicy.AllowedFileRoots),
+		}
+		changed := len(added.AllowedNetworkHosts)+len(added.AllowedListenAddresses)+len(added.AllowedFileRoots) > 0
+		if changed {
+			agent.NoteLocally(dir, "Host operator allowed "+agent.DescribeAllowances(added)+" (vectory allow)")
+		}
+		if *c.json {
+			c.output(map[string]any{"status": "ok", "command": "allow", "changed": changed, "added": added, "allowances": after.CapabilityPolicy})
+			return exitOK
+		}
+		if changed {
+			fmt.Fprintf(c.stdout, "Allowed %s.\n", agent.DescribeAllowances(added))
+		} else {
+			fmt.Fprintln(c.stdout, "Already allowed; nothing changed.")
+		}
+		fmt.Fprintf(c.stdout, "This host allows %s.\n", agent.DescribeAllowances(after.CapabilityPolicy))
+		if after.CapabilityPolicy.FullVectorConfig {
+			fmt.Fprintln(c.stdout, "It runs in full mode, which doesn't need allowances; they apply if it returns to restricted mode.")
+		} else if changed {
+			fmt.Fprintln(c.stdout, "Start the agent again; a version this host refused is tried again.")
+		}
+		return exitOK
+	}
+}
+
+// newEntries lists what after has that before hadn't, in order.
+func newEntries(before, after []string) []string {
+	var out []string
+	for _, value := range after {
+		if !slices.Contains(before, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func defineConfigureMetrics(c *cli) func() int {

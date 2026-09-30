@@ -24,3 +24,10 @@ func agentLockHeld(dir string) bool {
 	_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
 	return false
 }
+
+// processAlive reports whether pid is a running process (one owned by
+// another account counts: it exists, the signal just isn't permitted).
+func processAlive(pid int) bool {
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
+}

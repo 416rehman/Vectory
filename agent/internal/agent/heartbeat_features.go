@@ -1,6 +1,9 @@
 package agent
 
-import "slices"
+import (
+	"path/filepath"
+	"slices"
+)
 
 // Additive heartbeat fields are sent only to servers that list them in the
 // signed manifest's features, so a newer agent never trips an older server's
@@ -16,6 +19,10 @@ const (
 	// says "nothing keeps its agent running" and "Nothing running" from them.
 	featureServiceManager = "service_manager"
 	featureVectorRunning  = "vector_running"
+	// Which agent build runs, and where its state lives: the dashboard says
+	// "already runs this build" and writes host commands for this host.
+	featureAgentSHA256 = "agent_sha256"
+	featureStateDir    = "state_dir"
 )
 
 func (e *Engine) serverSupports(feature string) bool {
@@ -63,6 +70,12 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 	if e.serverSupports(featureVectorRunning) && e.Driver != nil {
 		alive := e.Driver.Alive()
 		h.VectorRunning = &alive
+	}
+	if e.serverSupports(featureAgentSHA256) && e.State.Agent != nil && e.State.Agent.SHA256 != "" {
+		h.AgentSHA256 = e.State.Agent.SHA256
+	}
+	if e.serverSupports(featureStateDir) && filepath.IsAbs(e.Dir) {
+		h.StateDir = e.Dir
 	}
 }
 

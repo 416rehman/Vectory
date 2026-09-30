@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AgentInstallSchema, type AgentInstall } from "./api";
 import {
+  effectiveTrust,
+  fingerprint,
   installerCommand,
   platformDefaults,
   quote,
@@ -8,12 +10,13 @@ import {
   setupArguments,
   setupCommand,
   fingerprintRows,
-  shortFingerprint,
+  trustChoices,
   windowsCommand,
   type SetupChoices,
 } from "./enrollmentCommands";
 import {
   eventsFor,
+  mergeAttempts,
   progress,
   refusal,
   supervision,
@@ -23,6 +26,14 @@ import {
 const pin = "1f3c" + "0".repeat(56) + "9ab0";
 const installerSha = "c0f4e1b7" + "1".repeat(50) + "9d19ab";
 const windowsSha = "e".repeat(64);
+// A synthetic certificate: only its PEM shape matters here.
+const caPem = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUU3ludGhldGljIGFnZW50IENBIGZvciB0ZXN0cy4wCgYI",
+  "U3ludGhldGljU3ludGhldGljU3ludGhldGlj==",
+  "-----END CERTIFICATE-----",
+  "",
+].join("\n");
 const install: AgentInstall = AgentInstallSchema.parse({
   agent_url: "https://vectory.example.test:8443",
   agent_url_configured: false,
@@ -33,6 +44,7 @@ const install: AgentInstall = AgentInstallSchema.parse({
     publicly_trusted: false,
     ca_sha256: pin,
     ca_fingerprint: null,
+    ca_pem: caPem,
     ca_name: "Example agent CA",
     ca_issuer: "Example agent CA",
     ca_not_after: null,
@@ -73,15 +85,32 @@ const choices = (overrides: Partial<SetupChoices> = {}): SetupChoices => ({
   ...overrides,
 });
 
+/** Every option that turns certificate verification off, in any shell. */
+function insecureOptions(command: string) {
+  return command
+    .split(/\s+/)
+    .filter(
+      (word) =>
+        /^-[A-Za-z]*k[A-Za-z]*$/.test(word) ||
+        /^--(insecure|proxy-insecure|no-check-certificate)$/.test(word) ||
+        /^-SkipCertificateCheck/i.test(word) ||
+        /ServerCertificateValidationCallback/i.test(word),
+    );
+}
+
 describe("install commands", () => {
-  it("download the installer, check it against the page's SHA-256 and pass only choices", () => {
+  it("pin the server's CA for the download, check the installer's SHA-256 and pass only choices", () => {
     expect(installerCommand(install, choices())).toBe(
       [
-        "curl -fsSLk https://vectory.example.test:8443/agent/v1/install.sh -o vectory-install.sh",
-        `echo '${installerSha}  vectory-install.sh' | sha256sum -c - &&`,
-        "  sudo sh vectory-install.sh \\",
-        "    --mode restricted \\",
-        "    --create-user",
+        `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
+        "curl -fsSL --cacert vectory-ca.pem \\",
+        "  -o vectory-install.sh \\",
+        "  https://vectory.example.test:8443/agent/v1/install.sh &&",
+        `echo '${installerSha}  vectory-install.sh' \\`,
+        "  | sha256sum -c - &&",
+        "sudo sh vectory-install.sh \\",
+        "  --mode restricted \\",
+        "  --create-user",
       ].join("\n"),
     );
     const mac = installerCommand(
@@ -89,8 +118,121 @@ describe("install commands", () => {
       choices({ os: "darwin", mode: "full" }),
     );
     expect(mac).toContain(
-      "| shasum -a 256 -c - &&\n  sudo sh vectory-install.sh \\\n    --mode full",
+      "  | shasum -a 256 -c - &&\nsudo sh vectory-install.sh \\\n  --mode full",
     );
+  });
+
+  it("gives each certificate choice its exact option, for the download and for setup", () => {
+    // A CA certificate file on the host: curl and setup both read it.
+    expect(
+      installerCommand(
+        install,
+        choices({ trust: "file", caFile: "/etc/vectory/server-ca.pem" }),
+      ),
+    ).toBe(
+      [
+        "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
+        "  -o vectory-install.sh \\",
+        "  https://vectory.example.test:8443/agent/v1/install.sh &&",
+        `echo '${installerSha}  vectory-install.sh' \\`,
+        "  | sha256sum -c - &&",
+        "sudo sh vectory-install.sh \\",
+        "  --mode restricted \\",
+        "  --ca-file /etc/vectory/server-ca.pem \\",
+        "  --create-user",
+      ].join("\n"),
+    );
+    expect(
+      setupCommand(
+        install,
+        choices({ trust: "file", caFile: "/etc/vectory/server-ca.pem" }),
+      ),
+    ).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
+    // The host's own trusted certificates: an explicit, empty --ca-file=.
+    const system = installerCommand(install, choices({ trust: "system" }))!;
+    expect(system.split("\n").slice(0, 3)).toEqual([
+      "curl -fsSL \\",
+      "  -o vectory-install.sh \\",
+      "  https://vectory.example.test:8443/agent/v1/install.sh &&",
+    ]);
+    expect(system).toContain("  --ca-file= \\");
+    expect(setupCommand(install, choices({ trust: "system" }))).toContain(
+      "  --ca-file= \\",
+    );
+    // Pinned: setup gets the fingerprint; the installer adds it by itself.
+    expect(setupCommand(install, choices())).toContain(`  --ca-sha256 ${pin}`);
+    expect(installerCommand(install, choices())).not.toMatch(
+      /--ca-sha256|--ca-file/,
+    );
+    // An unfinished choice produces no command rather than a weaker one.
+    expect(installerCommand(install, choices({ trust: "file" }))).toBeNull();
+    expect(setupCommand(install, choices({ trust: "file" }))).toBeNull();
+    // A pin needs the certificate: without it there is no installer command.
+    const noPem = {
+      ...install,
+      certificate: { ...install.certificate!, ca_pem: undefined },
+    };
+    expect(installerCommand(noPem, choices())).toBeNull();
+  });
+
+  it("puts the agent where Advanced says and starts it from there", () => {
+    const command = installerCommand(
+      install,
+      choices({ installDir: "/opt/vectory agent/bin" }),
+    )!;
+    expect(command).toContain(
+      "sudo sh vectory-install.sh \\\n  --mode restricted \\\n  --install-dir '/opt/vectory agent/bin' \\\n",
+    );
+    expect(
+      runCommand(
+        install,
+        choices({ installDir: "/opt/vectory agent/bin" }),
+        true,
+      ),
+    ).toBe(
+      "sudo '/opt/vectory agent/bin/vectory' run --state-dir /var/lib/vectory-agent",
+    );
+  });
+
+  it("never turns certificate verification off, for any platform, mode or server", () => {
+    const servers = [
+      install,
+      {
+        ...install,
+        certificate: { ...install.certificate!, publicly_trusted: true },
+      },
+      { ...install, installer: null },
+      { ...install, certificate: null },
+    ];
+    let checked = 0;
+    for (const server of servers)
+      for (const os of ["linux", "darwin", "windows"] as const)
+        for (const mode of ["restricted", "full"] as const)
+          for (const trust of [undefined, "pinned", "file", "system"] as const)
+            for (const service of ["auto", "none"] as const)
+              for (const installDir of ["", "/opt/vectory/bin"]) {
+                const picked = choices({
+                  os,
+                  mode,
+                  trust,
+                  service,
+                  installDir,
+                  caFile: os === "windows" ? "C:\\ca.pem" : "/etc/ca.pem",
+                });
+                for (const command of [
+                  installerCommand(server, picked),
+                  setupCommand(server, picked),
+                  windowsCommand(server, picked, server.releases[0]),
+                  runCommand(server, picked, true),
+                ]) {
+                  if (!command) continue;
+                  checked++;
+                  expect(insecureOptions(command), command).toEqual([]);
+                }
+              }
+    expect(checked).toBeGreaterThan(500);
+    expect(insecureOptions("curl -fsSLk https://x")).toEqual(["-fsSLk"]);
+    expect(insecureOptions("iwr -SkipCertificateCheck")).toHaveLength(1);
   });
 
   it("passes a Vector binary that isn't on PATH, one option per line", () => {
@@ -122,10 +264,15 @@ describe("install commands", () => {
       ...install,
       certificate: { ...install.certificate!, publicly_trusted: true },
     };
+    expect(trustChoices(publicInstall)).toEqual(["system", "file"]);
+    expect(trustChoices(install)).toEqual(["pinned", "file", "system"]);
+    // A pin chosen before is not offered for a public certificate.
+    expect(effectiveTrust(publicInstall, "pinned")).toBe("system");
     expect(installerCommand(publicInstall, choices())).toMatch(
-      /^curl -fsSL https/,
+      /^curl -fsSL \\\n {2}-o vectory-install\.sh \\\n {2}https:/,
     );
     expect(setupCommand(publicInstall, choices())).not.toContain("--ca-sha256");
+    expect(setupCommand(publicInstall, choices())).toContain("--ca-file=");
     expect(setupCommand(install, choices())).toBe(
       [
         "sudo vectory setup \\",
@@ -199,8 +346,8 @@ describe("install commands", () => {
     expect(AgentInstallSchema.safeParse(badDigest).success).toBe(false);
   });
 
-  it("shows fingerprints the way the agent prints them", () => {
-    expect(shortFingerprint(pin)).toBe("1F:3C:...:9A:B0");
+  it("shows fingerprints in full, the way the agent prints them", () => {
+    expect(fingerprint(pin)).toBe("1F:3C:" + "00:".repeat(28) + "9A:B0");
   });
 
   it("starts an agent without a service where this page's command put it", () => {
@@ -267,6 +414,18 @@ describe("enrollment activity", () => {
       eventsFor(events, "t1").map((e) => e.reason_code || e.outcome),
     ).toEqual(["TOKEN_UNKNOWN", "success"]);
     expect(refusal(events[1]).title).toBe("the token expired");
+  });
+
+  it("adds what the page saw live to the day's attempts, once each and newest first", () => {
+    const old = event({ id: "a1", created_at: "2026-09-29T09:00:00Z" });
+    const live = event({
+      id: "a2",
+      outcome: "success",
+      created_at: "2026-09-29T10:00:05Z",
+    });
+    expect(
+      mergeAttempts([old], [live, { ...old }]).map((item) => item.id),
+    ).toEqual(["a2", "a1"]);
   });
 
   it("follows the enrolled device to its first check-in", () => {

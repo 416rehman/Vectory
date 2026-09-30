@@ -28,6 +28,10 @@ const reasons: Record<string, { title: string; fix: string }> = {
     title: "the token only allows other device names",
     fix: "Use a name the token allows, or create a new command without a name restriction.",
   },
+  DEVICE_NAME_MISMATCH: {
+    title: "the command was made for another device name",
+    fix: "Run it with the --name it was made for, or create a new command for this name.",
+  },
   RECOVERY_NAME_MISMATCH: {
     title: "this recovery token is for another device name",
     fix: "Use the recovered device's exact name.",
@@ -60,6 +64,29 @@ export function refusal(event: { reason_code?: string | null }) {
       title: "the server refused it",
       fix: "Check Activity for details.",
     }
+  );
+}
+
+/**
+ * The day's attempts plus what the live watch saw since, newest first and
+ * each attempt once: the history list moves as a device enrolls on the page.
+ */
+export function mergeAttempts(
+  history: EnrollmentEvent[],
+  live: EnrollmentEvent[],
+): EnrollmentEvent[] {
+  const seen = new Set<string>();
+  const merged: EnrollmentEvent[] = [];
+  for (const event of [...live, ...history]) {
+    const key = event.id || `${event.created_at}|${event.device_name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged.sort(
+    (a, b) =>
+      (Date.parse(b.created_at || "") || 0) -
+      (Date.parse(a.created_at || "") || 0),
   );
 }
 

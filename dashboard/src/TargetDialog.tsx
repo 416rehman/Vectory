@@ -35,12 +35,12 @@ import { releasePlan } from "./deploymentStatus";
 import { deviceDisplayStatus, statusLabel, type StatusTone } from "./status";
 import { shortDigest } from "./enrollmentCommands";
 import {
-  allowancesFile,
   fullModeRequirements,
   hasHostApprovals,
   hostApprovals,
   type AgentCatalog,
 } from "./hostRequirements";
+import { hostApprovalCommands, namedDevices } from "./hostApprovalCommands";
 import {
   AssignmentLink,
   ConflictTable,
@@ -101,8 +101,9 @@ function blockerRowLabel(code: string): string {
 }
 /**
  * A restricted host refuses destinations, listeners and paths it hasn't
- * approved. Say which ones this version uses, and hand over the exact
- * allowances file and commands for the host.
+ * approved. Say which ones this version uses, and hand over the commands
+ * made for each host: its state directory and what keeps its agent running,
+ * with `vectory allow`, which adds to what the host already allows.
  */
 function HostApprovalNote({
   approvals,
@@ -122,21 +123,14 @@ function HostApprovalNote({
       ? `files under ${approvals.fileRoots.join(", ")}`
       : "",
   ].filter(Boolean);
-  const hostSteps = [
-    "sudo vectory service-stop",
-    "sudo tee /etc/vectory/allowances.json <<'EOF'",
-    allowancesFile(approvals),
-    "EOF",
-    "sudo vectory install --capability-policy /etc/vectory/allowances.json",
-    "sudo vectory service-start",
-  ].join("\n");
+  const blocks = hostApprovalCommands(approvals, devices);
+  const unreported = devices.filter((device) => !device.state_dir);
   return (
     <div className="control-note target-approval-note" role="status">
       <strong>
         {devices.length === 1
-          ? `${devices[0].name} runs`
-          : `${devices.length} selected devices run`}{" "}
-        in restricted mode and refuse this version until their host approves it
+          ? `${devices[0].name} runs in restricted mode and refuses this version until its host approves it`
+          : `${devices.length} selected devices run in restricted mode and refuse this version until their hosts approve it`}
       </strong>
       <p>
         It uses {parts.join("; ")}. Only the host operator can allow these; the
@@ -145,18 +139,49 @@ function HostApprovalNote({
       <details className="target-approval-steps">
         <summary>Commands for the host</summary>
         <p>
-          Run these on each restricted host. The file replaces the host&apos;s
-          current allowances, so keep anything it already allows.
+          <code>vectory allow</code> adds these to what the host already allows
+          and removes nothing. It runs while the agent is stopped; when the
+          agent starts again, it tries this version, even one it refused before.
+          {unreported.length > 0 &&
+            ` ${namedDevices(unreported.map((device) => device.name))} ${unreported.length === 1 ? "doesn't" : "don't"} report ${unreported.length === 1 ? "its" : "their"} state directory: if it isn't the default, add --state-dir.`}
         </p>
-        <pre tabIndex={0} aria-label="Host approval commands">
-          <code>{hostSteps}</code>
-        </pre>
-        <CopyButton
-          text={hostSteps}
-          label="Copy commands"
-          copiedMessage="Host commands copied."
-        />
+        {blocks.map((block) => (
+          <HostCommandBlock
+            key={block.commands}
+            label={
+              blocks.length > 1
+                ? `On ${namedDevices(block.devices)}`
+                : devices.length === 1
+                  ? `On ${devices[0].name}`
+                  : "On each host"
+            }
+            commands={block.commands}
+          />
+        ))}
       </details>
+    </div>
+  );
+}
+/** One host's commands, with Copy. */
+function HostCommandBlock({
+  label,
+  commands,
+}: {
+  label: string;
+  commands: string;
+}) {
+  return (
+    <div className="target-approval-block">
+      <span>{label}</span>
+      <pre tabIndex={0} aria-label={`Host approval commands, ${label}`}>
+        <code>{commands}</code>
+      </pre>
+      <CopyButton
+        text={commands}
+        label="Copy commands"
+        ariaLabel={`Copy commands ${label.toLowerCase()}`}
+        copiedMessage="Host commands copied."
+      />
     </div>
   );
 }
@@ -210,6 +235,11 @@ type Adoption = {
   assignments: AssignmentDescription[];
   previousPriority: number;
   previousMode: string;
+  /**
+   * Another pipeline that only this device follows, replaced because the
+   * dialog was opened from the device's page.
+   */
+  deviceOnly?: boolean;
 };
 type Outcome = {
   label: string;
@@ -234,6 +264,7 @@ export default function TargetDialog({
   initialStrategy,
   policyId,
   policyName,
+  fromDevicePage = false,
 }: {
   userId: string;
   open: boolean;
@@ -242,6 +273,11 @@ export default function TargetDialog({
   policy?: Policy;
   onDone: (message: string) => void;
   initialDeviceIds?: string[];
+  /**
+   * Opened from one device's page: a pipeline only that device follows is
+   * replaced by default instead of asking for a priority.
+   */
+  fromDevicePage?: boolean;
   preserveExistingSettings?: boolean;
   /** The pipeline's display name, when the caller knows it. */
   pipelineName?: string;
@@ -648,6 +684,45 @@ export default function TargetDialog({
           previousMode,
         };
       }
+      // From a device's page, another pipeline that only this device follows
+      // would otherwise stop the review at a priority choice: replace it by
+      // default when the server confirms nothing else follows it ("Keep …
+      // as well" undoes it). A shared assignment is never replaced this way.
+      const standing = conflictRows(
+        result,
+        policy ? "policy" : "configuration",
+      ).flatMap((row) => row.assignments.map((item) => item.id));
+      if (
+        fromDevicePage &&
+        !adopted &&
+        !chosen.declined &&
+        !chosen.replaces.length &&
+        result.devices.length === 1 &&
+        standing.length
+      ) {
+        const trial = { ...chosen, replaces: [...new Set(standing)] };
+        const trialRequest = builder.current(trial);
+        const trialResult = await post<DeploymentPreview>(
+          "/deployments/preview",
+          structuredClone(trialRequest),
+        );
+        const replaced = trialResult.replacements || [];
+        if (
+          replaced.length &&
+          replaced.every((entry) => entry.retires_assignment === true) &&
+          !conflictRows(trialResult, policy ? "policy" : "configuration").length
+        ) {
+          adopted = {
+            assignments: replaced.map((entry) => entry.assignment),
+            previousPriority: chosen.priority,
+            previousMode: chosen.mode,
+            deviceOnly: true,
+          };
+          chosen = trial;
+          request = trialRequest;
+          result = trialResult;
+        }
+      }
       if (!mounted.current || currentActor.current !== userId) return;
       const key = JSON.stringify(request);
       // The selection must not have changed while the review was running.
@@ -824,7 +899,28 @@ export default function TargetDialog({
   const configurationId = version?.configuration_id || null;
   const shortName = (assignment: AssignmentDescription) =>
     shortAssignmentName(assignment, configurationId);
+  const restrictedIds = new Set(restrictedTargets.map((device) => device.id));
   function outcomeFor(device: Device): Outcome | null {
+    const outcome = reviewOutcome(device);
+    // A restricted host refuses what it hasn't approved: the row says so
+    // instead of reading as if the device simply takes this version.
+    const refusal = !restrictedIds.has(device.id)
+      ? null
+      : capabilityBlocked
+        ? "refused: needs Full Vector mode"
+        : needsApproval
+          ? "refused until its host approves it"
+          : null;
+    if (!outcome?.takes || !refusal) return outcome;
+    return {
+      ...outcome,
+      tone: "warning",
+      detail: outcome.detail
+        ? `${outcome.detail}; ${refusal}`
+        : capitalize(refusal),
+    };
+  }
+  function reviewOutcome(device: Device): Outcome | null {
     // A device the server won't release to never reads as "New".
     const blocked = blockersByDevice.get(device.id);
     if (blocked?.length)
@@ -1483,7 +1579,39 @@ export default function TargetDialog({
                 ))}
               </ul>
             )}
-            {adoption && replaces.length > 0 && (
+            {adoption?.deviceOnly && replaces.length > 0 && (
+              <div className="target-adoption" role="status">
+                <p>
+                  Replaces{" "}
+                  {adoption.assignments.length === 1
+                    ? shortName(adoption.assignments[0])
+                    : "the pipelines this device follows"}
+                  : only this device follows{" "}
+                  {adoption.assignments.length === 1 ? "it" : "them"}, so
+                  nothing else changes.
+                </p>
+                <button
+                  type="button"
+                  className="target-link-button"
+                  disabled={busy}
+                  onClick={() =>
+                    void review({
+                      replaces: [],
+                      priority,
+                      mode,
+                      declined: true,
+                    })
+                  }
+                >
+                  Keep{" "}
+                  {adoption.assignments.length === 1
+                    ? shortName(adoption.assignments[0])
+                    : "them"}{" "}
+                  as well
+                </button>
+              </div>
+            )}
+            {adoption && !adoption.deviceOnly && replaces.length > 0 && (
               <div className="target-adoption" role="status">
                 <p>
                   {change.kind === "policy"
@@ -1543,7 +1671,10 @@ export default function TargetDialog({
                 <dt>Priority</dt>
                 <dd>
                   {priority}
-                  {adoption && replaces.length > 0 && !priorityTouched
+                  {adoption &&
+                  !adoption.deviceOnly &&
+                  replaces.length > 0 &&
+                  !priorityTouched
                     ? " · kept from the assignment it replaces"
                     : ""}
                 </dd>

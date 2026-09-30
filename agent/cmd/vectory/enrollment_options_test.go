@@ -60,7 +60,7 @@ func TestEnrollmentCLIRefusalsDoNotSaveSettingsOrAllocateIdentity(t *testing.T) 
 
 func TestEnrollmentCLIExplicitSystemTrustIsDifferentFromOmission(t *testing.T) {
 	dir, before, _ := enrollmentCLIState(t)
-	args := []string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:9", "--id", "synthetic", "--token", "synthetic"}
+	args := []string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:9", "--id", "synthetic", "--token", syntheticToken}
 	code, diagnostic := bindingCommand(t, args)
 	if code != 1 || !strings.Contains(diagnostic, "cannot read trusted CA file") {
 		t.Fatal("omitted CA did not retain the saved private trust path", code, diagnostic)
@@ -83,7 +83,7 @@ func TestEnrollmentCLIExplicitSystemTrustIsDifferentFromOmission(t *testing.T) {
 	if err != nil || pending == nil || pending.Delivery != "no" || pending.LastFailure != "CONNECTION_REFUSED" {
 		t.Fatal("unsent request was not recorded as correctable", pending, err)
 	}
-	code, diagnostic = bindingCommand(t, []string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:10", "--id", "corrected", "--token", "other", "--ca-file="})
+	code, diagnostic = bindingCommand(t, []string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:10", "--id", "corrected", "--token", strings.Repeat("cd", 32), "--ca-file="})
 	if code != 1 || !strings.Contains(diagnostic, "127.0.0.1:10") {
 		t.Fatal("unsent request prevented correcting the server and name", code, diagnostic)
 	}
@@ -98,7 +98,7 @@ func TestEnrollmentCLIAlreadyEnrolledCannotRewriteCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, extra := range [][]string{nil, {"--ca-file="}, {"--ca-file", "another-ca.pem"}} {
-		args := append([]string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:9", "--id", "synthetic", "--token", "synthetic"}, extra...)
+		args := append([]string{"enroll", "--state-dir", dir, "--server", "https://127.0.0.1:9", "--id", "synthetic", "--token", syntheticToken}, extra...)
 		code, diagnostic := bindingCommand(t, args)
 		if code != 1 || !strings.Contains(diagnostic, "already enrolled") {
 			t.Fatal("ordinary enrolled operation was not refused", code, diagnostic)

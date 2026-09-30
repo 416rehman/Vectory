@@ -58,43 +58,47 @@ Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`
 <!-- tabs:os -->
 #### Linux
 
-On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. It looks like this:
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. With a private CA (the usual case) it looks like this:
 
 ```sh
-curl -fsSLk https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh
-echo '<sha256 shown on Add device>  vectory-install.sh' | sha256sum -c - &&
-  sudo sh vectory-install.sh --mode restricted --create-user
+printf '%s\n' '-----BEGIN CERTIFICATE-----
+<your server's CA certificate, as Add device shows it>
+-----END CERTIFICATE-----' > vectory-ca.pem &&
+curl -fsSL --cacert vectory-ca.pem \
+  -o vectory-install.sh \
+  https://vectory.example.com:8443/agent/v1/install.sh &&
+echo '<sha256 shown on Add device>  vectory-install.sh' \
+  | sha256sum -c - &&
+sudo sh vectory-install.sh \
+  --mode restricted \
+  --create-user
 ```
 
-`-k` only skips the download's TLS check. The SHA-256 from your dashboard proves the installer is genuine, and the installer then checks the agent and pins your server's CA.
+Every step checks what it receives, and nothing turns certificate verification off. The command saves your server's CA certificate (public, like its fingerprint) as `vectory-ca.pem`, and curl verifies the server against it. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
 
 #### macOS
 
-On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It looks like this:
+On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result in Terminal. It is the Linux command with `shasum -a 256 -c -` in place of `sha256sum -c -`.
 
-```sh
-curl -fsSLk https://vectory.example.com:8443/agent/v1/install.sh -o vectory-install.sh
-echo '<sha256 shown on Add device>  vectory-install.sh' | shasum -a 256 -c - &&
-  sudo sh vectory-install.sh --mode restricted --create-user
-```
-
-`-k` only skips the download's TLS check. The SHA-256 from your dashboard proves the installer is genuine. The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
+The installer finds Vector through your `PATH` and Homebrew, and adopts the real binary behind Homebrew's link.
 
 #### Windows
 
-Use the [manual steps](#install-manually) in an elevated PowerShell.
+On **Add device**, choose **Windows**, download `vectory.exe` from the page, and run the command it shows in an elevated PowerShell in the same folder. The command checks the file's SHA-256 before it runs setup. It makes no web request of its own, so there is no certificate check to skip; the agent then verifies the server itself, the way you chose. For configuration management, use the [manual steps](#install-manually).
 <!-- /tabs -->
 
 The installer and `vectory setup` then:
 
 <!-- steps -->
-1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
+1. Detect the operating system and CPU, download the matching agent from your server, and check it against the SHA-256 embedded in the installer. It installs to `/usr/local/bin/vectory` (or the **Agent install directory** under **Advanced**, `--install-dir DIR`) with mode `0755`, whatever your umask, and the service runs it from there.
 2. Find Vector 0.58.x and adopt that exact binary. Its SHA-256 is recorded, and a changed binary is refused until you [approve it](agents.md#replace-the-vector-binary).
 3. Install in the mode you chose on **Add device**.
-4. Ask for the enrollment token (typing stays hidden) and enroll, trusting only the certificate pinned in the command. See [Trust the server certificate](#trust-the-server-certificate).
+4. Ask for the enrollment token (typing stays hidden) and enroll, checking the server the way you chose on **Add device** (the pinned CA unless you changed it). See [Trust the server certificate](#trust-the-server-certificate).
 5. Register the agent as a service, start it and wait for its first check-in. If the service already runs an older agent, it is restarted on the new one. A host without a service manager, such as most containers, WSL and Alpine with OpenRC, has nothing to register: setup checks in once, prints `[!!] Service` with the exact command that starts the agent, and exits with code 3, because the agent isn't running yet. See [Keep the agent running](#keep-the-agent-running).
 
-The token is never part of the URL or the installer script. The installer contains only public values: your server's address, its certificate fingerprint and the agents' checksums.
+The token is never part of the URL, the command or the installer script. The command and the installer contain only public values: your server's address, its CA certificate and fingerprint, and the checksums.
+
+If you type a device name on **Add device**, the command's token enrolls only that name: a copied command can't enroll a host under another one. The token list shows it as **Only** followed by the name. A token pasted short or mangled is refused on the host before anything is sent.
 
 ### Keep tokens out of shell history
 
@@ -169,29 +173,33 @@ The Windows service runs as the virtual account `NT SERVICE\Vectory`.
 
 - Add `--allow-full-vector-config` to `install` only when you have [chosen full mode](#choose-restricted-or-full-mode).
 - Add `--capability-policy PATH` to `install` for [restricted allowances](#configure-restricted-allowances).
-- Omit `--ca-file` when the operating system already trusts your server's certificate.
+- Pass `--ca-sha256` with the fingerprint from **Add device** instead of `--ca-file` to pin the CA, or `--ca-file=` when the operating system already trusts your server's certificate. See [Trust the server certificate](#trust-the-server-certificate).
 - Paths must be absolute and must not pass through a symlink. On macOS, avoid `/var` and `/tmp`, which are symlinks.
 
 The agent makes the managed configuration's folder private. Don't point it at a folder that holds unrelated configuration or secrets.
 
 ## Trust the server certificate
 
-The agent checks the server's certificate before it sends the enrollment token, and on every connection after that. There is no option to skip the check.
+The token proves the host may enroll; the certificate proves it is talking to your server. So the agent checks the server's certificate before it sends the enrollment token, and on every connection after that. No option in the commands, the installer or the agent turns the check off.
 
-| Your server's certificate | What to do |
-| --- | --- |
-| Issued by a public CA, or a CA the host already trusts | Nothing. The host's trust store is used. |
-| Issued by a private CA (typical for self-hosting) | Use the command from **Add device**. It pins the CA by its SHA-256 fingerprint (`--ca-sha256`), so there is no file to copy. |
-| Private CA, manual install | Copy the CA's public certificate (PEM) to the host and pass `--ca-file PATH`. |
+Choose how under **Advanced → How the host checks this server** on **Add device**. The commands carry exactly the matching option:
+
+| Choice | Use it when | The commands get |
+| --- | --- | --- |
+| **Pin this server's CA** (the default for a private CA) | Typical self-hosting: the agent listener's certificate comes from your own CA. | `--ca-sha256` with the CA's fingerprint for setup. The install command writes the CA certificate to `vectory-ca.pem`, and curl checks the download against it. Nothing to copy first. |
+| **A CA certificate file on the host** | Your team already distributes the CA. Put its certificate (PEM) on the host first. | `--ca-file PATH` for setup, and `curl --cacert PATH` for the download. |
+| **The host's trusted certificates** (the default for a publicly trusted certificate) | A public certificate, or a private CA the host's trust store already contains. | `--ca-file=` (empty: the host's store) for setup; curl uses the same store. |
+
+On a manual install, pass the same options to `vectory setup` or `vectory enroll`: `--ca-sha256 HEX`, `--ca-file PATH`, or `--ca-file=`. Leaving them out keeps the trust an existing installation already saved.
 
 A pinned fingerprint is checked before anything is sent. The agent accepts the server only if its chain contains a certificate with exactly that fingerprint, then verifies the host name and validity with that certificate as the only trusted root. It saves the certificate, so later connections are ordinary verified TLS. It never trusts a certificate on first use and never falls back to an unverified connection.
 
-Add device shows the start and end of the fingerprint; hover over it to see it in full.
+Add device shows the whole fingerprint, in rows of eight pairs, with **Copy**. If setup finds a different certificate, it prints both fingerprints in full and marks the first byte that differs, so you can compare them with the page. Without a pin, if the host doesn't trust the server's CA, setup prints the fingerprint of the certificate it was sent in the same rows of eight pairs, to compare; use the command from **Add device** rather than pinning what the host was sent.
 
 For `--ca-file`:
 
-- Use the CA that issued the **agent listener's** certificate. It can differ from the dashboard's.
-- Copy only the public certificate, never a private key. Compare fingerprints before you use it: `openssl x509 -in ca.pem -noout -fingerprint -sha256`.
+- Use the CA that issued the **agent listener's** certificate. It can differ from the dashboard's. Ask whoever runs the server for it; with the development PKI (`scripts/preview.sh`), it is `.local/pki/ca.pem` on the server.
+- Copy only the public certificate, never a private key, over a channel you trust. Compare its fingerprint with **Add device** before you use it: `openssl x509 -in ca.pem -noout -fingerprint -sha256`.
 - Store it at a stable, absolute path the agent's service account can read. The agent reads it again on every connection. On Windows, use a local drive, not a network share.
 - The server's `device-ca.pem` signs device identities. It is not the certificate that proves the server's identity.
 
@@ -216,7 +224,7 @@ A new restricted installation can't read files, reach destinations or open liste
 - Allowances don't create folders, grant operating-system permissions or turn on full mode.
 - Never allow the agent's own state directory as a file root.
 
-**Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To change them later, see [Change local settings](agents.md#change-local-settings).
+**Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To add one later and keep the rest, run `sudo vectory allow` with the agent stopped, for example `sudo vectory allow --network logs.example.net:443`. See [Update restricted allowances](agents.md#update-restricted-allowances).
 
 > [!NOTE]
 > Allowances limit what a pipeline can ask Vector to do. They are not an operating-system sandbox, so keep using host permissions and network controls where you need stronger isolation.

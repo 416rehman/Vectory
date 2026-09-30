@@ -41,6 +41,7 @@ import DocLink from "./DocLink";
 import {
   ModeCards,
   SecurityReceipt,
+  TrustChoices,
   isAbsoluteLocalFilePath,
 } from "./EnrollmentConnection";
 import EnrollmentTokenFlow, {
@@ -51,6 +52,7 @@ import {
   accountPatterns,
   detectOS,
   deviceNamePattern,
+  effectiveTrust,
   installerCommand,
   platformDefaults,
   releaseFor,
@@ -61,9 +63,11 @@ import {
   type Mode,
   type ServiceChoice,
   type SetupChoices,
+  type TrustChoice,
 } from "./enrollmentCommands";
 import {
   describeAgent,
+  mergeAttempts,
   progress,
   refusal,
   supervision,
@@ -95,9 +99,15 @@ function tokenStatus(token: Token) {
 function tokenScope(token: Token) {
   return token.recovery_name
     ? `Recovery for ${token.recovery_name}`
-    : token.name_prefix
-      ? `Names starting with ${token.name_prefix}`
-      : "Any unique device name";
+    : token.device_name
+      ? `Only ${token.device_name}`
+      : token.name_prefix
+        ? `Names starting with ${token.name_prefix}`
+        : "Any unique device name";
+}
+/** The installer's --install-dir: a directory, so a trailing slash is fine. */
+function directoryPath(value: string) {
+  return value.trim().replace(/(.)\/+$/, "$1");
 }
 function clock(value?: string | null) {
   if (!value) return "";
@@ -363,6 +373,10 @@ export function Enrollment({
   const [managedConfig, setManagedConfig] = useState("");
   const [capabilityPolicy, setCapabilityPolicy] = useState("");
   const [vectorBinary, setVectorBinary] = useState("");
+  // Empty: the server's default way for hosts to check it.
+  const [trust, setTrust] = useState<TrustChoice | "">("");
+  const [caFile, setCaFile] = useState("");
+  const [installDir, setInstallDir] = useState("");
   const [revokingUnused, setRevokingUnused] = useState(false);
   // Refused and accepted enrollments of the last day, kept across reloads.
   const [historySince] = useState(() =>
@@ -428,7 +442,11 @@ export function Enrollment({
     managedConfig,
     capabilityPolicy,
     vectorBinary,
+    trust: trust || undefined,
+    caFile,
+    installDir: os === "windows" ? "" : directoryPath(installDir),
   };
+  const trustChoice = install ? effectiveTrust(install, choices.trust) : null;
   const trimmedName = name.trim();
   const nameValid = !trimmedName || deviceNamePattern.test(trimmedName);
   const existing = trimmedName
@@ -450,6 +468,21 @@ export function Enrollment({
         ? "Use a full path on a local drive."
         : "Use a full path on the host."
       : "";
+  // A CA file is required once that choice is made; a typed path is only a
+  // path until setup reads it on the host.
+  const caFileProblem =
+    trustChoice === "file"
+      ? caFile.trim()
+        ? pathProblem(caFile)
+        : "Enter where the CA certificate is on the host."
+      : "";
+  const agentDirectory = directoryPath(installDir);
+  const installDirProblem =
+    os === "windows" || !agentDirectory
+      ? ""
+      : agentDirectory === "/"
+        ? "Choose a directory of its own for the agent, not /."
+        : pathProblem(agentDirectory);
   const prefixValid = /^[a-z0-9-]{0,80}$/.test(prefix);
   const prefixMatches =
     !prefix || !trimmedName || trimmedName.toLowerCase().startsWith(prefix);
@@ -469,6 +502,8 @@ export function Enrollment({
     !pathProblem(managedConfig, true) &&
     !pathProblem(capabilityPolicy, true) &&
     !pathProblem(vectorBinary) &&
+    !caFileProblem &&
+    !installDirProblem &&
     prefixValid &&
     prefixMatches &&
     usesValid &&
@@ -545,6 +580,9 @@ export function Enrollment({
         expires_hours: hours,
         max_uses: maxUses ? Number(maxUses) : null,
         name_prefix: prefix || null,
+        // The token enrolls only the typed name, so a copied command can't
+        // enroll a host under another one (servers before this ignore it).
+        ...(trimmedName ? { device_name: trimmedName.toLowerCase() } : {}),
       },
       { inline: true },
     );
@@ -635,13 +673,19 @@ export function Enrollment({
     ? install.releases.filter((release) => release.os === os)
     : [];
   const osLabel = platforms.find((item) => item.value === os)!.label;
+  // A pinned download needs the CA certificate itself (servers before it
+  // offered only the fingerprint): never fall back to an unchecked download.
+  const noVerifiedDownload =
+    trustChoice === "pinned" && !install?.certificate?.ca_pem;
   // Without a build to download, never issue an installer that would fail on
   // the host: issue the setup command for an agent copied there instead.
   const noDownload =
     !!install &&
     (!install.downloads_enabled ||
       platformBuilds.length === 0 ||
-      (os === "windows" ? !winRelease : !installCommand));
+      (os === "windows"
+        ? !winRelease
+        : !install.installer || noVerifiedDownload));
   // How to start an agent nothing keeps running: where this page's command
   // put it (the installer's directory, or on PATH next to a copied agent).
   const agentRun = install
@@ -675,7 +719,12 @@ export function Enrollment({
       token.id !== command?.tokenId,
   );
   const parsedHistory = EnrollmentActivitySchema.safeParse(history.data);
-  const recentAttempts = parsedHistory.success ? parsedHistory.data.events : [];
+  // The day's history polls rarely; the live watch adds what happens on this
+  // page, so the list and its count move as a device enrolls.
+  const recentAttempts = mergeAttempts(
+    parsedHistory.success ? parsedHistory.data.events : [],
+    watch.events,
+  );
   const commandExpired =
     !!commandToken &&
     (commandToken.revoked || Date.parse(commandToken.expires_at) < Date.now());
@@ -762,8 +811,8 @@ export function Enrollment({
               Advanced
               <span className="control-muted">
                 {" "}
-                · device name, Vector binary, token limits, service account,
-                paths
+                · device name, server certificate, Vector binary, token limits,
+                service account, paths
               </span>
             </summary>
             <fieldset disabled={busy} className="enroll-advanced-fields">
@@ -802,6 +851,17 @@ export function Enrollment({
                     Open existing device
                   </Button>
                 </div>
+              )}
+              {install?.agent_url && (
+                <TrustChoices
+                  install={install}
+                  os={os}
+                  value={trust}
+                  onChange={setTrust}
+                  caFile={caFile}
+                  onCaFile={setCaFile}
+                  caFileProblem={caFile.trim() ? caFileProblem : ""}
+                />
               )}
               {os !== "windows" ? (
                 <div className="enroll-service">
@@ -913,30 +973,52 @@ export function Enrollment({
                     }
                     placeholder={
                       os === "windows"
-                        ? "C:\\ProgramData\\Vectory\\capabilities.json"
-                        : "/etc/vectory/capabilities.json"
+                        ? "C:\\ProgramData\\Vectory\\allowances.json"
+                        : "/etc/vectory/allowances.json"
                     }
                     autoComplete="off"
                     spellCheck={false}
                   />
                 </Field>
               )}
-              <Field
-                label="Vector binary (optional)"
-                hint={
-                  pathProblem(vectorBinary) ||
-                  "Set this if Vector isn't on PATH, for example a downloaded archive."
-                }
-              >
-                <input
-                  value={vectorBinary}
-                  aria-invalid={!!pathProblem(vectorBinary)}
-                  onChange={(event) => setVectorBinary(event.target.value)}
-                  placeholder="Found automatically on PATH"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </Field>
+              <div className={os === "windows" ? undefined : "control-two-col"}>
+                <Field
+                  label="Vector binary (optional)"
+                  hint={
+                    pathProblem(vectorBinary) ||
+                    "Set this if Vector isn't on PATH, for example a downloaded archive."
+                  }
+                >
+                  <input
+                    value={vectorBinary}
+                    aria-invalid={!!pathProblem(vectorBinary)}
+                    onChange={(event) => setVectorBinary(event.target.value)}
+                    placeholder="Found automatically on PATH"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                {os !== "windows" && (
+                  <Field
+                    label="Agent install directory"
+                    hint={
+                      installDirProblem ||
+                      "Where the installer puts the vectory agent. A service runs it from there."
+                    }
+                  >
+                    <input
+                      value={installDir}
+                      aria-invalid={!!installDirProblem}
+                      onChange={(event) => setInstallDir(event.target.value)}
+                      placeholder={
+                        install?.default_install_dir || "/usr/local/bin"
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </Field>
+                )}
+              </div>
               <div className="control-three-col">
                 <Field
                   label="Token expires in (hours)"
@@ -1015,11 +1097,14 @@ export function Enrollment({
                     <strong>
                       {!install.downloads_enabled
                         ? "Agent downloads are off on this server."
-                        : `This server has no ${osLabel} agent build yet.`}
+                        : noVerifiedDownload && platformBuilds.length > 0
+                          ? "This server doesn't offer its CA certificate, so the installer download can't be checked against the pin."
+                          : `This server has no ${osLabel} agent build yet.`}
                     </strong>{" "}
                     Copy the vectory agent to the host yourself; you&apos;ll get
                     the setup command to run next to it.{" "}
                     {install.downloads_enabled &&
+                      !noVerifiedDownload &&
                       (can(user, "admin")
                         ? "To offer one here, add it to the release mirror."
                         : "An administrator can add one to the release mirror.")}{" "}
@@ -1056,7 +1141,9 @@ export function Enrollment({
                           ? "Checking existing device names…"
                           : existing
                             ? "Choose another device name."
-                            : "Check the highlighted settings under Advanced."}
+                            : trustChoice === "file" && !caFile.trim()
+                              ? "Enter where the CA certificate is on the host, under Advanced."
+                              : "Check the highlighted settings under Advanced."}
                   </span>
                 )}
                 {ready && blocked && !busy && operate && (
@@ -1237,6 +1324,8 @@ export function Enrollment({
                 agentSha256={winRelease?.sha256 || null}
                 expiresAt={command.expiresAt}
                 maxUses={command.maxUses}
+                trust={trustChoice || "system"}
+                caFile={caFile.trim()}
               />
             </>
           )}
@@ -1246,7 +1335,7 @@ export function Enrollment({
               <p className="control-muted">
                 For hosts without access to this server&apos;s downloads, copy a
                 verified build to the host, then run setup with the same server
-                address and CA pin.
+                address and the same certificate check.
               </p>
               <CommandBlock command={manualCommand} label="Setup command" />
               {platformBuilds.length > 0 ? (
@@ -1535,7 +1624,11 @@ export function Enrollment({
             events={recentAttempts}
             loading={history.loading}
             error={history.error}
-            currentTokenId={command?.tokenId || null}
+            // The live timeline shows a waiting command's attempts; once its
+            // device checked in, they belong to the history again.
+            currentTokenId={
+              command && !state?.checkedIn ? command.tokenId : null
+            }
           />
         )}
 

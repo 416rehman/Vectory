@@ -276,6 +276,12 @@ async fn enroll_inner(
     {
         return Err(refused("NAME_PREFIX_MISMATCH", token_ref));
     }
+    if record["device_name"]
+        .as_str()
+        .is_some_and(|expected| name != expected)
+    {
+        return Err(refused("DEVICE_NAME_MISMATCH", token_ref));
+    }
     if record["recovery_name"]
         .as_str()
         .is_some_and(|expected| name != expected)
@@ -416,6 +422,8 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
     "secret_names",
     "service_manager",
     "vector_running",
+    "agent_sha256",
+    "state_dir",
 ];
 
 /// The manifest's `features`: the heartbeat fields above, plus `wake` while
@@ -426,6 +434,19 @@ fn features(s: &State) -> Vec<&'static str> {
         features.push(crate::wake::FEATURE);
     }
     features
+}
+
+/// A reported agent state directory: an absolute local path (POSIX or a
+/// Windows drive path), bounded and printable. It is not a secret; the
+/// dashboard writes host commands for it.
+fn state_dir_path(dir: &str) -> bool {
+    let bytes = dir.as_bytes();
+    let absolute = dir.starts_with('/')
+        || bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/');
+    absolute && dir.len() <= 4096 && !dir.chars().any(char::is_control)
 }
 
 /// What keeps an agent running, as the agent reports it.
@@ -640,6 +661,30 @@ pub async fn heartbeat(
         None | Some(Value::Null) => None,
         Some(Value::Bool(running)) => Some(*running),
         Some(_) => return Err(ApiError::invalid("Invalid vector_running")),
+    };
+    // The running agent build, for "already runs this build".
+    let agent_sha256 = match v.get("agent_sha256") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|sha| {
+                    sha.len() == 64
+                        && sha
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+                .ok_or_else(|| ApiError::invalid("Invalid agent_sha256"))?,
+        ),
+    };
+    let state_dir = match v.get("state_dir") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|dir| state_dir_path(dir))
+                .ok_or_else(|| ApiError::invalid("Invalid state_dir"))?,
+        ),
     };
     let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
@@ -887,6 +932,18 @@ pub async fn heartbeat(
         }
         None => {
             fields.remove("vector_running");
+        }
+    }
+    // Which build runs and where its state lives: current, or unknown when
+    // the agent doesn't say (an older build), never stale.
+    for (key, value) in [("agent_sha256", agent_sha256), ("state_dir", state_dir)] {
+        match value {
+            Some(text) => {
+                fields.insert(key.into(), json!(text));
+            }
+            None => {
+                fields.remove(key);
+            }
         }
     }
     match logs {

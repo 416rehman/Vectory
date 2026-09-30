@@ -86,8 +86,11 @@ type SetupResult struct {
 type SetupError struct{ Step SetupStep }
 
 func (e *SetupError) Error() string {
-	if e.Step.Fix == "" {
+	switch {
+	case e.Step.Fix == "":
 		return e.Step.Detail
+	case strings.Contains(e.Step.Detail, "\n"):
+		return e.Step.Detail + "\n" + e.Step.Fix
 	}
 	return e.Step.Detail + " " + e.Step.Fix
 }
@@ -149,10 +152,52 @@ type serviceChoice struct {
 	reason   string
 }
 
-// serviceHost is what chooseService learns about this host; tests replace it.
+// serviceHost is what setup learns about this host; tests replace it.
 type serviceHost struct {
 	systemd func() bool   // systemd is running and systemctl is installed
 	why     func() string // why systemd can't keep the agent running here
+	// detectVector lists running Vector processes (nil: this host's), and
+	// settle is how long a process must keep running to count (0: 6 s).
+	detectVector func(context.Context) ([]RunningVector, bool)
+	settle       time.Duration
+}
+
+// transientVector is how long setup waits before it takes a running Vector
+// for a workload: the Vectory validator's sample tests run Vector on the
+// server's host for at most 5 seconds, and a shared host must not fail on one.
+const transientVector = 6 * time.Second
+
+// runningVector lists the Vector processes that keep running: a process
+// seen twice, transientVector apart. It reports the wait as an info step.
+func (r *setupRun) runningVector(ctx context.Context) ([]RunningVector, bool) {
+	detect, settle := r.host.detectVector, r.host.settle
+	if detect == nil {
+		detect = DetectRunningVector
+	}
+	if settle <= 0 {
+		settle = transientVector
+	}
+	first, checked := detect(ctx)
+	if len(first) == 0 || r.options.KeepExistingVector {
+		return first, checked
+	}
+	r.add("existing", "info", "Existing", fmt.Sprintf("Vector is running here (%s); checking again in %d s in case it's a short test run.", describeRunning(first), int(settle.Round(time.Second)/time.Second)), "")
+	select {
+	case <-ctx.Done():
+		return first, checked
+	case <-time.After(settle):
+	}
+	second, checked := detect(ctx)
+	var lasting []RunningVector
+	for _, now := range second {
+		for _, before := range first {
+			if now.PID == before.PID {
+				lasting = append(lasting, now)
+				break
+			}
+		}
+	}
+	return lasting, checked
 }
 
 var nativeServiceHost = serviceHost{systemd: SystemdAvailable, why: func() string { return noSystemdReason("/") }}
@@ -477,7 +522,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		if digest, err := FileDigest(settings.VectorBinary); err != nil || digest != settings.VectorBinarySHA256 {
 			r.add("vector", "warn", "Vector", "The adopted binary at "+settings.VectorBinary+" changed or is missing.", "If you upgraded Vector on purpose, stop the agent and approve it: vectory re-adopt --expected-sha256 SHA256.")
 		} else {
-			r.add("vector", "ok", "Vector", settings.adoptedVectorVersion()+" at "+settings.VectorBinary+" · adopted", "")
+			r.add("vector", "ok", "Vector", fmt.Sprintf("%s at %s · binary pinned (SHA-256 %s…)", settings.adoptedVectorVersion(), settings.VectorBinary, digest[:12]), "")
 		}
 		vector.Path = settings.VectorBinary
 	case options.VectorBinary != "":
@@ -518,7 +563,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		managed = defaults.ManagedConfig
 	}
 	if !installed {
-		running, checked := DetectRunningVector(ctx)
+		running, checked := r.runningVector(ctx)
 		switch {
 		case !checked:
 			r.add("existing", "info", "Existing", "Couldn't check for another running Vector on this platform.", "Stop any other Vector before you deploy a pipeline to this host.")
@@ -691,6 +736,8 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 				}
 			}
 			r.add("service", "plan", "Service", plan, "")
+		} else if enrolled && agentLockHeld(dir) {
+			r.add("service", "plan", "Service", "none · the agent is already running; nothing to start.", "")
 		} else {
 			r.withoutService(choice, runCommand, adopted, true)
 		}
@@ -735,7 +782,11 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		if err := InstallWithOptions(ctx, dir, install); err != nil {
 			return r.failErr("install", "Install", err, "Fix the cause and run the command again; setup resumes where it stopped.")
 		}
-		r.add("install", "ok", "Install", "state "+dir+" · Vector adopted", "")
+		pinned := "Vector binary pinned"
+		if saved, err := LoadSettings(dir); err == nil && len(saved.VectorBinarySHA256) >= 12 {
+			pinned = fmt.Sprintf("Vector %s binary pinned (SHA-256 %s…)", saved.adoptedVectorVersion(), saved.VectorBinarySHA256[:12])
+		}
+		r.add("install", "ok", "Install", "state "+dir+" · "+pinned, "")
 	} else {
 		if policy != nil {
 			if err := InstallWithOptions(ctx, dir, InstallOptions{CapabilityPolicy: policy}); err != nil {
@@ -780,6 +831,26 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 	}
 
 	if service == "none" {
+		if enrolled && agentLockHeld(dir) {
+			// Setup ran again beside a running agent: nothing to start, unless
+			// it runs an older build than the one just installed (an upgrade),
+			// which only a restart by whoever started it replaces.
+			process, stop := "vectory run", "Stop it (Ctrl-C where it runs)"
+			if owner := readLockOwner(dir); owner != nil {
+				process = fmt.Sprintf("vectory %s, pid %d", owner.Command, owner.PID)
+				stop = fmt.Sprintf("Stop it (Ctrl-C where it runs, or sudo kill %d)", owner.PID)
+			}
+			if running, installed := runningBuild(dir), fileDigestOrEmpty(agentPath); running != nil && installed != "" && running.SHA256 != installed {
+				r.add("service", "warn", "Service", fmt.Sprintf("none · the agent still runs %s (%s); %s is installed.", running.Version, process, Version), "")
+				r.result.Next = stop + ", then start it again to run " + Version + ": " + runCommand
+				r.result.OK = true
+				return r.result, nil
+			}
+			r.add("service", "ok", "Service", "none · the agent is already running ("+process+")", "")
+			r.result.Next = "Nothing to start. Deploy a pipeline to " + settings.Name + " from the dashboard."
+			r.result.OK = true
+			return r.result, nil
+		}
 		if adopted {
 			// Setup never starts an adopted workload itself: the agent does,
 			// once it runs.

@@ -115,6 +115,12 @@ describe("current configuration attempt presentation", () => {
     expect(
       deviceApplicationExplanation(device({ local_paused: true }), version),
     ).toContain("when sync resumes");
+    // A revoked device no longer checks in: nothing it runs is confirmed.
+    expect(
+      deviceApplicationExplanation(device({ status: "revoked" }), version),
+    ).toBe(
+      "This device's access is revoked, so it no longer checks in: what it runs now is unknown.",
+    );
   });
   it("a claimed successful attempt alone never presents verified activation", () => {
     const snapshot = device({

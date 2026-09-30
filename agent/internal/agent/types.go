@@ -145,6 +145,11 @@ type Heartbeat struct {
 	// running. Both go only to servers that list them in features.
 	ServiceManager string `json:"service_manager,omitempty"`
 	VectorRunning  *bool  `json:"vector_running,omitempty"`
+	// AgentSHA256 is the SHA-256 of the running agent executable and
+	// StateDir the agent's state directory, a local path and not a secret.
+	// Both go only to servers that list them in features.
+	AgentSHA256 string `json:"agent_sha256,omitempty"`
+	StateDir    string `json:"state_dir,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated
@@ -288,6 +293,9 @@ type State struct {
 type CheckInFailure struct {
 	Since   time.Time `json:"since"`
 	Message string    `json:"message"`
+	// Code is the failure's classification, such as CONNECTION_REFUSED or
+	// CREDENTIAL_REJECTED (the server answers but refuses this agent).
+	Code string `json:"code,omitempty"`
 }
 
 // AgentBuild identifies an agent executable.

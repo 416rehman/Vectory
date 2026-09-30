@@ -17,6 +17,7 @@ import {
   MfaRecoveryCodesSchema,
   MfaSetupSchema,
   MfaStatusSchema,
+  groupRecoveryCode,
   mfaOutcome,
   recoveryCodesText,
   type MfaFlow,
@@ -895,13 +896,14 @@ function RecoveryCodesDialog({
         <ol className="recovery-codes" aria-label="Recovery codes">
           {codes.map((code) => (
             <li key={code}>
-              <code translate="no">{code}</code>
+              <code translate="no">{groupRecoveryCode(code)}</code>
             </li>
           ))}
         </ol>
         <p className="recovery-context">
-          For <strong>{email}</strong> on {workspace}. Keep them somewhere safe,
-          like your password manager. They won't be shown again.
+          For <strong className="auth-email">{email}</strong> on {workspace}.
+          Keep them somewhere safe, like your password manager. They won't be
+          shown again.
         </p>
         <div className="recovery-actions">
           <CopyButton text={text} label="Copy" copiedLabel="Copied" />

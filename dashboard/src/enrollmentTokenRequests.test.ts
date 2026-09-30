@@ -491,6 +491,44 @@ describe("correlated enrollment token responses", () => {
     ).toBe(true);
   });
 
+  it("binds a command's token to its typed device name, and accepts a server that ignores the binding", () => {
+    const named = { ...input, name_prefix: "lab-", device_name: "lab-7" };
+    const op = beginTokenRequest(actor, named);
+    const bound = {
+      ...receipt(op.id),
+      record: { ...record(), device_name: "lab-7" },
+    };
+    expect(checkTokenCreation(op, bound)).toEqual(bound);
+    // An older server omits the field: its token takes any name, and the
+    // token list says so, but the receipt is still this request's.
+    expect(checkTokenCreation(op, receipt(op.id)).record?.device_name).toBe(
+      undefined,
+    );
+    for (const device_name of ["lab-8", "LAB-7"]) {
+      const other = {
+        ...receipt(op.id),
+        record: { ...record(), device_name },
+      };
+      expect(() => checkTokenCreation(op, other)).toThrow(
+        device_name === "lab-8" ? /does not match/ : /./,
+      );
+    }
+    // A request without a name never accepts a bound token.
+    finishTokenRequest(op);
+    const open = beginTokenRequest(actor, input);
+    expect(() =>
+      checkTokenCreation(open, { ...bound, request_id: open.id }),
+    ).toThrow(/does not match/);
+    finishTokenRequest(open);
+    // A name the token could never enroll is refused before any request.
+    for (const bad of [
+      { ...named, device_name: "db-1" },
+      { ...named, device_name: "Lab-7" },
+      { ...named, device_name: "-lab" },
+    ])
+      expect(() => beginTokenRequest(actor, bad)).toThrow(/Review/);
+  });
+
   it("checks status-only identity without reconstructing an unreadable payload or enabling creation", () => {
     const result = {
       ...found(actor),

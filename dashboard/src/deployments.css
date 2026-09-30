@@ -477,64 +477,6 @@ a.rollout-fix-link {
   font-size: 12px;
 }
 
-/* Start a deployment */
-.deployment-picker {
-  display: grid;
-  gap: 14px;
-}
-.deployment-picker-list {
-  display: grid;
-  max-height: 360px;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-.deployment-picker-list > .loading,
-.deployment-picker-list > p {
-  margin: 0;
-  padding: 16px;
-}
-.deployment-picker-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  cursor: pointer;
-}
-.deployment-picker-option + .deployment-picker-option {
-  border-top: 1px solid var(--line);
-}
-.deployment-picker-option:hover {
-  background: var(--surface-hover);
-}
-.deployment-picker-option[data-selected] {
-  background: var(--accent-soft);
-}
-.deployment-picker-option > svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--muted);
-}
-.deployment-picker-option input {
-  margin-top: 3px;
-}
-.deployment-picker-option span {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-.deployment-picker-option small {
-  color: var(--muted);
-  font-size: 12px;
-}
-.deployment-picker-hint {
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-}
-.deployment-picker-version select {
-  width: 100%;
-}
-
 @media (max-width: 720px) {
   .deployment-device-results .pagination {
     gap: 10px;

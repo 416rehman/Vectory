@@ -1,6 +1,6 @@
-# ADR 0010: Add device pins the server's CA automatically instead of offering a trust choice
+# ADR 0010: Add device pins the server's CA by default and keeps the trust choice
 
-Proposed 2026-09-29. This records what Add device does at commit `a469266` (since `c925c68` and `0e63604`, both 2026-09-29). It departs from the specification, so it needs an owner decision: accept it and amend the specification, or restore the explicit choice described below.
+Accepted 2026-09-29, with the explicit choice restored (below). Proposed earlier the same day to record what Add device did at commit `a469266` (since `c925c68` and `0e63604`, both 2026-09-29), which departed from the specification.
 
 ## Context
 
@@ -10,17 +10,19 @@ Until `c925c68`, Add device offered that choice. Operators had to find the serve
 
 ## Decision
 
-- When the agent listener's certificate is not publicly trusted, Add device generates `--ca-sha256` with the SHA-256 of the CA that the listener presents (`trustFor` in `dashboard/src/enrollmentCommands.ts`). When it is publicly trusted, the command uses system trust and passes no trust option. It never generates `--ca-file`.
+- When the agent listener's certificate is not publicly trusted, Add device generates `--ca-sha256` with the SHA-256 of the CA that the listener presents, by default. When it is publicly trusted, the default is the host's trusted certificates.
 - The fingerprint reaches the operator on the signed-in dashboard page, over the dashboard's own HTTPS connection: that is the separately trusted channel. The page shows the full fingerprint for comparison.
 - The agent (`agent/internal/agent/pin.go`) accepts the server only if its presented chain verifies against the pinned CA as the only root, including the host name and validity period, before it sends a token. It then keeps that CA in its state directory as the trust for later connections.
-- The agent still accepts `--ca-file PATH`, and `--ca-file=` for system trust, for operators who type the command themselves.
+- **The explicit choice is restored**, under **Advanced → How the host checks this server**, in plain words: pin this server's CA (`--ca-sha256`, the default for a private CA), a CA certificate file on the host (`--ca-file PATH`) and the host's trusted certificates (`--ca-file=`, the default for a publicly trusted certificate). A publicly trusted server offers only the last two. Each choice produces exactly its flag, for setup and for the installer, and `enrollment-connection-browser.mjs` asserts the flag each choice produces.
+- **The installer download is verified too.** For the pinned choice the command writes the CA certificate the page shows (public, like its fingerprint) to `vectory-ca.pem` and runs `curl --cacert vectory-ca.pem`; for a CA file, `curl --cacert PATH`; for the host's store, plain `curl`. No generated command, and nothing in the installer, uses `-k`, `--insecure` or `--no-check-certificate` (unit and server tests assert it). curl's `--pinnedpubkey` was tested and can't replace the CA check: curl still refuses an unknown CA unless `-k` turns verification off, so the command carries the CA certificate instead.
+
+## Why restore the choice
+
+Restoring it costs the default flow nothing: the pin stays the default, the page still needs nothing copied to the host, and the choice sits under **Advanced**. It gives back what the specification asks for (line 72: system trust, a public CA file, `--ca-file=`) to operators who distribute their own CA or use a public certificate, and it is honest about which flag the command carries. Pinning remains within line 110, since the fingerprint comes from the authenticated dashboard.
 
 ## Consequences
 
-- Enrollment needs no file copied to the host, and a mistyped path can no longer break it.
-- The generated commands no longer offer the choice or the `--ca-file=` form the specification describes, and the historical acceptance records described the old choice until 2026-09-29.
-- The installer download is a separate step: for a private CA the generated `curl` command skips certificate verification (`-k`) and relies on the SHA-256 shown on the page. That violates the specification's no-insecure-fallback rule; replacing it is tracked separately.
-
-## The option to restore the choice
-
-Add device could offer three explicit choices, each producing its exact flag: pin the presented CA (`--ca-sha256`, the default for a private CA), system trust (`--ca-file=`) and a CA file on the device (`--ca-file PATH`), disabled while a token is being created. A browser test would then assert the flag each choice produces. Which way to go is an owner decision; this record does not make it.
+- Enrollment needs no file copied to the host by default, and a mistyped path can't break the default flow.
+- The generated commands carry the CA certificate for the download; the command stays one paste in any POSIX shell (sh, dash, bash and zsh).
+- The historical acceptance records described the old choice until 2026-09-29; the current behavior is described in `docs/user/installation.md` (Trust the server certificate).
+- The specification needs no amendment for this decision; its author may still choose to name the pinned default in section 4.
