@@ -158,6 +158,7 @@ async function stopServer() {
 const requests = [];
 const scenarios = [];
 const latencies = {};
+const observed = {};
 const errors = [];
 let browser,
   failure,
@@ -520,6 +521,10 @@ try {
       );
       await dialog.getByPlaceholder("Find a device").fill("");
       // Everything out, counted against the saved group, then undone.
+      const previews = () =>
+        requests.filter((r) => r.path === "/groups/membership-preview").length;
+      await settle();
+      const previewsBefore = previews();
       latencies.group_remove_all_ms = await paint(
         "remove all",
         "all removed",
@@ -527,6 +532,18 @@ try {
       );
       await expect(dialog.locator(".group-changes")).toContainText(
         `0 added · ${members} removed since it was saved`,
+      );
+      // An edit this large is not sent to the server for a per-device
+      // preview until someone asks.
+      await expect(dialog.locator(".group-effects")).toContainText(
+        `This changes ${members} devices`,
+      );
+      await page.waitForTimeout(1000);
+      await settle();
+      assert.equal(
+        previews(),
+        previewsBefore,
+        "a very large edit is not previewed on its own",
       );
       latencies.group_undo_ms = await paint(
         "undo device changes",
@@ -557,8 +574,26 @@ try {
         path: path.join(output, "group-editor-1280.png"),
         animations: "disabled",
       });
+      // Asking for the preview of that large edit: the server answers with a
+      // line per changed device and the dialog sums them up.
+      const previewing = Date.now();
+      await dialog
+        .getByRole("button", { name: "Preview what changes", exact: true })
+        .click();
+      await expect(dialog.locator(".group-effects")).toContainText(
+        /Removing|Adding|devices? changes?/,
+        { timeout: 60000 },
+      );
+      latencies.group_large_preview_ms = Date.now() - previewing;
+      expect(
+        await dialog.locator(".group-effects li").count(),
+        "the preview lists a bounded number of devices",
+      ).toBeLessThanOrEqual(50);
       for (const [name, ms] of Object.entries(latencies))
-        if (name.startsWith("group_") && name !== "group_editor_open_ms")
+        if (
+          name.startsWith("group_") &&
+          !["group_editor_open_ms", "group_large_preview_ms"].includes(name)
+        )
           assert.ok(
             ms < INPUT_LATENCY_MS,
             `${name} took ${Math.round(ms)} ms with ${large.member_count.toLocaleString()} members`,
@@ -596,7 +631,7 @@ try {
       await expect(
         versions.first().locator(".overview-running-rate"),
       ).toHaveText(/→|\/s|No metrics yet/);
-      latencies.overview_running_now_rows = await versions.count();
+      observed.running_now_rows = await versions.count();
       await expect(page.locator(".needs-you")).toBeVisible();
       await page.screenshot({
         path: path.join(output, "overview-1280.png"),
@@ -632,22 +667,30 @@ try {
     inventoryReads.every((r) => r.items === null || r.items <= PAGE_ROWS),
     "no inventory read returns more than a page",
   );
-  const largest = requests.reduce((a, b) => (b.bytes > a.bytes ? b : a));
+  // The reads the pages make. A membership preview is a POST that answers per
+  // changed device, so it is reported apart, not held to the bound.
+  const reads = requests.filter((r) => r.method === "GET");
+  const largest = reads.reduce((a, b) => (b.bytes > a.bytes ? b : a));
   assert.ok(
     largest.bytes <= LARGEST_READ,
     `the largest read was ${largest.path}${largest.query} at ${largest.bytes.toLocaleString()} bytes`,
   );
-  assert.deepEqual(errors, [], "no page errors");
-  console.log(
-    "Largest read:",
-    `${largest.path}${largest.query}`,
-    `${largest.bytes.toLocaleString()} B;`,
-    "inventory pages:",
-    inventoryReads.length,
-    "of at most",
-    Math.max(...inventoryReads.map((r) => r.items ?? 0)),
-    "rows each",
+  observed.largest_read = {
+    path: `${largest.path}${largest.query}`,
+    bytes: largest.bytes,
+  };
+  observed.inventory_pages = inventoryReads.length;
+  observed.most_rows_in_a_page = Math.max(
+    ...inventoryReads.map((r) => r.items ?? 0),
   );
+  observed.largest_preview_bytes = Math.max(
+    0,
+    ...requests
+      .filter((r) => r.path === "/groups/membership-preview")
+      .map((r) => r.bytes),
+  );
+  assert.deepEqual(errors, [], "no page errors");
+  console.log("Observed:", JSON.stringify(observed));
   console.log("Latencies (ms):", JSON.stringify(latencies));
 } catch (error) {
   failure = error;
@@ -678,6 +721,7 @@ try {
         },
         scenarios,
         latencies,
+        observed,
         requests,
         errors,
         ...(failure ? { failure: failure.message } : {}),
