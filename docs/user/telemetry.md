@@ -119,11 +119,11 @@ With **Collect operational metrics** off, the server stores neither, but it stil
 ### Estimate the disk history takes
 
 ```text
-rows per device per day = 86,400 / max(60, check-in interval in seconds)   (at most 1,440)
+rows per device per day = 86,400 / max(60, check-in interval in seconds)   (an upper bound: at most 1,440)
 history bytes           = devices × retention days × rows per device per day × bytes per row
 ```
 
-A full sample, with all 17 device-level numbers at full precision, measured 585 bytes of JSON and 754 bytes per history row including its two indexes: 20,094 rows written by a release build of the server on 2026-09-29, measured with SQLite's `dbstat`. At a check-in interval of a minute or less that is 1,440 rows, about 1.1 MB, per device per day:
+A full sample, with all 17 device-level numbers at full precision, measured 585 bytes of JSON and 755 bytes per history row including its two indexes: 78,624 rows written by a release build of the server on 2026-09-30, measured with SQLite's `dbstat`. At a check-in interval of a minute or less that is up to 1,440 rows, about 1.1 MB, per device per day:
 
 | Devices | 7 days (default) | 30 days |
 | --- | --- | --- |

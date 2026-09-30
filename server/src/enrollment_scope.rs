@@ -17,7 +17,7 @@ pub const MAX_LABEL_KEY: usize = 63;
 /// Longest label value, in characters.
 pub const MAX_LABEL_VALUE: usize = 128;
 
-/// A device name as enrollment stores it: the supplied name trimmed and
+/// A device name as enrollment stores it: the requested name trimmed and
 /// ASCII-lowercased, 1 to 100 letters, digits, dots, hyphens or underscores,
 /// starting with a letter or digit. None when the name can never enroll.
 pub fn device_name(raw: &str) -> Option<String> {
@@ -237,14 +237,14 @@ mod tests {
     #[test]
     fn a_scope_is_validated_whole_and_stored_only_when_set() {
         let scope = parse(
-            &json!({"allowed_names":[" Web-01","web-02"],"labels":{"Site":" Berlin ","rack":"r12"}}),
+            &json!({"allowed_names":[" Web-01","web-02"],"labels":{"Site":" Berlin ","rack":"a7"}}),
             Some("web-"),
         )
         .unwrap();
         let mut record = json!({"id":"t"});
         scope.store(&mut record);
         assert_eq!(record["allowed_names"], json!(["web-01", "web-02"]));
-        assert_eq!(record["labels"], json!({"site":"Berlin","rack":"r12"}));
+        assert_eq!(record["labels"], json!({"site":"Berlin","rack":"a7"}));
 
         let mut plain = json!({"id":"t"});
         parse(&json!({"allowed_names":null,"labels":{}}), None)

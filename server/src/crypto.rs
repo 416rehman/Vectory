@@ -507,7 +507,7 @@ impl Keys {
                 roots.add(cert?)?;
             }
         }
-        // The older manual overlap: an administrator-supplied bundle, trusted
+        // The older manual overlap: a bundle an administrator installs, trusted
         // for as long as the variable is set.
         if let Ok(path) = std::env::var("VECTORY_PREVIOUS_DEVICE_CA") {
             tracing::warn!(
