@@ -63,6 +63,12 @@ async function fieldAction(label) {
     const action = page.getByRole("menuitem", { name: label, exact: true });
     if (await action.count()) {
       await action.click();
+      // The menu hands focus back once it has left the page, a tick later.
+      // Wait for that, or a fast machine's next step races the late move.
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await page.evaluate(
+        () => new Promise((resolve) => setTimeout(resolve, 0)),
+      );
       return;
     }
     await page.keyboard.press("Escape");
@@ -996,6 +1002,12 @@ try {
     const amount = page.getByLabel("Amount", { exact: true });
     await amount.fill("-");
     await fieldAction("Remove amount");
+    // The menu hands focus back to its button once its closing animation ends.
+    // Wait for that: a faster machine reached the help below first, and the
+    // late focus move then dismissed it.
+    await expect(
+      page.getByRole("button", { name: "Actions for Amount", exact: true }),
+    ).toBeFocused();
     expect(await stored()).toEqual({ amount: 4, note: "keep" });
     await expect(amount).toHaveValue("-");
     await expect(
