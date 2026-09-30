@@ -555,6 +555,43 @@ async fn condition_quick_fixes_keep_the_original_meaning() {
     child.kill().await.unwrap();
 }
 
+/// Vector drops the events still in flight when its stdin ends. Before the
+/// worker held stdin open until the last sample had entered the pipeline, about
+/// one run in a hundred lost the last sample's outputs and reported it as
+/// unmatched. Sixty runs make a return of that visible in a single test run.
+#[tokio::test]
+async fn the_last_sample_of_a_run_is_never_lost() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; synthetic sample execution unverified");
+        return;
+    };
+    let (mut child, url, client) = start_worker(&vector).await;
+    for run in 0..60 {
+        let routed = post(
+            &client,
+            &url,
+            "transform-test",
+            json!({
+                "transform":{"type":"route","route":{"errors":"(.status >= 500) ?? false"}},
+                "samples":[{"status":503},{"status":200},{}]
+            }),
+        )
+        .await;
+        let ports: Vec<&str> = routed["results"]
+            .as_array()
+            .unwrap_or_else(|| panic!("run {run}: {routed}"))
+            .iter()
+            .map(|result| result["outputs"][0]["port"].as_str().unwrap_or("none"))
+            .collect();
+        assert_eq!(
+            ports,
+            vec!["errors", "_unmatched", "_unmatched"],
+            "run {run}: {routed}"
+        );
+    }
+    child.kill().await.unwrap();
+}
+
 #[tokio::test]
 async fn real_vector_worker_runs_samples_and_tests() {
     let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
