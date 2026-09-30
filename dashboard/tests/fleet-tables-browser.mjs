@@ -344,6 +344,36 @@ async function sort(label) {
     .getByRole("button", { name: new RegExp(`^Sort by ${label}(?:,|$)`) })
     .click();
 }
+/**
+ * A page of devices in a picker scrolls inside its own box: the box is no
+ * taller than 22rem, its rows are clipped by it, and the pager and buttons
+ * under it are never covered by them.
+ */
+async function pickerScrollsInsideItsBox() {
+  const box = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      ".device-picker .data-table-scroll",
+    );
+    const rect = scroller.getBoundingClientRect();
+    const below = [".data-table-pagination", ".device-picker-actions"].map(
+      (selector) => {
+        const element = document.querySelector(`.device-picker ${selector}`);
+        return element ? element.getBoundingClientRect().top : Infinity;
+      },
+    );
+    return {
+      overflowY: getComputedStyle(scroller).overflowY,
+      height: rect.height,
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      bottom: rect.bottom,
+      nextTop: Math.min(...below),
+    };
+  });
+  expect(["auto", "scroll"]).toContain(box.overflowY);
+  expect(box.height).toBeLessThanOrEqual(22 * 16 + 2);
+  expect(box.scrolls).toBe(true);
+  expect(box.bottom).toBeLessThanOrEqual(box.nextTop + 1);
+}
 async function check(name, run) {
   if (
     process.env.VECTORY_FLEET_TABLES_ONLY &&
@@ -497,6 +527,7 @@ try {
       await expect(
         page.getByText("1–25 of 999", { exact: true }),
       ).toBeVisible();
+      await pickerScrollsInsideItsBox();
       await page.getByRole("button", { name: "Next", exact: true }).click();
       await expect(rows("Devices").first()).toContainText("Device 0026");
       await page.getByLabel("Select Device 0030", { exact: true }).check();
