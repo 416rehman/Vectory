@@ -9,6 +9,7 @@ import {
   parsePreapprovedNames,
   sameScope,
   scopeText,
+  usesBelowNames,
 } from "./enrollmentScope";
 
 describe("enrollment token scope", () => {
@@ -128,5 +129,19 @@ describe("enrollment token scope", () => {
     expect(scopeText({ recovery_name: "edge-01", allowed_names: ["x"] })).toBe(
       "Recovery for edge-01",
     );
+  });
+});
+
+describe("usesBelowNames", () => {
+  it("warns only when the use limit leaves listed names unable to enroll", () => {
+    const names = ["edge-01", "edge-02", "edge-03"];
+    expect(usesBelowNames(names, "1")).toBe(
+      "Only 1 of these 3 names can enroll: raise Devices it can enroll, or leave it empty.",
+    );
+    expect(usesBelowNames(names, "3")).toBe("");
+    expect(usesBelowNames(names, "")).toBe("");
+    expect(usesBelowNames(names, "0")).toBe("");
+    expect(usesBelowNames(names, "two")).toBe("");
+    expect(usesBelowNames(null, "1")).toBe("");
   });
 });
