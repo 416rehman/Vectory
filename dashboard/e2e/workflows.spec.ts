@@ -521,7 +521,7 @@ test("staged enrollment, token management, groups and deployment review use real
   ).toBeDisabled();
   await page
     .getByRole("dialog")
-    .getByRole("checkbox", { name: /^Select / })
+    .getByRole("checkbox", { name: /^Select (?!devices on this page)/ })
     .first()
     .check();
   const previewResponse = page.waitForResponse(

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import { slimOverview } from "./fleet-replies.mjs";
 import net from "node:net";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -177,15 +178,7 @@ async function fixture({
     // An administrator's Overview asks whether a notification channel exists.
     if (path === "/notifications/channels") return reply(configuredChannels);
     if (path === "/overview")
-      return reply({
-        devices_total: 0,
-        devices_online: 0,
-        configurations_total: 0,
-        deployments_active: 13,
-        issues_open: 0,
-        devices: [],
-        recent_activity: [],
-      });
+      return reply(slimOverview([], { deployments_active: 13 }));
     if (path === "/deployments/history") {
       let items = state.records.filter((item) =>
         item.name.includes(url.searchParams.get("search") || ""),

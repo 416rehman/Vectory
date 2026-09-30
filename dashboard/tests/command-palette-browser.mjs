@@ -7,6 +7,11 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  slimOverview,
+} from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -126,6 +131,18 @@ const pipeline = {
   },
   graph: { nodes: [], edges: [] },
 };
+const savedGroup = {
+  id: ids.group,
+  name: "Edge collectors",
+  description: "Synthetic group",
+  device_ids: [ids.device],
+  revision: 1,
+};
+const fleet = fleetReplies({
+  devices: [device],
+  groups: [savedGroup],
+  groupById: false,
+});
 const requests = [],
   unexpected = [],
   errors = [],
@@ -158,6 +175,8 @@ await context.route("**/*", async (route) => {
     );
   }
   const page12 = { items: [], total: 0, page: 1, page_size: 12 };
+  // The palette searches devices on the server and lists groups by count.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (path === "/status")
     return reply({ initialized: true, version: "synthetic" });
   if (path === "/session")
@@ -169,15 +188,7 @@ await context.route("**/*", async (route) => {
   // An administrator's Overview and Issues ask whether a notification channel exists.
   if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/overview")
-    return reply({
-      devices_total: 1,
-      devices_online: 1,
-      configurations_total: 1,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [device],
-      recent_activity: [],
-    });
+    return reply(slimOverview([device], { configurations_total: 1 }));
   if (path === "/telemetry/summary")
     return reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
   if (path === "/devices") return reply([device]);
@@ -311,6 +322,25 @@ try {
     },
   );
   await check(
+    "Opening the palette again within thirty seconds reuses what it read",
+    async () => {
+      await view();
+      const reads = () =>
+        requests.filter(
+          (request) => request.path === "/deployments/history?page_size=20",
+        ).length;
+      const before = reads();
+      await open();
+      await expect.poll(reads).toBe(before + 1);
+      await search().press("Escape");
+      await expect(palette()).toHaveCount(0);
+      await open();
+      await page.waitForTimeout(500);
+      expect(reads()).toBe(before + 1);
+      await search().press("Escape");
+    },
+  );
+  await check(
     "Fuzzy search finds a device by name with its live status, highlights the match, opens it and remembers it",
     async () => {
       await open();
@@ -336,11 +366,23 @@ try {
       await expect(
         palette().getByRole("group", { name: "Recent" }),
       ).toContainText("Synthetic unassigned device");
-      // Labels, pipelines, groups and deployments are all searchable.
-      await search().fill("eu-west");
+      // The server matches a device's platform as well as its name.
+      await search().fill("windows amd64");
       await expect(
         palette().getByRole("option", { name: "Synthetic unassigned device" }),
       ).toBeVisible();
+      await expect(
+        palette().getByRole("option", { name: "Synthetic unassigned device" }),
+      ).toContainText("windows / amd64");
+      // Devices come from the server one search at a time, five rows at most;
+      // the fleet is never listed to be filtered here.
+      expect(requests.map((request) => request.path)).toContain(
+        "/devices/inventory?q=unassig&page_size=5",
+      );
+      expect(requests.filter((request) => request.path === "/devices")).toEqual(
+        [],
+      );
+      // Pipelines, groups and deployments are searchable too.
       await search().fill("edge coll");
       await expect(
         palette().getByRole("option", { name: "Edge collectors" }),

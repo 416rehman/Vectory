@@ -8,6 +8,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import net from "node:net";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  slimOverview,
+} from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -202,6 +207,7 @@ const requests = [],
   accessibility = [],
   measurements = [];
 page.on("pageerror", (error) => errors.push(error.message));
+const fleet = fleetReplies({ devices: [device], groups: [] });
 await context.route("**/*", async (route) => {
   const request = route.request();
   const url = new URL(request.url());
@@ -301,15 +307,16 @@ await context.route("**/*", async (route) => {
   // An administrator's Overview asks whether a notification channel exists.
   if (path === "/notifications/channels") return reply(configuredChannels);
   if (path === "/overview")
-    return reply({
-      devices_total: 1,
-      devices_online: 0,
-      configurations_total: 1,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [device],
-      recent_activity: activity,
-    });
+    return reply(
+      slimOverview([device], {
+        configurations_total: 1,
+        recent_activity: activity,
+        // A server without the fleet feed: the Overview falls back to these.
+        fleet_activity: undefined,
+      }),
+    );
+  // Pages of devices, one device, and the groups without their members.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (path === "/devices") return reply([device]);
   // The search directory and device pages list groups and recent deployments.
   if (path === "/groups") return reply([]);

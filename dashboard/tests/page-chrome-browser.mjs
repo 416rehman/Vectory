@@ -295,16 +295,16 @@ try {
     // pushes the close button off a phone or widens the page.
     const long = `synthetic-group-${"x".repeat(75)}`;
     const { context, page } = await open(375, "light", {
+      // The list reads groups without their members (`?slim=1`).
       "/groups": [
         {
           id: "00000000-0000-4000-8000-000000000001",
           name: long,
           description: "Synthetic group",
-          device_ids: [],
+          member_count: 0,
           revision: 1,
         },
       ],
-      "/devices": [],
     });
     await page.goto(`${origin}#/groups`);
     await page.getByRole("button", { name: long, exact: true }).click();

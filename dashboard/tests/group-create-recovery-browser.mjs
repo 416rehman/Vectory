@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -183,6 +184,11 @@ async function start(f = state(), options = {}) {
       seed: options.seed,
     },
   );
+  const fleet = fleetReplies({
+    devices: () => f.devices,
+    groups: () => f.groups,
+    groupById: false,
+  });
   await context.route("**/*", async (route) => {
     const request = route.request(),
       url = new URL(request.url()),
@@ -219,6 +225,8 @@ async function start(f = state(), options = {}) {
         },
         csrf_token: "synthetic",
       });
+    // Pages of devices, one device, and the groups without their members.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (method === "GET" && path === "/devices") return reply(f.devices);
     // The group overview lists assignments; member edits preview their effects.
     if (method === "GET" && path === "/deployments/history")
