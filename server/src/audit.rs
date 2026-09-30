@@ -209,6 +209,11 @@ fn number(path: &str) -> String {
         "CASE WHEN json_type(r.data,'$.{path}')='integer' AND json_extract(r.data,'$.{path}') BETWEEN 0 AND 9007199254740991 THEN json_extract(r.data,'$.{path}') ELSE NULL END"
     )
 }
+fn flag(path: &str) -> String {
+    format!(
+        "CASE json_type(r.data,'$.{path}') WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE NULL END"
+    )
+}
 fn uuid_sql(expression: &str) -> String {
     format!(
         "(length({expression})=36 AND substr({expression},9,1)='-' AND substr({expression},14,1)='-' AND substr({expression},19,1)='-' AND substr({expression},24,1)='-' AND length(replace({expression},'-',''))=32 AND replace({expression},'-','') NOT GLOB '*[^0-9a-f]*')"
@@ -231,7 +236,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -261,7 +266,12 @@ fn base(details: bool) -> String {
             text("details.agent_version", 64),
             text("details.configuration_mode", 16),
             text("details.client_address", 64),
-            text("details.summary", 500)
+            text("details.summary", 500),
+            flag("details.tests_failed"),
+            number("details.tests_failed_count"),
+            number("details.tests_refused_count"),
+            number("details.tests_not_run_count"),
+            number("details.tests_passed_count")
         )
     } else {
         String::new()
@@ -570,6 +580,16 @@ fn details(v: &Value, extra: &Value) -> Value {
         | "notification.channel.delete"
         | "notification.channel.test" => &["name", "summary"],
         "detection.update" => &["summary"],
+        // Published over failing tests: the counts and one sentence, never a
+        // test's name or body.
+        "configuration.publish" => &[
+            "tests_failed",
+            "tests_failed_count",
+            "tests_refused_count",
+            "tests_not_run_count",
+            "tests_passed_count",
+            "summary",
+        ],
         // Written by the enrollment endpoint from bounded, secret-free fields.
         "device.enroll" => &[
             "reason_code",

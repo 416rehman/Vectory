@@ -1970,6 +1970,14 @@ fn sanitize_tests(value: &Value) -> Option<Vec<Value>> {
                 }
                 clean["outputs"] = json!(outputs);
             }
+            // Vector never ran a test it could not read or build.
+            if !passed
+                && clean["message"]
+                    .as_str()
+                    .is_some_and(crate::vector_diagnostics::is_refusal)
+            {
+                clean["refused"] = json!(true);
+            }
             Some(clean)
         })
         .collect()
@@ -1979,7 +1987,7 @@ fn sanitize_tests(value: &Value) -> Option<Vec<Value>> {
 /// nothing when one test cannot be read or built, and a worker can drop a
 /// result, so a test without one is reported as not run, never left out of
 /// the count.
-fn complete_results(config: &Value, reported: Vec<Value>) -> Vec<Value> {
+pub(crate) fn complete_results(config: &Value, reported: Vec<Value>) -> Vec<Value> {
     let mut remaining: Vec<Option<Value>> = reported.into_iter().map(Some).collect();
     let mut ordered = Vec::new();
     for (index, test) in config["tests"].as_array().into_iter().flatten().enumerate() {
@@ -2002,30 +2010,35 @@ fn complete_results(config: &Value, reported: Vec<Value>) -> Vec<Value> {
     ordered
 }
 
-/// `POST /api/v1/configurations/test`: run the draft's native `tests` with
-/// `vector test` in the isolated worker and report every test's result.
-pub async fn pipeline_tests(
-    axum::extract::State(s): axum::extract::State<crate::State>,
-    h: axum::http::HeaderMap,
-    axum::Json(input): axum::Json<Value>,
-) -> crate::error::Result<axum::Json<Value>> {
+/// A draft's native tests, run once: the reply `POST /configurations/test`
+/// sends, and whether the isolated worker was asked at all.
+pub(crate) struct TestRun {
+    pub reply: Value,
+    /// The worker answered, so the run is worth an audit row.
+    pub asked: bool,
+}
+
+/// Run the draft's native `tests` with `vector test` in the isolated worker
+/// and report every test's result. The test route and the publish gate both
+/// come through here, so a version is never published on a verdict the test
+/// route would not give.
+pub(crate) async fn run_pipeline_tests(
+    s: &crate::State,
+    config: &Value,
+) -> crate::error::Result<TestRun> {
     use axum::http::StatusCode;
-    let user = crate::auth::authorize(&s, &h, &["editor", "operator"], true).await?;
-    s.limit(
-        format!("pipeline-tests:{}", crate::api::text(&user, "id")),
-        20,
-        std::time::Duration::from_secs(60),
-    )?;
-    let config = &input["config"];
     let structural = validate(config);
-    let finish = |mut result: Value, tests: Vec<Value>, tests_run: bool| {
+    let finish = |mut result: Value, tests: Vec<Value>, tests_run: bool, asked: bool| {
         let passed = tests.iter().filter(|t| t["passed"] == true).count();
         result["tests"] = json!(tests);
         result["tests_run"] = json!(tests_run);
         if tests_run {
             result["output"] = json!(format!("{passed} of {} tests passed.", tests.len()));
         }
-        result
+        TestRun {
+            reply: result,
+            asked,
+        }
     };
     if structural["valid"] != true {
         let result = check_result(
@@ -2035,7 +2048,7 @@ pub async fn pipeline_tests(
             vec![],
             vec![],
         );
-        return Ok(axum::Json(finish(result, vec![], false)));
+        return Ok(finish(result, vec![], false, false));
     }
     let reasons = device_context_reasons(config);
     if config.get("provider").is_some_and(|p| !p.is_null()) {
@@ -2052,7 +2065,7 @@ pub async fn pipeline_tests(
             vec![],
         );
         result["deferred"] = json!(true);
-        return Ok(axum::Json(finish(result, vec![], false)));
+        return Ok(finish(result, vec![], false, false));
     }
     let unavailable = || {
         api_error(
@@ -2077,7 +2090,7 @@ pub async fn pipeline_tests(
             vec![],
             vec![],
         );
-        return Ok(axum::Json(finish(result, vec![], false)));
+        return Ok(finish(result, vec![], false, false));
     }
     let _permit = s
         .validation_slots
@@ -2127,22 +2140,41 @@ pub async fn pipeline_tests(
     }
     let mut result = check_result(diagnostics, tests_run, true, reasons, placeholders);
     result["vector_validated"] = json!(false);
-    let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
-    crate::db::audit(
-        &mut tx,
-        crate::api::text(&user, "id"),
-        "configuration.tests",
-        "",
-        if result["valid"] == true {
-            "success"
-        } else {
-            "failed"
-        },
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(axum::Json(finish(result, tests, tests_run)))
+    Ok(finish(result, tests, tests_run, true))
+}
+
+/// `POST /api/v1/configurations/test`: run the draft's native `tests` and
+/// report every test's result.
+pub async fn pipeline_tests(
+    axum::extract::State(s): axum::extract::State<crate::State>,
+    h: axum::http::HeaderMap,
+    axum::Json(input): axum::Json<Value>,
+) -> crate::error::Result<axum::Json<Value>> {
+    let user = crate::auth::authorize(&s, &h, &["editor", "operator"], true).await?;
+    s.limit(
+        format!("pipeline-tests:{}", crate::api::text(&user, "id")),
+        20,
+        std::time::Duration::from_secs(60),
+    )?;
+    let run = run_pipeline_tests(&s, &input["config"]).await?;
+    if run.asked {
+        let (_guard, mut tx) = crate::db::write_tx(&s).await?;
+        crate::auth::authorize_in(&mut tx, &h, &["editor", "operator"], true).await?;
+        crate::db::audit(
+            &mut tx,
+            crate::api::text(&user, "id"),
+            "configuration.tests",
+            "",
+            if run.reply["valid"] == true {
+                "success"
+            } else {
+                "failed"
+            },
+        )
+        .await?;
+        tx.commit().await?;
+    }
+    Ok(axum::Json(run.reply))
 }
 
 pub fn render(config: &Value) -> std::result::Result<String, serde_json::Error> {

@@ -752,7 +752,7 @@
           "properties": {
             "code": {
               "type": "string",
-              "description": "Stable machine-readable code. Common: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, STALE_REVISION, INVALID_INPUT, RATE_LIMITED, SIGNIN_THROTTLED, CAPACITY_BUSY (agent listener or download slots busy, or a membership preview found the writer busy; retry after Retry-After), REQUEST_TIMEOUT (agent request deadline), PAYLOAD_TOO_LARGE (body over its limit), EXPORT_BUSY, EXPORT_CAPACITY, EXPORT_STORAGE, EXPORT_TIMEOUT, EXPORT_TOO_LARGE, VALIDATION_FAILED, INTERNAL. CONTRACT.md lists every code."
+              "description": "Stable machine-readable code. Common: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, STALE_REVISION, INVALID_INPUT, RATE_LIMITED, SIGNIN_THROTTLED, CAPACITY_BUSY (agent listener or download slots busy, or a membership preview found the writer busy; retry after Retry-After), REQUEST_TIMEOUT (agent request deadline), PAYLOAD_TOO_LARGE (body over its limit), EXPORT_BUSY, EXPORT_CAPACITY, EXPORT_STORAGE, EXPORT_TIMEOUT, EXPORT_TOO_LARGE, VALIDATION_FAILED, TESTS_FAILED, INTERNAL. CONTRACT.md lists every code."
             },
             "message": {
               "type": "string"
@@ -8664,6 +8664,10 @@
           "type": "boolean",
           "description": "True when Vector did not run this test, for example because another test could not be read or built. Such a test never passes."
         },
+        "refused": {
+          "type": "boolean",
+          "description": "True when Vector could not read or build this test, so it never ran. Its message says why."
+        },
         "message": {
           "type": "string",
           "maxLength": 600
@@ -8684,6 +8688,77 @@
       "required": [
         "name",
         "passed"
+      ],
+      "additionalProperties": false
+    },
+    "TestsFailed": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "const": "TESTS_FAILED"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineTest"
+          },
+          "maxItems": 100,
+          "description": "One row per configured test, not_run rows included. Each detail is cut to 1,000 characters and outputs are left out; POST /configurations/test returns the full rows."
+        },
+        "tests_run": {
+          "type": "boolean",
+          "description": "Vector ran the tests, so each row is its verdict. False when no runner answered."
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "passed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector ran the test and it failed."
+            },
+            "refused": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector could not read or build the test."
+            },
+            "not_run": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector did not run the test."
+            }
+          },
+          "required": [
+            "passed",
+            "failed",
+            "refused",
+            "not_run"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "error",
+        "tests",
+        "tests_run",
+        "counts"
       ],
       "additionalProperties": false
     },

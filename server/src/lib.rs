@@ -35,6 +35,7 @@ pub mod pipeline_requests;
 pub mod pipelines;
 pub mod policy_requests;
 pub mod publication_requests;
+pub mod publish_tests;
 pub mod reset_requests;
 pub mod restored_access;
 pub mod rollback_review;
