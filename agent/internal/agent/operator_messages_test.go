@@ -268,7 +268,9 @@ func TestStatusSaysRevokedAndNamesTheAgentProcess(t *testing.T) {
 	if text := RenderStatus(view, now); !strings.Contains(text, "not answering since") {
 		t.Fatal(text)
 	}
-	if command := RunCommandFor(filepath.Join(t.TempDir(), "custom")); !strings.Contains(command, " run --state-dir ") || !filepath.IsAbs(strings.Fields(strings.TrimPrefix(command, "sudo "))[0]) {
+	// The path may be quoted (Windows quotes it in single quotes).
+	command := RunCommandFor(filepath.Join(t.TempDir(), "custom"))
+	if program := strings.Trim(strings.Fields(strings.TrimPrefix(command, "sudo "))[0], `'"`); !strings.Contains(command, " run --state-dir ") || !filepath.IsAbs(program) {
 		t.Fatalf("run command must name this agent's absolute path: %q", command)
 	}
 }
