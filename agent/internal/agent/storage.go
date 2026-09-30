@@ -148,14 +148,35 @@ func CheckFreshStateDirectory(dir string) error {
 	}
 	return nil
 }
+
+// atomicFile is what AtomicWrite writes its temporary file through.
+type atomicFile interface {
+	Name() string
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+// createAtomicTemp creates the temporary file that will replace dest, beside
+// it. It is a variable so a test can make the disk fill up at a chosen write;
+// nothing else replaces it.
+var createAtomicTemp = func(dest string) (atomicFile, error) {
+	return os.CreateTemp(filepath.Dir(dest), atomicTempPrefix+"*")
+}
+
+// AtomicWrite replaces path with data: the bytes are written and synced to a
+// private temporary file beside it, which then takes the place of path, so a
+// crash leaves the old file or the new one, never part of either. The result
+// is private to the writing account whatever file it replaces. A full disk
+// comes back as a *DiskFullError and leaves path untouched.
 func AtomicWrite(path string, data []byte) error {
 	if e := SafePath(path); e != nil {
 		return e
 	}
 	dir := filepath.Dir(path)
-	f, e := os.CreateTemp(dir, atomicTempPrefix+"*")
+	f, e := createAtomicTemp(path)
 	if e != nil {
-		return e
+		return storageError(dir, e)
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
@@ -165,19 +186,20 @@ func AtomicWrite(path string, data []byte) error {
 	}
 	if _, e = f.Write(data); e != nil {
 		f.Close()
-		return e
+		return storageError(dir, e)
 	}
 	if e = f.Sync(); e != nil {
 		f.Close()
-		return e
+		return storageError(dir, e)
 	}
 	if e = f.Close(); e != nil {
-		return e
+		return storageError(dir, e)
 	}
+	keepOwner(tmp, path)
 	if e = replaceFile(tmp, path); e != nil {
-		return e
+		return storageError(dir, e)
 	}
-	return syncDir(dir)
+	return storageError(dir, syncDir(dir))
 }
 func ReadJSON(path string, v any) error {
 	if e := SafePath(path); e != nil {

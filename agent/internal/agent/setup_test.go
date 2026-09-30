@@ -41,7 +41,9 @@ type setupServer struct {
 	pin        string
 	enrolls    atomic.Int32
 	heartbeats atomic.Int32
-	revoked    atomic.Bool
+	// authenticated counts heartbeats that arrived with a client certificate.
+	authenticated atomic.Int32
+	revoked       atomic.Bool
 	// hold keeps heartbeats unanswered until release is closed.
 	hold    atomic.Bool
 	release chan struct{}
@@ -77,11 +79,15 @@ func (s *setupServer) setWait(handler http.HandlerFunc) {
 	s.wait = handler
 }
 
-func newSetupServer(t *testing.T) *setupServer {
+func newSetupServer(t *testing.T) *setupServer { return newSetupServerFor(t, nil) }
+
+// newSetupServerFor is a server whose certificate is valid for names, or for
+// 127.0.0.1 and localhost when there are none.
+func newSetupServerFor(t *testing.T, names []string) *setupServer {
 	ca := makeCA(t)
 	pub, signingKey, _ := ed25519.GenerateKey(rand.Reader)
 	s := &setupServer{pin: Fingerprint(certificateSHA256(ca.cert)), release: make(chan struct{})}
-	server := chainServer(t, ca, nil, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := chainServer(t, ca, names, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/agent/v1/install.sh":
 			w.WriteHeader(http.StatusOK)
@@ -93,6 +99,9 @@ func newSetupServer(t *testing.T) *setupServer {
 			_ = json.NewEncoder(w).Encode(map[string]string{"device_id": r.TLS.PeerCertificates[0].Subject.CommonName, "name": "setup-edge"})
 		case "/agent/v1/heartbeat":
 			s.heartbeats.Add(1)
+			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				s.authenticated.Add(1)
+			}
 			if s.hold.Load() {
 				select {
 				case <-s.release:

@@ -127,6 +127,9 @@ func (r *setupRun) failErr(id, label string, err error, fix string) (SetupResult
 	if errors.As(err, &setup) {
 		return r.fail(id, label, setup.Step.Detail, setup.Step.Fix)
 	}
+	if full, ok := diskFullFrom(err); ok {
+		return r.fail(id, label, sentence(err.Error()), full.Fix("run the command again; setup resumes where it stopped"))
+	}
 	return r.fail(id, label, sentence(err.Error()), fix)
 }
 

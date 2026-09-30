@@ -66,6 +66,19 @@ func localDiagnostics(dir string, settings Settings, state State) LocalDiagnosti
 	return d
 }
 
+// diagnostic returns the issue's diagnostic with the code, or nil.
+func diagnostic(issue *Issue, code string) *Diagnostic {
+	if issue == nil {
+		return nil
+	}
+	for i := range issue.Diagnostics {
+		if issue.Diagnostics[i].Code == code {
+			return &issue.Diagnostics[i]
+		}
+	}
+	return nil
+}
+
 func unavailableTemplate() ConfigurationDiagnostic {
 	return ConfigurationDiagnostic{Check: "unavailable", Reason: "VERIFIED_TEMPLATE_UNAVAILABLE", NextAction: "The accepted desired template is not cached with its expected size and digest. Check the agent connection log and next authorized download; the managed file may still contain the last working configuration."}
 }
@@ -107,6 +120,9 @@ const firstVersionFailed = "Vector isn't running: this was the device's first ve
 func applyNextAction(state State) string {
 	if state.Error == nil {
 		return "Compare the cached apply state and last heartbeat with the dashboard. This local report does not prove current process liveness or server connectivity."
+	}
+	if diagnostic(state.Error, "DISK_FULL") != nil {
+		return "Free some space on the disk the problem names. The agent applies the version at its next check-in by itself; keep the private recovery files intact."
 	}
 	// Only a device that verified a configuration has one that keeps running.
 	keeps := " Vector keeps running the last working configuration."

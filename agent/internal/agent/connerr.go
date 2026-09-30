@@ -206,6 +206,9 @@ func describeCheckInFailure(err error, lastAnswered *time.Time, now time.Time) s
 	if ce, ok := AsConnectionError(err); ok && lastAnswered != nil {
 		return ce.forKnownServer(*lastAnswered, now).Error()
 	}
+	if full, ok := diskFullFrom(err); ok {
+		return sentence(err.Error()) + " " + full.Fix("the agent tries again at its next check-in")
+	}
 	return err.Error()
 }
 
@@ -313,9 +316,9 @@ func classifyTransport(target *url.URL, proxy *url.URL, wrote bool, err error) *
 	case errors.Is(err, context.Canceled):
 		e.Code, e.Message = "CANCELED", "Stopped before the server answered."
 	case errors.As(err, &verification):
-		return classifyCertificate(target, verification.Err, verification.UnverifiedCertificates)
+		return withProxyNote(classifyCertificate(target, verification.Err, verification.UnverifiedCertificates), proxy)
 	case errors.As(err, &unknown), errors.As(err, &hostname), errors.As(err, &invalid):
-		return classifyCertificate(target, err, nil)
+		return withProxyNote(classifyCertificate(target, err, nil), proxy)
 	case errors.As(err, &record), strings.Contains(err.Error(), "server gave HTTP response to HTTPS client"):
 		// net/http replaces the TLS record error with this text for HTTP replies.
 		e.Code = "PLAIN_HTTP"
@@ -399,6 +402,17 @@ func classifyTransport(target *url.URL, proxy *url.URL, wrote bool, err error) *
 			e.Message = fmt.Sprintf("%s closed the connection during the TLS handshake.", address)
 			e.Fix = "Check that --server points to the Vectory agent listener."
 		}
+	case proxy != nil && !wrote && strings.EqualFold(innerError(err), "Proxy Authentication Required"):
+		// The proxy answered CONNECT with 407. The password, if any, is never
+		// printed: only where to put it.
+		e.Code = "PROXY_AUTH_REQUIRED"
+		if proxy.User != nil {
+			e.Message = fmt.Sprintf("The proxy at %s did not accept the user name and password in HTTPS_PROXY.", proxyAddress)
+			e.Fix = "Check them (percent-encode characters such as @ and : in the password), or ask the proxy's administrator to allow this server."
+		} else {
+			e.Message = fmt.Sprintf("The proxy at %s requires a user name and password.", proxyAddress)
+			e.Fix = fmt.Sprintf("Set HTTPS_PROXY to http://USER:PASSWORD@%s where the agent runs, or ask the proxy's administrator to allow this server without sign-in.", proxyAddress)
+		}
 	case proxy != nil && !wrote:
 		// A proxy that refuses CONNECT reports only its status text.
 		e.Code = "PROXY_REFUSED"
@@ -414,6 +428,20 @@ func classifyTransport(target *url.URL, proxy *url.URL, wrote bool, err error) *
 		}
 	}
 	return e
+}
+
+// withProxyNote says, on a certificate failure, that the connection went
+// through a proxy: a proxy that inspects TLS answers with a certificate of its
+// own, which is the usual reason a server's certificate is not the one
+// expected. The agent never accepts it. The note names the proxy by its
+// address, never by its credentials.
+func withProxyNote(ce *ConnectionError, proxy *url.URL) *ConnectionError {
+	if proxy == nil || !strings.HasPrefix(ce.Code, "TLS_") {
+		return ce
+	}
+	out := *ce
+	out.Fix = strings.TrimSpace(ce.Fix + "\nThis connection goes through the proxy at " + proxy.Host + " (HTTPS_PROXY). A proxy that inspects TLS presents a certificate of its own, and the agent doesn't accept it: ask the proxy's administrator to let this server through uninspected, or add it to NO_PROXY.")
+	return &out
 }
 
 func innerError(err error) string {

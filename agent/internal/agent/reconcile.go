@@ -77,6 +77,7 @@ func (e *Engine) actual() string {
 // Recover is called under the process lock before any heartbeat. A transaction
 // without durable verified state restores the last verified artifact, never drift.
 func (e *Engine) Recover(ctx context.Context) error {
+	e.removeStaleLeftovers()
 	var j Journal
 	err := ReadJSON(filepath.Join(e.Dir, "journal.json"), &j)
 	if os.IsNotExist(err) {
@@ -97,6 +98,39 @@ func (e *Engine) Recover(ctx context.Context) error {
 	}
 	return e.rollback(ctx, j.Generation, "An interrupted apply was recovered", attempt)
 }
+
+// removeStaleLeftovers deletes what an earlier run of this agent left behind
+// when it was killed in the middle of a write or a validation: temporary
+// files, staged candidates and the validation copy of Vector's runtime
+// settings, once they are older than any of those could last. It runs at
+// startup under the agent lock, and a failure to delete one is not an error.
+func (e *Engine) removeStaleLeftovers() {
+	dirs := []string{e.Dir}
+	if e.Settings.ManagedConfig != "" {
+		if managed := filepath.Dir(e.Settings.ManagedConfig); filepath.Clean(managed) != filepath.Clean(e.Dir) {
+			dirs = append(dirs, managed)
+		}
+	}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			stale := agentLeftover(name) || dir == e.Dir && strings.HasPrefix(name, "host-runtime-stage-") && strings.HasSuffix(name, ".json")
+			if !stale {
+				continue
+			}
+			if info, err := entry.Info(); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) > atomicTempStale {
+				if path := filepath.Join(dir, name); SafePath(path) == nil {
+					_ = os.Remove(path)
+				}
+			}
+		}
+	}
+}
+
 func (e *Engine) StartExisting(ctx context.Context) error {
 	return e.startExisting(ctx, false)
 }
@@ -125,7 +159,7 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 			return errWorkloadPaused
 		}
 		if err = AtomicWrite(e.Settings.ManagedConfig, good); err != nil {
-			return e.fail("WRITE_FAILED", "startup", "Cannot restore the established local workload")
+			return e.failWith("WRITE_FAILED", "startup", storageMessage("Cannot restore the established local workload", err), e.storageDiagnostic(err))
 		}
 	}
 	data, err := readArtifact(e.Settings.ManagedConfig)
@@ -176,7 +210,53 @@ func (e *Engine) startExisting(ctx context.Context, honorPause bool) error {
 	}
 	return e.save()
 }
+
+// Poll is one check-in: it reports, learns the desired version and reconciles.
+// A disk that is full while it runs is recorded as a failure the operator can
+// read, with its fix, and the same check-in is tried again at the next one.
 func (e *Engine) Poll(ctx context.Context) error {
+	return e.noteStorageFailure(e.poll(ctx))
+}
+
+// noteStorageFailure makes a full disk visible. A save that fails for lack of
+// space comes back from the middle of an apply as a bare error; this turns it
+// into the issue the next heartbeat reports and `vectory status` shows: the
+// disk named by what it holds, and the fix. The version is not held back: the
+// next check-in applies it.
+func (e *Engine) noteStorageFailure(err error) error {
+	full, ok := diskFullFrom(err)
+	if !ok || e.State.ApplyState == "verified_applied" {
+		// A completed apply stays what it is when only recording it failed:
+		// Vector runs the verified version, and the next check-in saves that.
+		return err
+	}
+	if e.State.Error == nil || diagnostic(e.State.Error, "DISK_FULL") == nil {
+		message := "The disk that holds " + storageLabelFor(e.Settings, full.Dir) + " is full, so the agent can't save its progress"
+		issue := &Issue{Code: "WRITE_FAILED", Stage: progressStage(e.State.ApplyState), Message: message, Diagnostics: e.storageDiagnostic(err)}
+		e.State.ApplyState, e.State.Error = "failed", issue
+		e.attemptOutcome(e.currentAttempt(), "failed", issue)
+		// Best effort: with the disk still full this fails again, and the
+		// in-memory record reaches the server with the next heartbeat.
+		_ = e.save()
+	}
+	return err
+}
+
+// progressStage names the step an apply was in when it stopped, from its
+// last recorded progress.
+func progressStage(state string) string {
+	switch state {
+	case "desired":
+		return "download"
+	case "downloaded":
+		return "staging"
+	case "validated", "written", "reload_requested":
+		return "commit"
+	}
+	return "storage"
+}
+
+func (e *Engine) poll(ctx context.Context) error {
 	// Never silently round/clamp counters from an old or manually edited state.
 	// Such a state needs local recovery; it cannot emit an invalid heartbeat.
 	if e.State.ReportedGeneration > MaxJSONCounter || e.State.HighestGeneration > MaxJSONCounter || e.State.HighestPolicyGeneration > MaxJSONCounter || e.State.SecretRevision > MaxJSONCounter {
@@ -284,7 +364,11 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	template, err := e.loadTemplate(ctx, d)
 	if err != nil {
-		return e.failAttempt("DOWNLOAD_FAILED", "download", "Cannot obtain a digest-verified authorized template")
+		var failure *downloadFailure
+		if !errors.As(err, &failure) {
+			failure = &downloadFailure{code: "DOWNLOAD_FAILED", message: "Cannot obtain a digest-verified authorized template"}
+		}
+		return e.failAttemptWith(failure.code, "download", failure.message, failure.diagnostics)
 	}
 	data, usesSecrets, err := resolveLocalSecrets(template, e.Settings.SecretFiles, e.Settings.CapabilityPolicy.FullVectorConfig)
 	if err != nil {
@@ -322,7 +406,10 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	if actual == effectiveSHA && e.State.LastGoodSHA256 == effectiveSHA {
 		if e.Driver.Alive() {
 			e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
-			return e.save()
+			if err = e.save(); err != nil {
+				return err
+			}
+			return e.completeTransaction(effectiveSHA)
 		}
 		if e.supervisor != nil {
 			// Continuous Run restores this exact established content on its local
@@ -342,14 +429,25 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {
-		return e.failAttempt("WRITE_FAILED", "staging", "Cannot securely stage configuration")
+		return e.failAttemptWith("WRITE_FAILED", "staging", storageMessage("Cannot securely stage configuration", err), e.storageDiagnostic(err))
 	}
 	defer os.Remove(stage)
 	if err = e.Driver.Validate(ctx, stage); err != nil {
+		if _, full := diskFullFrom(err); full {
+			// Validation needs room for its own temporary files. That is the
+			// disk's problem, not the version's: nothing holds it back.
+			return e.failAttemptWith("WRITE_FAILED", "validation", storageMessage("Cannot prepare Vector's validation", err), e.storageDiagnostic(err))
+		}
+		// A version that validation could not verify in time is held back like
+		// a rejected one: it is never treated as valid. Vector did not reject it.
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttemptWith("VALIDATION_FAILED", "validation", "Vector rejected this version on the device", e.diagnoseFailure(err, data))
+		message := "Vector rejected this version on the device"
+		if failure := asVectorFailure(err); failure != nil && failure.Phase == "timeout" {
+			message = "Vector did not finish validating this version in time, so it was not applied"
+		}
+		return e.failAttemptWith("VALIDATION_FAILED", "validation", message, e.diagnoseFailure(err, data))
 	}
 	e.attemptProgress("validated")
 	if err = e.save(); err != nil {
@@ -374,12 +472,12 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	if readErr == nil {
 		if err = AtomicWrite(filepath.Join(e.Dir, "pre-attempt.json"), previous); err != nil {
-			return e.failAttempt("WRITE_FAILED", "commit", "Cannot securely preserve pre-apply content")
+			return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot securely preserve pre-apply content", err), e.storageDiagnostic(err))
 		}
 	}
 	j := Journal{Stage: "prepared", Generation: m.Generation, DesiredSHA256: effectiveSHA, PreviousSHA256: Digest(previous), PreviousAbsent: os.IsNotExist(readErr), SecretRevision: attemptRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return e.failAttempt("WRITE_FAILED", "commit", "Cannot persist the apply recovery journal")
+		return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot persist the apply recovery journal", err), e.storageDiagnostic(err))
 	}
 	if err = e.boundary("prepared"); err != nil {
 		return err
@@ -391,11 +489,11 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return e.save()
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, data); err != nil {
-		return e.rollback(ctx, m.Generation, "Managed configuration replacement failed", j.ConfigurationAttempt)
+		return e.replacementFailed(ctx, m.Generation, err, j)
 	}
 	j.Stage = "written"
 	if err = WriteJSON(filepath.Join(e.Dir, "journal.json"), j); err != nil {
-		return e.rollback(ctx, m.Generation, "Cannot persist managed replacement recovery state", j.ConfigurationAttempt)
+		return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot persist managed replacement recovery state", j.ConfigurationAttempt, err)
 	}
 	e.attemptProgress("written")
 	if err = e.save(); err != nil {
@@ -412,6 +510,11 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
+		if _, full := diskFullFrom(err); full {
+			// Vector's runtime settings couldn't be written: nothing was
+			// reloaded, and the version is not at fault.
+			return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot write Vector's runtime settings", j.ConfigurationAttempt, err)
+		}
 		return e.rollbackWith(ctx, m.Generation, "Vector didn't confirm it runs this version", j.ConfigurationAttempt, e.diagnoseFailure(err, data))
 	}
 	if e.actual() != effectiveSHA {
@@ -421,7 +524,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		return err
 	}
 	if err = AtomicWrite(filepath.Join(e.Dir, "good-"+effectiveSHA+".json"), data); err != nil {
-		return e.rollback(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt)
+		return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt, err)
 	}
 	e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
 	if err = e.save(); err != nil {
@@ -438,6 +541,30 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	}
 	return e.cleanupGood()
 }
+
+// completeTransaction finishes an apply whose verification is already durable
+// when a leftover says otherwise: a journal that describes the verified
+// content is removed, and so are the superseded recovery copies. That is what
+// remains to do when the state was saved but the process could not finish (the
+// disk filled up between the two). A journal of any other candidate stays.
+func (e *Engine) completeTransaction(effectiveSHA string) error {
+	path := filepath.Join(e.Dir, "journal.json")
+	if _, err := os.Lstat(path); err != nil {
+		return nil
+	}
+	var j Journal
+	if ReadJSON(path, &j) != nil || j.DesiredSHA256 != effectiveSHA {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := syncDir(e.Dir); err != nil {
+		return err
+	}
+	return e.cleanupGood()
+}
+
 func (e *Engine) markApplied(generation uint64, templateSHA, effectiveSHA string, revision uint64, usesSecrets bool) {
 	e.State.LastGoodSHA256 = effectiveSHA
 	e.State.ActualSHA256 = effectiveSHA
@@ -459,13 +586,15 @@ func (e *Engine) loadTemplate(ctx context.Context, d *Desired) ([]byte, error) {
 	}
 	data, err := e.Client.request(ctx, "GET", d.ArtifactPath, nil)
 	if err != nil {
-		return nil, err
+		return nil, classifyDownload(err)
 	}
+	// The bytes stay in memory until they are exactly what the signed manifest
+	// names, so a cut-off or altered download never leaves a file behind.
 	if int64(len(data)) != d.Size || Digest(data) != d.SHA256 {
-		return nil, errors.New("artifact size or digest verification failed")
+		return nil, mismatchFailure(len(data), d.Size, int64(len(data)) == d.Size)
 	}
 	if err = AtomicWrite(path, data); err != nil {
-		return nil, err
+		return nil, &downloadFailure{code: "WRITE_FAILED", message: storageMessage("Cannot save the downloaded configuration", err), diagnostics: e.storageDiagnostic(err)}
 	}
 	files, err := filepath.Glob(filepath.Join(e.Dir, "template-*.json"))
 	if err != nil {
@@ -485,8 +614,49 @@ func (e *Engine) rollback(ctx context.Context, g uint64, reason string, attempt 
 }
 
 // rollbackWith restores the last verified configuration. Diagnostics explain
-// why the candidate failed; restore failures add their own.
+// why the candidate failed; restore failures add their own. The version is
+// held back until someone asks for another attempt.
 func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, diagnostics []Diagnostic) error {
+	return e.restoreLastGood(ctx, g, reason, attempt, diagnostics, true)
+}
+
+// rollbackAfterWriteFailure restores the last verified configuration after a
+// write to disk failed. The version is not at fault (the disk was full, a
+// file was locked), so it is not held back: the next check-in tries it again.
+func (e *Engine) rollbackAfterWriteFailure(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, cause error) error {
+	return e.restoreLastGood(ctx, g, storageMessage(reason, cause), attempt, e.storageDiagnostic(cause), false)
+}
+
+// replacementFailed handles a managed file that could not be replaced. The
+// replacement is atomic, so a failure normally leaves the previous content in
+// place: there is nothing to undo, Vector was never touched, and the version
+// is not held back. If the new content is there after all (the failure came
+// after the swap), the last good one is restored.
+func (e *Engine) replacementFailed(ctx context.Context, generation uint64, cause error, j Journal) error {
+	if e.managedUnchanged(j) {
+		// No transaction is in flight, so no journal should be left to make a
+		// restart roll back and hold the version.
+		if removeErr := os.Remove(filepath.Join(e.Dir, "journal.json")); removeErr == nil || os.IsNotExist(removeErr) {
+			_ = syncDir(e.Dir)
+		}
+		return e.failAttemptWith("WRITE_FAILED", "commit", storageMessage("Cannot write the managed configuration", cause), e.storageDiagnostic(cause))
+	}
+	return e.rollbackAfterWriteFailure(ctx, generation, "Managed configuration replacement failed", j.ConfigurationAttempt, cause)
+}
+
+// managedUnchanged reports whether the managed file still holds what it held
+// when the journal was written.
+func (e *Engine) managedUnchanged(j Journal) bool {
+	data, err := readArtifact(e.Settings.ManagedConfig)
+	if os.IsNotExist(err) {
+		return j.PreviousAbsent
+	}
+	return err == nil && !j.PreviousAbsent && Digest(data) == j.PreviousSHA256
+}
+
+// restoreLastGood puts the last verified configuration back, activates and
+// verifies it. suppress holds the failed version back from automatic retries.
+func (e *Engine) restoreLastGood(ctx context.Context, g uint64, reason string, attempt *ConfigurationAttempt, diagnostics []Diagnostic, suppress bool) error {
 	fail := func(code, message string, restore ...Diagnostic) error {
 		all := append(append([]Diagnostic(nil), diagnostics...), restore...)
 		if len(all) > maxDiagnostics {
@@ -495,8 +665,10 @@ func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, atte
 		e.attemptOutcome(attempt, "failed", &Issue{Code: code, Stage: "rollback", Message: message, Diagnostics: all})
 		return e.failWith(code, "rollback", message, all)
 	}
-	e.State.FailedGeneration = &g
-	e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
+	if suppress {
+		e.State.FailedGeneration = &g
+		e.State.FailedEffectiveSHA256 = e.State.MaterializationSHA256
+	}
 	if e.State.LastGoodSHA256 == "" {
 		// Nothing verified ever ran here: this was the device's first
 		// version, so there is nothing earlier to go back to. Stop Vector and
@@ -521,12 +693,18 @@ func (e *Engine) rollbackWith(ctx context.Context, g uint64, reason string, atte
 		return fail("ROLLBACK_FAILED", "Recovery content violates current local capability policy")
 	}
 	if err = AtomicWrite(e.Settings.ManagedConfig, b); err != nil {
-		return fail("ROLLBACK_FAILED", "Cannot restore verified recovery content")
+		return fail("ROLLBACK_FAILED", storageMessage("Cannot restore verified recovery content", err), e.storageDiagnostic(err)...)
 	}
 	if err = e.Driver.Validate(ctx, e.Settings.ManagedConfig); err != nil {
+		if _, full := diskFullFrom(err); full {
+			return fail("ROLLBACK_FAILED", storageMessage("Cannot check the restored configuration", err), e.storageDiagnostic(err)...)
+		}
 		return fail("ROLLBACK_FAILED", "Restored configuration validation failed", e.diagnoseFailure(err, b)...)
 	}
 	if err = e.Driver.Activate(ctx, e.Settings.ManagedConfig); err != nil {
+		if _, full := diskFullFrom(err); full {
+			return fail("ROLLBACK_FAILED", storageMessage("Cannot load the restored configuration", err), e.storageDiagnostic(err)...)
+		}
 		return fail("ROLLBACK_FAILED", "Vector didn't confirm it runs the restored configuration", e.diagnoseFailure(err, b)...)
 	}
 	e.State.ActualSHA256 = e.State.LastGoodSHA256
@@ -878,16 +1056,7 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 			}
 			return err
 		}
-		seconds := e.State.Policy.HeartbeatSeconds
-		if seconds < 10 || seconds > 3600 {
-			seconds = 60
-		}
-		if failures > 0 {
-			seconds = 5 << min(failures, 6)
-			if seconds > 300 {
-				seconds = 300
-			}
-		}
+		seconds := checkInSeconds(e.State.Policy, failures)
 		var b [1]byte
 		_, _ = rand.Read(b[:])
 		delay := time.Duration(float64(seconds) * (0.8 + float64(b[0])/255*0.4) * float64(time.Second))
@@ -906,6 +1075,23 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 			return nil
 		}
 	}
+}
+
+// checkInSeconds is how long to wait before the next check-in, before jitter:
+// the policy's interval while check-ins succeed, and while they fail a wait
+// that doubles from 10 s and stops at 5 min. That bounds every retry of a
+// failed check-in, download included: one attempt per wait, never a tight loop,
+// never more often than every ten seconds and never less often than every five
+// minutes.
+func checkInSeconds(policy Policy, failures int) int {
+	seconds := policy.HeartbeatSeconds
+	if seconds < 10 || seconds > 3600 {
+		seconds = 60
+	}
+	if failures > 0 {
+		seconds = min(5<<min(failures, 6), 300)
+	}
+	return seconds
 }
 
 // learnedFeatures reports whether the server lists a heartbeat field the
