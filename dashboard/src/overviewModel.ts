@@ -135,7 +135,10 @@ export function quietSummary(unmeasured: number) {
 export function monitoringTarget(
   running: Pick<
     OverviewRunning,
-    "configuration_id" | "configuration_name" | "device_count" | "devices_reporting"
+    | "configuration_id"
+    | "configuration_name"
+    | "device_count"
+    | "devices_reporting"
   >[],
 ) {
   const tally = new Map<string, { id: string; name: string; count: number }>();
@@ -179,7 +182,7 @@ export function groupList(names: string[], more = 0) {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 /**
- * Events in and out per second across a version's devices: "14 → 4.5/s".
+ * Events in and out per second across a version's devices: "14.0 → 4.5/s".
  * Null before any device reported; an unknown rate is never shown as 0.
  */
 export function runningRate(
