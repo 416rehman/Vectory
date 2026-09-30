@@ -17,11 +17,22 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__vector-host" {
 		os.Exit(VectorHostMain(os.Args[2:]))
 	}
+	if fakeVectorInvoked() {
+		os.Exit(fakeVectorMain(os.Args[1:], os.Stdout))
+	}
+	if raw := os.Getenv(proxyClientEnv); raw != "" {
+		os.Exit(proxyClientMain(raw))
+	}
+	if raw := os.Getenv(killHelperEnv); raw != "" {
+		os.Exit(killHelperMain(raw))
+	}
 	if dir := os.Getenv(drainAgentEnv); dir != "" {
 		os.Exit(drainAgentMain(dir))
 	}
 	hermeticTestEnvironment()
-	os.Exit(m.Run())
+	code := m.Run()
+	stopFakeVector()
+	os.Exit(code)
 }
 
 // hermeticTestEnvironment makes t.TempDir() return canonical paths and keeps

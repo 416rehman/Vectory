@@ -469,6 +469,7 @@ var codeHints = map[string]string{
 	"VRL_E100":               "Handle the error case, for example with a fallback: to_int(.status) ?? 0.",
 	"OUTPUT_UNUSED":          "Connect it to a sink or transform, or remove it if unneeded.",
 	"TEST_FAILED":            "Fix the transform, or update the test's expected values.",
+	"VECTOR_TIMEOUT":         "Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application.",
 }
 
 // diagnosticSet dedupes, orders (errors first) and bounds diagnostics.
