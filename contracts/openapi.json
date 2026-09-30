@@ -6824,6 +6824,93 @@
         ]
       }
     },
+    "/api/v1/deployments/{id}/release-next-stage": {
+      "post": {
+        "summary": "Operator or administrator releases the next stage of a running canary now, without waiting for its observation period or for delivery to be measured. Only a canary that has applied on every released device qualifies; the release goes through the scheduler's own admission, is recorded on the rollout and audited as deployment.stage_released_early",
+        "operationId": "post__api_v1_deployments__id__release_next_stage",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT, nothing changed: not a canary, not active (paused, failed, finished), nothing released yet, every device released already, a released device has not applied, has gone quiet, is paused, is superseded or is not delivering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Deployments"
+        ]
+      }
+    },
     "/api/v1/deployments/{id}/unassign": {
       "post": {
         "summary": "Remove an assignment only if its reviewed scope and projected effects still match; 409 ASSIGNMENT_REMOVAL_REVIEW_CHANGED requires explicit fresh review. Missing review token is rejected.",
@@ -14859,6 +14946,61 @@
               "client_address": {
                 "type": "string",
                 "maxLength": 64
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "tests_failed": {
+                "type": "boolean"
+              },
+              "tests_failed_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tests_refused_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tests_not_run_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tests_passed_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "stage": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "gate_state": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "released_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "verified_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "measuring_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "next_released_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             },
             "required": [],
@@ -18571,6 +18713,15 @@
           "failure_threshold": {
             "type": "integer",
             "minimum": 0
+          },
+          "canary_device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 100,
+            "description": "Canary rollouts only: the devices to release first. Distinct lowercase device UUIDs, at most canary_size and at most 100, each a device the request targets (otherwise 400 INVALID_INPUT on preview and create). Fewer than canary_size: the most ready of the remaining targets fill the canary. Absent, null or empty: the scheduler chooses, online and healthy devices that report metrics first and device ID order among equals."
           }
         },
         "required": [
@@ -21475,6 +21626,17 @@
               }
             ],
             "description": "Lowest priority that would outrank every existing winner on conflicting or outranked devices, when one exists."
+          },
+          "canary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanaryPlan"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canary rollouts only, null otherwise. A chosen device that is not checking in, paused or failing adds a warning: the rollout waits for it. Omitted by older servers."
           },
           "paused_device_ids": {
             "type": "array",
@@ -26245,6 +26407,85 @@
         "additionalProperties": false,
         "description": "Display metadata for an assignment. Names and numbers only: never selectors, targets, variable values or artifacts."
       },
+      "CanaryPlan": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "chosen_by_you": {
+            "type": "boolean",
+            "description": "The request named at least one canary device."
+          },
+          "device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 100
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "chosen": {
+                  "type": "boolean",
+                  "description": "Named by the request rather than picked by the scheduler."
+                },
+                "readiness": {
+                  "enum": [
+                    "ready",
+                    "no_metrics",
+                    "failing",
+                    "paused",
+                    "away"
+                  ],
+                  "description": "ready: online, healthy and reporting metrics. no_metrics: online and healthy but nothing to measure delivery against. failing: online but failing or not delivering. paused: sync paused. away: not checking in."
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 120
+                }
+              },
+              "required": [
+                "device_id",
+                "device_name",
+                "chosen",
+                "readiness",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "size",
+          "chosen_by_you",
+          "device_ids",
+          "devices"
+        ],
+        "additionalProperties": false,
+        "description": "Who a canary rollout releases first, in release order, and why. The scheduler releases exactly these devices as the first stage."
+      },
       "RolloutLane": {
         "type": "object",
         "properties": {
@@ -26339,6 +26580,39 @@
           "more": {
             "type": "integer",
             "minimum": 0
+          },
+          "released_early": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "by_name": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "by_name",
+                  "at"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on a stage that someone released before the stage ahead of it finished observing or measuring (POST /deployments/{id}/release-next-stage): who, and when. Null otherwise. Omitted by older servers."
           }
         },
         "required": [
@@ -26557,6 +26831,17 @@
                 "type": "null"
               }
             ]
+          },
+          "canary_watch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanaryWatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canary rollouts with a released canary; null otherwise. Omitted by older servers."
           }
         },
         "required": [
@@ -26571,6 +26856,265 @@
         ],
         "additionalProperties": false,
         "description": "Waves recovered from persisted release times; queued waves follow the scheduler order (pending targets by device ID, canary first, then batches). Failures group current failed targets by diagnostic or error."
+      },
+      "CanaryWatch": {
+        "type": "object",
+        "properties": {
+          "window_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 3600,
+            "description": "How far before its release a device's baseline reaches."
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "device_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "released_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "gate_reason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "superseded",
+                        "stale",
+                        "paused",
+                        "unverified",
+                        "unavailable",
+                        "measuring",
+                        "degraded"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Why the canary gate is not counting this device as verified right now, by the same predicate that decides whether the rollout may go on; null when it is counted."
+                },
+                "now": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "sampled_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "events_in_per_second": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "events_out_per_second": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "errors_per_minute": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "buffer_utilization": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "sampled_at",
+                        "events_in_per_second",
+                        "events_out_per_second",
+                        "errors_per_minute",
+                        "buffer_utilization"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The device's latest sample, or null when it reports no fresh telemetry."
+                },
+                "baseline": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "minutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Minutes of stored telemetry the averages cover."
+                        },
+                        "events_in_per_second": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "events_out_per_second": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "errors_per_minute": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1000000000000000
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "buffer_utilization": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "minutes",
+                        "events_in_per_second",
+                        "events_out_per_second",
+                        "errors_per_minute",
+                        "buffer_utilization"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Averages of the stored minute samples before the release, or null when there are none. Never a zero standing in for missing history."
+                },
+                "samples": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "measured": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "needed": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "measured",
+                        "needed"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Delivery checks on this version so far, against the number the gate needs. Null when the device reports no metrics."
+                }
+              },
+              "required": [
+                "device_id",
+                "device_name",
+                "released_at",
+                "gate_reason",
+                "now",
+                "baseline",
+                "samples"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "more": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Canary devices beyond the five listed."
+          }
+        },
+        "required": [
+          "window_seconds",
+          "evaluated_at",
+          "devices",
+          "more"
+        ],
+        "additionalProperties": false,
+        "description": "What the canary devices of a running canary rollout deliver now, beside the same numbers over the minutes before their release, read from telemetry the server already stores. At most five devices, by name."
       },
       "DeviceListTelemetry": {
         "type": "object",

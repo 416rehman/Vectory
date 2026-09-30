@@ -5,6 +5,7 @@ pub mod assignment_removal;
 pub mod audit;
 pub mod audit_exports;
 pub mod auth;
+pub mod canary_choice;
 pub mod canary_gate;
 pub mod configuration_attempt;
 pub mod crypto;

@@ -236,7 +236,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -271,7 +271,13 @@ fn base(details: bool) -> String {
             number("details.tests_failed_count"),
             number("details.tests_refused_count"),
             number("details.tests_not_run_count"),
-            number("details.tests_passed_count")
+            number("details.tests_passed_count"),
+            text("details.stage", 32),
+            text("details.gate_state", 32),
+            number("details.released_count"),
+            number("details.verified_count"),
+            number("details.measuring_count"),
+            number("details.next_released_count")
         )
     } else {
         String::new()
@@ -580,6 +586,17 @@ fn details(v: &Value, extra: &Value) -> Value {
         | "notification.channel.delete"
         | "notification.channel.test" => &["name", "summary"],
         "detection.update" => &["summary"],
+        // The stage that was released early, what the gate showed then, and how
+        // many devices it released.
+        "deployment.stage_released_early" => &[
+            "summary",
+            "stage",
+            "gate_state",
+            "released_count",
+            "verified_count",
+            "measuring_count",
+            "next_released_count",
+        ],
         // Published over failing tests: the counts and one sentence, never a
         // test's name or body.
         "configuration.publish" => &[
