@@ -116,11 +116,13 @@ func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
 		t.Fatal(code, stderr)
 	}
 	// A complete policy file says what it leaves allowed.
+	// (An absolute path of this platform: "/var/log/app" names no drive on Windows.)
+	root := filepath.Join(t.TempDir(), "app-logs")
 	policy := filepath.Join(t.TempDir(), "allowances.json")
-	if err := agent.WriteJSON(policy, agent.CapabilityPolicy{AllowedFileRoots: []string{"/var/log/app"}}); err != nil {
+	if err := agent.WriteJSON(policy, agent.CapabilityPolicy{AllowedFileRoots: []string{root}}); err != nil {
 		t.Fatal(err)
 	}
-	if code, stdout, _ = invoke("install", "--state-dir", dir, "--capability-policy", policy); code != 0 || !strings.Contains(stdout, "This host allows files under /var/log/app.") {
+	if code, stdout, _ = invoke("install", "--state-dir", dir, "--capability-policy", policy); code != 0 || !strings.Contains(stdout, "This host allows files under "+root+".") {
 		t.Fatal(code, stdout)
 	}
 }
