@@ -472,6 +472,35 @@ func TestSetupRemembersAConfigDirectoryAfterVectorStops(t *testing.T) {
 	}
 }
 
+// A dry run says what a real one would do about a recorded topology, and
+// writes nothing: the adoption isn't recorded either.
+func TestDryRunOfAnAdoptionRecordsNothing(t *testing.T) {
+	h := newAdoptionHost(t, map[string]string{"10-sources.yaml": minimalYAML, "20-sinks.yaml": twoFiles}, configDirArgs)
+	first, err := h.run()
+	if err == nil || first.Adoption == nil {
+		t.Fatalf("%+v %v", first.Steps, err)
+	}
+	folder := first.Adoption.BackupDir
+	h.running = nil
+	h.options.DryRun = true
+	if _, err := h.run(); err == nil || !strings.Contains(err.Error(), "--adopt-existing") {
+		t.Fatalf("a dry run went ahead over a topology the agent wouldn't manage: %v", err)
+	}
+	h.options.AdoptExisting = true
+	result, err := h.run()
+	if err != nil || !result.OK || !result.DryRun || stepStatus(result, "install") != "plan" {
+		t.Fatalf("%+v %v", result.Steps, err)
+	}
+	var record AdoptionInventory
+	if err := ReadJSON(filepath.Join(folder, adoptionRecordName), &record); err != nil || record.Acknowledged {
+		t.Fatalf("a dry run recorded the adoption: %+v %v", record, err)
+	}
+	h.requireNothingInstalled()
+	if len(h.recordFolders()) != 1 {
+		t.Fatalf("%v", h.recordFolders())
+	}
+}
+
 func TestSetupAfterAPlainVectorStopsNeedsNoAdoption(t *testing.T) {
 	h := newAdoptionHost(t, map[string]string{"vector.yaml": minimalYAML}, func(conf string) []string { return []string{"--config", filepath.Join(conf, "vector.yaml")} })
 	if _, err := h.run(); err == nil {

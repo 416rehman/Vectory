@@ -5,7 +5,7 @@ package agent
 import (
 	"bytes"
 	"context"
-	"os/user"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -17,7 +17,8 @@ import (
 // collectStartup reads how one Vector process was started: its arguments and
 // environment from the kernel (kern.procargs2, which the account that runs the
 // process and root may read), its working directory from lsof, and the launchd
-// job that starts it.
+// job that starts it. Where the kernel's record can't be read, ps still shows
+// the arguments, though without their quoting.
 func collectStartup(ctx context.Context, running RunningVector) VectorStartup {
 	startup := VectorStartup{PID: running.PID, Service: running.Service}
 	pid := strconv.Itoa(running.PID)
@@ -29,10 +30,13 @@ func collectStartup(ctx context.Context, running RunningVector) VectorStartup {
 		}
 	}
 	if len(startup.Command) == 0 {
-		// Without permission for the process's own record, ps still shows its
-		// arguments, though unquoted.
 		if fields := strings.Fields(commandOutput(ctx, 65536, "/bin/ps", "-ww", "-o", "args=", "-p", pid)); len(fields) > 0 {
 			startup.Command, startup.Source = fields, "process"
+			// ps shows the environment of the account's own processes, and of every
+			// process to root. For any other it shows none, which says nothing.
+			if uid, err := strconv.Atoi(commandLine(ctx, "/bin/ps", "-o", "uid=", "-p", pid)); err == nil && (os.Geteuid() == 0 || uid == os.Geteuid()) {
+				startup.Environment, startup.EnvironmentKnown = environmentFromPS(commandOutput(ctx, 1<<20, "/bin/ps", "eww", "-o", "command=", "-p", pid), fields)
+			}
 		}
 	}
 	for _, line := range strings.Split(commandOutput(ctx, 65536, "/usr/sbin/lsof", "-a", "-d", "cwd", "-p", pid, "-Fn"), "\n") {
@@ -41,7 +45,7 @@ func collectStartup(ctx context.Context, running RunningVector) VectorStartup {
 			break
 		}
 	}
-	if job, ok := plistJobFor(ctx, commandLine(ctx, "/bin/ps", "-o", "uid=", "-p", pid), startup.Command, execPath); ok {
+	if job, ok := plistJobFor(ctx, startup.Command, execPath); ok {
 		startup.Service, startup.ServiceCommand = job.Label, job.Command()
 		if startup.WorkDir == "" {
 			startup.WorkDir = job.WorkingDirectory
@@ -60,16 +64,20 @@ func collectStartup(ctx context.Context, running RunningVector) VectorStartup {
 	return startup
 }
 
-// plistJobFor finds the launchd job whose property list starts this process:
-// the one with the process's arguments, or else its executable. Jobs live in
-// the system folders and in the LaunchAgents of the account that runs it.
-func plistJobFor(ctx context.Context, uid string, command []string, execPath string) (plistJob, bool) {
+// launchdDirectories are the folders launchd jobs are defined in: the system's,
+// and the LaunchAgents of every account setup may read (all of them as root,
+// its own otherwise).
+func launchdDirectories() []string {
 	directories := []string{"/Library/LaunchDaemons", "/Library/LaunchAgents"}
-	if account, err := user.LookupId(strings.TrimSpace(uid)); err == nil && account.HomeDir != "" {
-		directories = append(directories, filepath.Join(account.HomeDir, "Library", "LaunchAgents"))
-	}
+	users, _ := filepath.Glob("/Users/*/Library/LaunchAgents")
+	return append(directories, users...)
+}
+
+// plistJobFor finds the launchd job whose property list starts this process:
+// the one with the process's arguments, or else its executable.
+func plistJobFor(ctx context.Context, command []string, execPath string) (plistJob, bool) {
 	var byExecutable *plistJob
-	for _, directory := range directories {
+	for _, directory := range launchdDirectories() {
 		paths, _ := filepath.Glob(filepath.Join(directory, "*.plist"))
 		for _, path := range paths {
 			job, ok := readPlistJob(ctx, path)

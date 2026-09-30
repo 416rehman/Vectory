@@ -117,6 +117,24 @@ func TestParseProcArgs2(t *testing.T) {
 	}
 }
 
+func TestEnvironmentFromPS(t *testing.T) {
+	command := []string{"/opt/homebrew/bin/vector", "--config-dir", "/opt/homebrew/etc/vector/conf.d"}
+	line := "  /opt/homebrew/bin/vector --config-dir /opt/homebrew/etc/vector/conf.d HOME=/Users/op VECTOR_CONFIG_JSON=/x/extra.json PATH=/usr/bin AWS_SECRET_ACCESS_KEY=hunter2\n"
+	got, ok := environmentFromPS(line, command)
+	if !ok || !reflect.DeepEqual(got, map[string]string{"VECTOR_CONFIG_JSON": "/x/extra.json"}) {
+		t.Fatalf("%v %v", got, ok)
+	}
+	if got, ok := environmentFromPS("/opt/homebrew/bin/vector --config-dir /opt/homebrew/etc/vector/conf.d", command); !ok || len(got) != 0 {
+		t.Fatalf("a process with nothing to show: %v %v", got, ok)
+	}
+	if _, ok := environmentFromPS("/somewhere/else --config-dir x", command); ok {
+		t.Fatal("a line that doesn't start with the arguments says nothing about the environment")
+	}
+	if _, ok := environmentFromPS("", command); ok {
+		t.Fatal("an empty line says nothing")
+	}
+}
+
 const homebrewPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

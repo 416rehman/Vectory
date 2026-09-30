@@ -198,6 +198,20 @@ func parseProcArgs2(data []byte) (path string, args, environment []string, err e
 	return path, args, environment, nil
 }
 
+// environmentFromPS reads the variables that select configuration from the
+// line `ps eww` prints for a process: its arguments, then its environment,
+// separated by spaces. A value with a space in it is cut at the space, which
+// costs nothing for the paths and comma lists these variables hold unless one
+// has a space. The second result is false when the line doesn't start with the
+// arguments it should.
+func environmentFromPS(line string, command []string) (map[string]string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), strings.Join(command, " "))
+	if !ok {
+		return nil, false
+	}
+	return selectedEnvironment(strings.Fields(rest), false), true
+}
+
 // plistJob is the part of a launchd property list that says how a job starts.
 type plistJob struct {
 	Label                string
