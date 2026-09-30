@@ -12,6 +12,7 @@ export function pipelineRoute(
   if (destination) {
     query.set("panel", destination.panel);
     if (destination.section) query.set("section", destination.section);
+    if (destination.test) query.set("test", String(destination.test));
   }
   return `configurations${id ? `/${encodeURIComponent(id)}` : ""}${query.size ? `?${query}` : ""}`;
 }

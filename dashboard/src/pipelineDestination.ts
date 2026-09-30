@@ -9,6 +9,8 @@ export type PipelineSection =
 export type PipelineDestination = {
   panel: PipelinePanel;
   section?: PipelineSection;
+  /** The test to select (1-based), for the tests section. */
+  test?: number;
 };
 
 const panels = new Set(["settings", "history", "details", "tools"]);
@@ -29,10 +31,17 @@ export function readPipelineDestination(
   const panel = query.get("panel");
   if (!panel || !panels.has(panel)) return undefined;
   const section = query.get("section");
+  const test = query.get("test");
   return {
     panel: panel as PipelinePanel,
     ...(panel === "settings" && section && Object.hasOwn(sections, section)
       ? { section: section as PipelineSection }
+      : {}),
+    ...(panel === "settings" &&
+    section === "tests" &&
+    test &&
+    /^[1-9]\d{0,2}$/.test(test)
+      ? { test: Number(test) }
       : {}),
   };
 }

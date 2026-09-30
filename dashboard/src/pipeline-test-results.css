@@ -73,3 +73,14 @@
   font-size: 12.5px;
   line-height: 1.45;
 }
+.pipeline-test-reason,
+.pipeline-test-hint {
+  margin: 6px 0 0 23px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.pipeline-test-hint {
+  color: var(--ink);
+}
