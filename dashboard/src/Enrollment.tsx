@@ -474,6 +474,12 @@ export function Enrollment({
     (Number.isInteger(Number(maxUses)) &&
       Number(maxUses) >= 1 &&
       Number(maxUses) <= 100000);
+  // A use limit below the list's length leaves some names unable to enroll.
+  const namesBeyondUses =
+    !!preapproved.value &&
+    !!maxUses &&
+    usesValid &&
+    Number(maxUses) < preapproved.value.length;
   const hoursValid = Number.isInteger(hours) && hours >= 1 && hours <= 720;
   const ready =
     !!install?.agent_url &&
@@ -1024,9 +1030,11 @@ export function Enrollment({
                   label="Only these device names (optional)"
                   hint={
                     preapproved.error ||
-                    (nameListed
-                      ? "One per line or separated by commas. Each name can enroll once."
-                      : "Add this device's name to the list.")
+                    (!nameListed
+                      ? "Add this device's name to the list."
+                      : namesBeyondUses
+                        ? `Only ${Number(maxUses)} of these ${preapproved.value?.length} names can enroll: raise Devices it can enroll, or leave it empty.`
+                        : "One per line or separated by commas. Each name can enroll once.")
                   }
                 >
                   <textarea
@@ -1053,7 +1061,7 @@ export function Enrollment({
                     aria-invalid={!!labels.error}
                     disabled={!!command}
                     onChange={(event) => setLabelsText(event.target.value)}
-                    placeholder={"site=berlin\nrack=r12"}
+                    placeholder={"site=berlin\nrack=a7"}
                     autoComplete="off"
                     spellCheck={false}
                   />

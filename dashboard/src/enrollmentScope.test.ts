@@ -78,8 +78,8 @@ describe("enrollment token scope", () => {
 
   it("reads labels one key=value per line", () => {
     expect(parseLabels("")).toEqual({ value: null, error: "" });
-    expect(parseLabels("Site = Berlin\n\nrack=r12=a\r\n")).toEqual({
-      value: { site: "Berlin", rack: "r12=a" },
+    expect(parseLabels("Site = Berlin\n\nrack=a7=b\r\n")).toEqual({
+      value: { site: "Berlin", rack: "a7=b" },
       error: "",
     });
     expect(parseLabels("site").error).toMatch(/key=value/);
@@ -122,9 +122,9 @@ describe("enrollment token scope", () => {
     expect(
       scopeText({
         allowed_names: ["a", "b"],
-        labels: { site: "berlin", rack: "r12" },
+        labels: { site: "berlin", rack: "a7" },
       }),
-    ).toBe("2 preapproved names · labels site=berlin, rack=r12");
+    ).toBe("2 preapproved names · labels site=berlin, rack=a7");
     expect(scopeText({ recovery_name: "edge-01", allowed_names: ["x"] })).toBe(
       "Recovery for edge-01",
     );
