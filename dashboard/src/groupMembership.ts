@@ -8,6 +8,20 @@ import {
 } from "./api";
 import { assignmentName, policySummary } from "./deploymentReviewModel";
 
+/**
+ * An edit that changes more devices than this is previewed when asked: the
+ * server answers with a line per device, which nobody needs after a click on
+ * "Remove all".
+ */
+export const AUTO_PREVIEW = 500;
+/**
+ * Whether an edit's preview is read now: any small edit, and a large one
+ * only once someone asked for exactly this edit (`asked` is its key).
+ */
+export function previewWanted(changed: number, key: string, asked: string) {
+  return changed > 0 && (changed <= AUTO_PREVIEW || asked === key);
+}
+
 /** Members read per page when looking for ones the server no longer knows. */
 const MEMBER_PAGE = 100;
 /** Pages read from the end of a group's members, at most. */
