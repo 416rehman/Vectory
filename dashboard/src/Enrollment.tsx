@@ -831,7 +831,7 @@ export function Enrollment({
               <span className="control-muted">
                 {" "}
                 · device name, server certificate, Vector binary, token limits,
-                service account, paths
+                allowed names, labels, service account, paths
               </span>
             </summary>
             <fieldset disabled={busy} className="enroll-advanced-fields">
