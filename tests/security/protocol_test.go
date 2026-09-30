@@ -26,9 +26,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -82,22 +84,49 @@ func keyCSR(t *testing.T) ([]byte, string) {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw}), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}))
 }
+
+// server is one isolated server process that a test may stop and start again
+// on the same state, as an operator does around vectory-admin.
+type server struct {
+	t                                             *testing.T
+	h                                             *harness
+	dir, binary, admin, certPath, keyPath, secret string
+	cmd                                           *exec.Cmd
+	log                                           *os.File
+}
+
 func setup(t *testing.T) *harness {
+	s := newServer(t)
+	s.start()
+	return s.h
+}
+
+// copyBinary copies a build input so native Windows tests do not hold the
+// developer's build output open or switch revisions during a concurrent rebuild.
+func copyBinary(t *testing.T, dir, binary string) string {
+	bytes, e := os.ReadFile(binary)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Logf("native %s sha256=%x", filepath.Base(binary), sha256.Sum256(bytes))
+	copied := filepath.Join(dir, filepath.Base(binary))
+	if e = os.WriteFile(copied, bytes, 0700); e != nil {
+		t.Fatal(e)
+	}
+	return copied
+}
+
+func newServer(t *testing.T) *server {
 	binary := os.Getenv("VECTORY_SECURITY_SERVER")
 	if binary == "" {
 		t.Skip("native server security suite requires VECTORY_SECURITY_SERVER; not a passing native gate")
 	}
 	dir := t.TempDir()
-	// Copy the input so native Windows tests do not hold the developer's build
-	// output open or accidentally switch revisions during a concurrent rebuild.
-	binaryBytes, copyError := os.ReadFile(binary)
-	if copyError != nil {
-		t.Fatal(copyError)
-	}
-	t.Logf("native server sha256=%x", sha256.Sum256(binaryBytes))
-	binary = filepath.Join(dir, filepath.Base(binary))
-	if copyError = os.WriteFile(binary, binaryBytes, 0700); copyError != nil {
-		t.Fatal(copyError)
+	s := &server{t: t, dir: dir, binary: copyBinary(t, dir, binary)}
+	// vectory-admin is built next to the server; VECTORY_SECURITY_ADMIN overrides.
+	s.admin = os.Getenv("VECTORY_SECURITY_ADMIN")
+	if s.admin == "" {
+		s.admin = filepath.Join(filepath.Dir(binary), "vectory-admin"+filepath.Ext(binary))
 	}
 	k, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
@@ -115,57 +144,81 @@ func setup(t *testing.T) *harness {
 		t.Fatal(e)
 	}
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(k)
-	certPath, keyPath, secretPath := filepath.Join(dir, "server.pem"), filepath.Join(dir, "key.pem"), filepath.Join(dir, "bootstrap")
-	for p, b := range map[string][]byte{certPath: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), keyPath: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})} {
+	s.certPath, s.keyPath, s.secret = filepath.Join(dir, "server.pem"), filepath.Join(dir, "key.pem"), filepath.Join(dir, "bootstrap")
+	for p, b := range map[string][]byte{s.certPath: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), s.keyPath: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})} {
 		if e = os.WriteFile(p, b, 0600); e != nil {
 			t.Fatal(e)
 		}
 	}
 	secret := fmt.Sprintf("%x", serial().Bytes()) + fmt.Sprintf("%x", serial().Bytes())
-	if e = os.WriteFile(secretPath, []byte(secret), 0600); e != nil {
+	if e = os.WriteFile(s.secret, []byte(secret), 0600); e != nil {
 		t.Fatal(e)
 	}
-	httpAddr, tlsAddr := freePort(t), freePort(t)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
-	h := &harness{t: t, http: "http://" + httpAddr, https: "https://" + tlsAddr, plain: &http.Client{Timeout: 10 * time.Second}, tls: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}}}, bootstrap: secret, roots: roots}
-	log, e := os.Create(filepath.Join(dir, "server.log"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	cmd := exec.Command(binary)
-	cmd.Env = append(os.Environ(), "VECTORY_DATA_DIR="+filepath.Join(dir, "state"), "VECTORY_HTTP_ADDR="+httpAddr, "VECTORY_AGENT_ADDR="+tlsAddr, "VECTORY_TLS_CERT="+certPath, "VECTORY_TLS_KEY="+keyPath, "VECTORY_BOOTSTRAP_SECRET_FILE="+secretPath, "VECTORY_COOKIE_SECURE=false", "VECTORY_DEVELOPMENT=true", "VECTORY_DASHBOARD_DIR="+dir, "VECTORY_RELEASES_DIR="+filepath.Join(dir, "releases"))
-	cmd.Stdout = log
-	cmd.Stderr = log
-	if e = cmd.Start(); e != nil {
-		log.Close()
+	s.h = &harness{t: t, plain: &http.Client{Timeout: 10 * time.Second}, tls: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13}}}, bootstrap: secret, roots: roots}
+	if s.log, e = os.Create(filepath.Join(dir, "server.log")); e != nil {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-		log.Close()
+		s.stop()
+		s.log.Close()
 		if t.Failed() {
 			data, _ := os.ReadFile(filepath.Join(dir, "server.log"))
 			t.Logf("server diagnostics: %s", data)
 		}
 	})
-	ready := false
+	return s
+}
+
+// start runs the server on fresh loopback ports and waits until it answers.
+func (s *server) start() {
+	t, h := s.t, s.h
+	httpAddr, tlsAddr := freePort(t), freePort(t)
+	h.http, h.https = "http://"+httpAddr, "https://"+tlsAddr
+	cmd := exec.Command(s.binary)
+	cmd.Env = append(os.Environ(), "VECTORY_DATA_DIR="+filepath.Join(s.dir, "state"), "VECTORY_HTTP_ADDR="+httpAddr, "VECTORY_AGENT_ADDR="+tlsAddr, "VECTORY_TLS_CERT="+s.certPath, "VECTORY_TLS_KEY="+s.keyPath, "VECTORY_BOOTSTRAP_SECRET_FILE="+s.secret, "VECTORY_COOKIE_SECURE=false", "VECTORY_DEVELOPMENT=true", "VECTORY_DASHBOARD_DIR="+s.dir, "VECTORY_RELEASES_DIR="+filepath.Join(s.dir, "releases"))
+	cmd.Stdout = s.log
+	cmd.Stderr = s.log
+	if e := cmd.Start(); e != nil {
+		t.Fatal(e)
+	}
+	s.cmd = cmd
 	for i := 0; i < 100; i++ {
 		res, e := h.plain.Get(h.http + "/api/v1/status")
 		if e == nil {
 			res.Body.Close()
 			if res.StatusCode == 200 {
-				ready = true
-				break
+				return
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !ready {
-		t.Fatal("isolated server did not become ready")
+	t.Fatal("isolated server did not become ready")
+}
+
+// stop ends the server process; its exclusive data-directory lock goes with it.
+func (s *server) stop() {
+	if s.cmd != nil {
+		s.cmd.Process.Kill()
+		s.cmd.Wait()
+		s.cmd = nil
 	}
-	return h
+}
+
+// adminTool runs vectory-admin on this server's state, returning its combined
+// output and exit code.
+func (s *server) adminTool(args ...string) (string, int) {
+	s.t.Helper()
+	cmd := exec.Command(s.admin, append([]string{"--data-dir", filepath.Join(s.dir, "state")}, args...)...)
+	out, e := cmd.CombinedOutput()
+	if exit, ok := e.(*exec.ExitError); ok {
+		return string(out), exit.ExitCode()
+	}
+	if e != nil {
+		s.t.Fatalf("vectory-admin did not run (set VECTORY_SECURITY_ADMIN): %v", e)
+	}
+	return string(out), 0
 }
 func (h *harness) req(client *http.Client, base, method, path string, v any, cookie, csrf string) (int, map[string]any, http.Header) {
 	h.t.Helper()
@@ -466,6 +519,148 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatal("revoked token accepted")
 		}
 	})
+	t.Run("token-scope-preapproved-names-and-labels-grant-nothing", func(t *testing.T) {
+		tooMany := map[string]string{}
+		for i := 0; i < 9; i++ {
+			tooMany[fmt.Sprintf("k%d", i)] = "v"
+		}
+		for _, bad := range []map[string]any{
+			{"name": "scope-bad", "expires_hours": 1, "name_prefix": "scope-", "allowed_names": []string{"elsewhere-1"}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{"scope-a", "SCOPE-A"}},
+			{"name": "scope-bad", "expires_hours": 1, "allowed_names": []string{"not a name"}},
+			{"name": "scope-bad", "expires_hours": 1, "labels": map[string]string{"bad key": "x"}},
+			{"name": "scope-bad", "expires_hours": 1, "labels": tooMany},
+		} {
+			n, v, _ := h.api("POST", "/tokens", bad)
+			expect(t, n, 400, v)
+		}
+		// A group named like a label: a label must not put a device in it.
+		n, group, _ := h.api("POST", "/groups", map[string]any{"name": "production", "device_ids": []string{}})
+		okay(t, n, group)
+		n, created, _ := h.api("POST", "/tokens", map[string]any{"name": "scoped", "expires_hours": 1, "max_uses": 10, "name_prefix": "scope-", "allowed_names": []string{" Scope-A", "scope-b"}, "labels": map[string]string{"Site": " Berlin ", "group": "production"}})
+		okay(t, n, created)
+		record := created["record"].(map[string]any)
+		if fmt.Sprint(record["allowed_names"]) != "[scope-a scope-b]" || fmt.Sprint(record["labels"]) != "map[group:production site:Berlin]" {
+			t.Fatalf("scope not normalized: %#v", record)
+		}
+		secret := created["token"].(string)
+		listed := func() map[string]bool {
+			r, e := http.NewRequest("GET", h.http+"/api/v1/devices", nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r.Header.Set("Cookie", h.cookie)
+			res, e := h.plain.Do(r)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer res.Body.Close()
+			var devices []map[string]any
+			if e = json.NewDecoder(res.Body).Decode(&devices); e != nil {
+				t.Fatal(e)
+			}
+			names := map[string]bool{}
+			for _, d := range devices {
+				names[d["name"].(string)] = true
+			}
+			return names
+		}
+		before := listed()
+		_, outsideCSR := keyCSR(t)
+		// Matches the prefix but isn't on the list; then matches neither.
+		for _, name := range []string{"scope-c", "elsewhere-2"} {
+			n, v := h.enroll(secret, name, fmt.Sprintf("%x", serial()), outsideCSR)
+			if n < 400 {
+				t.Fatalf("%s enrolled outside the token's scope: %#v", name, v)
+			}
+		}
+		if after := listed(); len(after) != len(before) || after["scope-c"] || after["elsewhere-2"] {
+			t.Fatal("a refused enrollment created a device record")
+		}
+		key, csr := keyCSR(t)
+		n, enrolled := h.enroll(secret, "Scope-A", fmt.Sprintf("%x", serial()), csr)
+		okay(t, n, enrolled)
+		_, againCSR := keyCSR(t)
+		n, v := h.enroll(secret, "scope-a", fmt.Sprintf("%x", serial()), againCSR)
+		if n < 400 {
+			t.Fatalf("a preapproved name enrolled twice: %#v", v)
+		}
+		reasons := map[string]string{}
+		n, activity, _ := h.api("GET", "/agent-install/activity?since="+url.QueryEscape(time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)), nil)
+		okay(t, n, activity)
+		for _, raw := range activity["events"].([]any) {
+			event := raw.(map[string]any)
+			if event["token_id"] == record["id"] && event["outcome"] == "failure" {
+				if _, seen := reasons[fmt.Sprint(event["device_name"])]; !seen {
+					reasons[fmt.Sprint(event["device_name"])] = fmt.Sprint(event["reason_code"])
+				}
+			}
+		}
+		if reasons["scope-c"] != "NAME_NOT_PREAPPROVED" || reasons["elsewhere-2"] != "NAME_PREFIX_MISMATCH" || reasons["scope-a"] != "NAME_ALREADY_ENROLLED" {
+			t.Fatalf("refusal reasons not recorded: %#v", reasons)
+		}
+		// Labels arrive on the device; they grant no group, assignment or policy.
+		id := enrolled["device_id"].(string)
+		n, detail, _ := h.api("GET", "/devices/"+id+"?include=groups", nil)
+		okay(t, n, detail)
+		if fmt.Sprint(detail["labels"]) != "map[group:production site:Berlin]" || detail["name"] != "scope-a" {
+			t.Fatalf("labels not applied: %#v", detail)
+		}
+		if detail["groups"].(map[string]any)["total"] != float64(0) || detail["desired_version_id"] != nil || detail["desired_generation"] != float64(0) || detail["assignment"] != nil || detail["policy_assignment"] != nil {
+			t.Fatalf("enrollment scope granted membership or an assignment: %#v", detail)
+		}
+		n, members, _ := h.api("GET", "/groups/"+group["id"].(string)+"/members", nil)
+		okay(t, n, members)
+		if members["total"] != float64(0) {
+			t.Fatalf("a label added group membership: %#v", members)
+		}
+		scoped := h.client(enrolled, key)
+		defer scoped.CloseIdleConnections()
+		n, envelope, _ := h.req(scoped, h.https, "POST", "/agent/v1/heartbeat", beat, "", "")
+		okay(t, n, envelope)
+		payload, _ := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+		var manifest map[string]any
+		if err := json.Unmarshal(payload, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if manifest["desired"] != nil || manifest["generation"] != float64(0) {
+			t.Fatalf("a scoped enrollment received desired state: %#v", manifest)
+		}
+		// The other listed name, with the prefix, enrolls under the same token.
+		_, secondCSR := keyCSR(t)
+		n, second := h.enroll(secret, "scope-b", fmt.Sprintf("%x", serial()), secondCSR)
+		okay(t, n, second)
+	})
+	t.Run("token-name-binding-and-preapproved-list-are-independent-limits", func(t *testing.T) {
+		n, created, _ := h.api("POST", "/tokens", map[string]any{"name": "both", "expires_hours": 1, "max_uses": 5, "device_name": "Bound-A", "allowed_names": []string{"bound-a", "bound-b"}})
+		okay(t, n, created)
+		record := created["record"].(map[string]any)
+		if record["device_name"] != "bound-a" || fmt.Sprint(record["allowed_names"]) != "[bound-a bound-b]" {
+			t.Fatalf("both limits were not stored: %#v", record)
+		}
+		secret := created["token"].(string)
+		// On the list but not the bound name: refused. The bound name enrolls.
+		_, listedCSR := keyCSR(t)
+		n, v := h.enroll(secret, "bound-b", fmt.Sprintf("%x", serial()), listedCSR)
+		if n < 400 {
+			t.Fatalf("a listed name other than the bound one enrolled: %#v", v)
+		}
+		_, boundCSR := keyCSR(t)
+		n, v = h.enroll(secret, "bound-a", fmt.Sprintf("%x", serial()), boundCSR)
+		okay(t, n, v)
+		// A bound name that isn't on the list, and a listed name that isn't the
+		// bound one, can never enroll: the limits are not alternatives.
+		n, contradictory, _ := h.api("POST", "/tokens", map[string]any{"name": "never", "expires_hours": 1, "device_name": "solo-a", "allowed_names": []string{"solo-b"}})
+		okay(t, n, contradictory)
+		_, neverCSR := keyCSR(t)
+		for _, name := range []string{"solo-a", "solo-b"} {
+			n, v := h.enroll(contradictory["token"].(string), name, fmt.Sprintf("%x", serial()), neverCSR)
+			if n < 400 {
+				t.Fatalf("%s enrolled although the token's limits contradict each other: %#v", name, v)
+			}
+		}
+	})
 	t.Run("editor-and-operator-restrictions", func(t *testing.T) {
 		for role, paths := range map[string][]string{"editor": {"/users", "/tokens", "/groups", "/deployments"}, "operator": {"/users", "/configurations"}} {
 			email := role + "@example.invalid"
@@ -706,4 +901,191 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		n, denied, _ = h.req(h.plain, h.http, "GET", "/api/v1/session", nil, recoveryCookie, "")
 		expect(t, n, 401, denied)
 	})
+}
+
+// Device CA rotation with the real vectory-admin tool: refused while the
+// server runs; devices on the old CA keep working and renew onto the new one;
+// the manifest signing trust is unchanged; a forgery chained to neither CA is
+// refused; retiring waits for the devices that still hold old certificates;
+// afterwards the old CA's certificates are refused at TLS.
+func TestDeviceCARotationWithTheAdminTool(t *testing.T) {
+	s := newServer(t)
+	s.start()
+	h := s.h
+	n, v, headers := h.api("POST", "/bootstrap", map[string]any{"bootstrap_secret": h.bootstrap, "email": "rotation-admin@example.invalid", "name": "Rotation test", "password": "test-only-password-29843"})
+	okay(t, n, v)
+	h.cookie = strings.Split(headers.Get("Set-Cookie"), ";")[0]
+	h.csrf = v["csrf_token"].(string)
+	fingerprint := func(text string) string {
+		block, _ := pem.Decode([]byte(text))
+		if block == nil {
+			t.Fatalf("not a PEM certificate: %q", text)
+		}
+		return fmt.Sprintf("%x", sha256.Sum256(block.Bytes))
+	}
+	issuer := func(text string) string {
+		block, _ := pem.Decode([]byte(text))
+		certificate, e := x509.ParseCertificate(block.Bytes)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return certificate.Issuer.String()
+	}
+	nonce := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	beat := map[string]any{"protocol_version": 1, "request_id": "rotation", "nonce": nonce, "boot_id": "rotation", "agent_version": "security-test", "vector_version": "0.58.0", "reported_generation": 0, "policy_generation": 0, "actual_sha256": "", "apply_state": "unmanaged", "local_paused": false, "remote_pause_acknowledged": false}
+	// Go's TLS client withholds a certificate whose issuer the server doesn't
+	// advertise, so an attacker's client always presents it: the server's own
+	// verifier must refuse it.
+	checkIn := func(credentials map[string]any, key []byte) (int, map[string]any, error) {
+		pair, e := tls.X509KeyPair([]byte(credentials["certificate_pem"].(string)), key)
+		if e != nil {
+			t.Fatal(e)
+		}
+		client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: h.roots, MinVersion: tls.VersionTLS13, GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &pair, nil }}}}
+		defer client.CloseIdleConnections()
+		body, _ := json.Marshal(beat)
+		request, _ := http.NewRequest("POST", h.https+"/agent/v1/heartbeat", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response, e := client.Do(request)
+		if e != nil {
+			return 0, nil, e
+		}
+		defer response.Body.Close()
+		var out map[string]any
+		json.NewDecoder(response.Body).Decode(&out)
+		return response.StatusCode, out, nil
+	}
+	token := h.token(map[string]any{"name": "rotation", "expires_hours": 1, "max_uses": 10})
+	keyA, csrA := keyCSR(t)
+	n, a := h.enroll(token, "rot-a", fmt.Sprintf("%x", serial()), csrA)
+	okay(t, n, a)
+	keyB, csrB := keyCSR(t)
+	n, b := h.enroll(token, "rot-b", fmt.Sprintf("%x", serial()), csrB)
+	okay(t, n, b)
+	oldCA, signing := fingerprint(a["ca_pem"].(string)), a["signing_public_key"].(string)
+	signedBy := func(envelope map[string]any) bool {
+		payload, _ := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+		signature, _ := base64.StdEncoding.DecodeString(envelope["signature"].(string))
+		public, _ := base64.StdEncoding.DecodeString(signing)
+		return ed25519.Verify(public, payload, signature)
+	}
+
+	if out, code := s.adminTool("rotate-device-ca"); code != 1 || !strings.Contains(out, "still running") {
+		t.Fatalf("rotation ran next to a live server: %d %s", code, out)
+	}
+	s.stop()
+	out, code := s.adminTool("rotate-device-ca")
+	current := regexp.MustCompile(`Current CA   sha256 ([0-9a-f]{64})`).FindStringSubmatch(out)
+	if code != 0 || current == nil || !strings.Contains(out, "Previous CA  sha256 "+oldCA) || !strings.Contains(out, "2 devices hold certificates from the previous CA") {
+		t.Fatalf("rotate-device-ca: %d %s", code, out)
+	}
+	newCA := current[1]
+	if out, code := s.adminTool("rotate-device-ca"); code != 1 || !strings.Contains(out, "Retire it first") {
+		t.Fatalf("a second overlap was started: %d %s", code, out)
+	}
+	s.start()
+
+	// Overlap: both old-CA devices keep working under the same signing key.
+	for _, device := range []struct {
+		credentials map[string]any
+		key         []byte
+	}{{a, keyA}, {b, keyB}} {
+		n, envelope, e := checkIn(device.credentials, device.key)
+		if e != nil || n != 200 || !signedBy(envelope) {
+			t.Fatalf("an old-CA device stopped working during the overlap: %d %v %#v", n, e, envelope)
+		}
+		// The agent's own transport offers its certificate only for a CA the
+		// server names in its request: the previous CA is named during the overlap.
+		agentLike := h.client(device.credentials, device.key)
+		n, envelope, _ = h.req(agentLike, h.https, "POST", "/agent/v1/heartbeat", beat, "", "")
+		agentLike.CloseIdleConnections()
+		if n != 200 || !signedBy(envelope) {
+			t.Fatalf("an agent-like client on the old CA stopped working during the overlap: %d %#v", n, envelope)
+		}
+	}
+	// A forgery chained to neither CA, named like the original CA, is refused.
+	attackerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	attackerTemplate := &x509.Certificate{SerialNumber: serial(), Subject: pkix.Name{CommonName: "Vectory device CA"}, IsCA: true, BasicConstraintsValid: true, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageCertSign}
+	attackerDER, _ := x509.CreateCertificate(rand.Reader, attackerTemplate, attackerTemplate, &attackerKey.PublicKey, attackerKey)
+	attackerCA, _ := x509.ParseCertificate(attackerDER)
+	forgedKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	forgedDER, _ := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: serial(), Subject: pkix.Name{CommonName: a["device_id"].(string)}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, attackerCA, &forgedKey.PublicKey, attackerKey)
+	forgedPKCS8, _ := x509.MarshalPKCS8PrivateKey(forgedKey)
+	forged := map[string]any{"certificate_pem": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: forgedDER}))}
+	forgedKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: forgedPKCS8})
+	if n, _, e := checkIn(forged, forgedKeyPEM); e == nil {
+		t.Fatalf("a certificate from an unknown CA passed TLS: HTTP %d", n)
+	}
+	// Renewal moves a device onto the new CA; signing trust is unchanged.
+	nextKey, nextCSR := keyCSR(t)
+	clientB := h.client(b, keyB)
+	n, renewed, _ := h.req(clientB, h.https, "POST", "/agent/v1/renew", map[string]any{"csr_pem": nextCSR}, "", "")
+	clientB.CloseIdleConnections()
+	okay(t, n, renewed)
+	if fingerprint(renewed["ca_pem"].(string)) != newCA || renewed["signing_public_key"] != signing || issuer(renewed["certificate_pem"].(string)) == issuer(b["certificate_pem"].(string)) {
+		t.Fatalf("renewal did not move the device onto the new CA: %#v", renewed)
+	}
+	if n, envelope, e := checkIn(renewed, nextKey); e != nil || n != 200 || !signedBy(envelope) {
+		t.Fatalf("the renewed certificate does not work: %d %v", n, e)
+	}
+	keyC, csrC := keyCSR(t)
+	n, c := h.enroll(token, "rot-c", fmt.Sprintf("%x", serial()), csrC)
+	okay(t, n, c)
+	if fingerprint(c["ca_pem"].(string)) != newCA {
+		t.Fatal("a device enrolled during the overlap got a certificate from the old CA")
+	}
+	n, settings, _ := h.api("GET", "/settings", nil)
+	okay(t, n, settings)
+	status := settings["device_ca"].(map[string]any)
+	previous, _ := status["previous"].(map[string]any)
+	if status["current"].(map[string]any)["sha256"] != newCA || previous == nil || previous["sha256"] != oldCA || previous["devices"] != float64(2) || fmt.Sprint(previous["device_names"]) != "[rot-a rot-b]" {
+		t.Fatalf("device CA status: %#v", status)
+	}
+
+	// Retiring waits for both devices: A never renewed, and B's old
+	// certificate stays valid for a day after its renewal.
+	s.stop()
+	for _, args := range [][]string{{"retire-device-ca"}, {"retire-device-ca", "--apply"}} {
+		if out, code := s.adminTool(args...); code != 1 || !strings.Contains(out, "2 devices still hold certificates it issued: rot-a, rot-b") {
+			t.Fatalf("%v retired while devices remained: %d %s", args, code, out)
+		}
+	}
+	if out, code := s.adminTool("device-ca-status"); code != 0 || !strings.Contains(out, "sha256 "+newCA) || !strings.Contains(out, "2 devices still hold certificates from the previous CA") {
+		t.Fatalf("device-ca-status: %d %s", code, out)
+	}
+	s.start()
+	for _, device := range []map[string]any{a, b} {
+		n, v, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/revoke", map[string]any{})
+		okay(t, n, v)
+	}
+	s.stop()
+	if out, code := s.adminTool("retire-device-ca"); code != 0 || !strings.Contains(out, "Ready") {
+		t.Fatalf("retire check: %d %s", code, out)
+	}
+	if out, code := s.adminTool("retire-device-ca", "--apply"); code != 0 || !strings.Contains(out, "Retired the previous device CA (sha256 "+oldCA) {
+		t.Fatalf("retire: %d %s", code, out)
+	}
+	s.start()
+
+	// The old CA's certificates are refused at TLS; the new CA's pass TLS,
+	// and revocation still decides after that. An agent-like client that
+	// withholds the retired certificate is simply unauthenticated.
+	if n, _, e := checkIn(a, keyA); e == nil {
+		t.Fatalf("a certificate from the retired CA passed TLS: HTTP %d", n)
+	}
+	agentLike := h.client(a, keyA)
+	n, v, _ = h.req(agentLike, h.https, "POST", "/agent/v1/heartbeat", beat, "", "")
+	agentLike.CloseIdleConnections()
+	expect(t, n, 401, v)
+	if n, _, e := checkIn(renewed, nextKey); e != nil || n != 401 {
+		t.Fatalf("a revoked device's new-CA certificate: %d %v", n, e)
+	}
+	if n, envelope, e := checkIn(c, keyC); e != nil || n != 200 || !signedBy(envelope) {
+		t.Fatalf("a new-CA device stopped working after retirement: %d %v", n, e)
+	}
+	n, settings, _ = h.api("GET", "/settings", nil)
+	okay(t, n, settings)
+	if settings["device_ca"].(map[string]any)["previous"] != nil {
+		t.Fatalf("a retired CA is still reported: %#v", settings["device_ca"])
+	}
 }

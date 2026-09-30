@@ -32,6 +32,8 @@ import AgentSettingsCreation, {
   type AgentSettingsCreationHandle,
 } from "./AgentSettingsCreation";
 import AgentSettingsEditor from "./AgentSettingsEditor";
+import { DeviceCertificates } from "./DeviceCertificates";
+import { readDeviceCa } from "./deviceCaStatus";
 import "./control.css";
 import type { Notify } from "./toast";
 
@@ -463,6 +465,8 @@ type InstanceSettings = {
   vector_version?: string | null;
   heartbeat_seconds?: number | null;
   telemetry_retention_days?: number | null;
+  /** The device CA and the one a rotation replaced; readDeviceCa checks its shape. */
+  device_ca?: unknown;
 };
 
 export function Settings() {
@@ -555,6 +559,7 @@ export function Settings() {
           </div>
         </details>
       </section>
+      <DeviceCertificates status={readDeviceCa(data?.device_ca)} />
     </div>
   );
 }

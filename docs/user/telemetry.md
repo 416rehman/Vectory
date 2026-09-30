@@ -107,6 +107,58 @@ Hover over the throughput chart, or focus it and use the arrow keys, to read a s
 
 History is kept for 7 days by default and bucketed by minute. A gap means no sample arrived. Old samples stay after a device goes offline, so check the timestamp before treating a number as current.
 
+## Storage and limits
+
+Each check-in that carries metrics updates two things on the server:
+
+- **The latest sample**, on the device's record, with its per-component breakdown. The next check-in replaces it.
+- **History**: one row per device per minute, with the device-level numbers only (no components). Another check-in in the same minute replaces that minute's row. About once a minute the server deletes rows older than [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, 1 to 30).
+
+With **Collect operational metrics** off, the server stores neither, but it still checks the sample.
+
+### Estimate the disk history takes
+
+```text
+rows per device per day = 86,400 / max(60, check-in interval in seconds)   (an upper bound: at most 1,440)
+history bytes           = devices × retention days × rows per device per day × bytes per row
+```
+
+A full sample, with all 17 device-level numbers at full precision, measured 585 bytes of JSON and 755 bytes per history row including its two indexes: 78,624 rows written by a release build of the server on 2026-09-30, measured with SQLite's `dbstat`. At a check-in interval of a minute or less that is up to 1,440 rows, about 1.1 MB, per device per day:
+
+| Devices | 7 days (default) | 30 days |
+| --- | --- | --- |
+| 100 | 0.8 GB | 3.3 GB |
+| 1,000 | 7.6 GB | 33 GB |
+| 10,000 | 76 GB | 326 GB |
+
+Devices that report fewer numbers, or check in less often than once a minute, take less.
+
+The database file doesn't shrink after old rows are deleted: SQLite reuses the space for new rows. To store less, shorten the retention, or lengthen the check-in interval in the devices' agent settings.
+
+### Limits the server enforces
+
+A sample outside these limits makes the server refuse the whole check-in (HTTP 400), not just the metrics. Nothing is clamped or rounded.
+
+| Limit | Value |
+| --- | --- |
+| Device-level fields | `sampled_at`, `components` and 17 numbers: `events_per_second`, `events_out_per_second`, `bytes_in_per_second`, `bytes_out_per_second`, `errors`, `errors_per_minute`, `uptime_seconds`, `memory_bytes`, `cpu_seconds`, `discarded_events`, `discarded_intentional`, `discarded_error`, `filtered_per_minute`, `dropped_per_minute`, `buffer_bytes`, `buffer_events` and `buffer_utilization`. Any other field is refused. |
+| Component fields | `id`, `type`, `kind` (`source`, `transform` or `sink`), `sent_by_output` and 18 numbers, from `events_per_second` to `latency_mean_seconds`. Any other field is refused. |
+| Numbers | Finite, from 0 to 10¹⁵. Buffer and component utilization from 0 to 1. |
+| Sample time | Within 24 hours of the server's clock. |
+| Components per sample | 50. |
+| Outputs per component | 16. |
+| Component IDs and output names | 1 to 100 characters: letters, digits, `_`, `.` and `-`, unique within a sample. Component types: up to 64 characters. |
+| Check-in size | 1 MiB. Larger requests get HTTP 413. |
+| Check-ins per device | 30 a minute. More get HTTP 429 with a wait time. |
+
+The agent keeps its samples inside these limits. It reads at most 1 MiB, 10,000 lines and 5,000 series from the metrics endpoint, reports at most 50 components and the first 16 outputs of each, and sends no sample when a scrape exceeds any limit. The device's latest sample then clears, and history shows a gap.
+
+### Queues and drops
+
+Nothing queues telemetry. The server checks and stores each sample inside its check-in, and the agent sends only its current sample: a sample whose check-in failed is never sent again, so an outage leaves a gap. When the agent listener is busy with 128 requests, further ones get HTTP 503 and the agent retries with backoff; a request that takes over 15 seconds gets HTTP 408.
+
+The server exposes no drop counters: it doesn't count refused samples, samples an agent didn't send, or rows replaced within a minute. A refused check-in shows in the agent's log and in `vectory status` on the device, and the device's last check-in stops advancing. The **Dropped** and **Filtered** numbers on the device page are Vector's own event counters, not telemetry drops.
+
 ## Investigate a change
 
 Suppose throughput drops while buffered data grows:

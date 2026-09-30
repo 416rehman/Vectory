@@ -152,7 +152,7 @@ pub async fn recover_generations(
     Ok(json!({"applied":apply,"devices":plan}))
 }
 
-fn atomic_private_replace(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn atomic_private_replace(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Missing parent directory"))?;

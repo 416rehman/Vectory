@@ -1532,6 +1532,41 @@
                     ],
                     "description": "Bind the token to one device name (Add device, when a name is typed). Normalized to lowercase; must start with name_prefix. Servers before this field ignore it: the receipt echoes it only when it applies."
                   },
+                  "allowed_names": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 500,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "description": "Device names this token may enroll, each once. Normalized like enrollment names (trimmed, ASCII-lowercased); each must be a valid device name, distinct after normalization, and start with name_prefix when both are set."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "labels": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "maxProperties": 8,
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "description": "Labels every device this token enrolls receives. Keys are trimmed and lowercased to 1..63 of a-z 0-9 . - _ starting with a letter or digit; values are trimmed, 1..128 characters without control characters."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "request_id": {
                     "type": "string",
                     "format": "uuid"
@@ -2710,7 +2745,9 @@
             "description": "Success",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
               }
             }
           },
@@ -19324,7 +19361,17 @@
             "type": "boolean"
           },
           "labels": {
-            "type": "object"
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           },
           "sync_paused": {
             "type": "boolean"
@@ -21724,6 +21771,41 @@
             "type": "string",
             "format": "date-time"
           },
+          "allowed_names": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "description": "Normalized preapproved device names. Only a device whose normalized name is listed can enroll, each name once. Present only on tokens created with a list."
+          },
+          "labels": {
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
+          },
+          "enrolled_names": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "maxItems": 500,
+            "description": "Token list only: preapproved names that already enrolled."
+          },
           "recovery_device_id": {
             "type": "string",
             "format": "uuid"
@@ -21903,6 +21985,32 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "allowed_names": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            },
+            "description": "Normalized preapproved device names. Only a device whose normalized name is listed can enroll, each name once. Present only on tokens created with a list."
+          },
+          "labels": {
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           }
         },
         "required": [
@@ -21912,7 +22020,6 @@
           "uses",
           "max_uses",
           "name_prefix",
-          "device_name",
           "revoked",
           "created_at"
         ],
@@ -22406,6 +22513,150 @@
         ],
         "description": "Empty legacy request or strict correlated request. The expected name must exactly match the original source device on first issuance. Same actor/request key cannot be rebound to another device or reviewed name."
       },
+      "DeviceCa": {
+        "type": "object",
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the CA certificate DER: the fingerprint operators compare and the issuer recorded on each device credential."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "not_after": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "sha256",
+          "subject",
+          "not_before",
+          "not_after"
+        ],
+        "additionalProperties": false
+      },
+      "PreviousDeviceCa": {
+        "type": "object",
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "not_after": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "devices": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Active devices that still hold an unexpired, unrevoked certificate from this CA (including credentials issued before issuers were recorded). Retiring waits for zero."
+          },
+          "device_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "description": "Up to 20 of those devices by name."
+          },
+          "last_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the last of those certificates expires: retiring succeeds by then at the latest."
+          }
+        },
+        "required": [
+          "sha256",
+          "subject",
+          "not_before",
+          "not_after",
+          "devices",
+          "device_names",
+          "last_expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "vector_version": {
+            "type": "string"
+          },
+          "heartbeat_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "telemetry_retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "instance_name": {
+            "type": "string"
+          },
+          "schedule_late_start_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 604800,
+            "description": "How late a scheduled deployment still activates once (VECTORY_SCHEDULE_LATE_START_SECONDS); later ones become missed."
+          },
+          "device_ca": {
+            "type": "object",
+            "properties": {
+              "current": {
+                "$ref": "#/components/schemas/DeviceCa"
+              },
+              "previous": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PreviousDeviceCa"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The CA a rotation replaced, still trusted for client certificates until vectory-admin retire-device-ca; null when none."
+              }
+            },
+            "required": [
+              "current",
+              "previous"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "vector_version",
+          "heartbeat_seconds",
+          "telemetry_retention_days",
+          "instance_name"
+        ],
+        "additionalProperties": true
+      },
       "AgentInstall": {
         "type": "object",
         "properties": {
@@ -22642,6 +22893,9 @@
                   "TOKEN_EXHAUSTED",
                   "NAME_TAKEN",
                   "NAME_PREFIX_MISMATCH",
+                  "DEVICE_NAME_MISMATCH",
+                  "NAME_NOT_PREAPPROVED",
+                  "NAME_ALREADY_ENROLLED",
                   "RECOVERY_NAME_MISMATCH",
                   "RECOVERY_TARGET_MISSING",
                   "REQUEST_MISMATCH",
@@ -26871,7 +27125,17 @@
             "type": "boolean"
           },
           "labels": {
-            "type": "object"
+            "type": "object",
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Descriptive labels from the enrollment token that enrolled the device (at most 8; lowercase keys, values of 1 to 128 characters without control characters). They never grant group membership, assignments, policy or secret access."
           },
           "sync_paused": {
             "type": "boolean"
