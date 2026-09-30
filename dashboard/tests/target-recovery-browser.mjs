@@ -1680,9 +1680,9 @@ try {
       expect(state.previews.at(-1).replaces || []).toEqual([]);
       // An assignment other devices follow too is never replaced this way.
       await open({ fromDevicePage: true }, false);
-      await expect(
-        dialog().getByText(/only this device follows/),
-      ).toHaveCount(0);
+      await expect(dialog().getByText(/only this device follows/)).toHaveCount(
+        0,
+      );
       await expect(
         dialog().getByRole("button", {
           name: "Deploy to devices",
@@ -1692,9 +1692,9 @@ try {
       // Nor when the dialog wasn't opened from the device's page.
       await open({}, true);
       expect(state.previews).toHaveLength(1);
-      await expect(
-        dialog().getByText(/only this device follows/),
-      ).toHaveCount(0);
+      await expect(dialog().getByText(/only this device follows/)).toHaveCount(
+        0,
+      );
       expect(state.creates).toHaveLength(0);
     },
   );
