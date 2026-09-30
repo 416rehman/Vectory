@@ -371,8 +371,10 @@ export type NeedsYouRow<G, R> =
  * Needs you, one row per problem, most urgent first: devices losing data
  * (not delivering), then failed applies, then rollouts that stopped, then
  * everything else in the server's order. A device group and the stopped
- * rollout its devices share read as one row. Dismissed rollouts are left out;
- * device problems can't be dismissed while they last.
+ * rollout its devices share read as one row, including devices held on their
+ * previous version, which sit among the rollouts when one stopped for them.
+ * Dismissed rollouts are left out; device problems can't be dismissed while
+ * they last.
  */
 export function needsYouRows<
   G extends { cause: string; deployment_id?: string | null },
@@ -395,13 +397,25 @@ export function needsYouRows<
     ...groups.filter((group) => group.cause === "degraded"),
     ...groups.filter((group) => group.cause === "failed"),
   ].map(withRollout);
+  const held = new Map(
+    groups
+      .filter((group) => group.cause === "held")
+      .map((group) => [group, withRollout(group)] as const)
+      .filter(([, row]) => row.rollout),
+  );
   return [
     ...urgent,
+    ...held.values(),
     ...open
       .filter((rollout) => !merged.has(rollout))
       .map((rollout): NeedsYouRow<G, R> => ({ kind: "rollout", rollout })),
     ...groups
-      .filter((group) => group.cause !== "degraded" && group.cause !== "failed")
+      .filter(
+        (group) =>
+          group.cause !== "degraded" &&
+          group.cause !== "failed" &&
+          !held.has(group),
+      )
       .map((group): NeedsYouRow<G, R> => ({
         kind: "group",
         group,
