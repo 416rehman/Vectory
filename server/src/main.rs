@@ -159,6 +159,11 @@ async fn main() -> anyhow::Result<()> {
     }
     let validation_url =
         validation_url_for_mode(development, env::var("VECTORY_VALIDATION_URL").ok())?;
+    let schedule_late_start_seconds = vectory_server::schedule::late_start_from(
+        env::var("VECTORY_SCHEDULE_LATE_START_SECONDS")
+            .ok()
+            .as_deref(),
+    )?;
     let web_addr = env_or("VECTORY_HTTP_ADDR", "127.0.0.1:8080");
     check_http_bind_address(development, &web_addr)?;
     let agent_addr = if cert.is_some() && key.is_some() {
@@ -198,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
         instance_name: env_or("VECTORY_INSTANCE_NAME", "Vectory"),
         validation_url,
         trust_proxy_headers: env_or("VECTORY_TRUST_PROXY_HEADERS", "false") == "true",
+        schedule_late_start_seconds,
         bundled_releases_dir: env::var("VECTORY_BUNDLED_RELEASES_DIR")
             .ok()
             .filter(|path| !path.trim().is_empty())
@@ -234,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
                         "retention pruning failed; retrying next minute"
                     )
                 }
+                vectory_server::db::report_writer(&scheduler.settings.data_dir);
             }
         }
     });

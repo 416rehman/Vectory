@@ -1,8 +1,74 @@
 # Measured protocol load and limits
 
-The final 2026-09-26 Go HTTP/2 experiment reached all 100, 1,000 and 10,000 authenticated protocol identities with zero request failures after connection-admission fixes. The earlier HTTP/1.1 experiment failed at 10,000 and is preserved below. **There is no production fleet-capacity claim.** Clients and debug server shared a Windows development host; other development work was not suspended. These are short protocol simulations, not isolated hardware benchmarks or native-agent/Vector qualification.
+**Current measurement (2026-09-30, release build, a shared 4-vCPU Linux VM, simulated devices).** 10,000 devices without assignments, checking in every minute: about 170 check-ins a second with the single database writer half busy and a median per-second p99 latency of 34 ms. With all 10,000 devices in an all-at-once deployment, the writer spends about twice as long per check-in (the scheduler's work for the active rollout included) and saturates at 140 to 160 check-ins a second: p99 1.5 to 3 seconds, and the check-ins above that are refused with HTTP 503 and retried with backoff. The database writer is the bottleneck; CPU (under one vCPU for the server) and memory (1.0 GiB peak) are not. **There is no supported fleet size.** The run that led here also found and fixed a memory blow-up in deployment resolution. Details and older experiments follow.
 
-## Go HTTP/2 rerun after admission fixes
+## Release build: 10,000 devices, a rollout and churn (2026-09-29 and 30)
+
+**Build.** `cargo build --release` (thin LTO, one codegen unit, stripped) of the server sources at `4d60c2b`, SHA-256 `ec87936838e0c59e677285648a236b5650c193e8d9b9d4f8ad70ee0eaba3016c`, measured from commit `aecd80a` (no server changes in between). Run 1 below used the sources of `21bd03f`, before the fix it found (SHA-256 `c6a64fdb204ffd4c7542a55b4c3313ad0685d1921992c19e67a763a19b13a377`). Raw measurements, sampled and without keys: [run 1](../evidence/capacity-2026-09-29.json), [run 2](../evidence/capacity-2026-09-30.json).
+
+**Hosts.** Linux 6.18 virtual machines with 4 vCPUs, 15.7 GiB of RAM, no swap and a virtio disk, shared with other development work. Run 1 ran on an Intel Xeon at 2.10 GHz. The host restarted before run 2, which ran on an Intel Xeon at 2.80 GHz; a 4 KiB write plus `fsync` took 0.33 ms on average there (p99 2.1 ms). The load generator ran on the same host over loopback, so the server, the load generator and anything else running share the four vCPUs; the numbers below say how busy the host was. Run 1 started once the one-minute load average had dropped under 3 (after a 9-minute wait), run 2 on an idle host (2.2); other work resumed during both (load average up to 3.6 in run 1 before its stall, 2.2 to 6.0 in run 2). The server and the load generator each ran under a 4 GiB address-space limit in run 2.
+
+**Harness.** `tests/load/capacity.py` with the Go driver `tests/load/fleet` (Go 1.24.7), described in [the load test README](../../tests/load/README.md). 10,000 identities were seeded offline, signed by the server's own device CA and registered as enrollment registers them. Each simulated device has its own key, certificate and HTTP/2 connection pool over TLS 1.3, checks every signed manifest (signature, device, nonce, generation), and sends a full telemetry sample: all 17 device-level numbers at full precision and three components, about 2 KB per check-in. The run:
+
+- starts at a 60-second check-in interval (0 to 60 seconds of initial jitter, then 0.8 to 1.2 times the interval);
+- at 120 seconds creates an all-at-once deployment of one pipeline (1,229-byte artifact) to all 10,000 devices through the dashboard API. Each device downloads the artifact at its next check-in, checks the digest, and reports the apply in a follow-up check-in two seconds later, as the agent does;
+- from 30 seconds to the end enrolls new devices through `POST /agent/v1/enroll` at 5 a second (half the server-wide limit, from ten loopback source addresses), each followed by its first check-in;
+- then steps the interval down to 30, 15, 10 and 5 seconds, 150 seconds each, to find where the server saturates.
+
+Simulated devices never run Vector: their `verified_applied` reports are fixture input, not activation evidence.
+
+### Run 1: a deployment to 10,000 listed devices exhausted memory (fixed)
+
+Before the deployment, from 60 to 120 seconds, the server handled 165 check-ins a second and 5 enrollments a second without an error. The median per-second p99 latency was 37 ms (worst second 123 ms). The server used 0.37 vCPU and 519 to 536 MiB of RSS, the load generator 0.15 vCPU, and the whole host 1.3 busy vCPUs (load average 2.4 to 3.6). The writer lock was busy 43 to 46% of each minute, with a mean wait of 7.5 ms.
+
+The deployment request took 27.8 seconds. During it the server's RSS rose from 536 MiB to 8.4 GiB, and to 11.5 GiB during the next scheduler tick. No check-in succeeded afterwards: every one got HTTP 503 (all 128 agent request slots were waiting for the writer lock) or HTTP 408 after 15 seconds, no device learned about the deployment, and the host ran out of memory (load average 27 to 30). The server was stopped 13 minutes into the run at 11.5 GiB RSS.
+
+The cause: `resolve`, which runs under the writer lock on every deployment change and scheduler tick, copied the whole deployment record once for every device it wins. The record carries its selector, here 10,000 device IDs (a deployment reviewed in the dashboard also stores the reviewed target list), so one pass allocated about 8 GB and took longer than a check-in may wait. Commit `4d60c2b` borrows the record instead. `winners_among` still copies for the deployment preview, group edits, rollback review and assignment removal, which see the same growth when they cover thousands of devices: see "Open limits" below.
+
+### Run 2: after the fix
+
+**Before the deployment** (60 to 120 seconds; no device had an assignment) the load generator attempted 180 check-ins a second. The median per-second p99 latency was 34 ms. 1,032 attempts got HTTP 503: retries of a first minute in which all 10,000 devices connected and checked in for the first time (writer 89% busy). In the minute before the deployment the writer was 52% busy for 10,221 writes, with a mean wait of 87 ms. The server used 0.45 vCPU and 554 MiB of RSS, the host 0.7 busy vCPUs.
+
+**The deployment request** took 20.3 seconds and held the writer for 20.2 of them in one transaction. Check-ins that waited longer than 15 seconds got HTTP 408; the rest of that minute's queue got HTTP 503.
+
+**After it**, with every device assigned, the writer stayed 96 to 98% busy for the rest of the run at 123 to 176 writes a second. Shorter check-in intervals added refusals, not throughput:
+
+| Phase (settled window) | Nominal check-ins/s | Succeeded/s | p50 / p95 / p99 of successes | Refused (503 / 408) | Server vCPU | Host busy vCPUs | Writer busy |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 60 s interval (60–360 s, includes the deployment) | 167 | 140 | 656 ms / 1.19 s / 3.02 s | 39,096 / 123 | 0.85 | 1.7 | 52%, then 97–98% |
+| 30 s (390–510 s) | 333 | 83 | 918 ms / 1.86 s / 13.3 s | 17,710 / 106 | 0.66 | 1.5 | 98–99% |
+| 15 s (525–660 s) | 667 | 145 | 769 ms / 1.36 s / 1.89 s | 19,431 / 0 | 0.91 | 2.2 | 97% |
+| 10 s (670–810 s) | 1,000 | 161 | 698 ms / 1.27 s / 1.48 s | 20,913 / 0 | 0.93 | 2.3 | 97% |
+| 5 s (815–960 s) | 2,000 | 144 | 782 ms / 1.50 s / 2.10 s | 18,307 / 0 | 0.87 | 2.5 | 97% |
+
+"Nominal" is 10,000 divided by the interval; refused devices back off (10 seconds doubling to 5 minutes), so fewer attempts arrive. In the 30-second phase one reporting window stretched to 96 seconds with a 2.6-second hold and 15-second waits; its cause wasn't isolated. Each check-in carried about 2 KB. SQLite reported no errors and never hit its busy timeout: all waiting happened on the server's own writer lock. The WAL file stayed near 4.2 MB until the deployment's transaction grew it to 56.6 MB, a size it then kept: SQLite reuses the file and nothing truncates it. Server RSS peaked at 1.00 GiB; the load generator used about 1 GiB.
+
+**The rollout.** Half of the 10,000 targets were verified 116 seconds after the deployment request and 90% after 616 seconds. When the run ended, 840 seconds after it, 9,035 were verified and 965 still waited: their check-ins kept getting HTTP 503 and backing off. 9,333 artifact downloads succeeded (p50 1.4 ms, p99 6.7 ms); 2,256 got HTTP 503, because downloads share the 128 agent request slots with check-ins queued for the writer, although they never take the writer themselves.
+
+**Enrollment churn.** Of 4,500 enrollments at 5 a second, 2,280 succeeded (p50 682 ms, p99 3.2 s), 2,214 got HTTP 503 and 6 got HTTP 408. 1,817 of the new devices' first check-ins succeeded; 463 got HTTP 503.
+
+**Storage.** 78,624 telemetry history rows took 755 bytes each with their indexes (585 bytes of JSON), measured with `dbstat`; see [Monitor devices](../user/telemetry.md#storage-and-limits) for what that means per day. At the end the database held 12,280 devices (2.5 KB of JSON each) in 157 MB.
+
+**An interrupted attempt** of run 2, with the same binary on run 1's host, stopped after 5 minutes when the host restarted: its deployment request took 15.1 seconds, 9,958 of the 10,000 targets were verified 196 seconds after it, the writer was 97% busy at about 200 writes a second, and server RSS stayed under 940 MiB.
+
+### What this means
+
+- **Budget on this hardware.** About 170 check-ins a second from unassigned devices, with the writer half busy and a median per-second p99 of 34 ms; 140 to 160 a second once devices are assigned, at which point latency reaches seconds and the excess is refused. Half of the assigned ceiling, about 80 check-ins a second, is a reasonable planning figure (5,000 devices at the default one-minute interval, or 10,000 at two minutes); that figure is derived, not measured.
+- **The bottleneck is the single database writer.** Every check-in, enrollment and scheduler tick is serialized behind one lock and one SQLite transaction. At saturation the lock was held 97% of the time while the server process used under one vCPU and the host had 1.5 to 2.5 of its 4 vCPUs busy, so more vCPUs would not raise the ceiling; doing less work per check-in under the lock would.
+- **Memory and connections were not limits** after the fix: 1.0 GiB of RSS for 10,000 connected devices and a 10,000-target deployment.
+
+### Open limits these runs found
+
+- Creating a deployment for 10,000 devices holds the writer for 15 to 20 seconds in one transaction, so check-ins queued behind it time out.
+- The 128 agent request slots are shared by check-ins, downloads and enrollments. When check-ins queue for the writer, downloads and enrollments are refused too, although only enrollment needs the writer.
+- `winners_among` still copies the whole deployment record for every device in scope, for the deployment preview, group edits, rollback review and assignment removal. By the same arithmetic as run 1, previewing a second deployment over the same 10,000 listed devices would copy the first record about 20,000 times; this wasn't measured.
+- Telemetry history grows by about 1.1 MB per device per day at the default interval: about 76 GB for 10,000 devices over the default 7 days.
+
+**Not measured:** real agents and Vector activation (applies are synthetic), canary rollouts, dashboard reads during the load, network latency, a dedicated host or independent load generators, fleets of 100 and 1,000 devices on a release build, hours of sustained load, and reconnect storms after an outage.
+
+## Go HTTP/2 rerun after admission fixes (2026-09-26, debug build, Windows)
+
+The final 2026-09-26 Go HTTP/2 experiment reached all 100, 1,000 and 10,000 authenticated protocol identities with zero request failures after connection-admission fixes. The earlier HTTP/1.1 experiment failed at 10,000 and is preserved below. Clients and debug server shared a Windows development host; other development work was not suspended. These are short protocol simulations, not isolated hardware benchmarks or native-agent/Vector qualification.
 
 The server SHA256 was `68cb4de673a3d3d6b05a2b522b4c3b966507e4feffbe1bb888afc6988b8da177`; the Go 1.26.8 driver SHA256 was `2d780587b65d68daeb7022c25bfa88725d841bf7d4e53db0475713563ac267e7`. All successful responses negotiated HTTP/2.0 over TLS 1.3. Each identity used a unique certificate, private connection pool and the Go DefaultTransport-clone pattern used by the real agent. Connection admission defaults to 16,384 accepted connections, with separate limits of 128 concurrent TLS handshakes, 128 parsed requests, 16 HTTP/2 streams per connection and a 15-second request deadline. The previously shared authenticated/anonymous rate tables were also separated. These limits bound resources; the maximum is not a supported fleet-size promise.
 

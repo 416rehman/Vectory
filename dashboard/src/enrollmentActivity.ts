@@ -32,6 +32,14 @@ const reasons: Record<string, { title: string; fix: string }> = {
     title: "the command was made for another device name",
     fix: "Run it with the --name it was made for, or create a new command for this name.",
   },
+  NAME_NOT_PREAPPROVED: {
+    title: "that name isn't on the token's list of device names",
+    fix: "Use a listed name, or create a new command that includes this one.",
+  },
+  NAME_ALREADY_ENROLLED: {
+    title: "that name already enrolled with this token",
+    fix: "Each listed name enrolls once. Create a new command to add it again.",
+  },
   RECOVERY_NAME_MISMATCH: {
     title: "this recovery token is for another device name",
     fix: "Use the recovered device's exact name.",

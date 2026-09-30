@@ -14,8 +14,10 @@ pub mod deployment_history;
 pub mod deployment_requests;
 pub mod detection;
 pub mod device;
+pub mod device_ca;
 pub mod device_recovery_requests;
 pub mod device_revocation;
+pub mod enrollment_scope;
 pub mod error;
 pub mod fleet;
 pub mod group_requests;
@@ -39,6 +41,7 @@ pub mod reset_requests;
 pub mod restored_access;
 pub mod rollback_review;
 pub mod rollout;
+pub mod schedule;
 pub mod scheduled_refresh;
 pub mod telemetry;
 pub mod token_requests;
@@ -70,6 +73,9 @@ pub struct Settings {
     /// Take the client address from the last X-Forwarded-For hop. Enable only
     /// when the HTTP listener is reachable solely through a trusted proxy.
     pub trust_proxy_headers: bool,
+    /// How many seconds after its time a due schedule still activates
+    /// (`VECTORY_SCHEDULE_LATE_START_SECONDS`); None uses the one-hour default.
+    pub schedule_late_start_seconds: Option<u64>,
     /// Agent builds shipped inside the server image. Entries in the operator
     /// mirror (`releases_dir`) replace the bundled build for their platform.
     pub bundled_releases_dir: Option<PathBuf>,
@@ -160,7 +166,7 @@ pub async fn initialize(settings: Settings) -> anyhow::Result<State> {
         .max_connections(8)
         .connect_with(options)
         .await?;
-    sqlx::migrate!().run(&pool).await?;
+    db::migrate(&pool, &sqlx::migrate!()).await?;
     // A restart or point-in-time restore must never resume a password-verified
     // pre-session capability. The exclusive instance lock makes this safe.
     sqlx::query("DELETE FROM login_challenges")

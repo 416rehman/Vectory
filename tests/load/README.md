@@ -1,5 +1,26 @@
 # Isolated protocol load experiment
 
+## Capacity run: rollout, churn and saturation (`capacity.py`)
+
+`capacity.py` measures one server build on one Linux host, end to end: a copy of the given binary on loopback ports 8390 (dashboard API) and 8391 (agent listener), device identities seeded offline and signed by the server's own device CA, and `fleet/main.go` driving them, one TLS connection pool per device over HTTP/2. Each simulated device checks every signed manifest (signature, device, nonce, generation) and sends a full telemetry sample: every device-level field the server accepts, at full float precision, plus three components. During the run the harness:
+
+- creates an all-at-once deployment to every seeded device through the dashboard API; devices download the artifact, check its digest and report the apply in a follow-up check-in two seconds later, as the agent does;
+- enrolls new devices through `POST /agent/v1/enroll` at a steady rate (from ten loopback source addresses, under the per-address limit), each followed by its first check-in;
+- steps the check-in interval down by phase (60, 30, 15, 10 and 5 seconds by default) to find where the server saturates.
+
+It samples the server's and the load generator's CPU and memory and the whole host's busy CPUs from `/proc` every second, the database and WAL sizes, rollout progress from the database, and the server's once-a-minute `vectory_server::sqlite` writer line (writes, `busy_percent`, lock waits, WAL size). Afterwards it measures the telemetry table's exact storage with SQLite's `dbstat`.
+
+```sh
+cargo build --release --locked --manifest-path server/Cargo.toml --bin vectory-server
+go build -o /private/capacity-driver tests/load/fleet/main.go
+python3 tests/load/capacity.py --server server/target/release/vectory-server \
+  --driver /private/capacity-driver --out /private/new-directory --result /private/capacity.json
+```
+
+It needs Python 3.11 or later with `cryptography`, and Go 1.24 or later. `--devices`, `--phases`, `--duration`, `--deploy-at` and `--enroll-per-minute` change the scenario. `--server-memory-mb` and `--driver-memory-mb` (4,096 each by default) cap each process's address space, so a runaway allocation fails in that process instead of exhausting a shared host. The fixture directory holds private keys and is deleted afterwards unless `--keep` is given; the result file holds measurements only. The server, the load generator and anything else running on the host share its CPUs, and the result records all three. Simulated devices never run Vector: their `verified_applied` reports are fixture input, not activation.
+
+## Earlier protocol experiments
+
 Both harnesses provision a new private fixture directory, copy a real native server binary, create a private TLS CA, and register unique CA-signed device keys in a fresh SQLite database. They exercise the actual TLS 1.3 mutual-authentication listener, heartbeat persistence, telemetry storage, and Ed25519 signed manifests. Every successful response is checked for signature, nonce, device UUID, generation and artifact digest. They never connect to the ordinary application fleet. `benchmark.py` uses Python/aiohttp and explicitly selects HTTP/1.1. `benchmark_http2.py` launches a Go driver with the native agent's DefaultTransport-clone pattern and records the actual negotiated HTTP protocol for every response.
 
 Install dependencies in an isolated environment. Versions used for the recorded experiment were Python 3.11.0, aiohttp 3.13.5, cryptography 46.0.6 and psutil 7.0.0. For this repository's local test setup, optional `.local/load-deps` is added to the Python import path.

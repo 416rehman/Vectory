@@ -39,11 +39,12 @@ Compose sets the server's own variables (TLS paths, validator URL, data director
 | `VECTORY_TRUST_PROXY_HEADERS` | `false` | Take the client address from the last `X-Forwarded-For` hop, for sign-in limits and the audit log. Turn it on only when the HTTP listener is reachable solely through a proxy you control. |
 | `VECTORY_MAX_AGENT_CONNECTIONS` | `16384` | Most agent connections accepted at once, from 64 to 65,536. A resource limit, not a supported fleet size. |
 | `VECTORY_AGENT_WAKE_LIMIT` | `20000` | Most agents that can wait for changes at once, from 0 to 100,000. A waiting agent gets a deployment within seconds instead of at its next check-in; beyond the limit, agents check in on schedule. Each waiting agent keeps its one connection open, which counts toward `VECTORY_MAX_AGENT_CONNECTIONS`. `0` turns wake-ups off. |
-| `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Days of device metrics history to keep, from 1 to 30. The audit log is kept separately and never pruned. |
-| `VECTORY_PREVIOUS_DEVICE_CA` | None | PEM file (up to 64 KiB) with a previous device CA, so devices can still renew while you move to a replacement device CA. |
+| `VECTORY_TELEMETRY_RETENTION_DAYS` | `7` | Days of device metrics history to keep, from 1 to 30. The audit log is kept separately and never pruned. See [Storage and limits](telemetry.md#storage-and-limits). |
+| `VECTORY_SCHEDULE_LATE_START_SECONDS` | `3600` | How late a scheduled deployment may still start, in seconds, from 60 to 604800 (7 days). If the server was down at the scheduled time, a schedule it finds within this window starts once; a later one is marked **Schedule missed** and needs a new deployment. The server refuses to start with any other value. |
+| `VECTORY_PREVIOUS_DEVICE_CA` | None | The older manual way to replace the device CA: a PEM file (up to 64 KiB) whose certificates the agent listener also trusts for as long as the variable is set. [`vectory-admin rotate-device-ca`](vectory-admin.md#rotate-device-ca) replaces it, tracks which devices still need the old CA and retires it. The server logs a warning while this is set. |
 | `VECTORY_DEVELOPMENT` | `false` | Local development only. Allows running without TLS, the validator or secure cookies, and then requires loopback listeners. |
 
-`RUST_LOG` controls log detail, for example `RUST_LOG=vectory_server=debug`. The default is `vectory_server=info,tower_http=warn`.
+`RUST_LOG` controls log detail, for example `RUST_LOG=vectory_server=debug`. The default is `vectory_server=info,tower_http=warn`. Adding `vectory_server::sqlite=debug` logs one line a minute about the database: how many writes ran, the share of the minute the single writer was busy (`busy_percent`), how long writes waited for it, and the size of the write-ahead log (`wal_bytes`).
 
 ### Agent downloads
 

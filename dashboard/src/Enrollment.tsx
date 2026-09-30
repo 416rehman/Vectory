@@ -74,6 +74,13 @@ import {
   unsupervisedLine,
 } from "./enrollmentActivity";
 import {
+  deviceName,
+  parseLabels,
+  parsePreapprovedNames,
+  scopeText,
+  usesBelowNames,
+} from "./enrollmentScope";
+import {
   resolveTokenRequests,
   useTokenRequests,
 } from "./enrollmentTokenRequests";
@@ -95,15 +102,6 @@ function tokenStatus(token: Token) {
       : token.max_uses && token.uses >= token.max_uses
         ? "Used up"
         : "Available";
-}
-function tokenScope(token: Token) {
-  return token.recovery_name
-    ? `Recovery for ${token.recovery_name}`
-    : token.device_name
-      ? `Only ${token.device_name}`
-      : token.name_prefix
-        ? `Names starting with ${token.name_prefix}`
-        : "Any unique device name";
 }
 /** The installer's --install-dir: a directory, so a trailing slash is fine. */
 function directoryPath(value: string) {
@@ -396,6 +394,8 @@ export function Enrollment({
   const [hours, setHours] = useState(1);
   const [maxUses, setMaxUses] = useState("1");
   const [prefix, setPrefix] = useState("");
+  const [namesText, setNamesText] = useState("");
+  const [labelsText, setLabelsText] = useState("");
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [secret, setSecret] = useState<ReadyToken | null>(null);
@@ -486,11 +486,22 @@ export function Enrollment({
   const prefixValid = /^[a-z0-9-]{0,80}$/.test(prefix);
   const prefixMatches =
     !prefix || !trimmedName || trimmedName.toLowerCase().startsWith(prefix);
+  const preapproved = parsePreapprovedNames(
+    namesText,
+    prefixValid ? prefix : "",
+  );
+  const labels = parseLabels(labelsText);
+  // With a list, this command's own device name must be on it.
+  const nameListed =
+    !preapproved.value ||
+    !trimmedName ||
+    preapproved.value.includes(deviceName(trimmedName) || "");
   const usesValid =
     !maxUses ||
     (Number.isInteger(Number(maxUses)) &&
       Number(maxUses) >= 1 &&
       Number(maxUses) <= 100000);
+  const namesWarning = usesBelowNames(preapproved.value, maxUses);
   const hoursValid = Number.isInteger(hours) && hours >= 1 && hours <= 720;
   const ready =
     !!install?.agent_url &&
@@ -506,6 +517,9 @@ export function Enrollment({
     !installDirProblem &&
     prefixValid &&
     prefixMatches &&
+    !preapproved.error &&
+    nameListed &&
+    !labels.error &&
     usesValid &&
     hoursValid &&
     baseline !== null &&
@@ -582,7 +596,12 @@ export function Enrollment({
         name_prefix: prefix || null,
         // The token enrolls only the typed name, so a copied command can't
         // enroll a host under another one (servers before this ignore it).
-        ...(trimmedName ? { device_name: trimmedName.toLowerCase() } : {}),
+        // A list of preapproved names is the scope instead when one is given.
+        ...(trimmedName && !preapproved.value
+          ? { device_name: trimmedName.toLowerCase() }
+          : {}),
+        ...(preapproved.value ? { allowed_names: preapproved.value } : {}),
+        ...(labels.value ? { labels: labels.value } : {}),
       },
       { inline: true },
     );
@@ -1067,6 +1086,47 @@ export function Enrollment({
                     onChange={(event) => setPrefix(event.target.value)}
                     placeholder="Any name"
                     autoComplete="off"
+                  />
+                </Field>
+              </div>
+              <div className="control-two-col">
+                <Field
+                  label="Only these device names (optional)"
+                  hint={
+                    preapproved.error ||
+                    (!nameListed
+                      ? "Add this device's name to the list."
+                      : namesWarning ||
+                        "One per line or separated by commas. Each name can enroll once.")
+                  }
+                >
+                  <textarea
+                    value={namesText}
+                    rows={3}
+                    aria-invalid={!!preapproved.error || !nameListed}
+                    disabled={!!command}
+                    onChange={(event) => setNamesText(event.target.value)}
+                    placeholder={"edge-01\nedge-02"}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field
+                  label="Labels for enrolled devices (optional)"
+                  hint={
+                    labels.error ||
+                    "One key=value per line, up to 8. Labels describe a device; they don't add it to groups or deployments."
+                  }
+                >
+                  <textarea
+                    value={labelsText}
+                    rows={3}
+                    aria-invalid={!!labels.error}
+                    disabled={!!command}
+                    onChange={(event) => setLabelsText(event.target.value)}
+                    placeholder={"site=berlin\nrack=a7"}
+                    autoComplete="off"
+                    spellCheck={false}
                   />
                 </Field>
               </div>
@@ -1675,7 +1735,7 @@ export function Enrollment({
                   cell: (token) => (
                     <>
                       <strong>{token.name}</strong>
-                      <small>{tokenScope(token)}</small>
+                      <small>{scopeText(token)}</small>
                     </>
                   ),
                 },

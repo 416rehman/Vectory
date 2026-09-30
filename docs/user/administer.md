@@ -119,21 +119,39 @@ An old backup also restores old decisions: accounts that were disabled, old role
 
 The first start after an upgrade migrates the database before the server answers. Some upgrades build an index over stored telemetry, so that start can take a while when the telemetry table is large. Let it finish.
 
+If a migration fails, nothing from it is kept: the database stays at the previous migration, and the server stops with a message that names the failed migration, its cause and where the database stands. Fix the cause and start again, or restore the pre-upgrade backup.
+
 Migrations only move forward. An older server refuses a database that a newer one migrated, so going back to a previous version means restoring its backup: if an upgrade fails, stop and restore the pre-upgrade backup into a new volume with the previous image.
 
 ## Rotate the signing key
 
 Devices check manifests with the server's signing key. To rotate it, back up, stop the server and run [`vectory-admin rotate-signing-key`](vectory-admin.md#rotate-signing-key). Devices move to the new key at their next certificate renewal.
 
+## Rotate the device certificate authority
+
+The server's device certificate authority (CA), `keys/device-ca.pem`, signs every device's certificate. It's valid for 10 years. Rotate it before it expires, or when your policy asks for a new one. Devices keep working throughout.
+
+<!-- steps -->
+1. [Back up](#back-up-the-complete-state), then stop the server.
+2. Run [`vectory-admin rotate-device-ca`](vectory-admin.md#rotate-device-ca). It prints the new and previous CA fingerprints and how many devices hold certificates from the previous CA.
+3. Start the server. Certificates from either CA are accepted. New devices, and devices that renew, get certificates from the new CA.
+4. Watch **Settings → General → Device certificates** until no device uses the previous CA. Devices renew in their certificate's last day, so this takes up to 30 days; a device that renewed keeps its old certificate as a fallback for another 24 hours. To stop waiting for a device that won't come back, revoke it on its device page.
+5. Stop the server and run [`vectory-admin retire-device-ca`](vectory-admin.md#retire-device-ca). It checks, and names any device still on the previous CA. When it says **Ready**, run it again with `--apply`, then start the server.
+
+After retirement the server refuses certificates from the previous CA. A device that missed the move needs [identity recovery](agents.md#recover-a-device-identity).
+
+The CA key alone can't impersonate a device: every request also needs a certificate the server issued and still has on record. If you suspect the CA key leaked, rotate, then revoke any device you don't recognize.
+
 ## Monitor the instance
 
 - **Disk:** watch free space and the database's growth.
+- **Database load:** with `RUST_LOG=vectory_server=info,vectory_server::sqlite=debug`, the server logs once a minute how busy its single database writer was (`busy_percent`) and how long writes waited. A share that stays high means check-ins are queuing for the writer. See [Server settings](server-config.md#server-settings).
 - **Backups:** track the age of your last good backup.
 - **Logs:** `docker compose logs --tail 100 server proxy validator`.
 - **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30). The audit log is kept separately and never pruned.
 - **Connections:** `VECTORY_MAX_AGENT_CONNECTIONS` (16,384 by default) limits concurrent agent connections. It protects the server; it isn't a supported fleet size.
 
-A 70-second load test on 2026-09-26 reached 10,000 simulated devices without errors. It measured check-ins only, with a debug build on a shared development host: no rollouts, downloads or real agents. There is no supported fleet size yet, so test with your own fleet before relying on large numbers.
+A load test on 2026-09-30 ran a release build on a shared Linux virtual machine with 4 vCPUs and 16 GB of RAM, with 10,000 simulated devices, an all-at-once rollout to all of them and 5 enrollments a second. Unassigned devices checking in every minute (about 170 check-ins a second) kept the database writer half busy, with a typical 99th-percentile latency of 34 ms. Once every device had an assignment, the writer saturated at 140 to 160 check-ins a second: latency rose to seconds, the rest were refused and retried, and after 14 minutes 9,035 of the 10,000 devices had reported the rollout applied. The simulated devices ran no Vector, so there is no supported fleet size yet: test with your own fleet before relying on large numbers, and watch the database load line above.
 
 ## Review and export audit events
 
