@@ -151,7 +151,7 @@ The CA key alone can't impersonate a device: every request also needs a certific
 - **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30). The audit log is kept separately and never pruned.
 - **Connections:** `VECTORY_MAX_AGENT_CONNECTIONS` (16,384 by default) limits concurrent agent connections. It protects the server; it isn't a supported fleet size.
 
-A 70-second load test on 2026-09-26 reached 10,000 simulated devices without errors. It measured check-ins only, with a debug build on a shared development host: no rollouts, downloads or real agents. There is no supported fleet size yet, so test with your own fleet before relying on large numbers.
+A load test on 2026-09-30 ran a release build on a shared Linux virtual machine with 4 vCPUs and 16 GB of RAM, with 10,000 simulated devices, an all-at-once rollout to all of them and 5 enrollments a second. Unassigned devices checking in every minute (about 170 check-ins a second) kept the database writer half busy, with a typical 99th-percentile latency of 34 ms. Once every device had an assignment, the writer saturated at 140 to 160 check-ins a second: latency rose to seconds, the rest were refused and retried, and after 14 minutes 9,035 of the 10,000 devices had reported the rollout applied. The simulated devices ran no Vector, so there is no supported fleet size yet: test with your own fleet before relying on large numbers, and watch the database load line above.
 
 ## Review and export audit events
 
