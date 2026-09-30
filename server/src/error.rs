@@ -12,6 +12,9 @@ pub struct ApiError {
     pub message: String,
     /// Seconds a throttled client should wait; 429 responses default to 60.
     pub retry_after: Option<u64>,
+    /// Members added beside `error` in the body, for a refusal that carries
+    /// the evidence it stopped on (`409 TESTS_FAILED` lists the test results).
+    pub extra: Option<serde_json::Map<String, serde_json::Value>>,
 }
 pub type Result<T> = std::result::Result<T, ApiError>;
 impl ApiError {
@@ -21,7 +24,13 @@ impl ApiError {
             code,
             message: message.into(),
             retry_after: None,
+            extra: None,
         }
+    }
+    /// Adds the members of `extra` (an object) beside `error` in the body.
+    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
+        self.extra = extra.as_object().cloned();
+        self
     }
     pub fn throttled(code: &'static str, message: impl Into<String>, seconds: u64) -> Self {
         Self {
@@ -59,11 +68,14 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status;
-        let mut response = (
-            status,
-            Json(json!({"error":{"code":self.code,"message":self.message}})),
-        )
-            .into_response();
+        let mut body = json!({"error":{"code":self.code,"message":self.message}});
+        for (key, value) in self.extra.into_iter().flatten() {
+            // The error object is never replaced by evidence.
+            if key != "error" {
+                body[key] = value;
+            }
+        }
+        let mut response = (status, Json(body)).into_response();
         if status == StatusCode::TOO_MANY_REQUESTS {
             response.headers_mut().insert(
                 "retry-after",
