@@ -449,11 +449,13 @@ try {
             exact: true,
           }),
         ).toBeVisible();
-        // The person learns that the code is spent and how many are left.
+        // The person learns that the code is spent and how many are left. The
+        // toast is announced to screen readers too, so the words appear twice
+        // in the page: look at the one people see.
         await expect(
-          f.page.getByText("You used a recovery code; 7 left.", {
-            exact: true,
-          }),
+          f.page
+            .getByRole("region", { name: "Notifications" })
+            .getByText("You used a recovery code; 7 left.", { exact: true }),
         ).toBeVisible();
       } finally {
         await f.close();
