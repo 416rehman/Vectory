@@ -20,11 +20,6 @@ const output = resolve(
 );
 await mkdir(output, { recursive: true });
 const virtual = "\0virtual:staged-login-fixture";
-// An OS-assigned port: a harness never claims a fixed port another process may use.
-const reservation = net.createServer();
-await new Promise((done) => reservation.listen(0, "127.0.0.1", done));
-const port = reservation.address().port;
-await new Promise((done) => reservation.close(done));
 const server = await createServer({
   root: dashboard,
   configFile: resolve(dashboard, "vite.config.ts"),

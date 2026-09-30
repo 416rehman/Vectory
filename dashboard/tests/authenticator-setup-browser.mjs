@@ -633,7 +633,7 @@ try {
         /^vectory-recovery-codes-127\.0\.0\.1-\d+-\d{4}-\d\d-\d\d\.txt$/,
       );
       const saved = await readFile(await file.path(), "utf8");
-      expect(recoveryCodes.every((value) => saved.includes(value))).toBe(true);
+      expect(shownCodes.every((value) => saved.includes(value))).toBe(true);
       expect(
         await page.evaluate(() => ({
           revoked: window.__revokedDownloads,
