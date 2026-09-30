@@ -641,10 +641,14 @@ try {
         "No metrics yet",
       );
       await expect(second.locator(".overview-running-group")).toHaveText([
-        "Web tier4, 4 devices",
-        "Edge collectors3, 3 devices",
+        "Web tier4",
+        "Edge collectors3",
         "and 2 more",
       ]);
+      await expect(second.locator("a.overview-running-group")).toHaveCount(2);
+      await expect(
+        second.locator("a.overview-running-group").first(),
+      ).toHaveAccessibleName("Web tier, 4 devices");
       await expect(card).toContainText("Showing 2 of 5 pipeline versions.");
       await context.close();
     },

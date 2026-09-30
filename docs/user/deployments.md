@@ -50,7 +50,7 @@ The editor lists **Group devices** a page at a time with a search, so a group of
 - Tick a device to add it and untick it to remove it. **Select all 300 matching** adds every device a search finds; **Remove all** empties the group.
 - The editor counts your changes against the saved group, for example **12 added · 3 removed since it was saved**. **Undo device changes** returns to the saved members.
 - A group holds up to 10,000 devices. Saving more is refused, and the editor says how many to remove.
-- Devices you revoke leave every group.
+- Devices you revoke leave every group. A member that is no longer a device the server knows is listed by its ID under **Devices no longer available**; untick it, or choose **Remove all unavailable**, to take it out.
 
 ## Review changes to a group
 
