@@ -578,8 +578,23 @@ export type PreviewReplacement = {
   device_ids: string[];
   retires_assignment?: boolean;
 };
+/** Who a canary rollout releases first, in order, and why. */
+export type CanaryPlan = {
+  size: number;
+  chosen_by_you: boolean;
+  device_ids: string[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    chosen: boolean;
+    readiness: "ready" | "no_metrics" | "failing" | "paused" | "away";
+    reason: string;
+  }[];
+};
 export type DeploymentPreview = {
   request_correlation?: boolean;
+  /** Canary rollouts only: null for others, absent on older servers. */
+  canary?: CanaryPlan | null;
   /** The previewed version's pipeline name; older servers omit it. */
   configuration_name?: string | null;
   devices: Device[];
@@ -872,6 +887,8 @@ const deploymentUUID = z.string().uuid();
 const deploymentUUIDEqual = (left: string, right: string) =>
   left.toLowerCase() === right.toLowerCase();
 const deploymentSelectorSchema = z.object({
+    /** The devices the request chose to release first, when it chose any. */
+    canary_device_ids?: string[];
   device_ids: z.array(deploymentUUID),
   group_ids: z.array(deploymentUUID),
   exclude_ids: z.array(deploymentUUID),
@@ -935,6 +952,7 @@ export const DeploymentReceiptSchema = z
   })
   .passthrough()
   .refine((receipt) =>
+      canary_device_ids: z.array(deploymentUUID).max(100).optional(),
     receipt.operation === "create"
       ? receipt.source_deployment_id === null
       : receipt.source_deployment_id !== null &&
@@ -1110,11 +1128,40 @@ export type RolloutLane = {
   more: number;
 };
 export type RolloutFailure = {
+  /** Someone released this stage before the one ahead of it finished. */
+  released_early?: { by_name: string | null; at: string } | null;
   state: string;
   message: string | null;
   diagnostic: string | null;
   /** Degraded groups: what to do about the delivery problem. */
   fix?: string | null;
+/** What a canary device delivers: events per second, errors per minute, buffer fill. */
+export type CanaryWatchReading = {
+  events_in_per_second: number | null;
+  events_out_per_second: number | null;
+  errors_per_minute: number | null;
+  buffer_utilization: number | null;
+};
+export type CanaryWatchDevice = {
+  device_id: string;
+  device_name: string | null;
+  released_at: string;
+  /** Why the gate is not counting this device as verified; null when it is. */
+  gate_reason: string | null;
+  /** Its latest sample; null when it reports no fresh telemetry. */
+  now: (CanaryWatchReading & { sampled_at: string }) | null;
+  /** Averages over the minutes before its release; null when there are none. */
+  baseline: (CanaryWatchReading & { minutes: number }) | null;
+  /** Delivery checks so far against the number the gate needs. */
+  samples: { measured: number; needed: number } | null;
+};
+export type CanaryWatch = {
+  window_seconds: number;
+  evaluated_at: string;
+  devices: CanaryWatchDevice[];
+  /** Canary devices beyond the ones listed. */
+  more: number;
+};
   /** The leading finding's code (ADDRESS_IN_USE, VRL_E100, DATA_PLANE_…). */
   code?: string | null;
   /** The component and field it names, when it names them. */
@@ -1142,6 +1189,8 @@ export type SavedPolicyListItem = SavedPolicy & {
   updated_at?: string;
   applied_device_count?: number;
   /** Given this template before its latest edit; still on the earlier values. */
+  /** Canary rollouts with a released canary; absent on older servers. */
+  canary_watch?: CanaryWatch | null;
   outdated_device_count?: number;
   applied_devices?: { id: string; name: string }[];
 };

@@ -88,6 +88,9 @@ describe("audit view queries and identities", () => {
     expect(auditActionLabel("configuration.publish")).toBe(
       "Pipeline published",
     );
+    expect(auditActionLabel("deployment.stage_released_early")).toBe(
+      "Next stage released early",
+    );
   });
   it("retains server-wide browsing order in permalinks but excludes it from prepared export filters", () => {
     const q = {

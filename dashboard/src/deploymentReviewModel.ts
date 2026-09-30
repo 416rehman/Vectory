@@ -464,8 +464,14 @@ export function releaseErrors(release: ReleaseSettings, now = Date.now()) {
   }
   return errors;
 }
-/** The rollout object the server expects. */
-export function rolloutFor(release: ReleaseSettings) {
+/**
+ * The rollout object the server expects. `canaryDevices` names the devices to
+ * release first; none leaves the choice to the server.
+ */
+export function rolloutFor(
+  release: ReleaseSettings,
+  canaryDevices: string[] = [],
+) {
   const canary = usesCanary(release);
   return {
     kind: canary ? "canary" : "all",
@@ -473,6 +479,9 @@ export function rolloutFor(release: ReleaseSettings) {
     batch_size: canary ? release.batch : 10,
     observation_seconds: canary ? release.observe : 60,
     failure_threshold: canary ? release.threshold : 0,
+    ...(canary && canaryDevices.length
+      ? { canary_device_ids: canaryDevices }
+      : {}),
   };
 }
 /** ISO time for a scheduled release, or null. */

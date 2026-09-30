@@ -83,6 +83,7 @@ export const auditActions: Record<string, string> = {
   "deployment.unassign": "Assignment removed",
   "deployment.rollback": "Rollback deployed",
   "deployment.release": "Deployment released to device",
+  "deployment.stage_released_early": "Next stage released early",
   "deployment.gate": "Rollout gate checked",
   "deployment.activate": "Scheduled deployment activated",
   "deployment.missed": "Deployment schedule missed",

@@ -48,6 +48,7 @@ import {
   OutcomeChip,
   ReleaseStrategyFields,
 } from "./DeploymentReview";
+import { CanaryPicker, canaryStageColumn } from "./CanaryPicker";
 import {
   assignmentMeta,
   conflictRows,
@@ -200,6 +201,8 @@ type Inputs = {
   priority: number;
   mode: string;
   declined: boolean;
+  /** Devices named to release first; empty leaves the choice to the server. */
+  canary: string[];
 };
 type Reviewed = DeploymentPreview & {
   request: Record<string, any>;
@@ -286,6 +289,7 @@ export default function TargetDialog({
     [modeTouched, setModeTouched] = useState(false),
     [replaces, setReplaces] = useState<string[]>([]),
     [declined, setDeclined] = useState(false),
+    [canaryPicks, setCanaryPicks] = useState<string[]>([]),
     [adoption, setAdoption] = useState<Adoption | null>(null),
     [prefill, setPrefill] = useState<{
       values: number;
@@ -359,10 +363,16 @@ export default function TargetDialog({
       priority: inputs.priority,
       target_mode: scheduled ? "snapshot" : inputs.mode,
       scheduled_at: releaseValid ? scheduledAt(release) : null,
-      rollout: rolloutFor(release),
+      rollout: rolloutFor(release, inputs.canary),
     };
   }
-  const inputs: Inputs = { replaces, priority, mode, declined };
+  const inputs: Inputs = {
+    replaces,
+    priority,
+    mode,
+    declined,
+    canary: canaryPicks,
+  };
   const body = buildBody(inputs);
   const builder = useRef(buildBody);
   builder.current = buildBody;
@@ -565,6 +575,8 @@ export default function TargetDialog({
     setAdoption(null);
     setReplaces([]);
     setDeclined(false);
+    // A canary device chosen for the old selection may no longer be a target.
+    setCanaryPicks([]);
   }
   function toggle(
     value: string,
@@ -661,6 +673,7 @@ export default function TargetDialog({
       setPriority(chosen.priority);
       setMode(chosen.mode);
       setDeclined(chosen.declined);
+      setCanaryPicks(chosen.canary);
       if (adopted) setAdoption(adopted);
       else if (!chosen.replaces.length) setAdoption(null);
       setPreview({ ...result, request, key });
@@ -1515,6 +1528,7 @@ export default function TargetDialog({
                         : adoption.previousPriority,
                       mode: modeTouched ? mode : adoption.previousMode,
                       declined: true,
+                      canary: canaryPicks,
                     })
                   }
                 >
@@ -1571,6 +1585,16 @@ export default function TargetDialog({
                 </div>
               )}
             </dl>
+            {preview.canary && (
+              <CanaryPicker
+                devices={preview.devices}
+                plan={preview.canary}
+                chosen={canaryPicks}
+                scheduled={scheduled}
+                busy={busy}
+                onChoose={(ids) => void review({ ...inputs, canary: ids })}
+              />
+            )}
             {artifactReviewIncomplete && (
               <ErrorBox message="The server did not confirm a rendered artifact for every reviewed device. Go back and review this deployment again after the server is updated." />
             )}
@@ -1713,6 +1737,7 @@ export default function TargetDialog({
                       );
                     },
                   },
+                  ...canaryStageColumn(preview.canary),
                   {
                     id: "change",
                     header: "Now → After",
@@ -1897,7 +1922,15 @@ export default function TargetDialog({
         <Button
           variant="secondary"
           disabled={busy}
-          onClick={preview ? () => setPreview(null) : onClose}
+          onClick={
+            preview
+              ? () => {
+                  // The canary is chosen from what a review lists.
+                  setPreview(null);
+                  setCanaryPicks([]);
+                }
+              : onClose
+          }
         >
           {preview ? "Back to selection" : "Cancel"}
         </Button>

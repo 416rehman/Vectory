@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { DeploymentSummary } from "./api";
+import type { CanaryWatch, DeploymentSummary } from "./api";
 import CanaryGate from "./CanaryGate";
 import {
   readCanaryGate,
@@ -39,13 +39,13 @@ const deployment = (
     canary_gate: value,
     ...change,
   }) as DeploymentSummary;
-const render = (value: DeploymentSummary, readError = false) =>
+const render = (
+  value: DeploymentSummary,
+  readError = false,
+  watch?: CanaryWatch,
+) =>
   renderToStaticMarkup(
-    createElement(CanaryGate, {
-      deployment: value,
-      readError,
-      onRefresh: async () => {},
-    }),
+    createElement(CanaryGate, { deployment: value, readError, watch }),
   );
 const observing: Gate = {
   ...gate,
@@ -59,8 +59,10 @@ describe("current canary gate evidence", () => {
   it("does not use historical successes as current verification", () => {
     expect(readCanaryGate(deployment())?.verified_count).toBe(0);
     const html = render(deployment());
-    expect(html).toContain("Waiting for current verification");
-    expect(html).toContain("Another assignment is effective");
+    expect(html).toContain(
+      "Another assignment is effective on 1 released device",
+    );
+    expect(html).not.toContain("currently verified");
     expect(html).not.toContain("Observation in progress");
   });
   it("rejects malformed or contradictory gate evidence instead of showing a pass", () => {
@@ -90,9 +92,10 @@ describe("current canary gate evidence", () => {
     expect(readCanaryGate(deployment(observing))?.state).toBe("observing");
     const html = render(deployment(observing));
     expect(html).toContain("Observation in progress");
-    expect(html).toContain("Checked");
+    // One countdown, in the stage lane, and one refresh control, in the page
+    // header: the gate carries neither.
     expect(html).not.toMatch(
-      /remaining|releases in|complete in|role="progressbar"/i,
+      /remaining|releases in|complete in|next batch|role="timer"|role="progressbar"|Refresh/i,
     );
     expect(render(deployment(observing), true)).not.toContain(
       "Observation in progress",
@@ -134,7 +137,7 @@ describe("current canary gate evidence", () => {
         reasons: { ...gate.reasons, superseded: 0, degraded: 1 },
       }),
     );
-    expect(html).toContain("Not delivering");
+    expect(html).toContain("applied but isn&#x27;t delivering");
     expect(html).toContain("counts as a failure");
     expect(
       render(
@@ -145,6 +148,38 @@ describe("current canary gate evidence", () => {
       ),
     ).toContain("Measuring delivery");
     expect(readGateReason("degraded")).toBe("degraded");
+  });
+  it("names the device the gate waits on, in words the lanes agree with", () => {
+    const measuring = deployment({
+      ...gate,
+      reasons: { ...gate.reasons, superseded: 0, measuring: 1 },
+    });
+    const watch: CanaryWatch = {
+      window_seconds: 600,
+      evaluated_at: "2026-09-27T12:00:00Z",
+      more: 0,
+      devices: [
+        {
+          device_id: "00000000-0000-4000-8000-000000000001",
+          device_name: "edge-nyc-02",
+          released_at: "2026-09-27T11:50:00Z",
+          gate_reason: "measuring",
+          now: null,
+          baseline: null,
+          samples: { measured: 2, needed: 3 },
+        },
+      ],
+    };
+    const html = render(measuring, false, watch);
+    expect(html).toContain(
+      "Measuring delivery on edge-nyc-02 (2 of 3 samples)",
+    );
+    // Without the lanes' names the gate still says something true.
+    expect(render(measuring)).toContain(
+      "Measuring delivery on 1 released device",
+    );
+    // The gate has nothing to press: refreshing is the page's one control.
+    expect(html).not.toContain("<button");
   });
   it("reads gates from servers without data-plane health", () => {
     const { measuring: _m, degraded: _d, ...legacy } = gate.reasons;
