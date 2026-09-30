@@ -585,7 +585,7 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		case !checked:
 			r.add("existing", "info", "Existing", "Couldn't check for another running Vector on this platform.", "Stop any other Vector before you deploy a pipeline to this host.")
 		case len(running) > 0 && !options.KeepExistingVector:
-			stop := stopAdvice(running)
+			stop := stopAdvice(running, runtime.GOOS)
 			// How it was started and which files it loads is recorded, and the
 			// files are copied, before setup says anything else about it.
 			inventory := r.inventoryRunning(ctx, running, dir)

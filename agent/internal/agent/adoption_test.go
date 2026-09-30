@@ -21,10 +21,17 @@ var (
 	recordedAt   = regexp.MustCompile(`(?i)(recorded) \d{4}-\d\d-\d\d \d\d:\d\d \w+`)
 )
 
+// stopVector is the advice the tests' running Vector gets to stop it: the
+// service manager's command of the platform the test runs on.
+func stopVector() string {
+	return stopAdvice([]RunningVector{{Service: "vector.service"}}, runtime.GOOS)
+}
+
 // renderAdoption prints the steps that concern an existing Vector the way the
 // command line prints them, with the values that differ between runs replaced
-// by placeholders (longest first: the backup folder is inside the state
-// directory).
+// by placeholders: the paths (also as a command line quotes them, and longest
+// first, since the backup folder is inside the state directory), the times and
+// the platform's way to stop a service.
 func renderAdoption(result SetupResult, replace map[string]string) string {
 	var b strings.Builder
 	for _, step := range result.Steps {
@@ -36,14 +43,20 @@ func renderAdoption(result SetupResult, replace map[string]string) string {
 			fmt.Fprintf(&b, "%s%s\n", strings.Repeat(" ", 18), IndentLines(step.Fix, 18))
 		}
 	}
-	out := b.String()
-	values := make([]string, 0, len(replace))
-	for value := range replace {
-		values = append(values, value)
+	out := strings.ReplaceAll(b.String(), stopVector(), "<stop>")
+	replacements := map[string]string{}
+	for value, placeholder := range replace {
+		for _, form := range []string{value, quoteArg(value), displayArg(value)} {
+			replacements[form] = placeholder
+		}
 	}
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
-	for _, value := range values {
-		out = strings.ReplaceAll(out, value, replace[value])
+	forms := make([]string, 0, len(replacements))
+	for form := range replacements {
+		forms = append(forms, form)
+	}
+	sort.Slice(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	for _, form := range forms {
+		out = strings.ReplaceAll(out, form, replacements[form])
 	}
 	out = backupFolder.ReplaceAllString(out, "<time>")
 	out = recordedAt.ReplaceAllString(out, "$1 <date>")
@@ -358,7 +371,7 @@ func TestSetupRefusesAConfigDirectoryOfSeveralFilesAndNamesThem(t *testing.T) {
 	h.requireNothingInstalled()
 	assertGolden(t, "running-config-dir", renderAdoption(result, h.replace()))
 	message := err.Error()
-	for _, want := range []string{filepath.Join(h.conf, "10-sources.yaml"), filepath.Join(h.conf, "20-sinks.yaml"), "--adopt-existing", "Keep an existing workload", h.managed, "systemctl disable --now vector.service"} {
+	for _, want := range []string{filepath.Join(h.conf, "10-sources.yaml"), filepath.Join(h.conf, "20-sinks.yaml"), "--adopt-existing", "Keep an existing workload", h.managed, stopVector()} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the refusal doesn't say %q:\n%s", want, message)
 		}

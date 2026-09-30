@@ -204,11 +204,19 @@ func (i AdoptionInventory) Describe() string {
 	return b.String()
 }
 
-// stopAdvice is how to stop what runs, naming a service's own command.
-func stopAdvice(running []RunningVector) string {
+// stopAdvice is how to stop what runs: for a service, the command of this
+// platform's service manager (systemd, or PowerShell on Windows).
+func stopAdvice(running []RunningVector, goos string) string {
 	for _, v := range running {
-		if v.Service != "" {
+		if v.Service == "" {
+			continue
+		}
+		switch goos {
+		case "linux":
 			return "stop it (for example: sudo systemctl disable --now " + v.Service + ")"
+		case "windows":
+			name := quoteArg(v.Service)
+			return "stop it (for example, in an elevated PowerShell: Stop-Service -Name " + name + "; Set-Service -Name " + name + " -StartupType Disabled)"
 		}
 	}
 	return "stop it"
