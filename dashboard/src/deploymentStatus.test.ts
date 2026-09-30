@@ -338,6 +338,27 @@ describe("release plan", () => {
         checkInSeconds: 60,
       }).sentence,
     ).toBe("All 3 devices at once · about 2 min at 1 min check-ins");
+    // A large fleet reads with thousands separators, like every other count.
+    expect(
+      releasePlan({
+        kind: "all",
+        devices: 4750,
+        canarySize: 1,
+        batchSize: 1,
+        observeSeconds: 60,
+        checkInSeconds: 60,
+      }).sentence,
+    ).toBe("All 4,750 devices at once · about 2 min at 1 min check-ins");
+    expect(
+      releasePlan({
+        kind: "canary",
+        devices: 4750,
+        canarySize: 10,
+        batchSize: 1500,
+        observeSeconds: 0,
+        checkInSeconds: 60,
+      }).sentence,
+    ).toContain("→ 4 batches of up to 1,500");
     expect(
       releasePlan({
         kind: "canary",

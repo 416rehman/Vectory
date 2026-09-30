@@ -7,6 +7,7 @@ import {
   defaultRelease,
   inferPipelineName,
   keptLine,
+  namedDevices,
   pauseSource,
   policySummary,
   releaseErrors,
@@ -396,5 +397,23 @@ describe("release settings", () => {
       }).kind,
     ).toBe("canary");
     expect(scheduledAt(defaultRelease)).toBeNull();
+  });
+});
+
+describe("devices named in a sentence", () => {
+  const name = (device: string) => `device ${device}`;
+  it("names a few and counts the rest", () => {
+    expect(namedDevices(["a"], name)).toBe("device a");
+    expect(namedDevices(["a", "b"], name)).toBe("device a, device b");
+    const many = Array.from({ length: 680 }, (_, n) => String(n));
+    const sentence = namedDevices(many, name);
+    expect(sentence.split(", ")).toHaveLength(26);
+    expect(sentence.endsWith(", and 655 more")).toBe(true);
+    expect(sentence.startsWith("device 0, device 1, ")).toBe(true);
+  });
+  it("names exactly the limit without a tail", () => {
+    const ids = Array.from({ length: 25 }, (_, n) => String(n));
+    expect(namedDevices(ids, name)).not.toContain("more");
+    expect(namedDevices([...ids, "25"], name)).toContain(", and 1 more");
   });
 });

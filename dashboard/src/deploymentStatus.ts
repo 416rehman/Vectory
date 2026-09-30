@@ -408,15 +408,15 @@ export function releasePlan(options: {
     return {
       waves,
       seconds,
-      sentence: `${devices === 1 ? "1 device" : `All ${devices} devices`} at once · ${approxDuration(seconds)} ${cadence}`,
+      sentence: `${devices === 1 ? "1 device" : `All ${devices.toLocaleString()} devices`} at once · ${approxDuration(seconds)} ${cadence}`,
     };
   const [canary, ...batches] = waves;
   const sizes = new Set(batches);
   const batchText = !batches.length
     ? ""
     : sizes.size === 1
-      ? ` → ${countLabel(batches.length, "batch", "batches")} of ${batches[0]}`
-      : ` → ${countLabel(batches.length, "batch", "batches")} of up to ${Math.max(...batches)}`;
+      ? ` → ${countLabel(batches.length, "batch", "batches")} of ${batches[0].toLocaleString()}`
+      : ` → ${countLabel(batches.length, "batch", "batches")} of up to ${Math.max(...batches).toLocaleString()}`;
   return {
     waves,
     seconds,

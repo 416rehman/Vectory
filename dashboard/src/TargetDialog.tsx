@@ -60,6 +60,7 @@ import {
   keptLine,
   inferPipelineName,
   localInputValue,
+  namedDevices,
   pauseSource,
   policySummary,
   releaseErrors,
@@ -139,7 +140,7 @@ function HostApprovalNote({
       <strong>
         {devices.length === 1
           ? `${devices[0].name} runs`
-          : `${devices.length} selected devices run`}{" "}
+          : `${devices.length.toLocaleString()} selected devices run`}{" "}
         in restricted mode and refuse this version until their host approves it
       </strong>
       <p>
@@ -1283,7 +1284,7 @@ export default function TargetDialog({
           <div className="control-note" role="status">
             <strong>
               {capabilityBlocked
-                ? `${restrictedTargets.length === 1 ? `${restrictedTargets[0].name} runs` : `${restrictedTargets.length} selected devices run`} in restricted mode and will refuse this version`
+                ? `${restrictedTargets.length === 1 ? `${restrictedTargets[0].name} runs` : `${restrictedTargets.length.toLocaleString()} selected devices run`} in restricted mode and will refuse this version`
                 : effective.size
                   ? "This pipeline uses full Vector capabilities"
                   : "This version needs Full Vector mode"}
@@ -1677,9 +1678,9 @@ export default function TargetDialog({
                 <p>{blocker.reason}</p>
                 {blocker.device_ids.length > 0 && (
                   <p>
-                    {blocker.device_ids.length} affected{" "}
+                    {blocker.device_ids.length.toLocaleString()} affected{" "}
                     {blocker.device_ids.length === 1 ? "device" : "devices"}:{" "}
-                    {blocker.device_ids.map(deviceName).join(", ")}.
+                    {namedDevices(blocker.device_ids, deviceName)}.
                   </p>
                 )}
                 {blocker.code === "ACTIVE_CANARY_OVERLAP" &&
