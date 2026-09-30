@@ -81,7 +81,13 @@ services:
     restart: unless-stopped
     user: "10001:10001"
     read_only: true
+    # The image's caddy binary carries the file capability NET_BIND_SERVICE, and
+    # the kernel refuses to run a binary whose file capabilities are not in the
+    # container's bounding set ("exec /usr/bin/caddy: operation not permitted",
+    # then a restart loop). Keep exactly that one. Caddy listens on 8443 here,
+    # so it never binds a low port.
     cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     security_opt: [no-new-privileges:true]
     tmpfs: ["/data:rw,noexec,nosuid,size=16m,uid=10001,gid=10001", "/config:rw,noexec,nosuid,size=16m,uid=10001,gid=10001"]
     environment:

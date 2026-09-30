@@ -837,6 +837,19 @@ jobs:
             exit 1
           fi
           echo "PASS: the validator can neither connect to 1.1.1.1:443 nor resolve github.com."
+      # The uploaded artifact holds the full logs; this puts the state and the
+      # recent lines of each service where the failed run is read.
+      - name: Show the services' state and recent logs after a failure
+        if: ${{ failure() }}
+        timeout-minutes: 10
+        run: |
+          set +e
+          docker compose ps -a
+          for service in proxy server validator; do
+            echo "::group::$service (last 80 lines)"
+            docker compose logs --no-color --tail 80 "$service"
+            echo "::endgroup::"
+          done
       - name: Collect the logs and remove the stack and its volumes
         if: always()
         timeout-minutes: 10
