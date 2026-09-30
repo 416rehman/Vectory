@@ -104,17 +104,13 @@ function RunningRow({ row }: { row: OverviewRunning }) {
                 key={group.id}
                 className="overview-running-group"
                 href={group.href}
+                // The count is read with its unit, never as a bare number.
+                aria-label={`${group.name}, ${countLabel(group.count, "device")}`}
                 title={`${countLabel(group.count, "device")} of this version in ${group.name}`}
               >
                 {group.name}
-                <span
-                  className="overview-running-group-count"
-                  aria-hidden="true"
-                >
+                <span className="overview-running-group-count">
                   {group.count.toLocaleString()}
-                </span>
-                <span className="sr-only">
-                  , {countLabel(group.count, "device")}
                 </span>
               </a>
             ))}
