@@ -415,4 +415,119 @@ Each behavior above has a test in one of five layers. The IDs are used in the [i
 
 ## Appendix A: Proof of concept
 
-Placeholder: the transcript is added in the next commit.
+Measured on 2026-09-30 with the checksum-verified pinned build, `vector 0.58.0 (x86_64-unknown-linux-gnu 2bcad9b 2026-08-26 13:37:07.557544670)`, on Linux 6.18 (x86_64, 4 CPUs shared with other processes). Nothing was added to `server/`, `agent/` or `dashboard/`; the harness was about ten small shell and Python scripts that are not kept. macOS and Windows were not run.
+
+### Method
+
+- **Vector was started the way the agent's supervisor starts it:** two `--config-json` files (the managed pipeline and the overlay), `--log-format json` (Vector's log on stdout), `--graceful-shutdown-limit-secs 5`, a scrubbed environment (`env -i PATH=...`). The pipeline's `console` sink writes events to stderr.
+- **Isolation.** Every experiment ran in a private network namespace (`unshare --net`, loopback brought up with a short Python script), so a bind to Vector's default port could not collide with anything else on the machine. Start-time tests used port 18453, chosen at random from a block of ten. The unprivileged client was `setpriv --reuid=65534 --regid=65534 --clear-groups`.
+- **Pipeline** (`managed.json`), the shape the specification names, `demo_logs`, `remap`, `console`:
+
+```json
+{
+  "data_dir": "<scratch>/data",
+  "sources": {"demo": {"type": "demo_logs", "format": "shuffle",
+    "lines": ["alpha", "bravo", "charlie"], "sequence": true, "interval": 0.1}},
+  "transforms": {"remap": {"type": "remap", "inputs": ["demo"],
+    "source": ".parsed = true\n.host = \"poc\""}},
+  "sinks": {"console": {"type": "console", "inputs": ["remap"], "target": "stderr",
+    "encoding": {"codec": "json"}}}
+}
+```
+
+- **Overlays** were `{}` (API off) and `{"api":{"enabled":true,"address":"127.0.0.1:18453"}}`. Reloads are `kill -HUP <pid>`, as `reloadChild` does. Vector reads `internal_metrics` through a `prometheus_exporter` for the cost runs.
+
+### Command the agent would run
+
+```sh
+vector tap --url http://127.0.0.1:8686 --outputs-of=remap --limit 20 --interval 500 \
+  --duration-ms 30000 --format json --no-reconnect
+```
+
+Events arrive on stdout, one `{"log":{...}}` object per line, for example `{"log":{"host":"poc","message":"32 alpha","parsed":true,"service":"vector","source_type":"demo_logs","timestamp":"2026-09-30T00:08:50.914042640Z"}}`. With `-m` each line is `{"component_id":"remap","component_kind":"transform","component_type":"remap","event":{"log":{...}}}`. A metric event is `{"metric":{"name":...,"tags":{...},"kind":"absolute","gauge":{"value":...}}}`. Stderr carries `Log level is enabled.` and `[tap] Pattern 'remap' successfully matched.` or `[tap] Pattern 'nosuch' failed to match: will retry on configuration reload.`
+
+### A to C: opening and closing the API
+
+| Experiment | Steps | Result |
+| --- | --- | --- |
+| A | Start with overlay `{}`; overlay becomes `{"api":{"enabled":true,"address":"127.0.0.1:18453"}}`; `SIGHUP` | Log: `API is disabled...` at start; after the reload `GRPC API server bound to 127.0.0.1:8686.`, `GRPC API server started.` `addr=127.0.0.1:8686`, `Vector has reloaded.` `tap` on 18453: `Vector API server isn't reachable`, exit 69. `tap` on 8686 returns events. |
+| B1 | Start with the API enabled on 18453 in the overlay | Listens on `127.0.0.1:18453` (`API server running.` `address=127.0.0.1:18453`). |
+| B2 | Change the address to 18454, `SIGHUP` | Still 18453; no rebind, no log about it. |
+| B3 | Overlay `{}`, `SIGHUP` | `GRPC API server shutting down.`; no listener. |
+| B4 | Overlay adds the API on 18455, `SIGHUP` | Listens on `127.0.0.1:8686`. The configured address is ignored. |
+| B5 | `enabled: false` with an address, `SIGHUP` | `GRPC API server shutting down.`; no listener. |
+| C1 | The `api` block (18453) added to the managed file itself, `SIGHUP` | Listens on `127.0.0.1:8686`. Placement does not matter. |
+| C2 | Managed and overlay both set 18453, start | Listens on 18453. |
+| C3, C4 | Managed sets 18453, overlay sets 18454 | `Conflicting api address: 127.0.0.1:18453, 127.0.0.1:18454 .`; startup and `vector validate` fail (exit 78). |
+| C5 | 18453 already in use, start with the API on it | Vector exits: `Failed to bind gRPC API server to 127.0.0.1:18453: Address already in use (os error 98)`. |
+| C6 | 8686 already in use, API off at start, reload enables it | Vector exits: `Failed to bind gRPC API server to 127.0.0.1:8686: Address already in use (os error 98)`, `Vector is stopping.`; events stop. |
+| G2 | Managed `api {enabled: false}`, overlay `{enabled: true, address 18453}` | Listens on 18453: `enabled` is an OR. |
+| G3 | Managed `api {enabled: true, address 18454}`, overlay `{enabled: true}` | Listens on 18454: the address comes from the pipeline. |
+| G4 | Managed `api {enabled: true, address 18454}`, overlay `{enabled: false}` | Still listens on 18454: an overlay cannot switch a pipeline's API off. |
+
+Vector has no command-line flag or environment variable for the API address (`vector --help`). The gRPC service embedded in the binary has eight methods: `GetAllocationTracingStatus`, `GetComponents`, `GetMeta`, `StreamComponentAllocatedBytes`, `StreamComponentMetrics`, `StreamHeartbeat`, `StreamOutputEvents`, `StreamUptime`.
+
+### D and H: what `vector tap` does
+
+| Case | Command (after `vector tap --url http://127.0.0.1:18453`) | Result |
+| --- | --- | --- |
+| D1 | `--outputs-of remap --limit 5 --interval 500 --duration-ms 3000 --format json` | Exit 0 after 3.03 s, 25 events, 3,714 bytes on stdout; two status lines on stderr. |
+| D2 | `-q`, `-m` | `-q` drops the `[tap] Pattern` line, not the `Log level` line; `-m` wraps each event with the component ID, kind and type. |
+| D3, H2 | `--outputs-of nosuch` | Exit 0, no events, runs the whole `--duration-ms`; stderr says `failed to match: will retry on configuration reload.` |
+| D4 | `--inputs-of remap` (transform), `--inputs-of console` (sink) | Both work; `--inputs-of remap` shows the pre-transform event (no `parsed` field). |
+| D4 | `--outputs-of console` (a sink) | Exit 0, no events. |
+| D4 | `--outputs-of '*'` | Events from every component (`demo` and `remap`). |
+| F1d | No component argument | Events from every component. |
+| D5 | `--limit 1 --interval 100`, `--limit 100 --interval 1000`, `--limit 2 --interval 1000` (3 s, source at 10 events/s) | 30, 21 and 4 events: the limit is per interval and Vector drops the rest. |
+| D5x | `--limit 0`; `--interval 50` | Exit 2, a usage error naming the valid range (limit at least 1, interval at least 100). |
+| F2c | `--limit 1000000`, `--limit 4294967295` on a 12,000 events/s pipeline | Zero events, no error. `--limit 100000` works. |
+| F1e | `--url http://127.0.0.1:18459` (nothing listening) | Exit 69: `Vector API server isn't reachable`. |
+| G1 | Vector stopped while two taps stream | Default: `Connection failed ... Reconnecting in 5 seconds`, still retrying after 43 s until the timeout killed it (exit 124). `--no-reconnect`: exits 0 at the moment Vector stopped. |
+| H3 | `--outputs-of -x`; `--outputs-of=-x` | Exit 2 `unexpected argument '-x' found`; the equals form is accepted as a pattern. |
+| H4 | `--outputs-of=demo,remap`; `--outputs-of=re*` | A comma list and a glob both match. |
+| A | Client's stdout closed early by `head -5` | Exit 101 (a Rust panic writing to a closed pipe). |
+
+Component IDs Vector accepts (`vector validate` on a one-source config per ID, F1g): `a b`, `a/b`, `-x`, `*`, `a,b`, `Upper`, `ünï`, 200 characters, `a[b]`, `a"b`, `a'b`, `a;b`, `a$b`, a name with a newline, `_`, `0`. Refused: `a.b` (`Component name "a.b" should not contain a "."`).
+
+### Latency and bytes (F1a, F1b)
+
+Source at 10 events/s, `--limit 5`, 2 s window, five runs each, first-event time from process start.
+
+| `--interval` | First event, median (min to max) | Events in 2 s | Bytes in 2 s |
+| --- | --- | --- | --- |
+| 100 ms | 0.113 s (0.111 to 0.157) | 19 | about 2,830 |
+| 500 ms | 0.514 s (0.511 to 0.559) | 15 | about 2,250 |
+| 1000 ms | 1.013 s (1.013 to 1.013) | 5 | about 750 |
+
+An event is about 150 bytes here. A 20-event sample (`--limit 20 --interval 1000`) took 2.51 s wall, delivered its first event at 1.012 s and was 2,992 bytes. Client cost: 0.013 to 0.020 s of CPU per run, 31 to 33 MB resident. Reload duration where Vector logged it: 5.0 ms and 1.2 ms (later reload log lines are rate-limited by Vector).
+
+### E: an unauthenticated second process
+
+| Case | Result |
+| --- | --- |
+| E1 | As uid 65534 with no credential: `vector tap ... --outputs-of '*' -m` returned 59 events from both `demo` (raw source output) and `remap`. |
+| E2 | `curl --http2-prior-knowledge` with an empty gRPC frame: `GetMeta` returned the Vector version and the host name; `GetComponents` returned each component's ID, type and output name; `GET /health` returned `{"ok":true}`. |
+| E3 | A stream attached before the API was removed (uid 65534, `--no-reconnect`). Reload removes the block: no listener, but the stream kept flowing (112 to 172 lines in 3 s at 7 s after removal, 372 to 432 at 15 s, 834 to 894 at 25 s), and the server-side socket stayed `ESTABLISHED`. |
+| E4 | A further reload that leaves the API alone, then one that re-enables it (binds 8686): the old stream kept flowing (1,036 to 1,160 in 3 s). |
+| E5 | Vector stopped (`SIGTERM`): the client exited. Only stopping Vector ended the stream. |
+
+### F: cost and continuity
+
+F2b: six `demo_logs` sources (about 2,000 events/s each) into one `remap` and a `blackhole` sink, about 12,000 events/s, 8 s per scenario, throughput and latency from `vector_component_received_events_total` (sink) and `vector_component_latency_seconds` (`remap`) and CPU and memory from `/proc`. Greedy clients used `--limit 100000 --interval 100`.
+
+| Scenario | Events/s | `remap` mean latency | Vector CPU (of one core) | Vector memory |
+| --- | --- | --- | --- | --- |
+| T0 API off | 11,991 | 61 µs | 38.6% | 48.5 MB |
+| T1 API on, no client | 11,991 | 65 µs | 33.8% | 54.2 MB |
+| T2 one polite tap (20 events/s) | 11,992 | 67 µs | 45.0% | 59.0 MB |
+| T3 one greedy tap on `remap` | 11,994 | 69 µs | 39.7% | 75.6 MB |
+| T4 five greedy taps on all components | 11,887 | 1,123 µs | 80.2% | 136.4 MB |
+| T5 API closed again | 11,992 | 62 µs | 38.2% | 64.2 MB |
+
+Run-to-run noise on this shared machine is about ±6 points of CPU (T0 and T5 are the same scenario; an earlier run of it differed by 5 points). Client cost: the polite tap used 0.017 s of CPU in 9.5 s and 32 MB; a greedy client 1.2 s of CPU and 35 MB and received 112,796 events (16.4 MB); each of five greedy clients 1.7 to 1.8 s and 39 to 42 MB and received about 224,000 events (32 MB). Memory did not return to the baseline after the clients left (T5).
+
+F3: one `demo_logs` source numbering every line, two enable reloads and two disable reloads over 17 s: 143 events written, numbers 0 to 142, **no gaps or duplicates**.
+
+### What the numbers do not say
+
+Nothing above was run on macOS or Windows, above 12,000 events/s, with a `route` (named outputs), a sink with acknowledgements or a disk buffer, over IPv6, with very large events or with non-UTF-8 content. The first-event latency is the tap interval, so a fast component gives its `--limit` events at the first tick and a slow one gives them as they come, up to the window.
