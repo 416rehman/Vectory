@@ -8,20 +8,16 @@ import {
 import { Button, Spinner } from "./ui";
 import { setDifference } from "./deviceInventory";
 import {
+  AUTO_PREVIEW,
   membershipEffects,
   membershipSentence,
   previewBusy,
   previewWithRetries,
+  previewWanted,
 } from "./groupMembership";
 
 /** Devices described one by one before the rest are summed up. */
 const LISTED = 50;
-/**
- * An edit that changes more devices than this is previewed when asked: the
- * server answers with a line per device, which nobody needs after a click on
- * "Remove all".
- */
-export const AUTO_PREVIEW = 500;
 
 /**
  * What saving this membership edit would change on each added or removed
@@ -50,8 +46,8 @@ export default function GroupMembershipEffects({
   }, [ids, saved]);
   // A very large edit waits for a click, for this exact edit.
   const [asked, setAsked] = useState("");
+  const wanted = previewWanted(count, key, asked);
   const large = count > AUTO_PREVIEW;
-  const wanted = changed && (!large || asked === key);
   useEffect(() => {
     setPreview(null);
     setError("");

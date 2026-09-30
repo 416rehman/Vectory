@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APIError, type GroupMembershipPreview } from "./api";
 import {
+  AUTO_PREVIEW,
   BUSY_PREVIEW_RETRIES,
   membershipSentence,
   previewBusy,
+  previewWanted,
   previewWithRetries,
   readUnavailableMembers,
 } from "./groupMembership";
@@ -136,6 +138,19 @@ describe("a busy membership preview", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("when an edit is previewed", () => {
+  it("reads a small edit's preview at once and a large one's only when asked", () => {
+    expect(AUTO_PREVIEW).toBe(500);
+    expect(previewWanted(0, "", "")).toBe(false);
+    expect(previewWanted(1, "a|b", "")).toBe(true);
+    expect(previewWanted(500, "a|b", "")).toBe(true);
+    expect(previewWanted(501, "a|b", "")).toBe(false);
+    // Asked for this very edit; a different edit asks again.
+    expect(previewWanted(4750, "a|b", "a|b")).toBe(true);
+    expect(previewWanted(4751, "a|b,c", "a|b")).toBe(false);
   });
 });
 
