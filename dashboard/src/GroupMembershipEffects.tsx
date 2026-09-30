@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   withRequestDeadline,
-  type Device,
   type Group,
   type GroupMembershipPreview,
 } from "./api";
 import { Spinner } from "./ui";
+import { setDifference } from "./deviceInventory";
 import {
+  membershipEffects,
   membershipSentence,
   previewBusy,
   previewWithRetries,
 } from "./groupMembership";
+
+/** Devices described one by one before the rest are summed up. */
+const LISTED = 50;
 
 /**
  * What saving this membership edit would change on each added or removed
@@ -20,19 +24,23 @@ import {
 export default function GroupMembershipEffects({
   group,
   ids,
-  devices,
 }: {
   group: Group;
-  ids: string[];
-  devices: Device[];
+  ids: ReadonlySet<string>;
 }) {
   const [preview, setPreview] = useState<GroupMembershipPreview | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
-  const key = [...ids].sort().join(",");
-  const changed =
-    ids.length !== group.device_ids.length ||
-    ids.some((id) => !group.device_ids.includes(id));
+  // The edit is what differs from the saved group: that is what a new preview
+  // waits for, however many devices the group holds.
+  const saved = useMemo(() => new Set(group.device_ids), [group.device_ids]);
+  const { key, changed } = useMemo(() => {
+    const { added, removed } = setDifference(ids, saved);
+    return {
+      key: `${added.sort().join(",")}|${removed.sort().join(",")}`,
+      changed: added.length > 0 || removed.length > 0,
+    };
+  }, [ids, saved]);
   useEffect(() => {
     setPreview(null);
     setError("");
@@ -51,7 +59,7 @@ export default function GroupMembershipEffects({
                   method: "POST",
                   body: JSON.stringify({
                     group_id: group.id,
-                    device_ids: ids,
+                    device_ids: [...ids],
                     revision: group.revision,
                   }),
                   signal,
@@ -80,8 +88,10 @@ export default function GroupMembershipEffects({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, group.id, group.revision]);
   if (!changed) return null;
-  const name = (id: string, fallback: string | null) =>
-    devices.find((device) => device.id === id)?.name || fallback || id;
+  const name = (id: string, fallback: string | null) => fallback || id;
+  // A few devices read one by one; a large edit says what matters (the
+  // devices that change something) and counts the ones that change nothing.
+  const summary = preview ? membershipEffects(preview.devices, LISTED) : null;
   return (
     <section
       className="group-effects"
@@ -114,17 +124,28 @@ export default function GroupMembershipEffects({
           {blocker.reason}
         </p>
       ))}
-      {preview && (
-        <ul>
-          {preview.devices.map((entry) => (
-            <li key={entry.device_id} data-change={entry.change}>
-              {membershipSentence(
-                entry,
-                name(entry.device_id, entry.device_name),
-              )}
-            </li>
-          ))}
-        </ul>
+      {summary && (
+        <>
+          <ul>
+            {summary.listed.map((entry) => (
+              <li key={entry.device_id} data-change={entry.change}>
+                {membershipSentence(
+                  entry,
+                  name(entry.device_id, entry.device_name),
+                )}
+              </li>
+            ))}
+          </ul>
+          {summary.more > 0 && (
+            <p className="control-muted">
+              And {summary.more.toLocaleString()} more{" "}
+              {summary.more === 1 ? "device changes" : "devices change"}.
+            </p>
+          )}
+          {summary.quietSentence && (
+            <p className="control-muted">{summary.quietSentence}</p>
+          )}
+        </>
       )}
     </section>
   );

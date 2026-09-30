@@ -212,30 +212,15 @@ a.device-version-name:hover {
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
+/* A new page is loading: the last rows stay, dimmed, until it answers. */
+.table-card-settling :is(.data-table tbody, .data-list) {
+  opacity: 0.6;
+  transition: opacity var(--dur-base) var(--ease);
+}
 
 /* ---------- Groups ---------- */
 .groups-member-count {
   font-weight: var(--weight-medium);
-}
-.member-health {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 96px;
-}
-.member-health-bar {
-  display: flex;
-  gap: 2px;
-  width: 100%;
-  max-width: 160px;
-  height: 6px;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.member-health small {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  line-height: var(--leading-sm);
 }
 .groups-table .groups-manage {
   text-align: right;

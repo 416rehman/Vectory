@@ -95,19 +95,54 @@ function policyEffect(part: Part) {
   return null;
 }
 
+type Entry = GroupMembershipPreview["devices"][number];
+const effectsOf = (entry: Entry) =>
+  [
+    configurationEffect(entry.configuration, entry.change),
+    policyEffect(entry.policy),
+  ].filter(Boolean);
+
 /**
  * "Adding web-01 deploys Web access logs v3." One sentence per device, from
  * the server's simulation of the exact membership edit.
  */
-export function membershipSentence(
-  entry: GroupMembershipPreview["devices"][number],
-  name: string,
-) {
-  const effects = [
-    configurationEffect(entry.configuration, entry.change),
-    policyEffect(entry.policy),
-  ].filter(Boolean);
+export function membershipSentence(entry: Entry, name: string) {
+  const effects = effectsOf(entry);
   const verb = entry.change === "added" ? "Adding" : "Removing";
   if (!effects.length) return `${verb} ${name} changes nothing on it.`;
   return `${verb} ${name} ${effects.join(" and ")}.`;
+}
+
+/**
+ * The devices of a preview to describe one by one, and the rest in a
+ * sentence. Up to `limit` devices, each is described. Past that, the ones the
+ * edit changes something on come first, and the ones it changes nothing on
+ * are counted instead of listed.
+ */
+export function membershipEffects(entries: Entry[], limit: number) {
+  if (entries.length <= limit)
+    return {
+      listed: entries,
+      more: 0,
+      quiet: { added: 0, removed: 0 },
+      quietSentence: "",
+    };
+  const changing = entries.filter((entry) => effectsOf(entry).length > 0);
+  const quiet = entries.filter((entry) => effectsOf(entry).length === 0);
+  const count = (change: Entry["change"]) =>
+    quiet.filter((entry) => entry.change === change).length;
+  const added = count("added"),
+    removed = count("removed");
+  const sentence = (verb: string, n: number) =>
+    n
+      ? `${verb} ${n.toLocaleString()} ${n === 1 ? "device" : "devices"} changes nothing on ${n === 1 ? "it" : "them"}.`
+      : "";
+  return {
+    listed: changing.slice(0, limit),
+    more: Math.max(0, changing.length - limit),
+    quiet: { added, removed },
+    quietSentence: [sentence("Adding", added), sentence("Removing", removed)]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
