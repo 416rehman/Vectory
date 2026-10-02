@@ -769,6 +769,9 @@ jobs:
             and .services.validator.read_only == true
             and .services.validator.cap_drop == ["ALL"]
             and .services.validator.user == "10002:10002"
+            and (.services.validator.mem_limit | tostring) == "536870912"
+            and (.services.validator.cpus | tonumber) == 1
+            and (.services.validator.pids_limit | tonumber) == 64
             and .services.server.depends_on.validator.condition == "service_healthy"
           ' "$RUNNER_TEMP/compose.json"
       # 30 minutes, not 10: a cold release build (thin LTO, one codegen unit,

@@ -14,7 +14,7 @@ Where Vectory stands, how to pick it up and what to do first, written so the nex
 
 ## State
 
-The branch this file is on, version `0.1.0-dev`: a developer preview, not production qualified, with no public release. The requirements checklist reads 65 Met, 46 Partial, 0 Missing and 6 Unverified of 117 rows. Nothing is signed and nothing is published; the release prerequisites that need the maintainer are at the end of [HANDOFF.md](HANDOFF.md).
+The branch this file is on, version `0.1.0-dev`: a developer preview, not production qualified, with no public release. The requirements checklist reads 69 Met, 46 Partial, 0 Missing and 2 Unverified of 117 rows. Nothing is signed and nothing is published; the release prerequisites that need the maintainer are at the end of [HANDOFF.md](HANDOFF.md).
 
 Landed since `a469266` (the details are in [CHANGELOG.md](../../CHANGELOG.md) and the user-facing [What's new](../user/whats-new.md)):
 
