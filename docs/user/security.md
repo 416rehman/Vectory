@@ -35,7 +35,7 @@ Each device runs in one mode, chosen on the host when the agent is installed.
 | Sources | `demo_logs`, `internal_metrics`, `file`, `http_server`, `syslog`, `opentelemetry` |
 | Transforms | `remap`, `filter`, `route`, `sample`, `reduce`, `log_to_metric` |
 | Sinks | `console` (to stderr only), `blackhole`, `http`, `loki`, `elasticsearch`, `prometheus_exporter` |
-| Global settings | `data_dir`, a loopback-only `api`, `acknowledgements`, `healthchecks`, `timezone` |
+| Global settings | `data_dir`, `acknowledgements`, `healthchecks`, `timezone` |
 
 Within those components, restricted mode also:
 
@@ -43,10 +43,13 @@ Within those components, restricted mode also:
 - requires explicit destinations and listeners, so a component can't fall back to a default address;
 - refuses environment variables (`$NAME`, `${NAME}`), `{{ }}` templates and other substitutions anywhere in the pipeline;
 - refuses secret providers, enrichment tables, external VRL files and any setting that runs a program;
+- refuses an `api` block. Vector's local API has no authentication, so any local user could read live events through it. A pipeline that opens it needs a full-mode device;
 - refuses VRL that calls a function reaching outside the event: `get_env_var`, `get_secret`, `set_secret`, `remove_secret`, `dns_lookup`, `reverse_dns`, `http_request`, `get_enrichment_table_record`, `find_enrichment_table_records`, and the functions that read a file (`validate_json_schema`, `parse_proto`, `encode_proto`). Only a call counts: a metric named `http_requests_total` or an event value `"http_request"` is data;
 - refuses to turn off TLS certificate or host name verification.
 
 **Full Vector** mode accepts anything the host's Vector build supports. Only the host can enable it, with `vectory install --allow-full-vector-config`; the dashboard shows the mode and blocks deployments that need full mode on restricted devices. Allowances don't apply in full mode.
+
+**Both modes** refuse a component ID that could be a path: one with a `/`, a `\` or a control character, or one that starts with a drive letter and a colon (like `C:`). Vector uses an ID as a directory name under its `data_dir` for disk buffers and checkpoints, so an ID such as `/tmp/x` would make it create files outside the agent's state directory. The agent refuses such a version before Vector sees it and reports `INVALID_COMPONENT_ID`, naming the component. A restricted device refuses an `api` block the same way and reports `LOCAL_API_DENIED`: no allowance covers it, so the version needs a full-mode device. Both findings, and what to do about them, are in [A pipeline is rejected or rolled back](troubleshooting.md#a-pipeline-is-rejected-or-rolled-back).
 
 > [!NOTE]
 > Allowances limit what a pipeline asks Vector to do. They are not an operating-system sandbox. Use host permissions, a dedicated service account and network controls where you need stronger isolation.

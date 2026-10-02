@@ -425,7 +425,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 		g := m.Generation
 		e.State.FailedGeneration = &g
 		e.State.FailedEffectiveSHA256 = effectiveSHA
-		return e.failAttemptWith("CAPABILITY_DENIED", "validation", "This host's restricted-mode policy doesn't allow this pipeline", e.policyDiagnostics(err, data))
+		return e.failAttemptWith("CAPABILITY_DENIED", "validation", e.Settings.CapabilityPolicy.refusedMessage(), e.policyDiagnostics(err, data))
 	}
 	stage := filepath.Join(filepath.Dir(e.Settings.ManagedConfig), ".vectory-stage-"+RandomID()+".json")
 	if err = AtomicWrite(stage, data); err != nil {

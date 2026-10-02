@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -77,6 +78,40 @@ func holdAsRun(t *testing.T, dir string) func() {
 		t.Fatal(err)
 	}
 	return unlock
+}
+
+// Vector's API has no authentication, so no allowance covers it: a host that
+// allows every address of port 8686 still refuses a pipeline with an api block,
+// and `vectory allow` has no flag that changes that.
+func TestAllowCannotPermitAPipelineToOpenVectorsLocalAPI(t *testing.T) {
+	dir := installedDir(t, agent.CapabilityPolicy{})
+	root := filepath.Join(t.TempDir(), "logs")
+	code, _, stderr := invoke("allow", "--state-dir", dir,
+		"--listener", "127.0.0.1:8686", "--listener", "[::1]:8686", "--listener", "0.0.0.0:8686",
+		"--network", "127.0.0.1:8686", "--file-root", root)
+	if code != 0 {
+		t.Fatal(code, stderr)
+	}
+	settings, err := agent.LoadSettings(dir)
+	if err != nil || len(settings.CapabilityPolicy.AllowedListenAddresses) != 3 {
+		t.Fatalf("the allowances were not written: %+v %v", settings.CapabilityPolicy, err)
+	}
+	for _, api := range []string{
+		`{"enabled":true,"address":"127.0.0.1:8686"}`,
+		`{"enabled":true,"address":"0.0.0.0:8686"}`,
+		`{"enabled":true}`,
+		`{"enabled":false}`,
+	} {
+		err := settings.CapabilityPolicy.Check([]byte(`{"api":` + api + `}`))
+		var refusal *agent.PolicyRefusal
+		if !errors.As(err, &refusal) || refusal.Code != "LOCAL_API_DENIED" {
+			t.Errorf("api %s after allow: %v", api, err)
+		}
+	}
+	// The flag set has nothing for it either.
+	if code, _, stderr = invoke("allow", "--state-dir", dir, "--api", "127.0.0.1:8686"); code == 0 || !strings.Contains(stderr, "api") {
+		t.Errorf("allow took an --api flag: %d %s", code, stderr)
+	}
 }
 
 func TestAllowAddsWhatTheHostApprovesAndSaysWhatItAllowsNow(t *testing.T) {
