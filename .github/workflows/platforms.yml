@@ -266,6 +266,16 @@ jobs:
             throw 'The validator did not listen on 127.0.0.1:8081.'
           }
           'VECTORY_VALIDATION_URL=http://127.0.0.1:8081' | Out-File -FilePath $env:GITHUB_ENV -Append
+          # What the validator answers to the smallest pipeline, printed: the server
+          # only says "unavailable" when the answer is not what it expects.
+          $probe = '{"config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}}}'
+          try {
+            $answer = Invoke-RestMethod -Uri 'http://127.0.0.1:8081/validate' -Method Post -ContentType 'application/json' -Body $probe -TimeoutSec 120
+            Write-Host "The validator answers: $($answer | ConvertTo-Json -Depth 6 -Compress)"
+          } catch {
+            Write-Host "The validator did not answer a probe: $($_.Exception.Message)"
+            Get-Content (Join-Path $preview 'validator.log'), (Join-Path $preview 'validator-error.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
+          }
       - name: Start a fresh instance with Start-LocalPreview.ps1
         id: instance
         timeout-minutes: 10
