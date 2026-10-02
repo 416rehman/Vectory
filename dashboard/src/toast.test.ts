@@ -64,6 +64,30 @@ describe("toast store", () => {
     ]);
   });
 
+  it("replaces an earlier message on the same topic, and dismisses a topic once it stops being true", () => {
+    notifyToast("Added pipeline test “a”. Save to keep it.", {
+      tone: "success",
+      topic: "unsaved-tests",
+    });
+    notifyToast("Added 2 pipeline tests. Save to keep them.", {
+      tone: "success",
+      topic: "unsaved-tests",
+    });
+    notifyToast("Imported.", { tone: "success" });
+    expect(toastSnapshot().map((item) => item.message)).toEqual([
+      "Added 2 pipeline tests. Save to keep them.",
+      "Imported.",
+    ]);
+    toast.dismissTopic("unsaved-tests");
+    expect(toastSnapshot().map((item) => item.message)).toEqual(["Imported."]);
+    // A topic nobody used leaves every message in place.
+    toast.dismissTopic("nothing");
+    expect(toastSnapshot()).toHaveLength(1);
+    // Messages without a topic are never swept up by one.
+    toast.dismissTopic("undefined");
+    expect(toastSnapshot()).toHaveLength(1);
+  });
+
   it("dismisses by id and keeps an action", () => {
     const id = toast.success("Group saved.", {
       action: { label: "View devices", href: "#/devices?group=g" },

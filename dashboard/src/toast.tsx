@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { CircleAlert, CircleCheck, X } from "lucide-react";
+import { toastLift, type Box } from "./toastPlacement";
 import "./toast.css";
 
 export type ToastTone = "success" | "error" | "info";
@@ -10,6 +18,12 @@ export type ToastOptions = {
   action?: ToastAction;
   /** Milliseconds before an automatic dismissal; errors persist by default. */
   duration?: number | null;
+  /**
+   * What the message is about. A newer message on the same topic replaces the
+   * older one, and a page can dismiss the topic once it stops being true
+   * ("Save to keep it" after the save).
+   */
+  topic?: string;
 };
 /** What a page's `notify` accepts: the tone is stated, never guessed. */
 export type NotifyOptions = ToastOptions & { tone: ToastTone };
@@ -28,6 +42,7 @@ export type ToastItem = {
   message: string;
   action?: ToastAction;
   duration: number | null;
+  topic?: string;
 };
 
 const MAX_TOASTS = 3;
@@ -44,6 +59,7 @@ function show(tone: ToastTone, message: string, options: ToastOptions = {}) {
     tone,
     message,
     action: options.action,
+    topic: options.topic,
     duration:
       options.duration !== undefined
         ? options.duration
@@ -51,9 +67,14 @@ function show(tone: ToastTone, message: string, options: ToastOptions = {}) {
           ? null
           : DEFAULT_DURATION,
   };
-  // Replace an identical visible message instead of stacking duplicates.
+  // Replace an identical visible message, or an earlier one on the same
+  // topic, instead of stacking duplicates.
   items = evict([
-    ...items.filter((old) => old.message !== message || old.tone !== tone),
+    ...items.filter(
+      (old) =>
+        (old.message !== message || old.tone !== tone) &&
+        (!options.topic || old.topic !== options.topic),
+    ),
     item,
   ]);
   emit();
@@ -80,6 +101,13 @@ export const toast = {
     show("info", message, options),
   dismiss(id: number) {
     const next = items.filter((item) => item.id !== id);
+    if (next.length === items.length) return;
+    items = next;
+    emit();
+  },
+  /** Every message about `topic`: it has stopped being true. */
+  dismissTopic(topic: string) {
+    const next = items.filter((item) => item.topic !== topic);
     if (next.length === items.length) return;
     items = next;
     emit();
@@ -215,6 +243,77 @@ function ToastCard({ item }: { item: ToastItem }) {
   );
 }
 
+/**
+ * What notifications must not cover at the bottom of the screen: the editor's
+ * problems bar, and the buttons at the foot of an open dialog.
+ */
+const BOTTOM_UI = '.problems-panel, [role="dialog"] .modal-footer';
+
+const boxOf = (element: Element): Box => {
+  const { left, right, top, bottom } = element.getBoundingClientRect();
+  return { left, right, top, bottom };
+};
+
+/**
+ * Keeps the stack clear of the bottom bars, as they come, go and resize: the
+ * stack rests where it always did and rises by `--toast-lift` while one is
+ * under it.
+ */
+function useClearOfBottomBars(
+  stack: RefObject<HTMLElement | null>,
+  active: boolean,
+) {
+  useLayoutEffect(() => {
+    const element = stack.current;
+    if (!active || !element) return;
+    let frame = 0;
+    // The elements whose size is followed: a new one reports once, so the set
+    // changes only when a bar comes or goes.
+    const watched = new Set<Element>();
+    const place = () => {
+      frame = 0;
+      const lifted =
+        Number.parseFloat(element.style.getPropertyValue("--toast-lift")) || 0;
+      const now = boxOf(element);
+      const bars = [...document.querySelectorAll(BOTTOM_UI)].filter(
+        (bar) => !element.contains(bar) && bar.getClientRects().length > 0,
+      );
+      // Where the stack rests: its box without the lift it has now.
+      const lift = toastLift(
+        { ...now, top: now.top + lifted, bottom: now.bottom + lifted },
+        bars.map(boxOf),
+      );
+      if (lift !== lifted)
+        element.style.setProperty("--toast-lift", `${lift}px`);
+      const targets = [element, ...bars];
+      for (const old of watched)
+        if (!targets.includes(old)) {
+          resizes.unobserve(old);
+          watched.delete(old);
+        }
+      for (const target of targets)
+        if (!watched.has(target)) {
+          resizes.observe(target);
+          watched.add(target);
+        }
+    };
+    const soon = () => {
+      if (!frame) frame = requestAnimationFrame(place);
+    };
+    const resizes = new ResizeObserver(soon);
+    const changes = new MutationObserver(soon);
+    changes.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", soon);
+    place();
+    return () => {
+      cancelAnimationFrame(frame);
+      changes.disconnect();
+      resizes.disconnect();
+      window.removeEventListener("resize", soon);
+    };
+  }, [stack, active]);
+}
+
 type Region = "polite" | "assertive";
 const REGIONS: Region[] = ["polite", "assertive"];
 /** How long a spoken message stays in its region before it is wiped. */
@@ -235,6 +334,8 @@ export function ToastViewport() {
     assertive: "",
   });
   const announced = useRef(0);
+  const stack = useRef<HTMLElement>(null);
+  useClearOfBottomBars(stack, list.length > 0);
   const timers = useRef<
     Record<
       Region,
@@ -283,7 +384,7 @@ export function ToastViewport() {
         {spoken.assertive}
       </div>
       {list.length > 0 && (
-        <section className="toast" aria-label="Notifications">
+        <section className="toast" aria-label="Notifications" ref={stack}>
           {list.map((item) => (
             <ToastCard key={item.id} item={item} />
           ))}
