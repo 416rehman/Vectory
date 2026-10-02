@@ -9,9 +9,23 @@ in scripts/generate-vector-catalog.mjs marks it. If the copies drift, a
 deployment reaches a device that then refuses it, or is blocked for no reason:
 the server and the agent once disagreed about the `api` block that way.
 
+Two AWS credential shapes are refused whatever the host allows, so the three
+copies must also agree about them: a `credentials_file` key below an `auth`
+key (it can make Vector run a program), and a sink that signs with the AWS
+strategy without explicit keys (it would sign with the host's own identity).
+The four sink types that take the credential and where each reads it, the keys
+that make it explicit, the keys that borrow the host's identity and the
+credentials file key are held in `credentialRefusal` and `awsCredentialPath` in
+policy.go, in `requires_full_mode` and its helpers in rollout.rs, and in
+`fullModeRequirements` and its helpers in hostRequirements.ts.
+
 The capability table (vector-catalog/capabilities.json) will replace these
 lists. Until the three readers use it, its `current_restricted_mode` section
-must equal them and the tiers must keep every one of them built in.
+must equal them and the tiers must keep every one of them built in, and its
+`aws` credential shape and the credential paths of its sinks must agree with
+the rules. They differ in one place: the table counts `access_key_id` alone as
+explicit, while the agent, which enforces, requires both keys, and the server
+and the dashboard follow the agent.
 """
 
 import json
@@ -105,6 +119,57 @@ SERVER_REFUSED_KEYS = quoted(
 DASHBOARD_REFUSED_KEYS = quoted(
     re.search(r'\[\s*("command",.*?)\]\.includes\(key\.toLowerCase\(\)\)', DASHBOARD_RULE, re.S).group(1)
 )
+
+
+def credential_paths(text: str, entry: str) -> dict[str, list[str]]:
+    """Sink type -> the path of its AWS credential, from the `entry` matches of a table."""
+    found = {sink: re.findall(r'"([a-z_]+)"', path) for sink, path in re.findall(entry, text)}
+    assert found, f"no credential paths in {text[:60]!r}; did the code move?"
+    return found
+
+
+# Where each restricted-mode sink that takes an AWS credential reads it.
+AGENT_AWS_PATHS = credential_paths(
+    block(POLICY, r"awsCredentialPath = map\[string\]\[\]string\{(.*?)\n\t\}"),
+    r'"([a-z_]+)":\s*\{([^}]*)\}',
+)
+SERVER_AWS_PATHS = credential_paths(
+    block(ROLLOUT, r"const AWS_CREDENTIAL_PATHS: \[\(&str, &\[&str\]\); \d+\] = \[(.*?)\n\];"),
+    r'\("([a-z_]+)", &\[([^\]]*)\]\)',
+)
+DASHBOARD_AWS_PATHS = credential_paths(
+    block(DASHBOARD, r"const awsCredentialPaths = new Map\(\[(.*?)\]\);"),
+    r'\["([a-z_]+)", \[([^\]]*)\]\]',
+)
+# The keys that make the credential explicit, the keys that borrow the host's
+# identity, and the key that names a credentials file.
+AGENT_AWS_KEYS = {
+    "explicit": quoted(block(POLICY, r"awsExplicitKeys\s*=\s*\[\]string\{(.*?)\}")),
+    "ambient": quoted(block(POLICY, r"awsAmbientKeys\s*=\s*\[\]string\{(.*?)\}")),
+    "file": quoted(block(POLICY, r'const credentialsFileKey = ("[a-z_]+")')),
+}
+SERVER_AWS_KEYS = {
+    "explicit": quoted(block(ROLLOUT, r"const AWS_EXPLICIT_KEYS: \[&str; \d+\] = \[(.*?)\];")),
+    "ambient": quoted(block(ROLLOUT, r"const AWS_AMBIENT_KEYS: \[&str; \d+\] = \[(.*?)\];")),
+    "file": quoted(block(ROLLOUT, r'const CREDENTIALS_FILE_KEY: &str = ("[a-z_]+");')),
+}
+DASHBOARD_AWS_KEYS = {
+    "explicit": quoted(block(DASHBOARD, r"const awsExplicitKeys = \[(.*?)\];")),
+    "ambient": quoted(block(DASHBOARD, r"const awsAmbientKeys = \[(.*?)\];")),
+    "file": quoted(block(DASHBOARD, r'const credentialsFileKey = ("[a-z_]+");')),
+}
+# The code of each rule, for the checks that the copies read a name or a value
+# the same way: the credentials file, the strategy, and the keys of a credential.
+AGENT_COMPONENT = block(POLICY, r"func \(p CapabilityPolicy\) component\((.*?)\n\}\n")
+AGENT_FILE_FIELD = block(POLICY, r"func credentialsFileField\((.*?)\n\}\n")
+AGENT_AMBIENT = block(POLICY, r"func ambientAWSRefusal\((.*?)\n\}\n")
+AGENT_EXPLICIT = block(POLICY, r"func explicitAWSCredential\((.*?)\n\}\n")
+SERVER_FILE_FIELD = block(ROLLOUT, r"fn credentials_file_below_auth\((.*?)\n\}\n")
+SERVER_AMBIENT = block(ROLLOUT, r"fn signs_with_host_identity\((.*?)\n\}\n")
+SERVER_EXPLICIT = block(ROLLOUT, r"fn explicit_aws_credential\((.*?)\n\}\n")
+DASHBOARD_FILE_FIELD = block(DASHBOARD, r"function credentialsFileBelowAuth\((.*?)\n\}\n")
+DASHBOARD_AMBIENT = block(DASHBOARD, r"function signsWithHostIdentity\((.*?)\n\}\n")
+DASHBOARD_EXPLICIT = block(DASHBOARD, r"function explicitAwsCredential\((.*?)\n\}\n")
 
 
 class RestrictedModeLists(unittest.TestCase):
@@ -210,6 +275,86 @@ class CapabilityTable(unittest.TestCase):
         for scope in TABLE["components"]:
             if not scope["reviewed"]:
                 self.assertEqual(scope["tier"], "full", scope["scope"])
+
+
+def table_aws_paths() -> dict[str, list[str]]:
+    """Restricted-mode sink type -> where the table says it reads its AWS credential."""
+    found = {}
+    for typ in AGENT_COMPONENTS["sinks"]:
+        credentials = [c for c in SCOPES[f"sinks/{typ}"].get("credentials", []) if c["shape"] == "aws"]
+        if credentials:
+            assert len(credentials) == 1, f"sinks/{typ}: more than one aws credential"
+            # The rule holds only for the AWS strategy.
+            assert credentials[0].get("when") == {"auth.strategy": ["aws"]}, f"sinks/{typ}: {credentials[0]}"
+            found[typ] = credentials[0]["path"].split(".")
+    return found
+
+
+class AwsCredentialRules(unittest.TestCase):
+    """A credentials file and the host's own AWS identity are refused whatever the host allows."""
+
+    def test_the_four_sinks_and_where_each_reads_its_credential_match(self):
+        # Measured with the pinned Vector: Elasticsearch flattens the credential
+        # into auth, the shared HTTP authentication nests it in auth.auth.
+        self.assertEqual(
+            AGENT_AWS_PATHS,
+            {
+                "elasticsearch": ["auth"],
+                "http": ["auth", "auth"],
+                "loki": ["auth", "auth"],
+                "prometheus_exporter": ["auth", "auth"],
+            },
+        )
+        self.assertEqual(SERVER_AWS_PATHS, AGENT_AWS_PATHS)
+        self.assertEqual(DASHBOARD_AWS_PATHS, AGENT_AWS_PATHS)
+        self.assertLessEqual(set(AGENT_AWS_PATHS), set(AGENT_COMPONENTS["sinks"]))
+
+    def test_the_keys_match(self):
+        self.assertEqual(AGENT_AWS_KEYS["file"], ["credentials_file"])
+        self.assertEqual(AGENT_AWS_KEYS["ambient"], ["assume_role", "imds", "profile"])
+        # The agent demands both keys: one key alone leaves the rest to the host.
+        self.assertEqual(AGENT_AWS_KEYS["explicit"], ["access_key_id", "secret_access_key"])
+        self.assertEqual(SERVER_AWS_KEYS, AGENT_AWS_KEYS)
+        self.assertEqual(DASHBOARD_AWS_KEYS, AGENT_AWS_KEYS)
+
+    def test_every_component_is_judged_by_both_rules(self):
+        self.assertIn("credentialRefusal(typ, c)", AGENT_COMPONENT)
+        self.assertIn("credentials_file_below_auth(component, false)", SERVER_RULE)
+        self.assertIn("signs_with_host_identity(typ, component)", SERVER_RULE)
+        self.assertIn("credentialsFileBelowAuth(component)", DASHBOARD_RULE)
+        self.assertIn("signsWithHostIdentity(component)", DASHBOARD_RULE)
+
+    def test_the_rules_read_names_and_values_the_same_way(self):
+        # A credentials file is a key below any auth key, in any case.
+        self.assertIn("lower == credentialsFileKey", AGENT_FILE_FIELD)
+        self.assertIn('belowAuth || lower == "auth"', AGENT_FILE_FIELD)
+        self.assertIn("key == CREDENTIALS_FILE_KEY", SERVER_FILE_FIELD)
+        self.assertIn('below_auth || key == "auth"', SERVER_FILE_FIELD)
+        self.assertIn("lower === credentialsFileKey", DASHBOARD_FILE_FIELD)
+        self.assertIn('belowAuth || lower === "auth"', DASHBOARD_FILE_FIELD)
+        # The strategy is compared ignoring case.
+        self.assertIn('strings.EqualFold(strategy, "aws")', AGENT_AMBIENT)
+        self.assertIn('eq_ignore_ascii_case("aws")', SERVER_AMBIENT)
+        self.assertIn('strategy.toLowerCase() !== "aws"', DASHBOARD_AMBIENT)
+        # A key is a string with something other than space in it.
+        self.assertIn('strings.TrimSpace(value) == ""', AGENT_EXPLICIT)
+        self.assertIn("value.trim().is_empty()", SERVER_EXPLICIT)
+        self.assertIn("blank.test(value)", DASHBOARD_EXPLICIT)
+        # A role, a metadata client setting or a profile is set unless it is null or false.
+        self.assertIn("value != nil && value != false", AGENT_EXPLICIT)
+        self.assertIn("Value::Null | Value::Bool(false)", SERVER_EXPLICIT)
+        self.assertIn("value == null", DASHBOARD_EXPLICIT)
+        self.assertIn("value === false", DASHBOARD_EXPLICIT)
+
+    def test_the_capability_table_agrees(self):
+        aws = TABLE["credential_shapes"]["aws"]
+        self.assertEqual(sorted(aws["ambient_keys"]), AGENT_AWS_KEYS["ambient"])
+        self.assertEqual(sorted(aws["refused_keys"]), AGENT_AWS_KEYS["file"])
+        # The table's list is looser (see the top of this file): every key it
+        # counts as explicit is one the rule requires.
+        self.assertTrue(aws["explicit"])
+        self.assertLessEqual(set(aws["explicit"]), set(AGENT_AWS_KEYS["explicit"]))
+        self.assertEqual(table_aws_paths(), AGENT_AWS_PATHS)
 
 
 if __name__ == "__main__":
