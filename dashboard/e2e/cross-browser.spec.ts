@@ -15,6 +15,35 @@ const account = {
   password: crypto.randomBytes(24).toString("base64url"),
 };
 
+// What the browser reports while a test runs, printed when the test fails: a
+// run on a hosted machine has no other way to say why a page stayed empty.
+const problems: string[] = [];
+test.beforeEach(({ page }) => {
+  problems.length = 0;
+  page.on("pageerror", (error) =>
+    problems.push(`page error: ${String(error).slice(0, 300)}`),
+  );
+  page.on("console", (message) => {
+    if (message.type() === "error")
+      problems.push(`console: ${message.text().slice(0, 300)}`);
+  });
+  page.on("requestfailed", (request) =>
+    problems.push(
+      `request failed: ${request.url()} ${request.failure()?.errorText ?? ""}`,
+    ),
+  );
+});
+test.afterEach(async ({ page }, info) => {
+  if (info.status === info.expectedStatus) return;
+  const text = await page
+    .locator("body")
+    .innerText()
+    .catch(() => "");
+  console.log(
+    `What the browser saw at ${page.url()}: ${JSON.stringify({ problems, text: text.replace(/\s+/g, " ").slice(0, 300) })}`,
+  );
+});
+
 /** A signed-in session without the form: the form has its own test. */
 async function signedIn(page: Page) {
   const login = await page.request.post("/api/v1/login", {
