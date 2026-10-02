@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
@@ -82,6 +83,12 @@ const requests = [],
   attempts = [],
   observations = [];
 let failure;
+// The group read answers itself, with the revision the harness tracks.
+const fleet = fleetReplies({
+  devices,
+  groups: () => [group],
+  groupById: false,
+});
 await context.route("**/*", async (route) => {
   const req = route.request(),
     url = new URL(req.url());
@@ -90,6 +97,8 @@ await context.route("**/*", async (route) => {
   const path = url.pathname.slice(7),
     method = req.method();
   requests.push({ path, method });
+  // Pages of devices, one device, and the groups without their members.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (method === "GET" && path === "/devices")
     return route.fulfill({ json: devices });
   // The group overview lists assignments; member edits preview their effects.
