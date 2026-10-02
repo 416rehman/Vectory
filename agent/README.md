@@ -35,6 +35,17 @@ On Windows, build `vectory.exe` the same way and set `VECTOR_TEST_BINARY` to `ve
 
 `reported_generation` only moves to a generation whose exact content was verified. `configuration_attempt` records the candidate's generation, version, template digest, stage, local secret revision and a fixed, safe error category, and travels on every heartbeat. A failed attempt is suppressed so a bad version can't restart Vector in a loop; `vectory retry` (agent stopped), a new generation or a changed local secret allow another attempt.
 
+## Checks on request
+
+A signed manifest can carry one `validation` request (feature `validation`, bound to the device and the heartbeat like the rest of the manifest) that asks the agent to check a candidate version on this host without applying it:
+
+1. The request must name the artifact's own path and expire within 15 minutes of the manifest's issue time; anything else is ignored, and a block the agent can't read never keeps the manifest itself from being verified.
+2. The check follows the apply and never overlaps it: a journal, or progress between the start of an apply and its outcome, defers it to the next check-in. The agent downloads the candidate into memory, verifies its size and digest, fills in the device's secrets the way an apply does (naming every unbound one), applies the restricted-mode policy, stages the result in `<state>/validation-staging/` (mode 0700, never the managed directory) and lets the adopted Vector validate it, and run its tests when asked, under the apply's time limit.
+3. It writes nothing else: not the managed file, the journal, the last known good, a generation or the desired state, and it never starts, reloads or signals Vector. The copy is deleted on every path, and a start deletes what a killed process left. A data directory the validation had to create is removed again, and Vector's local log gets no note.
+4. The result carries redacted diagnostics (at most 20), tests (at most 100), the names of unbound device secrets and the duration; never subprocess output, a secret value or a secret's file. It goes in every heartbeat until the manifest stops carrying the request, and the run loop sends it a second after it is made. A server that refuses a heartbeat carrying it as invalid never gets that result again.
+
+Only `validation-answered.json` stays on disk: the ids of the last 16 requests this agent is done with, so that a manifest that carries one again isn't checked again. Checks are at least 10 seconds apart. `readiness` (whether the data directory the next apply would use is writable, and how many listen addresses the host approves) and `agent_features` ride the heartbeat only while the manifest lists `validation`. The manifest's `desired.configuration_name` and `desired.version_number` are display-only: they stay out of the generation's identity and read as absent when malformed.
+
 ## Supervision
 
 - The agent owns its Vector process. Stopping the agent stops Vector; starting it starts the current managed configuration and finishes any incomplete journal.
