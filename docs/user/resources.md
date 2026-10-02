@@ -164,7 +164,7 @@ record = get_enrichment_table_record!("hosts", {"hostname": "edge-01"})
 .owner = record.owner
 ```
 
-This sets `.owner = "platform"`. In a real pipeline, look up a field from the event, and decide what should happen when no record matches: the `!` makes a missing record an error. The CSV isn't part of the version, so check it exists on every device. See the [enrichment table reference](https://vector.dev/docs/reference/configuration/pipeline-components/#enrichment_tables).
+This sets `.owner = "platform"`. In a real pipeline, look up a field from the event, and decide what should happen when no record matches: the `!` makes a missing record an error. The CSV isn't part of the version, so check it exists on every device. The server never opens it: its check leaves the table to the devices, and the pipeline's tests run only on a device (see [Test transformations](#test-transformations)). See the [enrichment table reference](https://vector.dev/docs/reference/configuration/pipeline-components/#enrichment_tables).
 
 ## Test transformations
 
@@ -199,9 +199,11 @@ You should see **Pipeline tests passed**. Change `"edge"` to `"wrong"` and run a
 
 **Tests gate publishing.** **Review & publish** runs the pipeline's tests when it opens and says how they went: "Tests: 2 of 2 passed", or, when Vector couldn't build a test, which one and why, and that the others didn't run. While a test fails, was refused or didn't run, the primary button reads **Publish anyway** and sits beside **Open tests**, which takes you to the first test that isn't passing. Publishing anyway is allowed and recorded: the audit entry says tests were failing and how many of each kind, never what they contain. The server runs the tests again when it publishes, so a script that calls [`POST /configurations/{id}/publish`](api.md) gets `409 TESTS_FAILED` with the results until it sends `acknowledge_test_failures: true`. A pipeline with no tests, or whose tests Vector skipped and explained (a device runs them), publishes as before.
 
-The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
+The server runs tests in its sandboxed validator when the pipeline needs nothing from the device. **These tests need the device environment** means they couldn't run there; that isn't a pass.
 
-The server never sends network requests or reads device files from samples or tests. A program that calls `http_request`, `dns_lookup`, `reverse_dns`, `validate_json_schema`, `parse_proto` or `encode_proto` isn't run there, and the tester says so. A device in full mode runs it for real.
+A pipeline with a Lua step, or with an enrichment table that reads a file (`file`, `geoip` or `mmdb`), is never tested on the server: Lua can run any program, and the file lives on the device. **Run pipeline tests** says which, and the review counts those tests as not run, so the primary button reads **Publish anyway**. Run them on a device instead: in the deploy review, choose **Check on devices** and **Also run the pipeline's tests**. A `memory` table reads no file, so its tests run here as before. When a version has tests, each device runs `vector test` before applying it, and keeps its current configuration if any test fails. Restricted devices run tests too: a test only inserts your sample events into transforms and checks the output, with no file or network access, and any VRL in a test is still held to the device's allowances.
+
+The server never sends network requests or reads device files from samples or tests. A program that calls `http_request`, `dns_lookup`, `reverse_dns`, `validate_json_schema`, `parse_proto` or `encode_proto`, or that passes a file to `parse_groks` (`alias_sources`) or `parse_etld` (`psl`), isn't run there, and the tester says so. Without a file, `parse_groks` and `parse_etld` run as usual. A device in full mode runs it for real.
 
 To run the tests yourself, export the configuration as JSON and run the pinned Vector with the device's service account:
 
