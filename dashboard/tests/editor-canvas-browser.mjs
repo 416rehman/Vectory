@@ -1314,7 +1314,7 @@ try {
       },
     );
     await check(
-      "pending code, typed fields and field JSON disable saving without discarding or applying their text",
+      "typed fields and field JSON disable saving, and code that does not parse is refused with its place, without discarding or applying the text",
       async () => {
         for (const kind of ["code", "scalar", "raw"]) {
           await load();
@@ -1336,18 +1336,33 @@ try {
               await input.fill("{pending");
             }
           }
-          await expect(saveButton()).toBeDisabled();
+          // Code is applied by saving; a field draft must be applied first.
+          if (kind === "code") {
+            await expect(saveButton()).toBeEnabled();
+            await expect(page.locator(".pipeline-save-status")).toContainText(
+              "Unapplied code changes",
+            );
+          } else {
+            await expect(saveButton()).toBeDisabled();
+            await expect(page.locator(".pipeline-save-status")).toContainText(
+              "Unapplied field changes",
+            );
+          }
           await input.press("ControlOrMeta+s");
           await expect(
-            page
-              .getByText(
-                "Apply or discard unfinished code and field edits before saving the draft.",
-                { exact: true },
-              )
-              .first(),
+            kind === "code"
+              ? page.getByText(/Not saved\. Line 1:\d+: /).first()
+              : page
+                  .getByText(
+                    "Apply or discard unfinished code and field edits before saving the draft.",
+                    { exact: true },
+                  )
+                  .first(),
           ).toBeVisible();
           await openSave();
-          await expect(saveItem()).toBeDisabled();
+          if (kind === "code") await expect(saveItem()).toBeEnabled();
+          else await expect(saveItem()).toBeDisabled();
+          await expect(noteItem()).toBeDisabled();
           await page.keyboard.press("Escape");
           await expect(trigger()).toBeFocused();
           if (kind === "scalar") await expect(input).toHaveValue("-");
@@ -2796,7 +2811,77 @@ try {
         expect(fixture.mutations).toEqual([]);
       },
     );
-    expect(results).toHaveLength(13);
+    await check(
+      "a link that names a step and a field opens the pipeline with that step selected and the field in view; a step or field this draft lacks opens it with one line saying so",
+      async () => {
+        await load();
+        // Each visit is a fresh load of the link, as when it is followed.
+        const visit = async (query) => {
+          await page.goto(
+            `${origin}/__editor-canvas-fixture#/configurations/${pipelineId}${query}`,
+          );
+          await page.reload();
+          await expect(page.locator(".react-flow__node")).toHaveCount(5);
+        };
+        const inspector = () => page.locator(".editor-inspector");
+        const rate = () =>
+          inspector().getByRole("textbox", {
+            name: "One in every",
+            exact: true,
+          });
+        const note = (text) => page.getByText(text, { exact: true });
+        await visit("?select=sample&field=rate");
+        await expect(inspector()).toBeVisible();
+        await expect(rate()).toBeFocused();
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        await expect(
+          page.locator(
+            '.react-flow__node[data-id="sample"] .pipeline-node-selected, .react-flow__node[data-id="sample"].pipeline-node-selected',
+          ),
+        ).toHaveCount(1);
+        await expect(
+          page.locator(".toast-stack, [role=status]"),
+        ).not.toContainText("in this draft");
+        // The step alone selects it.
+        await visit("?select=branch");
+        await expect(inspector()).toBeVisible();
+        await expect(inspector()).toContainText("branch");
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        // A VRL setting: the cursor goes into its program.
+        await visit("?select=branch&field=route.accepted");
+        await expect(inspector().locator(".cm-content").first()).toBeFocused();
+        await expect(page.getByText(/no “route.accepted” setting/)).toHaveCount(
+          0,
+        );
+        // A step this draft does not have: the pipeline opens, nothing is
+        // selected, and one line says why.
+        await visit("?select=missing&field=rate");
+        await expect(
+          note("There is no step called “missing” in this draft."),
+        ).toBeVisible();
+        await expect(inspector()).toHaveCount(0);
+        await expect(page.locator(".react-flow__node")).toHaveCount(5);
+        // A field the step does not have: the step opens, with that line.
+        await visit("?select=sample&field=nothing");
+        await expect(
+          note("sample has no “nothing” setting in this draft."),
+        ).toBeVisible();
+        await expect(inspector()).toBeVisible();
+        await expect(page.locator(".pipeline-node-selected")).toHaveCount(1);
+        expect(fixture.mutations).toEqual([]);
+        // Moving to another step and field inside the open editor works too.
+        await page.evaluate((id) => {
+          location.hash = `#/configurations/${id}?select=branch`;
+        }, pipelineId);
+        await expect(inspector()).toContainText("branch");
+        await page.evaluate((id) => {
+          location.hash = `#/configurations/${id}?select=sample&field=rate`;
+        }, pipelineId);
+        await expect(rate()).toBeFocused();
+        expect(fixture.mutations).toEqual([]);
+      },
+    );
+    expect(results).toHaveLength(14);
   }
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);

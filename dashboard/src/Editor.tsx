@@ -172,6 +172,7 @@ import {
   sourceErrorMessage,
   sourceOffset,
 } from "./configurationSource";
+import { planCodeSave, unappliedStatus } from "./codeSave";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
 import ConfigurationImportDialog, {
   type ConfigurationImport,
@@ -252,7 +253,8 @@ import ConnectionStylePicker, {
 } from "./ConnectionStylePicker";
 import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
-import { refusal, type Notify } from "./toast";
+import { commandFor, useCommand } from "./commands";
+import { refusal, toast, type Notify } from "./toast";
 
 const edgeTypes = { pipeline: PipelineEdge };
 // React Flow (MIT) permits hiding its attribution badge; the canvas hides it.
@@ -421,6 +423,8 @@ const saveShortcut =
   /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
     ? "⌘S"
     : "Ctrl+S";
+/** The notice that added pipeline tests need a save to be kept. */
+const UNSAVED_TESTS_TOPIC = "unsaved-pipeline-tests";
 const AUTO_CHECK_KEY = "vectory.editor.auto-check";
 function readAutoCheck() {
   try {
@@ -538,6 +542,8 @@ export default function Editor({
       line?: number;
       column?: number;
       nonce: number;
+      /** The field was asked for and this step has no control for it. */
+      onMissing?: () => void;
     } | null>(null),
     [savingDraft, setSavingDraft] = useState(false),
     // The note for "Save with note…"; null while that dialog is closed.
@@ -1169,7 +1175,7 @@ export default function Editor({
   const handledDestination = useRef("");
   const blockedDestination = useRef("");
   const destinationKey = destination
-    ? `${destination.panel}:${destination.section || ""}:${destination.test || ""}`
+    ? `${destination.panel}:${destination.section || ""}:${destination.test || ""}:${destination.select || ""}:${destination.field || ""}`
     : "";
   useEffect(() => {
     if (!destination) {
@@ -1201,7 +1207,8 @@ export default function Editor({
     }
     handledDestination.current = destinationKey;
     blockedDestination.current = "";
-    if (destination.panel === "history") openHistory();
+    if (destination.panel === "step") openStep(destination);
+    else if (destination.panel === "history") openHistory();
     else if (destination.panel === "tools") {
       if (toolsRef.current) toolsRef.current.open = true;
     } else
@@ -1466,6 +1473,7 @@ export default function Editor({
             latest.current.dirty = false;
           }
           setSaveStatus(stillSame ? "All changes saved" : "Unsaved changes");
+          if (stillSame) toast.dismissTopic(UNSAVED_TESTS_TOPIC);
           if (explicit) notify("Draft revision saved.", { tone: "success" });
           return updated;
         } catch (e) {
@@ -2750,6 +2758,84 @@ export default function Editor({
     const saved = await saveDraftNow(false, note);
     if (saved) setSaveNote(null);
   }
+  // Saving from Code applies code that parses, then saves the draft. A save
+  // reads the draft as of the last render, so it waits for the applied draft.
+  const saveAfterApply = useRef<Config | null>(null);
+  function saveCode() {
+    const plan = planCodeSave({
+      code,
+      format,
+      unapplied: importedCodeDirty.current,
+      config,
+    });
+    if (plan.kind === "refuse") {
+      setError(plan.message);
+      setCodeReveal({ offset: plan.offset, nonce: Date.now() });
+      return;
+    }
+    setError("");
+    if (plan.kind === "apply") {
+      saveAfterApply.current = plan.config;
+      replace(plan.config);
+      importedCodeDirty.current = false;
+      return;
+    }
+    // Only the layout or the comments changed: the draft already has it all.
+    if (plan.kind === "same") {
+      importedCodeDirty.current = false;
+      syncCode(config);
+    }
+    void saveDraftNow();
+  }
+  useEffect(() => {
+    const applied = saveAfterApply.current;
+    if (!applied) return;
+    saveAfterApply.current = null;
+    if (config === applied) void saveDraftNow();
+  }, [config]);
+  /** What Save, its menu item and Ctrl/Cmd+S do. */
+  function saveNow() {
+    if (view === "code" && importedCodeDirty.current) saveCode();
+    else if (hasUnappliedImportFields()) {
+      setError(
+        "Apply or discard unfinished code and field edits before saving the draft.",
+      );
+    } else void saveDraftNow();
+  }
+  // The command palette's Deploy… and Duplicate… open the same dialogs as the
+  // buttons here, for this pipeline, when this person and this state allow it.
+  // Once this page knows the pipeline and is idle, a request it cannot answer
+  // ends with a line saying so.
+  const commandRefused = (verb: string, settled: boolean) =>
+    settled
+      ? () =>
+          notify(`${verb} isn't available for this pipeline now.`, {
+            tone: "info",
+          })
+      : undefined;
+  const idle = !!doc && !busy;
+  useCommand(
+    commandFor("pipeline.deploy", id),
+    () => {
+      if (publishedVersion && closeSettings())
+        setDeployVersion(publishedVersion);
+    },
+    can(user, "operate") &&
+      publishedVersionStatus === "ready" &&
+      !!publishedVersion &&
+      !busy &&
+      !deployVersion,
+    commandRefused(
+      "Deploy",
+      idle && publishedVersionStatus !== "loading" && !deployVersion,
+    ),
+  );
+  useCommand(
+    commandFor("pipeline.duplicate", id),
+    () => void openPipelineAction("duplicate"),
+    can(user, "edit") && !!doc && !busy && !pipelineAction,
+    commandRefused("Duplicate", idle && !pipelineAction),
+  );
   // Ctrl/Cmd+S saves the draft anywhere in the editor. The browser's own
   // "save page" never applies here, even when there is nothing to save.
   const saveShortcutState = useRef({ blocked: false, save: () => {} });
@@ -2765,15 +2851,7 @@ export default function Editor({
       !!pipelineAction ||
       !!importCandidate ||
       saveNote !== null,
-    save: () => {
-      if (hasUnappliedImportFields()) {
-        setError(
-          "Apply or discard unfinished code and field edits before saving the draft.",
-        );
-        return;
-      }
-      void saveDraftNow();
-    },
+    save: saveNow,
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -3145,13 +3223,16 @@ export default function Editor({
     [problems, selected],
   );
   const hasPendingFields = !!(pendingFieldCount || importedCodeDirty.current);
+  // Code that has not been applied to the draft yet; saving applies it first.
+  const codeUnapplied = view === "code" && importedCodeDirty.current;
   const displaySaveStatus = saveNeedsReload.current
     ? "Save conflict — reload server draft"
     : saveUncertain.current
       ? "Save status unknown — review server draft"
-      : hasPendingFields
-        ? "Unapplied field changes"
-        : saveStatus;
+      : (unappliedStatus({
+          code: importedCodeDirty.current,
+          fields: pendingFieldCount > 0,
+        }) ?? saveStatus);
   const definition = component
     ? catalog.find(
         (c) => c.type === component.type && c.kind === selectedNode.data.kind,
@@ -3341,6 +3422,38 @@ export default function Editor({
     setSelected(stepId);
     setError("");
   }
+  // A link from a failure names the step to fix, and the field when it can.
+  // A step or field this draft doesn't have opens the pipeline with a note.
+  function openStep(target: PipelineDestination) {
+    const step = nodes.find(
+      (node) => node.id === target.select && !node.data.enrichmentTable,
+    );
+    if (!step) {
+      notify(`There is no step called “${target.select}” in this draft.`, {
+        tone: "info",
+        duration: 8000,
+      });
+      return;
+    }
+    if (view !== "canvas") setView("canvas");
+    if (selected !== step.id) {
+      if (!closeSettings()) return;
+      setSelected(step.id);
+    }
+    const field = target.field;
+    setFocusRequest({
+      component: step.id,
+      field,
+      nonce: Date.now(),
+      onMissing: field
+        ? () =>
+            notify(`${step.id} has no “${field}” setting in this draft.`, {
+              tone: "info",
+              duration: 8000,
+            })
+        : undefined,
+    });
+  }
   // Open the step a problem belongs to and reveal the field and position.
   // Pipeline-wide problems open the matching pipeline settings section.
   function openProblem(problem: Problem) {
@@ -3440,7 +3553,8 @@ export default function Editor({
       tests.length === 1
         ? `Added pipeline test “${tests[0].name}”. Save to keep it.`
         : `Added ${tests.length} pipeline tests. Save to keep them.`,
-      { tone: "success" },
+      // Saving the draft makes this untrue; it leaves with the save.
+      { tone: "success", topic: UNSAVED_TESTS_TOPIC },
     );
   }
   function renameRoute(before: string, after: string) {
@@ -3872,7 +3986,7 @@ export default function Editor({
       ],
       () => ({
         ...node,
-        ariaLabel: `${nodeTitle(node)} ${node.id}${problem.hasIssue ? ", has problems" : ""}${
+        ariaLabel: `${sharedTitle ? `${node.id} · ${nodeTitle(node)}` : `${nodeTitle(node)} ${node.id}`}${problem.hasIssue ? ", has problems" : ""}${
           reading === undefined
             ? ""
             : `, ${nodeLiveSummary(node.data.kind, reading)}`
@@ -4463,16 +4577,22 @@ export default function Editor({
                         className="editor-save-button"
                         icon={Save}
                         busy={savingDraft}
-                        disabled={busy || hasPendingFields || !dirty}
+                        disabled={
+                          busy ||
+                          pendingFieldCount > 0 ||
+                          (!dirty && !codeUnapplied)
+                        }
                         aria-keyshortcuts="Control+S Meta+S"
                         title={
-                          hasPendingFields
-                            ? "Apply unfinished code and field edits before saving"
-                            : dirty
-                              ? `Save draft (${saveShortcut})`
-                              : "No unsaved changes"
+                          pendingFieldCount > 0
+                            ? "Apply unfinished field edits before saving"
+                            : codeUnapplied
+                              ? `Apply the code and save the draft (${saveShortcut})`
+                              : dirty
+                                ? `Save draft (${saveShortcut})`
+                                : "No unsaved changes"
                         }
-                        onClick={() => void saveDraftNow()}
+                        onClick={saveNow}
                       >
                         Save
                       </Button>
@@ -4507,12 +4627,12 @@ export default function Editor({
                             <DropdownMenu.Item
                               className="editor-save-menu-item"
                               disabled={
-                                hasPendingFields ||
-                                !dirty ||
+                                pendingFieldCount > 0 ||
+                                (!dirty && !codeUnapplied) ||
                                 busy ||
                                 savingDraft
                               }
-                              onSelect={() => void saveDraftNow()}
+                              onSelect={saveNow}
                               aria-keyshortcuts="Control+S Meta+S"
                             >
                               <Save size={16} aria-hidden="true" />
@@ -4539,8 +4659,9 @@ export default function Editor({
                             </DropdownMenu.Item>
                             {hasPendingFields && (
                               <p className="editor-save-menu-hint">
-                                Apply unfinished code and field edits before
-                                saving.
+                                {codeUnapplied
+                                  ? "Save draft applies your code. Apply it first to save with a note."
+                                  : "Apply unfinished field edits before saving."}
                               </p>
                             )}
                           </DropdownMenu.Content>
@@ -5894,6 +6015,7 @@ export default function Editor({
           open
           onClose={() => setDeployVersion(null)}
           version={deployVersion}
+          pipelineName={doc.name}
           initialDeviceIds={initialDeviceId ? [initialDeviceId] : []}
           onDone={(message) => notify(message, { tone: "success" })}
         />

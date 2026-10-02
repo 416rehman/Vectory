@@ -593,6 +593,102 @@ try {
     },
   );
   await check(
+    "steps that share a catalog title lead with their IDs, a long title takes two lines with all of it in the tooltip, and each card's accessible name carries both",
+    async () => {
+      const document = baseDocument();
+      document.config.sinks.archive = {
+        type: "gcp_chronicle_unstructured",
+        inputs: ["sample"],
+      };
+      for (const [width, theme] of [
+        [1440, "light"],
+        [1440, "dark"],
+        [375, "light"],
+      ]) {
+        await load({ document, width, height: 1000 });
+        await page.evaluate(
+          (theme) => (document.documentElement.dataset.theme = theme),
+          theme,
+        );
+        const heading = (id) =>
+          node(id).locator(".pipeline-node-title-text > strong");
+        // "output" and "other" are both Discard events: each leads with its ID.
+        for (const id of ["output", "other"]) {
+          await expect(heading(id)).toHaveText(`${id} · Discard events`);
+          await expect(heading(id)).toHaveAttribute(
+            "title",
+            `${id} · Discard events`,
+          );
+          await expect(node(id)).toHaveAttribute(
+            "aria-label",
+            `${id} · Discard events`,
+          );
+        }
+        // A title nothing else shares stays as it is, and so does its name.
+        await expect(heading("branch")).toHaveText("Route");
+        await expect(heading("branch")).not.toHaveAttribute("data-shared");
+        await expect(node("branch")).toHaveAttribute(
+          "aria-label",
+          "Route branch",
+        );
+        // 26 characters: a second line, never a cut or a spill past the header.
+        await expect(heading("archive")).toHaveText(
+          "GCP Chronicle Unstructured",
+        );
+        const fit = await heading("archive").evaluate((element) => {
+          const style = getComputedStyle(element);
+          const row = element
+            .closest(".pipeline-node-title-row")
+            .getBoundingClientRect();
+          const text = element.getBoundingClientRect();
+          const kind = element.parentElement
+            .querySelector(".pipeline-node-kind")
+            .getBoundingClientRect();
+          const menu = element
+            .closest(".pipeline-node")
+            .querySelector('[data-node-action="menu"]')
+            .getBoundingClientRect();
+          return {
+            // Layout size, not drawn size: the canvas may be zoomed out.
+            lines: Math.round(
+              element.offsetHeight / parseFloat(style.lineHeight),
+            ),
+            fontSize: parseFloat(style.fontSize),
+            clipped: element.scrollHeight > element.clientHeight + 1,
+            kindAbove: text.top - kind.bottom,
+            gapAbove: kind.top - row.top,
+            gapBelow: row.bottom - 1 - text.bottom,
+            clearOfMenu: menu.left - text.right,
+          };
+        });
+        measurements.push({ label: `card title ${width} ${theme}`, ...fit });
+        expect(fit.lines).toBe(2);
+        expect(fit.fontSize).toBeGreaterThanOrEqual(16);
+        expect(fit.clipped).toBe(false);
+        expect(fit.kindAbove).toBeGreaterThanOrEqual(0);
+        expect(fit.gapAbove).toBeGreaterThanOrEqual(0);
+        expect(fit.gapBelow).toBeGreaterThanOrEqual(0);
+        expect(fit.clearOfMenu).toBeGreaterThanOrEqual(0);
+        await expect(heading("archive")).toHaveAttribute(
+          "title",
+          "GCP Chronicle Unstructured",
+        );
+        // The same card with a one-line title keeps the header's height.
+        const heights = await page.evaluate(() =>
+          [...document.querySelectorAll(".pipeline-node-title-row")].map(
+            (row) => row.getBoundingClientRect().height,
+          ),
+        );
+        expect(new Set(heights.map((h) => Math.round(h))).size).toBe(1);
+        await page.screenshot({
+          path: resolve(output, `node-titles-${width}-${theme}.png`),
+          animations: "disabled",
+        });
+      }
+      expect(fixture.mutations).toEqual([]);
+    },
+  );
+  await check(
     "viewer and archived cards expose properties only and cannot connect or mutate",
     async () => {
       for (const options of [{ role: "viewer" }, { archived: true }]) {
@@ -621,7 +717,7 @@ try {
       }
     },
   );
-  expect(results).toHaveLength(5);
+  expect(results).toHaveLength(6);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

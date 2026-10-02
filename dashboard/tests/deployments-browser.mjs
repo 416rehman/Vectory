@@ -119,6 +119,8 @@ const targets = (parent) =>
         : null,
     original: true,
   }));
+// Failures to serve for one rollout instead of its generic one.
+let failureOverride = null;
 let delayedSearch = "",
   delayedTargetSearch = "",
   delayedSummary = "",
@@ -224,27 +226,30 @@ await context.route("**/api/v1/**", async (route) => {
         status: item.status,
         evaluated_at: new Date().toISOString(),
         stages: [],
-        failures: item.state_counts.failed
-          ? [
-              {
-                state: "failed",
-                message: "Vector validation failed",
-                diagnostic: null,
-                code: null,
-                component_id: null,
-                field: null,
-                buffer_utilization: null,
-                count: item.state_counts.failed,
-                device_ids: [`${id}-failed-device`],
-                devices: [
+        failures:
+          failureOverride?.id === id
+            ? failureOverride.failures
+            : item.state_counts.failed
+              ? [
                   {
-                    device_id: `${id}-failed-device`,
-                    device_name: `${id} failed device`,
+                    state: "failed",
+                    message: "Vector validation failed",
+                    diagnostic: null,
+                    code: null,
+                    component_id: null,
+                    field: null,
+                    buffer_utilization: null,
+                    count: item.state_counts.failed,
+                    device_ids: [`${id}-failed-device`],
+                    devices: [
+                      {
+                        device_id: `${id}-failed-device`,
+                        device_name: `${id} failed device`,
+                      },
+                    ],
                   },
-                ],
-              },
-            ]
-          : [],
+                ]
+              : [],
         removed_count: 0,
         check_in_seconds: 60,
         next_admission_at: null,
@@ -898,6 +903,52 @@ try {
         ),
       ).toHaveLength(0);
       await closeDetails();
+    },
+  );
+  await check(
+    "a failure only the pipeline can clear leads to the step and field the agent named, and to the pipeline alone when it named none",
+    async () => {
+      const failure = (code, component_id, field, count = 3) => ({
+        state: "failed",
+        message: "Vector validation failed",
+        diagnostic: "The agent could not apply this version.",
+        code,
+        component_id,
+        field,
+        buffer_utilization: null,
+        count,
+        device_ids: [`d-004-failed-${code}`],
+        devices: [
+          { device_id: `d-004-failed-${code}`, device_name: `edge-${code}` },
+        ],
+      });
+      failureOverride = {
+        id: "d-004",
+        failures: [
+          failure("UNKNOWN_FIELD", "sample", "rate"),
+          failure("ADDRESS_IN_USE", "out", null, 2),
+          failure("INVALID_CONFIGURATION", null, null, 1),
+          failure("PERMISSION_DENIED", "tail", "include", 5),
+        ],
+      };
+      await mount();
+      await open(4);
+      const pipeline = "#/configurations/synthetic-pipeline";
+      const fix = details().getByRole("link", { name: "Fix in pipeline" });
+      // The header link and each fixable card: a step and field, a step, none.
+      // A host problem is not the pipeline's to fix: it gets no link.
+      await expect(fix).toHaveCount(4);
+      const hrefs = await fix.evaluateAll((links) =>
+        links.map((link) => link.getAttribute("href")),
+      );
+      expect(hrefs).toEqual([
+        `${pipeline}?select=sample&field=rate`,
+        `${pipeline}?select=sample&field=rate`,
+        `${pipeline}?select=out`,
+        pipeline,
+      ]);
+      await closeDetails();
+      failureOverride = null;
     },
   );
   await check(

@@ -40,7 +40,7 @@
   height: var(--pipeline-node-header-height);
   flex: none;
   box-sizing: border-box;
-  padding: 15px 32px 15px 0;
+  padding: 12px 32px 12px 0;
   border-bottom: 1px solid
     color-mix(in srgb, var(--pipeline-category-border) 28%, transparent);
   display: flex;
@@ -91,14 +91,14 @@
 .pipeline-node-v2 .pipeline-node-title-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
   min-width: 0;
   flex: 1;
 }
 .pipeline-node-v2 .pipeline-node-kind {
   color: var(--pipeline-category-ink);
   font-size: 10px;
-  line-height: 14px;
+  line-height: 12px;
   letter-spacing: 0.075em;
   font-weight: 650;
   text-transform: uppercase;
@@ -106,14 +106,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A long title takes a second line before it is cut; its tooltip and the
+   card's accessible name carry all of it. */
 .pipeline-node-v2 .pipeline-node-title-text > strong {
-  display: block;
-  font-size: 18px;
-  line-height: 24px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 17px;
+  line-height: 20px;
   font-weight: 650;
-  letter-spacing: -0.25px;
-  white-space: nowrap;
+  letter-spacing: -0.2px;
+  white-space: normal;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
 }
 .pipeline-node-v2 .pipeline-node-summary {
