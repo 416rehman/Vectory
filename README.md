@@ -69,9 +69,9 @@ The same guides ship inside every server as a searchable, offline Help center at
 
 ## Project status
 
-Vectory is a **0.1 developer preview**. The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents in the local demo on Linux. On every change, CI runs the agent's native apply and rollback tests with Vector 0.58.0 on Linux, Windows and macOS. A run on Windows from install through apply against a real server last passed on 2026-09-26, by hand.
+Vectory is a **0.1 developer preview**, and nothing in it is signed. The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents on Linux, macOS and Windows. On every change CI runs the agent's native tests with Vector 0.58.0 on all three, a browser suite, and the Compose server stack on a clean runner. A second workflow, run on demand, installs the agent as a real operating-system service (systemd, launchd and the Windows service), runs the loop through it and restarts, kills and stops it; it also runs the first-use flows in Firefox and WebKit.
 
-Not done yet: published images and packages, signed releases, and service and reboot tests on every operating system. See [Compatibility](docs/user/compatibility.md) for minimums and what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the test behind each requirement.
+Not done yet: published images and packages, signed releases, reboot and upgrade tests, service tests on distributions other than Ubuntu 24.04, and tests on Arm64 hardware. An agent is upgraded on its host, one command per device; the dashboard can't update agents yet. See [Compatibility](docs/user/compatibility.md) for minimums and what is tested where, the [roadmap](docs/ROADMAP.md) for what's next, and the [requirements checklist](docs/internal/REQUIREMENTS.md) for the test behind each requirement.
 
 ## Develop
 
