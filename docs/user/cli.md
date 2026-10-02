@@ -31,7 +31,7 @@ Run `vectory --help` for the command list, `vectory help <command>` for one comm
 | [`run`](#run) | Run the agent in the foreground. | No |
 | [`status`](#status) | Show identity, server, pipeline and next step. | No |
 | [`doctor`](#doctor) | Check local setup and the server connection. | No |
-| [`logs`](#logs) | Show Vector's own log (never your events). | No |
+| [`logs`](#logs) | Show Vector's own log, not a stream of your events. | No |
 | [`pause`, `resume`](#pause-and-resume) | Stop or restart applying new versions on this host. | No |
 | [`retry`](#retry) | Allow one more attempt at a rejected version. | No: queued while it runs |
 | [`allow`](#allow) | Add a destination, listener or file root that restricted pipelines may use. | Yes |
@@ -219,7 +219,7 @@ sudo vectory doctor
 
 ## logs
 
-Show Vector's own log on this host: startup, reloads, and component warnings and errors. It never shows your events. The log lives in `<state-dir>/vector.log` and rotates at 10 MiB into one `.1` file. `logs` only reads files, so it works while the agent runs.
+Show Vector's own log on this host: startup, reloads, and component warnings and errors. It never streams your events, but a pipeline that logs event fields (the VRL `log()` function) shows them here. The log lives in `<state-dir>/vector.log` and rotates at 10 MiB into one `.1` file. `logs` only reads files, so it works while the agent runs.
 
 ```sh
 sudo vectory logs --follow
@@ -229,8 +229,10 @@ sudo vectory logs --follow
 | --- | --- |
 | `--lines N` | How many recent lines to print. Default 100. |
 | `--follow`, `-f` | Keep printing new lines until you press Ctrl-C. |
-| `--raw` | Print the log file's lines unchanged. |
+| `--raw` | Print the log file's lines unchanged. They can hold terminal escape sequences from your events: save them to a file, or pipe them through `cat -v`. |
 | `--json` | Print one JSON object per line: Vector's records as they are, and the agent's own notes with the same `timestamp`, `target` and `message` keys. |
+
+Event text can hold control characters, and a terminal acts on them: it can change the window title, clear the screen or overwrite the start of a line to forge another. So `logs` shows each control character, line or paragraph separator and text-direction control as an escape, such as `\x1b` for ESC and `\x0a` for a newline. `--json` escapes them as `\u001b`, and a program that decodes the JSON and prints a value must remove them itself. Only `--raw` prints them unchanged.
 
 The agent's notes include changes a host operator made, such as `Host operator allowed destination 127.0.0.1:8239 (vectory allow)`. With a `--state-dir` that holds no agent, `logs` says `No agent is installed at …` instead of waiting for a log.
 
