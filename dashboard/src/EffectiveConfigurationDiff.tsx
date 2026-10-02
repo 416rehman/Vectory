@@ -6,7 +6,7 @@ import {
   changesHeading,
   countsSentence,
   hunkTitle,
-} from "./effectiveConfiguration";
+} from "./effectiveConfigurationModel";
 
 /** Lines drawn before the first "Show more", and with each one. */
 const FIRST_LINES = 160;

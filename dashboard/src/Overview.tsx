@@ -75,7 +75,7 @@ import {
   dismissStoppedRollout,
   readDismissed,
   type StoppedRollout,
-} from "./stoppedRollouts";
+} from "./stoppedRolloutsModel";
 import { requestRollbackReview } from "./deploymentStatus";
 import NotificationsHint from "./NotificationsHint";
 import "./overview.css";

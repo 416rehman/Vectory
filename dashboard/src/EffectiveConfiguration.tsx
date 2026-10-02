@@ -52,7 +52,7 @@ import {
   sizeText,
   variableRows,
   versionName,
-} from "./effectiveConfiguration";
+} from "./effectiveConfigurationModel";
 import "./effective-configuration.css";
 
 // The viewer (CodeMirror) loads when a configuration is first shown, not with the page.

@@ -109,6 +109,13 @@ jobs:
           node --test scripts/check-requirements.test.mjs
           node scripts/check-requirements.mjs
         working-directory: .
+      - name: Check no two tracked files collide on a case-insensitive disk
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/check-file-names.test.mjs
+          node scripts/check-file-names.mjs
+        working-directory: .
       - name: Check every bash step of the workflows parses
         timeout-minutes: 10
         if: ${{ !cancelled() }}

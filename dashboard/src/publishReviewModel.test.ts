@@ -6,7 +6,7 @@ import {
   programDiff,
   reachLabel,
   reviewChanges,
-} from "./publishReview";
+} from "./publishReviewModel";
 
 const published = {
   sources: { nginx: { type: "file", include: ["/var/log/nginx/*.log"] } },

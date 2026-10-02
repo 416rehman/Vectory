@@ -22,7 +22,7 @@ import {
   variableRows,
   versionName,
   versionText,
-} from "./effectiveConfiguration";
+} from "./effectiveConfigurationModel";
 
 const SHA = (letter: string) => letter.repeat(64);
 const version = (
