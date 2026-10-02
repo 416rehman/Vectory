@@ -556,12 +556,14 @@ fn requires_full_mode(config: &Value) -> bool {
             })
             .collect()
     });
+    // `api` is not among them: Vector's local API has no authentication, so
+    // any local user could read live events through it. The host decides
+    // whether it exists, never a pipeline, and the agent refuses the block too.
     let restricted_roots = [
         "sources",
         "transforms",
         "sinks",
         "data_dir",
-        "api",
         "acknowledgements",
         "healthchecks",
         "timezone",
@@ -588,15 +590,6 @@ fn requires_full_mode(config: &Value) -> bool {
                     return true;
                 }
             }
-        }
-    }
-    if config["api"]["enabled"] == true {
-        let loopback = config["api"]["address"]
-            .as_str()
-            .and_then(|address| address.parse::<std::net::SocketAddr>().ok())
-            .is_some_and(|address| address.ip().is_loopback());
-        if !loopback {
-            return true;
         }
     }
     fn native_feature(value: &Value) -> bool {
@@ -3228,5 +3221,24 @@ mod tests {
         metric["transforms"]["m"] = json!({"type": "log_to_metric", "inputs": ["t"],
             "metrics": [{"type": "counter", "field": "message", "name": "lines", "tags": {"file": "app"}}]});
         assert!(!requires_full_mode(&metric));
+    }
+
+    #[test]
+    fn a_pipeline_that_opens_vectors_local_api_asks_for_full_mode() {
+        // Vector's API has no authentication: any local user could read live
+        // events through it. The host decides whether it exists, not a pipeline.
+        for api in [
+            json!({"enabled": true, "address": "127.0.0.1:8686"}),
+            json!({"enabled": true, "address": "[::1]:8686"}),
+            json!({"enabled": true, "address": "0.0.0.0:8686"}),
+            json!({"enabled": true}),
+            json!({"enabled": false}),
+            json!({}),
+        ] {
+            let mut config = remap(".x = 1");
+            config["api"] = api.clone();
+            assert!(requires_full_mode(&config), "{api}");
+        }
+        assert!(!requires_full_mode(&remap(".x = 1")));
     }
 }

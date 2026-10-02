@@ -601,6 +601,50 @@ async fn restricted_safe_configuration_can_be_admitted_on_restricted_device() {
 }
 
 #[tokio::test]
+async fn a_pipeline_that_opens_vectors_local_api_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    // Vector's API has no authentication, so a restricted device is never
+    // offered a pipeline that turns it on, even on the loopback address.
+    let version = "00000000-0000-4000-8000-000000000804";
+    let config = json!({"sources":{"in":{"type":"demo_logs"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}},
+        "api":{"enabled":true,"address":"127.0.0.1:8686"}});
+    let artifact = format!("{}\n", serde_json::to_string_pretty(&config).unwrap());
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "version",
+        &json!({"id":version,"configuration_id":"00000000-0000-4000-8000-000000000800",
+            "number":2,"config":config,"artifact":artifact,"sha256":db::hash(&artifact),
+            "size":artifact.len(),"created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    drop(conn);
+    let body = request(version, &ids, "snapshot");
+    let (status, preview) = call(
+        &app,
+        "/api/v1/deployments/preview",
+        body.clone(),
+        &cookie,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let blockers = preview["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 1, "{preview}");
+    assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED");
+    assert_eq!(blockers[0]["device_ids"], json!([ids[1]]));
+    let (status, rejected) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+    assert_eq!(deployment_count(&state).await, 0);
+    // Devices in full mode are offered it as before.
+    let body = request(version, &[ids[0].clone()], "snapshot");
+    let (status, preview) = call(&app, "/api/v1/deployments/preview", body, &cookie, &csrf).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["blockers"], json!([]));
+}
+
+#[tokio::test]
 async fn scheduled_activation_rechecks_mode_before_admitting_any_target() {
     let (_temp, state, app, ids, cookie, csrf) = fixture().await;
     let mut body = request(FULL_VERSION, &[ids[0].clone(), ids[2].clone()], "snapshot");

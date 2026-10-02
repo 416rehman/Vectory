@@ -148,6 +148,8 @@ These settings travel with the version. Paths refer to the device, not your brow
 
 Leave **Data directory** empty unless you need a specific path: the agent gives Vector a private data directory on each device. If you set one, it must exist and be writable on every device, and restricted devices must allow it.
 
+A pipeline that enables the internal API needs a full-mode device. Vector's API has no authentication, so restricted devices refuse it, and the deploy review says so.
+
 ## Import and export
 
 Drop a UTF-8 `.json`, `.yaml`, `.yml` or `.toml` file (up to 1 MiB) onto the graph or **Code** view, or choose **Actions → Import configuration file**. Vectory checks the syntax and structure first. Into an existing pipeline, you review a diff and choose **Replace pipeline**. Imports can be undone.
