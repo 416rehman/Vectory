@@ -1,0 +1,42 @@
+{
+  "description": "A templated relative path without base_dir has no static part to check; Vector refuses it too.",
+  "vector": "invalid",
+  "vector_error": "no literal directory prefix",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        },
+        "path": "{{ host }}.log"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "TEMPLATE_RESOURCE_DENIED",
+        "at": "/sinks/out/path"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

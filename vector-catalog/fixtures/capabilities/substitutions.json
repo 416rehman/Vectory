@@ -1,0 +1,74 @@
+{
+  "description": "Environment references, %{ and native secret references need full mode in any field.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "env": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".home = \"$HOME\""
+      },
+      "braces": {
+        "type": "remap",
+        "inputs": [
+          "env"
+        ],
+        "source": ".path = \"${PATH}\""
+      },
+      "grok": {
+        "type": "remap",
+        "inputs": [
+          "braces"
+        ],
+        "source": ". |= parse_grok!(.message, \"%{WORD:verb} %{GREEDYDATA:rest}\")"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "grok"
+        ],
+        "uri": "https://collector.example.net/",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/transforms/braces/source"
+      },
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/transforms/env/source"
+      },
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/transforms/grok/source"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

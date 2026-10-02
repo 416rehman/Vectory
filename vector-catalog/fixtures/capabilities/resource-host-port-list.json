@@ -1,0 +1,40 @@
+{
+  "description": "Each bootstrap server of a Kafka source is a destination, and the source needs approval.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "b1.example.net:9092, b2.example.net:9093",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "b1.example.net:9092",
+      "b2.example.net:9093"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "description": "The http sink's aws strategy without keys reaches the host's identity; basic credentials don't.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "signed": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://a.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "strategy": "aws",
+          "service": "es",
+          "auth": {}
+        }
+      },
+      "keyed": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://b.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "strategy": "aws",
+          "service": "es",
+          "auth": {
+            "access_key_id": "vectory-secret:aws-key-id",
+            "secret_access_key": "vectory-secret:aws-secret"
+          }
+        }
+      },
+      "basic": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://c.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "strategy": "basic",
+          "user": "vectory-secret:user",
+          "password": "vectory-secret:password"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [
+      "a.example.net:443",
+      "b.example.net:443",
+      "c.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

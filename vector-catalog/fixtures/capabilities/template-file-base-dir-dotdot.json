@@ -1,0 +1,42 @@
+{
+  "description": "A base_dir with a .. segment can't be approved.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        },
+        "base_dir": "/srv/vector/../../etc",
+        "path": "{{ host }}.log"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sinks/out/base_dir"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

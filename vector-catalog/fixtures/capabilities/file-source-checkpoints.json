@@ -1,0 +1,39 @@
+{
+  "description": "A file source's own data_dir holds checkpoints Vector writes.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "/var/log/app/*.log"
+        ],
+        "data_dir": "/var/lib/vector/file-checkpoints"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/lib/vector/file-checkpoints",
+      "/var/log/app"
+    ],
+    "writes": [
+      "/var/lib/vector/file-checkpoints"
+    ],
+    "assets": []
+  }
+}

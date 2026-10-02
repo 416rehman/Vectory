@@ -1,0 +1,45 @@
+{
+  "description": "A root inside the agent's state directory can't be approved: it holds identity, settings and assets.",
+  "host": {
+    "state_dir": "/var/lib/vectory-agent",
+    "managed_config_dir": "/etc/vectory/managed"
+  },
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "path": "/var/lib/vectory-agent/out/{{ host }}.log",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sinks/out/path"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

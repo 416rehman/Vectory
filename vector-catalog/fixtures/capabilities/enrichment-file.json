@@ -1,0 +1,48 @@
+{
+  "description": "A file enrichment table reads one CSV under an allowed root.",
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "users": {
+        "type": "file",
+        "file": {
+          "path": "/etc/vector/users.csv",
+          "encoding": {
+            "type": "csv"
+          }
+        },
+        "schema": {
+          "id": "string"
+        }
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/etc/vector/users.csv"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

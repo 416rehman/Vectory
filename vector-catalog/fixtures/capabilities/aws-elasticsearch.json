@@ -1,0 +1,45 @@
+{
+  "description": "Elasticsearch with auth.strategy aws and no keys reaches instance metadata (measured: Vector accepts it).",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "elasticsearch",
+        "inputs": [
+          "in"
+        ],
+        "endpoints": [
+          "https://search.example.net"
+        ],
+        "auth": {
+          "strategy": "aws"
+        },
+        "aws": {
+          "region": "us-east-1"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [
+      "search.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

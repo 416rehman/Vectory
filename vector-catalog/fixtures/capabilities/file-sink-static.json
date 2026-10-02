@@ -1,0 +1,40 @@
+{
+  "description": "A file sink with a plain path writes that one file.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "path": "/srv/vector/out/events.log",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/srv/vector/out/events.log"
+    ],
+    "writes": [
+      "/srv/vector/out/events.log"
+    ],
+    "assets": []
+  }
+}

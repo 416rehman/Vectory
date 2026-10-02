@@ -1,0 +1,46 @@
+{
+  "description": "Assuming a role counts as ambient even with explicit keys.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "aws_s3",
+        "inputs": [
+          "in"
+        ],
+        "bucket": "logs",
+        "region": "us-east-1",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "access_key_id": "vectory-secret:aws-key-id",
+          "secret_access_key": "vectory-secret:aws-secret",
+          "assume_role": "arn:aws:iam::123456789012:role/vector"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "aws_s3"
+    ],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

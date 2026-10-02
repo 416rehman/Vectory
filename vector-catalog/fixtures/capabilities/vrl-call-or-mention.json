@@ -1,0 +1,41 @@
+{
+  "description": "Only a call counts: a metric named http_requests_total or the value \"http_request\" is data.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "r": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".metric = \"http_requests_total\"\n.kind = \"http_request\"\n.http_requests = 1"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "r"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "A configuration provider replaces the signed pipeline, so it needs full mode.",
+  "vector": "skip",
+  "vector_error": "Vector would fetch the provider's configuration from its URL instead of reading this file.",
+  "config": {
+    "provider": {
+      "type": "http",
+      "url": "https://config.example.net/vector.json"
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/provider"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

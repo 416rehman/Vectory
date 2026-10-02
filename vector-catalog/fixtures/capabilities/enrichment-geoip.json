@@ -1,0 +1,40 @@
+{
+  "description": "A geoip table reads one MaxMind database under an allowed root.",
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "geo": {
+        "type": "geoip",
+        "path": "/usr/share/GeoIP/GeoLite2-Country.mmdb"
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/usr/share/GeoIP/GeoLite2-Country.mmdb"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}
