@@ -46,7 +46,7 @@ Assets added: the host's consent (`event_sampling` in `settings.json`), the per-
 Decisions for sampling:
 
 - Consent lives only in the host's `settings.json`, written by `vectory configure-sampling` while the agent is stopped. No manifest, policy, installer flag or dashboard action can write it, and `setup`, `install` and `enroll` never gain a sampling flag.
-- Restricted mode must not accept a pipeline `api` block. Today it does (`CapabilityPolicy.Check`, `requires_full_mode`), so the host does not own Vector's API. This is a prerequisite, not a follow-up.
+- Restricted mode does not accept a pipeline `api` block (`LOCAL_API_DENIED` in `CapabilityPolicy.Check`; `requires_full_mode` and the dashboard agree), so the host owns Vector's API. This was the prerequisite for sampling.
 - A reload re-reads the managed file, so sampling never opens a window on a paused, drifted or unsettled device. A window that finds drift when it must close repairs the file through the ordinary path first, or stops Vector when the device is paused, instead of activating unverified content.
 - The agent never leaves the API enabled: the overlay is rebuilt from scratch by every activation, and the window's closure is proven by a refused connect and an empty connection table, not assumed.
 - Redaction has no remote switch and there is no raw mode. `shape` (field names, types, sizes) is the default; `values` is a separate host choice meant for sandbox and staging hosts.
