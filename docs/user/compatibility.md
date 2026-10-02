@@ -30,7 +30,7 @@ What each part needs, where that is established. "Not yet established" means not
 | x86-64 CPU | x86-64-v1 | Agents are built with `GOAMD64=v1`, the baseline instruction set. |
 | Arm64 CPU | ARMv8.0 | Agents use Go's default, `GOARM64=v8.0`. |
 | Vector on a device | 0.58.0 | Any 0.58.x release is accepted; pre-releases are refused. Vector's own OS requirements aren't recorded here yet: check the [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/). |
-| Server host | Not yet established | Docker Compose on one Linux host. No Docker or Compose version has been tested, because no automated test starts the stack yet. |
+| Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
 | Browser | Not yet established | Only Chromium is tested (see [Browsers](#browsers)). |
 | Build the agent from source | Go 1.26.0 | Declared in `agent/go.mod`; builds and tests use Go 1.26.8. |
 | Build the server from source | Rust 1.88 | Declared as `rust-version` in `server/Cargo.toml`; builds and tests use Rust 1.94.0. |
@@ -61,7 +61,7 @@ Checks that need the device itself, such as local files, run on the device befor
 ## Server
 
 - **Docker Compose on one Linux host**, with local disk. The images build from source; published images are planned.
-- The Compose configuration is checked automatically and both images are built. A full start on a clean host hasn't yet run in automated tests, so try it on a staging host first.
+- CI follows the install guide on a clean runner: it builds both images, starts the stack, waits until every service is healthy, creates the first administrator, enrolls a device with the Add device installer and checks that the validator can't reach the network. A customer's host, a public certificate and your network aren't covered, so try it on a staging host first.
 - One server per data directory. SQLite doesn't support network filesystems or active-active replicas.
 
 ## Browsers
