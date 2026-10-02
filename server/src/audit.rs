@@ -236,7 +236,7 @@ fn digest(path: &str) -> String {
 fn base(details: bool) -> String {
     let extras = if details {
         format!(
-            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{}) AS extra",
+            ",json_object('reason',{},'issue_revision',{},'previous_group_revision',{},'group_revision',{},'secret_revision',{},'previous_secret_revision',{},'actual_sha256',{},'applied_template_sha256',{},'device_id',{},'previous_generation',{},'generation',{},'previous_policy_generation',{},'policy_generation',{},'secret_revision_floor',{},'version_id',{},'sha256',{},'policy_sha256',{},'browser_sessions',{},'password_reset_codes',{},'enrollment_tokens_to_revoke',{},'mfa_recovery_codes',{},'reason_code',{},'name',{},'token_id',{},'agent_os',{},'agent_arch',{},'agent_version',{},'configuration_mode',{},'client_address',{},'summary',{},'tests_failed',{},'tests_failed_count',{},'tests_refused_count',{},'tests_not_run_count',{},'tests_passed_count',{},'stage',{},'gate_state',{},'released_count',{},'verified_count',{},'measuring_count',{},'next_released_count',{},'validation_id',{},'configuration_id',{},'run_tests',{},'truncated',{},'device_count',{},'pending_count',{},'offline_count',{},'unsupported_count',{}) AS extra",
             text("reason", 1000),
             number("issue_revision"),
             number("previous_group_revision"),
@@ -277,7 +277,15 @@ fn base(details: bool) -> String {
             number("details.released_count"),
             number("details.verified_count"),
             number("details.measuring_count"),
-            number("details.next_released_count")
+            number("details.next_released_count"),
+            text("details.validation_id", 36),
+            text("details.configuration_id", 128),
+            flag("details.run_tests"),
+            flag("details.truncated"),
+            number("details.device_count"),
+            number("details.pending_count"),
+            number("details.offline_count"),
+            number("details.unsupported_count")
         )
     } else {
         String::new()
@@ -302,7 +310,7 @@ fn base(details: bool) -> String {
                 CASE WHEN action='deployment.release' AND {compound} THEN substr(target,1,36)
                      WHEN action='device.recovery_complete' AND {compound} THEN substr(target,38,36)
                      ELSE target END AS linked_target,
-                CASE WHEN action LIKE 'configuration.%' THEN 'configuration'
+                CASE WHEN action LIKE 'configuration.%' OR action='deployment.device_validation_requested' THEN 'configuration'
                      WHEN action LIKE 'deployment.%' THEN 'deployment'
                      WHEN action LIKE 'device.%' OR action='server.restore_generation_fence' THEN 'device'
                      WHEN action LIKE 'issue.%' THEN 'issue' WHEN action LIKE 'group.%' THEN 'group'
@@ -596,6 +604,19 @@ fn details(v: &Value, extra: &Value) -> Value {
             "verified_count",
             "measuring_count",
             "next_released_count",
+        ],
+        // A check on devices: which pipeline version, and counts of devices
+        // by what happened to each at the request. Never the configuration.
+        "deployment.device_validation_requested" => &[
+            "validation_id",
+            "configuration_id",
+            "version_id",
+            "run_tests",
+            "truncated",
+            "device_count",
+            "pending_count",
+            "offline_count",
+            "unsupported_count",
         ],
         // Published over failing tests: the counts and one sentence, never a
         // test's name or body.

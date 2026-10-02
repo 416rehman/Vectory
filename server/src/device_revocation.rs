@@ -42,6 +42,8 @@ pub(crate) async fn retire(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // It can never answer a device check again.
+    crate::device_validations::end_for(tx, id).await?;
     Ok(())
 }
 pub async fn status(

@@ -432,6 +432,9 @@ pub const HEARTBEAT_FEATURES: &[&str] = &[
     "vector_running",
     "agent_sha256",
     "state_dir",
+    // `agent_features`, `validation_result` and `readiness`; the manifest then
+    // carries `validation` for a device that announced it can be checked on.
+    crate::device_validations::FEATURE,
 ];
 
 /// The manifest's `features`: the heartbeat fields above, plus `wake` while
@@ -694,6 +697,10 @@ pub async fn heartbeat(
                 .ok_or_else(|| ApiError::invalid("Invalid state_dir"))?,
         ),
     };
+    // What the agent announces it can do, its readiness and the answer to a
+    // device check: strictly validated like every other member, before any
+    // write, so a refusal leaves nothing behind.
+    let checks = crate::device_validations::parse(&v)?;
     let mut tx = db::begin_write(&s.pool).await?;
     let row = sqlx::query("SELECT * FROM devices WHERE id=?")
         .bind(&id)
@@ -730,7 +737,18 @@ pub async fn heartbeat(
             }
         };
         let sha256 = artifact.sha256;
-        json!({"version_id":version_id,"sha256":sha256,"size":artifact.size,"artifact_path":format!("/agent/v1/artifacts/{sha256}"),"vector_version":crate::validation::VECTOR_VERSION})
+        let mut desired = json!({"version_id":version_id,"sha256":sha256,"size":artifact.size,"artifact_path":format!("/agent/v1/artifacts/{sha256}"),"vector_version":crate::validation::VECTOR_VERSION});
+        // What `vectory status` names: the version's number in its pipeline
+        // and the pipeline's name, covered by the signature like the rest and
+        // left out when the server does not know them.
+        let (number, name) = crate::device_validations::labels(&mut tx, &version).await?;
+        if let Some(number) = number {
+            desired["version_number"] = json!(number);
+        }
+        if let Some(name) = name {
+            desired["configuration_name"] = json!(name);
+        }
+        desired
     } else {
         Value::Null
     };
@@ -954,6 +972,7 @@ pub async fn heartbeat(
             }
         }
     }
+    crate::device_validations::remember(fields, &checks);
     match logs {
         Some(items) => {
             fields.insert(
@@ -1111,8 +1130,15 @@ pub async fn heartbeat(
         },
     )
     .await?;
+    // The answer to a device check, if this heartbeat carries one, and the
+    // check this device is asked to run now. Neither touches desired state,
+    // a generation, the policy or an issue.
+    let validation = crate::device_validations::heartbeat(&mut tx, &id, &checks).await?;
     let issued = Utc::now();
-    let payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":features(&s)});
+    let mut payload = json!({"protocol_version":1,"device_id":id,"nonce":nonce,"issued_at":issued.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"expires_at":(issued+Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"generation":generation,"policy_generation":policy_generation,"policy":policy,"desired":desired,"features":features(&s)});
+    if let Some(validation) = validation {
+        payload["validation"] = validation;
+    }
     let signing_id: Option<String> =
         sqlx::query_scalar("SELECT signing_key_id FROM credentials WHERE fingerprint=?")
             .bind(peer.0.as_deref().unwrap_or(""))
@@ -1148,27 +1174,43 @@ pub async fn artifact(
     {
         return Err(ApiError::missing());
     }
+    // The device's own desired artifact, exactly as it has always been
+    // authorized. Only when that does not authorize this digest, the digest of
+    // this device's own pending device check does: never another device's, and
+    // never one that was answered, superseded or has expired. A refusal is the
+    // desired artifact's refusal.
+    let bytes = match desired_artifact(&mut tx, &id, &sha).await {
+        Ok(bytes) => bytes.into_bytes(),
+        Err(refusal) => match crate::device_validations::candidate(&mut tx, &id, &sha).await? {
+            Some(bytes) => bytes,
+            None => return Err(refusal),
+        },
+    };
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+/// The artifact this device is currently offered, when `sha` is its digest.
+async fn desired_artifact(tx: &mut sqlx::SqliteConnection, id: &str, sha: &str) -> Result<String> {
     let row =
         sqlx::query("SELECT desired_version_id,desired_generation,data FROM devices WHERE id=?")
-            .bind(&id)
+            .bind(id)
             .fetch_one(&mut *tx)
             .await?;
     let version: Option<String> = row.get("desired_version_id");
     let generation: i64 = row.get("desired_generation");
-    let version = db::record(
-        &mut tx,
-        "version",
-        &version.ok_or_else(ApiError::forbidden)?,
-    )
-    .await?;
-    let artifact =
-        match crate::variables::current(&mut tx, &id, generation, text(&version, "id")).await? {
-            Some(snapshot) => snapshot,
-            None if version["variables"].as_array().is_none_or(Vec::is_empty) => {
-                crate::variables::render(&version, &Value::Null, &id)?
-            }
-            None => return Err(ApiError::forbidden()),
-        };
+    let version = db::record(tx, "version", &version.ok_or_else(ApiError::forbidden)?).await?;
+    let artifact = match crate::variables::current(tx, id, generation, text(&version, "id")).await?
+    {
+        Some(snapshot) => snapshot,
+        None if version["variables"].as_array().is_none_or(Vec::is_empty) => {
+            crate::variables::render(&version, &Value::Null, id)?
+        }
+        None => return Err(ApiError::forbidden()),
+    };
     let device = db::parse(row.get("data"))?;
     if device["desired_artifact_sha256"]
         .as_str()
@@ -1177,12 +1219,7 @@ pub async fn artifact(
     {
         return Err(ApiError::forbidden());
     }
-    let mut response = artifact.bytes.into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    Ok(response)
+    Ok(artifact.bytes)
 }
 /// Where the agent listener takes its connections from: a TCP listener in
 /// production. A test wraps one to make an accept fail.
