@@ -24,6 +24,7 @@ import { helpHref } from "./DocLink";
 import { useAppearance } from "./appearance";
 import PageBoundary from "./PageBoundary";
 import { loadPage } from "./pageLoading";
+import { currentRoute } from "./routeAliases";
 import Brand from "./Brand";
 
 const Documentation = lazy(() => loadPage(() => import("./Documentation")));
@@ -49,7 +50,7 @@ export default function App() {
     [initialized, setInitialized] = useState<boolean | null>(null),
     [connectionError, setConnectionError] = useState(""),
     [checking, setChecking] = useState(true),
-    [route, setRoute] = useState(location.hash.slice(2) || "overview");
+    [route, setRoute] = useState(currentRoute);
   const [appearance, setAppearance] = useAppearance();
   const [sessionEnded, setSessionEnded] = useState(false);
   useEffect(() => {
@@ -195,7 +196,7 @@ export default function App() {
   }, [initialize]);
   useEffect(() => {
     const changed = () => {
-      const nextRoute = location.hash.slice(2) || "overview";
+      const nextRoute = currentRoute();
       if (
         nextRoute !== route &&
         (nextRoute.split("?")[0] !== route.split("?")[0] ||
