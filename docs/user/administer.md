@@ -148,7 +148,8 @@ The CA key alone can't impersonate a device: every request also needs a certific
 - **Database load:** with `RUST_LOG=vectory_server=info,vectory_server::sqlite=debug`, the server logs once a minute how busy its single database writer was (`busy_percent`) and how long writes waited. A share that stays high means check-ins are queuing for the writer. See [Server settings](server-config.md#server-settings).
 - **Backups:** track the age of your last good backup.
 - **Logs:** `docker compose logs --tail 100 server proxy validator`.
-- **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30). The audit log is kept separately and never pruned.
+- **Metrics history** is kept for [`VECTORY_TELEMETRY_RETENTION_DAYS`](server-config.md#server-settings) (7 days by default, up to 30).
+- **The audit log** is never pruned, and each event takes about 0.8 KB. A busy fleet of 1,000 devices that takes five deployments a day adds about 8 MB a day (an estimate: [Audit log storage](telemetry.md#audit-log-storage) has the rules and a table). A device can add at most 4 events a minute of each kind about itself, so a device that misbehaves can't grow it at will. To keep a copy elsewhere before you archive the database, [export the events](#review-and-export-audit-events) as JSONL, a date range at a time. Vectory has no command that deletes events.
 - **Device check results** (**Check on devices**) are kept for 24 hours. A check's candidate configuration is removed when the device answers, when a newer check for that device replaces it, when the device is revoked, and within a minute after the check expires ten minutes after it was requested.
 - **Connections:** `VECTORY_MAX_AGENT_CONNECTIONS` (16,384 by default) limits concurrent agent connections. It protects the server; it isn't a supported fleet size.
 

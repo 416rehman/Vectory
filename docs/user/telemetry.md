@@ -40,7 +40,7 @@ Open [**Devices**](/#/devices) and select a device.
 | **Running vs desired** | The version the device should run, what it runs now, and each apply step. **View pipeline assignment** opens the deployment that decided it. |
 | **Operational metrics** | Throughput, errors, discarded events and buffers, when the pipeline exports metrics. See [Read history and gaps](#read-history-and-gaps). |
 | **Components** | Each component's events in and out, errors and buffers in the latest sample. At 1100 pixels wide or more it spans the page below the cards; on a narrower screen it is part of **Operational metrics**. |
-| **Recent Vector warnings and errors** | Vector's own warnings and errors from the last hour, redacted on the device. |
+| **Recent Vector warnings and errors** | Vector's own warnings and errors from the last hour, redacted on the device, with control characters shown as spaces. |
 | **Activity** | This device's open issues and recent changes. |
 | **About this device** | Platform, Vector and agent versions, mode, groups and the agent settings in force: **Check-in 15 s · applied by Ada on Sep 29 (not saved)**. The line names who applied the settings and when only when the server reports it, and says **(not saved)** for settings never saved under a name. **Upgrade agent** is here. |
 | **Sync, recovery and access** | Pause sync, device recovery and **Revoke device identity…**. |
@@ -171,6 +171,24 @@ A full sample, with all 17 device-level numbers at full precision, measured 585 
 Devices that report fewer numbers, or check in less often than once a minute, take less.
 
 The database file doesn't shrink after old rows are deleted: SQLite reuses the space for new rows. To store less, shorten the retention, or lengthen the check-in interval in the devices' agent settings.
+
+### Audit log storage
+
+The [audit log](administer.md#review-and-export-audit-events) is separate from metrics history, and Vectory never prunes it: it only adds events. An event takes about 0.8 KB with its indexes: 100,000 device events added to a migrated database took 779 bytes each (281 bytes of JSON), measured with SQLite's `dbstat` on 2026-10-02.
+
+A device writes an event about itself when what it reports changes: one when a version reaches it and one when it applies the version, so about two for each deployment. Identical check-ins add none.
+
+A device also adds at most 4 events a minute of each of three kinds (apply state, configuration mode and secret reconciliation), however often it checks in. A change past that is not recorded: the device page always shows the current state, and the audit log holds what fitted. A device that changed state at that rate all day would add at most 17,280 events, about 14 MB.
+
+These are estimates from those rules for device events alone, not measurements of a running fleet:
+
+| Devices | One deployment a day | Five deployments a day |
+| --- | --- | --- |
+| 100 | 0.16 MB a day, 58 MB a year | 0.8 MB a day, 0.3 GB a year |
+| 1,000 | 1.6 MB a day, 0.6 GB a year | 8 MB a day, 2.9 GB a year |
+| 10,000 | 16 MB a day, 5.8 GB a year | 80 MB a day, 29 GB a year |
+
+To keep a copy outside Vectory, [export the events](administer.md#review-and-export-audit-events) as JSONL a date range at a time; a [backup of the complete state](administer.md#back-up-the-complete-state) holds them too. Vectory has no command that deletes audit events.
 
 ### Limits the server enforces
 

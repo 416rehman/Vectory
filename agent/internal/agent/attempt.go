@@ -35,12 +35,26 @@ func cloneAttempt(a *ConfigurationAttempt) *ConfigurationAttempt {
 	copy.Error = cloneIssue(a.Error)
 	return &copy
 }
+
+// cloneIssue copies an issue for a heartbeat or for the state. A state file an
+// earlier build wrote can hold diagnostics from before the agent replaced
+// control characters in them, so the text of each goes through singleLine again:
+// whatever the state holds, no heartbeat carries one.
 func cloneIssue(issue *Issue) *Issue {
 	if issue == nil {
 		return nil
 	}
 	copy := *issue
-	copy.Diagnostics = append([]Diagnostic(nil), issue.Diagnostics...)
+	if len(issue.Diagnostics) > 0 {
+		copy.Diagnostics = make([]Diagnostic, len(issue.Diagnostics))
+		for i, d := range issue.Diagnostics {
+			d.Message, d.Hint, d.Field = singleLine(d.Message), singleLine(d.Hint), singleLine(d.Field)
+			if d.Message == "" {
+				d.Message = noPrintableDiagnostic
+			}
+			copy.Diagnostics[i] = d
+		}
+	}
 	return &copy
 }
 func (e *Engine) currentAttempt() *ConfigurationAttempt {
