@@ -30,9 +30,9 @@ Ask these first; each has a one-line answer in the ADR and a test in the plan.
 
 Release gates, all required: WP0 shipped; the native probe green on Linux CI; the independent review finished with its findings resolved; documentation matches behavior. macOS is separate: `configure-sampling` and the session engine stay disabled on `darwin` (a build constant listing the enabled platforms, initially `linux`) until N-01 passes on a native macOS runner.
 
-## WP0: make `api` host-owned (prerequisite) — done
+## WP0: make `api` host-owned (prerequisite)
 
-Restricted mode used to accept a loopback `api` block, so any publisher could open Vector's unauthenticated API for local users. It no longer does, in the three places that mirror each other:
+Status: done. Restricted mode used to accept a loopback `api` block, so any publisher could open Vector's unauthenticated API for local users. It no longer does, in the three places that mirror each other:
 
 | Where | What shipped |
 | --- | --- |
