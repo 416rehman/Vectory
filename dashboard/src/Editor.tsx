@@ -203,20 +203,19 @@ import { patternEdges, patternInputs, patternSummary } from "./inputPatterns";
 import CanvasFind from "./CanvasFind";
 import {
   edgeRate,
-  formatRate,
   liveSummary,
+  liveTable,
   nodeLive,
+  nodeLiveSummary,
+  readLivePreference,
+  spokenRate,
+  writeLivePreference,
   type PipelineTelemetry,
 } from "./liveGraph";
+import LiveTable from "./LiveTable";
+import ZoomVariable from "./canvasZoom";
+import { connectionRoutes } from "./canvasLayout";
 
-const LIVE_KEY = "vectory.editor.live";
-const readLiveSetting = () => {
-  try {
-    return localStorage.getItem(LIVE_KEY) === "on";
-  } catch {
-    return false;
-  }
-};
 /** How often live numbers refresh: about one agent check-in. */
 const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
@@ -411,6 +410,12 @@ function samePositions(left: any[], right: any[]) {
       ))
   );
 }
+/** What a card is called on the canvas: its catalog title. */
+const nodeTitle = (node: any) =>
+  componentTitle(String(node.data.component?.type || ""), node.data.kind, {
+    enrichmentTable: node.data.enrichmentTable,
+    implicitSource: node.data.implicitSource,
+  });
 const saveShortcut =
   typeof navigator !== "undefined" &&
   /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
@@ -476,7 +481,12 @@ export default function Editor({
     [customComponentJSON, setCustomComponentJSON] =
       useState('{\n  "type": ""\n}'),
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
-    [live, setLive] = useState(readLiveSetting),
+    // Whether this pipeline's Live was switched on or off here; null until
+    // someone chooses, when it follows whether a device runs the pipeline.
+    [liveChoice, setLiveChoice] = useState<boolean | null>(() =>
+      readLivePreference(user.id, id),
+    ),
+    [runsSomewhere, setRunsSomewhere] = useState<boolean | null>(null),
     [findOpen, setFindOpen] = useState(false),
     [copyFallback, setCopyFallback] = useState<{
       text: string;
@@ -1069,11 +1079,19 @@ export default function Editor({
     writeAutoCheck(value);
   }
   // Live numbers for the versions devices run, refreshed about once per
-  // check-in while the canvas is visible.
+  // check-in while the canvas is visible. Until someone chooses, Live is on
+  // for a pipeline a device runs, which one read finds out; the choice made
+  // here is remembered for this pipeline.
   const liveAvailable = !!publishedVersion;
-  const liveOn = live && liveAvailable && view === "canvas";
+  const liveWanted = liveChoice ?? runsSomewhere === true;
+  const liveOn = liveWanted && liveAvailable && view === "canvas";
+  const probing =
+    liveAvailable &&
+    liveChoice === null &&
+    runsSomewhere === null &&
+    view === "canvas";
   useEffect(() => {
-    if (!liveOn) return;
+    if (!liveOn && !probing) return;
     let alive = true,
       timer = 0;
     const controller = new AbortController();
@@ -1093,13 +1111,19 @@ export default function Editor({
           30000,
           controller.signal,
         );
-        if (alive) setTelemetry({ data, error: "" });
+        if (!alive) return;
+        setTelemetry({ data, error: "" });
+        // Only the first answer decides the default, so Live never switches
+        // itself on or off later.
+        setRunsSomewhere((known) => known ?? data.devices_running > 0);
       } catch (failure) {
-        if (alive)
+        if (alive) {
           setTelemetry((previous) => ({
             data: previous?.data ?? null,
             error: (failure as Error).message,
           }));
+          setRunsSomewhere((known) => known ?? false);
+        }
       }
       if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS);
     };
@@ -1109,22 +1133,37 @@ export default function Editor({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [liveOn, id]);
+  }, [liveOn, probing, id]);
   function toggleLive() {
-    const next = !live;
-    setLive(next);
+    const next = !liveWanted;
+    setLiveChoice(next);
+    writeLivePreference(user.id, id, next);
     if (!next) setTelemetry(null);
-    try {
-      localStorage.setItem(LIVE_KEY, next ? "on" : "off");
-    } catch {
-      /* the choice lasts for this visit */
-    }
   }
   const liveData = liveOn ? (telemetry?.data ?? null) : null;
   const liveStatus =
     liveOn && telemetry?.data
       ? liveSummary(telemetry.data, publishedVersion?.number ?? null)
       : null;
+  // Every number the canvas draws, as a table: widths and chips are not the
+  // only way to read them.
+  const liveRows = useMemo(
+    () =>
+      liveData
+        ? liveTable(
+            nodes
+              .filter((node) => !node.data.enrichmentTable)
+              .map((node) => ({
+                id: node.id,
+                title: nodeTitle(node),
+                kind: node.data.kind,
+              })),
+            edges,
+            liveData,
+          )
+        : null,
+    [liveData, nodes, edges],
+  );
   const toolsRef = useRef<HTMLDetailsElement>(null);
   useDismissibleDetails(toolsRef);
   const handledDestination = useRef("");
@@ -3777,6 +3816,18 @@ export default function Editor({
   if (flowCache.current.size > 4 * (nodes.length + edges.length) + 64)
     flowCache.current.clear();
   const nodeKinds = new Map(nodes.map((node) => [node.id, node.data.kind]));
+  // A connection that would run behind a card in a column it skips is routed
+  // around it; the label and the actions follow the routed line.
+  const routes = useMemo(
+    () => connectionRoutes({ nodes, edges }, connectionStyle),
+    [nodes, edges, connectionStyle],
+  );
+  // Two cards of the same kind share a catalog title; each leads with its ID.
+  const titleCounts = new Map<string, number>();
+  for (const node of nodes) {
+    const shown = nodeTitle(node);
+    titleCounts.set(shown, (titleCounts.get(shown) ?? 0) + 1);
+  }
   const currentFlowNodes = nodes.map((node) => {
     const highlight = highlightedConnection
       ? [highlightedConnection.source, highlightedConnection.target].includes(
@@ -3798,12 +3849,14 @@ export default function Editor({
     const liveKey = reading === undefined ? "" : JSON.stringify(reading);
     const traced = trace && trace.id === node.id ? trace.counts : undefined;
     const traceKey = traced ? JSON.stringify(traced) : "";
+    const sharedTitle = (titleCounts.get(nodeTitle(node)) ?? 0) > 1;
     return cachedFlowObject(
       `node:${node.id}`,
       [
         node,
         liveKey,
         traceKey,
+        sharedTitle,
         highlight,
         isSelected,
         problem.hasIssue,
@@ -3819,14 +3872,11 @@ export default function Editor({
       ],
       () => ({
         ...node,
-        ariaLabel: `${componentTitle(
-          String(node.data.component?.type || ""),
-          node.data.kind,
-          {
-            enrichmentTable: node.data.enrichmentTable,
-            implicitSource: node.data.implicitSource,
-          },
-        )} ${node.id}${problem.hasIssue ? ", has problems" : ""}`,
+        ariaLabel: `${nodeTitle(node)} ${node.id}${problem.hasIssue ? ", has problems" : ""}${
+          reading === undefined
+            ? ""
+            : `, ${nodeLiveSummary(node.data.kind, reading)}`
+        }`,
         domAttributes: {
           ...node.domAttributes,
           "data-connection-highlight": highlight,
@@ -3835,6 +3885,7 @@ export default function Editor({
         data: {
           ...node.data,
           ...problem,
+          sharedTitle,
           live: reading,
           trace: traced,
           connectivityWarning: warning,
@@ -3858,14 +3909,16 @@ export default function Editor({
     const rate = liveOn
       ? edgeRate(liveData, edge.source, edge.sourceHandle || "output")
       : undefined;
+    const lanes = routes.get(edge.id);
+    const lanesKey = lanes ? JSON.stringify(lanes) : "";
     return cachedFlowObject(
       `edge:${edge.id}`,
-      [edge, highlight, category, editable, connectionStyle, rate],
+      [edge, highlight, category, editable, connectionStyle, rate, lanesKey],
       () => ({
         ...edge,
         type: "pipeline",
         className: "pipeline-connection",
-        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${formatRate(rate)} events`}`,
+        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${spokenRate(rate)}`}`,
         domAttributes: {
           ...edge.domAttributes,
           "data-connection-highlight": highlight,
@@ -3875,6 +3928,7 @@ export default function Editor({
           editable,
           connectionStyle,
           liveRate: rate,
+          lanes,
           connectionHighlight: highlight,
           onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
           openMenu: stableHandlers(`edge:${edge.id}`).menu,
@@ -4899,6 +4953,7 @@ export default function Editor({
                   maxZoom={2}
                   defaultEdgeOptions={defaultEdgeOptions}
                 >
+                  <ZoomVariable />
                   <ConnectionCancellation
                     active={!!connectionGesture}
                     onCancel={() => {
@@ -4990,20 +5045,33 @@ export default function Editor({
                   )}
                   {liveAvailable && !connectionGesture && (
                     <Panel position="top-right" className="editor-live-panel">
-                      <button
-                        type="button"
-                        className="editor-live-toggle"
-                        aria-pressed={liveOn}
-                        onClick={toggleLive}
-                        title={
-                          liveOn
-                            ? "Hide live numbers"
-                            : "Show events per second from devices running this pipeline"
-                        }
-                      >
-                        <Radio size={15} aria-hidden="true" />
-                        Live
-                      </button>
+                      <div className="editor-live-controls">
+                        {liveOn && (
+                          <button
+                            type="button"
+                            className="editor-live-fit"
+                            onClick={fitGraph}
+                            title="Fit the whole graph in the view"
+                          >
+                            <Maximize size={15} aria-hidden="true" />
+                            Fit
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="editor-live-toggle"
+                          aria-pressed={liveOn}
+                          onClick={toggleLive}
+                          title={
+                            liveOn
+                              ? "Hide live numbers"
+                              : "Show events per second from devices running this pipeline"
+                          }
+                        >
+                          <Radio size={15} aria-hidden="true" />
+                          Live
+                        </button>
+                      </div>
                       {liveOn && (
                         <div
                           className="editor-live-status"
@@ -5037,6 +5105,7 @@ export default function Editor({
                                 Your draft has changes that aren&apos;t running.
                               </small>
                             )}
+                          {liveRows && <LiveTable table={liveRows} />}
                         </div>
                       )}
                     </Panel>

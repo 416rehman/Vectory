@@ -2,6 +2,10 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import {
+  isPipelineTelemetry,
+  pipelineTelemetry,
+} from "./telemetry-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -223,6 +227,9 @@ async function load({
         });
       // The publish review shows where versions are assigned.
       if (path === "/devices") return reply([]);
+      // The editor reads whether a device runs a published pipeline.
+      if (isPipelineTelemetry(path, pipelineId))
+        return reply(pipelineTelemetry(pipelineId));
       if (path === "/settings")
         return reply({ instance_name: "Synthetic isolated editor" });
       if (path === `/configurations/${pipelineId}`) {

@@ -5,6 +5,10 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import {
+  isPipelineTelemetry,
+  pipelineTelemetry,
+} from "./telemetry-replies.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -271,6 +275,8 @@ async function start(f, options = {}) {
         return reply({ instance_name: "Synthetic publish review fixture" });
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/devices") return reply([]);
+      if (isPipelineTelemetry(path, f.document.id))
+        return reply(pipelineTelemetry(f.document.id));
       if (path === `/configurations/${f.document.id}`) return reply(f.document);
       if (path === `/configurations/${f.document.id}/history`) {
         const page = Number(url.searchParams.get("page") || 1),
