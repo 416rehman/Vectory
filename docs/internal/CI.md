@@ -28,6 +28,7 @@ Runs only when dispatched; [packaging/README.md](../../packaging/README.md#relea
 | `images` | Both images build, run as UID 10001 and 10002, and refuse to start without their safety settings; SPDX SBOMs of both | A vulnerability verdict: the SBOMs are its input |
 | `sbom` | CycloneDX SBOMs of the Rust, Go and npm dependencies and a license inventory; `npm audit` finds no high or critical advisory in the dashboard's or the help center's shipped dependencies | License clearance; an advisory published after the run |
 | `assemble` | One verified folder with `SHA256SUMS` and `CANDIDATE.json`, including whether the image's agents are byte-identical to the release agents | Signatures or provenance |
+| `verify` | The uploaded candidate, downloaded again the way a reader of the release page gets it, passes `sha256sum -c SHA256SUMS` and `packaging/verify-release.py` without refreshing the sums | The candidate's contents beyond what `verify-release.py` reads |
 | `attest` | GitHub build provenance for `SHA256SUMS`, only with `attest` and a configured `release` environment | Anything about the candidate's contents |
 
 ## platforms.yml
