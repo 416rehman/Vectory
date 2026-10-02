@@ -305,6 +305,12 @@ jobs:
           mkdir -p artifacts/sbom
           (cd dashboard && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-dashboard.cdx.json
           (cd help-center && npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application --omit dev) > artifacts/sbom/vectory-help-center.cdx.json
+      - name: No high or critical advisory in the npm dependencies that ship
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          (cd dashboard && npm audit --omit=dev --audit-level=high)
+          (cd help-center && npm audit --omit=dev --audit-level=high)
       - name: License inventory, source lockfile inventory and source bytes
         timeout-minutes: 10
         run: |
