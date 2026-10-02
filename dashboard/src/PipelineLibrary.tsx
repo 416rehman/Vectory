@@ -420,6 +420,7 @@ export default function PipelineLibrary({
           onChange={setSearch}
           placeholder="Search pipelines"
           maxLength={200}
+          shortcut
         />
         {can(user, "edit") && (
           <div className="pipeline-library-toolbar-tools">

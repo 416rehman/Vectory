@@ -331,6 +331,29 @@ function demoPipeline(format) {
   };
 }
 
+// Where each step sits on the canvas: left to right through the columns, and
+// the destinations stacked in the order of the outputs that feed them (the
+// route's `errors` output above the sampled rest, then the metrics exporter).
+// Every connection runs level between its cards, so none passes behind one.
+const demoPositions = {
+  app_logs: [70, 70],
+  parse: [482, 70],
+  by_severity: [894, 70],
+  sample_rest: [1306, 281],
+  errors_out: [1718, 118],
+  archive: [1718, 368],
+  vector_metrics: [70, 618],
+  metrics_exporter: [1718, 618],
+};
+const demoGraph = () => ({
+  nodes: Object.entries(demoPositions).map(([id, [x, y]]) => ({
+    id,
+    type: "component",
+    position: { x, y },
+  })),
+  edges: [],
+});
+
 async function main() {
   if (args.includes("--stop")) return stopDemo();
   if (!["linux", "darwin"].includes(process.platform))
@@ -395,7 +418,7 @@ async function main() {
       name: `${label} (synthetic demo)`,
       description: "Synthetic demo_logs events: parse, route errors, sample the rest. Nothing leaves the host.",
       config,
-      graph: { nodes: [], edges: [] },
+      graph: demoGraph(),
       variables: [
         { name: "metrics_address", path: "/sinks/metrics_exporter/address", type: "string" },
       ],

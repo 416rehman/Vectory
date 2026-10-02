@@ -53,16 +53,23 @@ function LiveReading({
       </p>
     );
   const flow = [
-    kind !== "sources" && `in ${formatRate(reading.received)}`,
-    kind !== "sinks" && `out ${formatRate(reading.sent)}`,
-  ].filter(Boolean);
+    kind !== "sources" && (["in", formatRate(reading.received)] as const),
+    kind !== "sinks" && (["out", formatRate(reading.sent)] as const),
+  ].filter((part): part is readonly ["in" | "out", string] => !!part);
   const devices = `${reading.devices} ${reading.devices === 1 ? "device" : "devices"}`;
   return (
     <p
       className="pipeline-node-live"
-      title={`${flow.join(", ")} across ${devices}${reading.filtered ? `; ${formatRate(reading.filtered, "/min")} filtered` : ""}`}
+      title={`${flow.map((part) => part.join(" ")).join(", ")} across ${devices}${reading.filtered ? `; ${formatRate(reading.filtered, "/min")} filtered` : ""}`}
     >
-      <span className="pipeline-node-live-flow">{flow.join(" · ")}</span>
+      <span className="pipeline-node-live-flow">
+        {flow.map(([direction, value]) => (
+          <span className="pipeline-node-live-stat" key={direction}>
+            <span className="pipeline-node-live-key">{direction}</span>{" "}
+            <b>{value}</b>
+          </span>
+        ))}
+      </span>
       {!!reading.errors && (
         <span className="pipeline-node-live-badge" data-tone="error">
           <CircleX size={12} aria-hidden="true" />
@@ -112,6 +119,10 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
     implicitSource: data.implicitSource === true,
   };
   const title = componentTitle(type, kind, context);
+  // Two steps with the same catalog title lead with their IDs, so they can be
+  // told apart: "archive · Discard events".
+  const shared = data.sharedTitle === true && !context.enrichmentTable;
+  const heading = shared ? `${label} · ${title}` : title;
   const summary = componentSummary(component, kind, context);
   const ports = nodeOutputPorts(component, kind);
   const simpleOutput = ports.length === 1 && ports[0] === "output";
@@ -180,6 +191,7 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
     <div
       className={`pipeline-node pipeline-node-v2 pipeline-node-${kind}${connectivityWarning ? " pipeline-node-unconnected" : ""}${selected ? " pipeline-node-selected" : ""}${data.hasIssue ? " pipeline-node-issue" : ""}`}
       data-pipeline-category={kind}
+      data-live={data.live !== undefined || undefined}
       data-connectivity={connectivityWarning ? "no-destination" : undefined}
       data-connection-active={connectionActive || undefined}
       style={
@@ -217,7 +229,9 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
                   : "Enrichment table"
                 : kindLabels[kind]}
             </span>
-            <strong title={title}>{title}</strong>
+            <strong title={heading} data-shared={shared || undefined}>
+              {heading}
+            </strong>
           </div>
           {openMenu && (
             <button

@@ -46,11 +46,51 @@ export function runCommand(name: string, route?: string) {
   return true;
 }
 
-export function useCommand(name: string, handler: Handler, enabled = true) {
+/** What a page can do to one thing the palette found by name. */
+export type ThingCommand =
+  | "rollout.pause"
+  | "rollout.cancel"
+  | "rollout.rollback"
+  | "pipeline.deploy"
+  | "pipeline.duplicate";
+
+/**
+ * The command a page registers for one rollout or pipeline: "rollout.pause"
+ * for rollout `id`. The id is part of the name, so a page that shows one
+ * rollout never answers for another.
+ */
+export const commandFor = (command: ThingCommand, id: string) =>
+  `${command}:${id.toLowerCase()}`;
+
+/**
+ * Ends a request that was waiting for `name`, and says whether a fresh one was:
+ * the page it opened cannot do it now, so it must not run later on a click that
+ * had nothing to do with it.
+ */
+export function refuseCommand(name: string) {
+  const requested = pending.get(name);
+  pending.delete(name);
+  return requested !== undefined && Date.now() - requested < PENDING_MS;
+}
+
+/**
+ * Registers a page's command while it is `enabled`. A page that has what it
+ * needs to decide, and cannot do the command now, passes `whenRefused`: a
+ * request that was waiting for it ends there, and `whenRefused` says so.
+ */
+export function useCommand(
+  name: string,
+  handler: Handler,
+  enabled = true,
+  whenRefused?: () => void,
+) {
   const latest = useRef(handler);
   latest.current = handler;
+  const refused = useRef(whenRefused);
+  refused.current = whenRefused;
+  const settled = !!whenRefused;
   useEffect(() => {
-    if (!enabled) return;
-    return registerCommand(name, () => latest.current());
-  }, [name, enabled]);
+    if (enabled) return registerCommand(name, () => latest.current());
+    if (settled && refuseCommand(name)) refused.current?.();
+  }, [name, enabled, settled]);
 }

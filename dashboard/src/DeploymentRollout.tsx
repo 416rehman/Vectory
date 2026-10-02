@@ -23,6 +23,7 @@ import {
   type WatchCell,
   type WatchRow,
 } from "./canaryWatch";
+import { withStep } from "./pipelineDestination";
 
 import { Button, StatusBadge, useNow } from "./ui";
 import "./deployment-rollout.css";
@@ -511,7 +512,11 @@ export function FailureGroups({
               />
             );
           const text = failureText(failure.diagnostic, failure.message);
-          const fix = fixHref && pipelineFixable(failure.code) ? fixHref : null;
+          // The link opens the step the agent named, and its field.
+          const fix =
+            fixHref && pipelineFixable(failure.code)
+              ? withStep(fixHref, failure.component_id, failure.field)
+              : null;
           const code = failure.code || text.code;
           return (
             <li key={`${failure.state}-${index}`}>

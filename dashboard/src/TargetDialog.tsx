@@ -17,6 +17,9 @@ import { Button, CopyButton, ErrorBox, Field, Modal, useResource } from "./ui";
 import DocLink from "./DocLink";
 import DevicePicker from "./DevicePicker";
 import { readMatchingIds } from "./deviceInventory";
+import RunningSelection from "./RunningSelection";
+import { runningSummary } from "./runningDevices";
+import { useRunningDevices } from "./useRunningDevices";
 import { DataTable } from "./DataTable";
 import { deploymentRoute } from "./deploymentRouting";
 import { assertDeploymentReceipt } from "./deploymentReceipt";
@@ -442,6 +445,47 @@ export default function TargetDialog({
       }),
     [effective, known],
   );
+  // A pipeline that already runs starts from the devices that run it, unless
+  // devices were named when the dialog opened or something was chosen while
+  // they were being found.
+  const running = useRunningDevices(
+    version?.configuration_id,
+    !policy && !!version && initialDeviceIds.length === 0,
+  );
+  const [startedFrom, setStartedFrom] = useState<{
+    summary: string;
+    note: string | null;
+  } | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const startRead = useRef(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (running.state !== "ready" || startRead.current) return;
+    startRead.current = true;
+    const found = running.data;
+    if (!found.ids.length) return;
+    if (selected.length || groupIds.length || exclude.length || search.trim())
+      return;
+    keepRows(found.rows);
+    setSelected(found.ids);
+    setStartedFrom({
+      summary: runningSummary(found),
+      note:
+        found.ids.length < found.total || found.truncated
+          ? `${found.ids.length.toLocaleString()} of ${found.total.toLocaleString()} devices are selected. Choose the others from the list.`
+          : null,
+    });
+    // The first answer decides, once; it never replaces a choice made since.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+  /** The list and search for choosing devices, with focus on the search. */
+  function chooseByHand(clear: boolean) {
+    if (clear) {
+      clearDevices();
+      setStartedFrom(null);
+    } else setChoosing(true);
+    requestAnimationFrame(() => searchInput.current?.focus());
+  }
   // Devices the dialog was opened with are named before anything is typed.
   useEffect(() => {
     const missing = initialDeviceIds
@@ -1433,10 +1477,23 @@ export default function TargetDialog({
           <HostApprovalNote approvals={approvals} devices={restrictedTargets} />
         )}
         {!preview ? (
-          <fieldset className="target-selection" disabled={busy}>
+          <fieldset
+            className="target-selection"
+            disabled={busy}
+            data-collapsed={startedFrom && !choosing ? "" : undefined}
+          >
+            {startedFrom && !choosing && (
+              <RunningSelection
+                summary={startedFrom.summary}
+                note={startedFrom.note}
+                onChange={() => chooseByHand(false)}
+                onClear={() => chooseByHand(true)}
+              />
+            )}
             <label className="target-search">
               <Search size={17} />
               <input
+                ref={searchInput}
                 aria-label="Find targets"
                 placeholder="Search devices or groups"
                 value={search}

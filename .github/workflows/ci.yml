@@ -1173,6 +1173,24 @@ jobs:
         run: node tests/effective-configuration-browser.mjs
         env:
           VECTORY_EFFECTIVE_CONFIGURATION_OUTPUT: artifacts/browsers/effective-configuration
+      - name: Check the live graph reads at 1440 px, in light and dark, and its numbers are in a table
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/live-graph-browser.mjs
+        env:
+          VECTORY_LIVE_GRAPH_OUTPUT: artifacts/browsers/live-graph
+      - name: Check that deploying a pipeline that runs starts from the devices that run it
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/deploy-preselection-browser.mjs
+        env:
+          VECTORY_DEPLOY_PRESELECTION_OUTPUT: artifacts/browsers/deploy-preselection
+      - name: Check that toasts stack above the status bar and any dialog's buttons
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/toast-placement-browser.mjs
+        env:
+          VECTORY_TOAST_PLACEMENT_OUTPUT: artifacts/browsers/toast-placement
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}

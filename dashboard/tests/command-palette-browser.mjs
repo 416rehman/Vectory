@@ -81,6 +81,7 @@ const ids = {
   group: "66666666-6666-4666-8666-666666666666",
   deployment: "77777777-7777-4777-8777-777777777777",
   colleague: "88888888-8888-4888-8888-888888888888",
+  version: "99999999-9999-4999-8999-999999999999",
 };
 const user = {
   id: ids.user,
@@ -139,6 +140,53 @@ const savedGroup = {
   device_ids: [ids.device],
   revision: 1,
 };
+// A published version of the pipeline, offered once a check turns it on: the
+// pipeline's page then has something to deploy.
+const publishedVersion = {
+  id: ids.version,
+  configuration_id: ids.pipeline,
+  number: 2,
+  config: pipeline.config,
+  graph: pipeline.graph,
+  sha256: "2".repeat(64),
+  artifact: JSON.stringify(pipeline.config),
+  size: JSON.stringify(pipeline.config).length,
+  created_at: created,
+  message: "Synthetic version",
+  validation: { valid: true },
+};
+let published = false;
+// The rollout has finished since the palette's list was read.
+let finished = false;
+const rolloutSummary = () => ({
+  id: ids.deployment,
+  rollback_idempotency: true,
+  rollback_review: true,
+  request_correlation: true,
+  name: "Synthetic palette rollout",
+  configuration_id: ids.pipeline,
+  configuration_name: "Synthetic palette pipeline",
+  version_id: ids.version,
+  version_number: 2,
+  policy: null,
+  priority: 100,
+  target_mode: "snapshot",
+  status: finished ? "completed" : "active",
+  scheduled_at: null,
+  created_at: created,
+  rollout: {
+    kind: "canary",
+    canary_size: 1,
+    batch_size: 5,
+    observation_seconds: 30,
+    failure_threshold: 0,
+  },
+  target_count: 3,
+  verified_count: finished ? 3 : 1,
+  state_counts: finished
+    ? { verified_applied: 3 }
+    : { verified_applied: 1, pending: 2 },
+});
 const fleet = fleetReplies({
   devices: [device],
   groups: [savedGroup],
@@ -218,6 +266,7 @@ await context.route("**/*", async (route) => {
           id: ids.deployment,
           name: null,
           configuration_name: "Synthetic palette pipeline",
+          version_id: ids.version,
           version_number: 2,
           policy: false,
           status: "active",
@@ -230,6 +279,46 @@ await context.route("**/*", async (route) => {
       page: 1,
       page_size: 20,
     });
+  // The rollout the palette's verbs open, with the review a rollback shows.
+  if (path === `/deployments/${ids.deployment}/summary`)
+    return reply(rolloutSummary());
+  if (path === `/deployments/${ids.deployment}/rollout`)
+    return reply({
+      deployment_id: ids.deployment,
+      status: finished ? "completed" : "active",
+      evaluated_at: new Date().toISOString(),
+      stages: [],
+      failures: [],
+      removed_count: 0,
+      check_in_seconds: 60,
+      next_admission_at: null,
+    });
+  if (path === `/deployments/${ids.deployment}/targets`)
+    return reply({ items: [], total: 0, page: 1, page_size: 12 });
+  if (path === `/deployments/${ids.deployment}/rollback-preview`)
+    return reply({
+      source_deployment_id: ids.deployment,
+      source_version_id: ids.version,
+      source_status: "active",
+      source_action: "cancel",
+      previous_version_id: ids.pipeline,
+      previous_version_number: 1,
+      previous_configuration_id: ids.pipeline,
+      previous_configuration_name: "Synthetic palette pipeline",
+      priority: 101,
+      eligible_devices: [
+        {
+          device_id: ids.device,
+          device_name: device.name,
+          artifact_sha256: "a".repeat(64),
+        },
+      ],
+      excluded_devices: [],
+      blockers: [],
+      review_token: "b".repeat(64),
+      ready: true,
+    });
+  if (path === `/versions/${ids.version}`) return reply(publishedVersion);
   if (["/issues/history", "/audit/history"].includes(path))
     return reply(page12);
   if (path === "/issues/groups")
@@ -252,8 +341,17 @@ await context.route("**/*", async (route) => {
   if (path === `/configurations/${ids.pipeline}`) return reply(pipeline);
   if (path === `/configurations/${ids.pipeline}/history`)
     return reply({
-      items: [],
-      total: 0,
+      items: published
+        ? [
+            {
+              id: ids.version,
+              configuration_id: ids.pipeline,
+              number: 2,
+              created_at: created,
+            },
+          ]
+        : [],
+      total: published ? 1 : 0,
       page: 1,
       page_size: Number(url.searchParams.get("page_size")),
       kind: "versions",
@@ -581,6 +679,231 @@ try {
     },
   );
   await check(
+    "Verbs on rollouts, pipelines and devices answer to the words typed, open the page's own review or dialog, send nothing and follow the role",
+    async () => {
+      published = true;
+      const mutations = () =>
+        requests.filter((request) => request.method !== "GET");
+      const verb = (name) =>
+        palette().getByRole("option", { name, exact: true });
+      const verbs = () =>
+        palette().getByRole("option", {
+          name: /^(Pause|Cancel|Roll back|Deploy|Duplicate|Show issues) /,
+        });
+      const dialog = (name) => page.getByRole("dialog", { name, exact: true });
+      const asking = {
+        pause: ["pause palette", "Pause Synthetic palette pipeline v2"],
+        cancel: ["cancel palette", "Cancel Synthetic palette pipeline v2"],
+        rollback: [
+          "roll back palette",
+          "Roll back Synthetic palette pipeline v2",
+        ],
+        deploy: ["deploy palette", "Deploy Synthetic palette pipeline v2…"],
+        duplicate: [
+          "duplicate palette",
+          "Duplicate Synthetic palette pipeline…",
+        ],
+        issues: [
+          "show issues unassigned",
+          "Show issues for Synthetic unassigned device",
+        ],
+      };
+      async function pick(name) {
+        const [words, title] = asking[name];
+        await open();
+        await search().fill(words);
+        await expect(verb(title)).toBeVisible();
+        await verb(title).click();
+        await expect(palette()).toHaveCount(0);
+      }
+      await view();
+      // The names alone list no verb.
+      await open();
+      await search().fill("synthetic");
+      await expect(
+        palette().getByRole("group", { name: "Pipelines" }),
+      ).toContainText("Synthetic palette pipeline");
+      await expect(verbs()).toHaveCount(0);
+      await search().press("Escape");
+      // A rollout: the page opens with the same review its button opens.
+      await pick("pause");
+      await expect(page).toHaveURL(
+        new RegExp(`#/deployments/${ids.deployment}$`),
+      );
+      await expect(dialog("Pause rollout")).toBeVisible();
+      // The review opens on the choice that changes nothing: an Enter pressed
+      // again right after the palette's own does not confirm it.
+      const keepState = (name) =>
+        dialog(name).getByRole("button", {
+          name: "Keep current state",
+          exact: true,
+        });
+      await expect(keepState("Pause rollout")).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(dialog("Pause rollout")).toHaveCount(0);
+      expect(mutations()).toEqual([]);
+      // Already on that page, the verb runs in place.
+      await pick("cancel");
+      await expect(dialog("Cancel rollout")).toBeVisible();
+      await expect(keepState("Cancel rollout")).toBeFocused();
+      await page.keyboard.press("Escape");
+      await pick("rollback");
+      await expect(dialog("Review rollback")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog("Review rollback")).toHaveCount(0);
+      expect(mutations()).toEqual([]);
+      // A pipeline: its page opens the deploy dialog, or the duplicate one.
+      await pick("deploy");
+      await expect(page).toHaveURL(
+        new RegExp(`#/configurations/${ids.pipeline}$`),
+      );
+      await expect(
+        dialog("Deploy Synthetic palette pipeline v2"),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog("Deploy Synthetic palette pipeline v2")).toHaveCount(
+        0,
+      );
+      await pick("duplicate");
+      await expect(dialog("Duplicate pipeline")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog("Duplicate pipeline")).toHaveCount(0);
+      // A device: its issues.
+      await pick("issues");
+      await expect(page).toHaveURL(
+        new RegExp(`#/issues\\?device=${ids.device}$`),
+      );
+      await expect(
+        page.getByRole("button", { name: "Show all devices", exact: true }),
+      ).toBeVisible();
+      expect(mutations()).toEqual([]);
+      // Each role is offered what its pages let it do.
+      for (const [role, allowed] of [
+        ["viewer", ["issues"]],
+        ["operator", ["pause", "cancel", "rollback", "deploy", "issues"]],
+        ["editor", ["duplicate", "issues"]],
+        ["admin", Object.keys(asking)],
+      ]) {
+        user.role = role;
+        await view();
+        await open();
+        // Once the pipelines are listed, a verb that is missing is missing.
+        await search().fill("palette");
+        await expect(
+          palette().getByRole("group", { name: "Pipelines" }),
+        ).toContainText("Synthetic palette pipeline");
+        for (const [name, [words, title]] of Object.entries(asking)) {
+          await search().fill(words);
+          if (allowed.includes(name))
+            await expect(verb(title), `${role} ${name}`).toBeVisible();
+          else await expect(verb(title), `${role} ${name}`).toHaveCount(0);
+        }
+        await search().press("Escape");
+      }
+      user.role = "admin";
+      // A list that was out of date: the rollout finished since it was read.
+      // The page opens and says so; no review opens, now or on a later click.
+      finished = true;
+      await view();
+      await pick("pause");
+      await expect(
+        page
+          .getByRole("region", { name: "Notifications" })
+          .getByText("Pause isn't available for this rollout now."),
+      ).toBeVisible();
+      await expect(dialog("Pause rollout")).toHaveCount(0);
+      await page.waitForTimeout(500);
+      await expect(dialog("Pause rollout")).toHaveCount(0);
+      finished = false;
+      published = false;
+      expect(mutations()).toEqual([]);
+    },
+  );
+  await check(
+    "/ goes to the page's own search, or opens the palette where a page has none; the sheet reads Up / Down; old addresses open their pages with their query",
+    async () => {
+      // The key is pressed once the page's own content is there: until then a
+      // page has no search to go to.
+      const slash = async (route, ready) => {
+        await view(route);
+        await expect(ready).toBeVisible();
+        await page.locator("#main-content").focus();
+        await page.keyboard.press("/");
+      };
+      const issuesSearch = page.getByRole("textbox", {
+        name: "Search devices, pipelines, or reasons",
+        exact: true,
+      });
+      const pipelinesSearch = page.getByRole("textbox", {
+        name: "Search pipelines",
+        exact: true,
+      });
+      await slash("issues", issuesSearch);
+      await expect(issuesSearch).toBeFocused();
+      await expect(palette()).toHaveCount(0);
+      await slash("configurations", pipelinesSearch);
+      await expect(pipelinesSearch).toBeFocused();
+      await expect(palette()).toHaveCount(0);
+      // The Agent settings list has no search of its own.
+      await slash(
+        "policies",
+        page.getByRole("heading", { name: "No saved agent settings" }),
+      );
+      await expect(search()).toBeFocused();
+      await search().press("Escape");
+      // Typing a slash into a field is typing.
+      await view("issues");
+      const box = page.getByRole("textbox", {
+        name: "Search devices, pipelines, or reasons",
+        exact: true,
+      });
+      await box.focus();
+      await page.keyboard.type("a/b");
+      await expect(box).toHaveValue("a/b");
+      await expect(palette()).toHaveCount(0);
+      // The sheet joins the arrows with a slash, and keeps "then" for G O.
+      await view();
+      await page.locator("#main-content").focus();
+      await page.keyboard.press("?");
+      const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+      await expect(sheet).toContainText("Search this page");
+      const row = (label) =>
+        sheet.locator("dl > div").filter({ hasText: label });
+      await expect(row("Move between results").locator(".kbd")).toHaveText([
+        "↑",
+        "↓",
+      ]);
+      await expect(
+        row("Move between results").locator(".shortcut-then"),
+      ).toHaveText("/");
+      await expect(row("Pipelines").locator(".shortcut-then")).toHaveText(
+        "then",
+      );
+      await page.keyboard.press("Escape");
+      // The names pages used to have still open the pages that replaced them,
+      // from a link and from inside the dashboard, keeping what follows.
+      for (const [old, current] of [
+        ["pipelines", "configurations"],
+        ["activity", "deployments"],
+        ["rollouts", "deployments"],
+        ["pipelines?q=syslog", "configurations?q=syslog"],
+        [`rollouts/${ids.deployment}`, `deployments/${ids.deployment}`],
+      ]) {
+        await view(old);
+        await expect(page, `${old} from a link`).toHaveURL(
+          new RegExp(`#/${current.replace(/[?/]/g, "\\$&")}$`),
+        );
+        await view();
+        await page.evaluate((old) => {
+          location.hash = `#/${old}`;
+        }, old);
+        await expect(page, `${old} inside`).toHaveURL(
+          new RegExp(`#/${current.replace(/[?/]/g, "\\$&")}$`),
+        );
+      }
+    },
+  );
+  await check(
     "Results follow the role: viewers see no operator actions or people; administrators can find people",
     async () => {
       user.role = "viewer";
@@ -652,6 +975,32 @@ try {
           expect(scan.violations).toEqual([]);
           await page.screenshot({
             path: resolve(output, `command-palette-${width}-${theme}.png`),
+          });
+          // The same palette with a verb among its results.
+          await search().fill("pause palette");
+          const verbRow = palette().getByRole("option", {
+            name: "Pause Synthetic palette pipeline v2",
+            exact: true,
+          });
+          await expect(verbRow).toBeVisible();
+          const verbScan = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+            .analyze();
+          accessibility.push({
+            width,
+            theme,
+            view: "verbs",
+            violations: verbScan.violations.map((v) => ({
+              id: v.id,
+              targets: v.nodes.map((node) => node.target),
+            })),
+          });
+          expect(verbScan.violations).toEqual([]);
+          await page.screenshot({
+            path: resolve(
+              output,
+              `command-palette-verbs-${width}-${theme}.png`,
+            ),
           });
           await search().press("Escape");
           await expect(palette()).toHaveCount(0);

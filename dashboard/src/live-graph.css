@@ -26,8 +26,33 @@
   font-weight: 600;
   cursor: pointer;
 }
-.editor-live-toggle:hover {
+.editor-live-controls {
+  display: inline-flex;
+  gap: 6px;
+}
+.editor-live-toggle:hover,
+.editor-live-fit:hover {
   background: var(--surface-hover);
+}
+.editor-live-fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 2px 8px #00000008;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.editor-live-fit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .editor-live-toggle[aria-pressed="true"] {
   border-color: var(--ed-success-line, var(--line-strong));
@@ -86,18 +111,84 @@
   font-weight: 600;
   cursor: pointer;
 }
+/* The same numbers as a table, for reading them exactly or without sight. */
+.editor-live-panel:has(.editor-live-table[open]) {
+  max-width: min(560px, calc(100% - 36px));
+}
+.editor-live-status:has(.editor-live-table[open]) {
+  background: var(--surface);
+}
+.editor-live-table {
+  width: 100%;
+}
+.editor-live-table > summary {
+  color: var(--accent-text, var(--ink));
+  font-weight: 600;
+  cursor: pointer;
+}
+.editor-live-table > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.editor-live-table-scroll {
+  max-height: min(44vh, 320px);
+  margin-top: 6px;
+  overflow: auto;
+}
+.editor-live-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.editor-live-table caption {
+  padding: 6px 0 3px;
+  text-align: left;
+  font-weight: 650;
+}
+.editor-live-table th,
+.editor-live-table td {
+  padding: 3px 10px 3px 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: baseline;
+}
+.editor-live-table thead th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.editor-live-table tbody th {
+  font-weight: 500;
+}
+.editor-live-table code {
+  font-family: var(--ed-mono);
+}
+.editor-live-table small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
 
+/* A fitted graph is drawn small, and its numbers with it. The canvas publishes
+   its zoom as --flow-zoom, and the numbers are scaled back up to read at
+   about their own size: labels up to 2.2 times, a card's reading up to 1.6. */
+.editor-graph .react-flow {
+  --live-scale: clamp(1, calc(1 / var(--flow-zoom, 1)), 2.2);
+  --live-text: clamp(1, calc(1 / var(--flow-zoom, 1)), 1.6);
+}
 .pipeline-edge-rate {
   position: absolute;
-  padding: 1px 6px;
-  border: 1px solid var(--line);
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong, var(--line));
   border-radius: 999px;
   color: var(--ink);
   background: var(--surface);
+  box-shadow: 0 1px 3px #0000001f;
   font-family: var(--ed-mono);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 16px;
+  line-height: 18px;
   white-space: nowrap;
   pointer-events: none;
 }
@@ -133,36 +224,58 @@
   }
 }
 
+/* While Live is on a card shows what the step does now, not how it is set up. */
+.pipeline-node-v2[data-live]
+  .pipeline-node-summary
+  > p:not(.pipeline-node-live) {
+  display: none;
+}
 .pipeline-node-v2 .pipeline-node-summary > p.pipeline-node-live {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 3px 6px;
-  margin-top: 3px;
+  align-items: baseline;
+  gap: 3px 12px;
+  margin-top: 0;
   color: var(--ink);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--live-text, 1));
+  line-height: 1.35;
   font-variant-numeric: tabular-nums;
   white-space: normal;
+  overflow: visible;
 }
 .pipeline-node-v2 .pipeline-node-summary > p.pipeline-node-live[data-empty] {
   color: var(--muted);
   font-style: italic;
 }
 .pipeline-node-live-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
   font-family: var(--ed-mono);
-  font-size: 11.5px;
+}
+.pipeline-node-live-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4em;
+}
+.pipeline-node-live-key {
+  color: var(--muted);
+  font-size: 0.92em;
+}
+.pipeline-node-live-stat b {
+  font-weight: 650;
 }
 .pipeline-node-live-badge {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 0 5px;
+  padding: 0 6px;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: calc(11px * var(--live-text, 1));
+  font-weight: 600;
+  line-height: 1.45;
 }
 .pipeline-node-live-badge[data-tone="error"] {
   border-color: var(--ed-danger-line);

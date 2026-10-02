@@ -407,6 +407,67 @@ try {
   );
 
   await check(
+    "Ctrl/Cmd+S in Code applies code that parses and saves it; code that does not parse is refused with its line and column and nothing is saved",
+    async () => {
+      await load();
+      await openCode("yaml");
+      const status = page.locator(".pipeline-save-status");
+      await expect(status).toContainText("All changes saved");
+      const text = (await codeValue()).trimEnd();
+      // A repeated key does not parse: the message names where, the text stays
+      // as typed, the status says the code is not in the draft, nothing is sent.
+      const lines = text.split("\n");
+      const first = lines.indexOf("    format: json");
+      expect(first).toBeGreaterThan(0);
+      lines.splice(first + 1, 0, "    format: syslog");
+      const broken = lines.join("\n");
+      await codeInput().fill(broken);
+      await expect(status).toContainText("Unapplied code changes");
+      await expect(status).not.toContainText("field");
+      await codeInput().press("ControlOrMeta+s");
+      // The repeated key is on the line after the first one, four columns in.
+      await expect(
+        page.getByText(
+          `Not saved. Line ${first + 2}:5: Map keys must be unique`,
+        ),
+      ).toBeVisible();
+      expect(await codeValue()).toBe(broken);
+      await expect(status).toContainText("Unapplied code changes");
+      await page.waitForTimeout(500);
+      expect(fixture.mutations).toEqual([]);
+      await expect(button("Save")).toBeEnabled();
+      // Fixed and changed: saving applies the code, then saves the draft.
+      await codeInput().fill(text.replace("rate: 10", "rate: 25"));
+      await codeInput().press("ControlOrMeta+s");
+      await expect.poll(() => fixture.mutations.length).toBe(1);
+      expect(fixture.mutations[0].config.transforms.sample.rate).toBe(25);
+      expect(fixture.mutations[0].config.sources).toEqual(
+        baseDocument().config.sources,
+      );
+      await expect(status).toContainText("All changes saved");
+      await expect(page.getByText(/Not saved\./)).toHaveCount(0);
+      await toast("Draft revision saved.");
+      await expect(button("Save")).toBeDisabled();
+      // Only the layout and a comment changed: there is nothing to apply or
+      // save, and the code reads as the draft again.
+      await codeInput().fill(`# keep this\n${await codeValue()}`);
+      await expect(status).toContainText("Unapplied code changes");
+      await codeInput().press("ControlOrMeta+s");
+      await expect(status).toContainText("All changes saved");
+      expect(await codeValue()).not.toContain("keep this");
+      await page.waitForTimeout(500);
+      expect(fixture.mutations).toHaveLength(1);
+      // The Save button does the same as the shortcut.
+      await codeInput().fill(
+        (await codeValue()).replace("rate: 25", "rate: 30"),
+      );
+      await button("Save").click();
+      await expect.poll(() => fixture.mutations.length).toBe(2);
+      expect(fixture.mutations[1].config.transforms.sample.rate).toBe(30);
+    },
+  );
+
+  await check(
     "one valid uppercase-extension file dropped on an empty graph loads exact values and remains undoable",
     async () => {
       await load({ document: emptyDocument() });
@@ -712,7 +773,7 @@ try {
       }
     },
   );
-  expect(results).toHaveLength(8);
+  expect(results).toHaveLength(9);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

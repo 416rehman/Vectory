@@ -7,6 +7,7 @@ import {
   sectionTabs,
   shellInfo,
 } from "./navigation";
+import { resolveRouteAlias } from "./routeAliases";
 
 const tabs = Object.values(sectionTabs).flat();
 
@@ -58,5 +59,53 @@ describe("navigation", () => {
     const ids = new Set(pageEntries.map((entry) => entry.id));
     for (const item of [...primaryNavigation, ...tabs])
       expect(ids.has(item.id), item.id).toBe(true);
+  });
+});
+
+describe("other names for pages", () => {
+  it("lead to the page's own address and keep what follows", () => {
+    for (const [written, page] of [
+      ["pipelines", "configurations"],
+      [
+        "pipelines?search=syslog&state=archived",
+        "configurations?search=syslog&state=archived",
+      ],
+      ["pipelines/abc", "configurations/abc"],
+      ["pipelines/abc?panel=history", "configurations/abc?panel=history"],
+      ["activity", "deployments"],
+      ["activity?status=failed", "deployments?status=failed"],
+      ["rollouts", "deployments"],
+      ["rollouts/abc", "deployments/abc"],
+      ["rollouts/abc?x=1", "deployments/abc?x=1"],
+      ["Rollouts", "deployments"],
+    ])
+      expect(resolveRouteAlias(written), written).toBe(page);
+  });
+
+  it("leave real pages, unknown routes and look-alikes alone", () => {
+    for (const route of [
+      "overview",
+      "configurations",
+      "deployments/abc",
+      "devices?q=pipelines",
+      "pipelinesx",
+      "my-pipelines",
+      "docs/pipelines",
+      "constructor",
+      "__proto__",
+      "toString",
+      "",
+    ])
+      expect(resolveRouteAlias(route), route).toBe(route);
+  });
+
+  it("send Activity to the first tab of the Activity tab set, and every other name to a page that exists", () => {
+    expect(resolveRouteAlias("activity")).toBe(sectionTabs.deployments[0].id);
+    const pages = new Set([
+      ...primaryNavigation.map((item) => item.id),
+      ...tabs.map((tab) => tab.id),
+    ]);
+    for (const name of ["pipelines", "activity", "rollouts"])
+      expect(pages.has(resolveRouteAlias(name)), name).toBe(true);
   });
 });

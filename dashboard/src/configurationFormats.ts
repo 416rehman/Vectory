@@ -3,8 +3,11 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { configurationDiff, differencePath } from "./configurationDiff";
 import { assertExactNumbers } from "./configurationNumbers";
 
-const sectionOrder = ["api", "sources", "transforms", "sinks"];
-const componentSections = new Set(["sources", "transforms", "sinks"]);
+/** A pipeline reads in the order events flow: sources, transforms, sinks. */
+const sectionOrder = ["sources", "transforms", "sinks"];
+/** What follows the pipeline in a file, in this order, after everything else. */
+const trailingSections = ["tests"];
+const componentSections = new Set(sectionOrder);
 const leadingKeys = ["type", "inputs"];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -65,22 +68,24 @@ export function stringifyConfiguration(
   format: string,
 ): string {
   assertExactNumbers(value);
-  // Global options such as data_dir first, then the pipeline's sections in
-  // flow order; nested values and unknown settings keep their order.
-  const global = (key: string) =>
-    !sectionOrder.includes(key) && !isRecord(value[key]);
+  // The pipeline's sections in flow order lead; global options and anything
+  // else follow in their own order, and the pipeline tests come last. Nested
+  // values and unknown settings keep their order.
+  const rest = (key: string) =>
+    !sectionOrder.includes(key) && !trailingSections.includes(key);
   const ordered = Object.fromEntries([
-    ...Object.entries(value).filter(([key]) => global(key)),
     ...sectionOrder
       .filter((key) => Object.hasOwn(value, key))
       .map((key) => [key, orderSection(key, value[key])]),
-    ...Object.entries(value).filter(
-      ([key]) => !sectionOrder.includes(key) && !global(key),
-    ),
+    ...Object.entries(value).filter(([key]) => rest(key)),
+    ...trailingSections
+      .filter((key) => Object.hasOwn(value, key))
+      .map((key) => [key, value[key]]),
   ]);
   if (format === "json") return JSON.stringify(ordered, null, 2);
   if (format !== "toml") return YAML.stringify(ordered);
-  // TOML root assignments must precede table sections to retain their scope.
+  // The TOML writer puts root assignments before the tables, where their
+  // scope is the whole file, whatever order they are given in.
   const text = stringifyToml(ordered);
   // TOML has no null value. The serializer can omit unsupported object values
   // without throwing, so verify the complete semantic document before use.

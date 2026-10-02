@@ -172,6 +172,7 @@ import {
   sourceErrorMessage,
   sourceOffset,
 } from "./configurationSource";
+import { planCodeSave, unappliedStatus } from "./codeSave";
 import ConfigurationCodeEditor from "./ConfigurationCodeEditor";
 import ConfigurationImportDialog, {
   type ConfigurationImport,
@@ -203,20 +204,19 @@ import { patternEdges, patternInputs, patternSummary } from "./inputPatterns";
 import CanvasFind from "./CanvasFind";
 import {
   edgeRate,
-  formatRate,
   liveSummary,
+  liveTable,
   nodeLive,
+  nodeLiveSummary,
+  readLivePreference,
+  spokenRate,
+  writeLivePreference,
   type PipelineTelemetry,
 } from "./liveGraph";
+import LiveTable from "./LiveTable";
+import ZoomVariable from "./canvasZoom";
+import { connectionRoutes } from "./canvasLayout";
 
-const LIVE_KEY = "vectory.editor.live";
-const readLiveSetting = () => {
-  try {
-    return localStorage.getItem(LIVE_KEY) === "on";
-  } catch {
-    return false;
-  }
-};
 /** How often live numbers refresh: about one agent check-in. */
 const LIVE_REFRESH_MS = 15000;
 import { coalesces, editedField } from "./editHistory";
@@ -253,7 +253,8 @@ import ConnectionStylePicker, {
 } from "./ConnectionStylePicker";
 import { connectionLineTypes } from "./connectionStyle";
 import CanvasActionMenu, { type CanvasAction } from "./CanvasActionMenu";
-import { refusal, type Notify } from "./toast";
+import { commandFor, useCommand } from "./commands";
+import { refusal, toast, type Notify } from "./toast";
 
 const edgeTypes = { pipeline: PipelineEdge };
 // React Flow (MIT) permits hiding its attribution badge; the canvas hides it.
@@ -411,11 +412,19 @@ function samePositions(left: any[], right: any[]) {
       ))
   );
 }
+/** What a card is called on the canvas: its catalog title. */
+const nodeTitle = (node: any) =>
+  componentTitle(String(node.data.component?.type || ""), node.data.kind, {
+    enrichmentTable: node.data.enrichmentTable,
+    implicitSource: node.data.implicitSource,
+  });
 const saveShortcut =
   typeof navigator !== "undefined" &&
   /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
     ? "⌘S"
     : "Ctrl+S";
+/** The notice that added pipeline tests need a save to be kept. */
+const UNSAVED_TESTS_TOPIC = "unsaved-pipeline-tests";
 const AUTO_CHECK_KEY = "vectory.editor.auto-check";
 function readAutoCheck() {
   try {
@@ -476,7 +485,12 @@ export default function Editor({
     [customComponentJSON, setCustomComponentJSON] =
       useState('{\n  "type": ""\n}'),
     [publishedVersion, setPublishedVersion] = useState<Version | null>(null),
-    [live, setLive] = useState(readLiveSetting),
+    // Whether this pipeline's Live was switched on or off here; null until
+    // someone chooses, when it follows whether a device runs the pipeline.
+    [liveChoice, setLiveChoice] = useState<boolean | null>(() =>
+      readLivePreference(user.id, id),
+    ),
+    [runsSomewhere, setRunsSomewhere] = useState<boolean | null>(null),
     [findOpen, setFindOpen] = useState(false),
     [copyFallback, setCopyFallback] = useState<{
       text: string;
@@ -528,6 +542,8 @@ export default function Editor({
       line?: number;
       column?: number;
       nonce: number;
+      /** The field was asked for and this step has no control for it. */
+      onMissing?: () => void;
     } | null>(null),
     [savingDraft, setSavingDraft] = useState(false),
     // The note for "Save with note…"; null while that dialog is closed.
@@ -1069,11 +1085,19 @@ export default function Editor({
     writeAutoCheck(value);
   }
   // Live numbers for the versions devices run, refreshed about once per
-  // check-in while the canvas is visible.
+  // check-in while the canvas is visible. Until someone chooses, Live is on
+  // for a pipeline a device runs, which one read finds out; the choice made
+  // here is remembered for this pipeline.
   const liveAvailable = !!publishedVersion;
-  const liveOn = live && liveAvailable && view === "canvas";
+  const liveWanted = liveChoice ?? runsSomewhere === true;
+  const liveOn = liveWanted && liveAvailable && view === "canvas";
+  const probing =
+    liveAvailable &&
+    liveChoice === null &&
+    runsSomewhere === null &&
+    view === "canvas";
   useEffect(() => {
-    if (!liveOn) return;
+    if (!liveOn && !probing) return;
     let alive = true,
       timer = 0;
     const controller = new AbortController();
@@ -1093,13 +1117,19 @@ export default function Editor({
           30000,
           controller.signal,
         );
-        if (alive) setTelemetry({ data, error: "" });
+        if (!alive) return;
+        setTelemetry({ data, error: "" });
+        // Only the first answer decides the default, so Live never switches
+        // itself on or off later.
+        setRunsSomewhere((known) => known ?? data.devices_running > 0);
       } catch (failure) {
-        if (alive)
+        if (alive) {
           setTelemetry((previous) => ({
             data: previous?.data ?? null,
             error: (failure as Error).message,
           }));
+          setRunsSomewhere((known) => known ?? false);
+        }
       }
       if (alive) timer = window.setTimeout(load, LIVE_REFRESH_MS);
     };
@@ -1109,28 +1139,43 @@ export default function Editor({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [liveOn, id]);
+  }, [liveOn, probing, id]);
   function toggleLive() {
-    const next = !live;
-    setLive(next);
+    const next = !liveWanted;
+    setLiveChoice(next);
+    writeLivePreference(user.id, id, next);
     if (!next) setTelemetry(null);
-    try {
-      localStorage.setItem(LIVE_KEY, next ? "on" : "off");
-    } catch {
-      /* the choice lasts for this visit */
-    }
   }
   const liveData = liveOn ? (telemetry?.data ?? null) : null;
   const liveStatus =
     liveOn && telemetry?.data
       ? liveSummary(telemetry.data, publishedVersion?.number ?? null)
       : null;
+  // Every number the canvas draws, as a table: widths and chips are not the
+  // only way to read them.
+  const liveRows = useMemo(
+    () =>
+      liveData
+        ? liveTable(
+            nodes
+              .filter((node) => !node.data.enrichmentTable)
+              .map((node) => ({
+                id: node.id,
+                title: nodeTitle(node),
+                kind: node.data.kind,
+              })),
+            edges,
+            liveData,
+          )
+        : null,
+    [liveData, nodes, edges],
+  );
   const toolsRef = useRef<HTMLDetailsElement>(null);
   useDismissibleDetails(toolsRef);
   const handledDestination = useRef("");
   const blockedDestination = useRef("");
   const destinationKey = destination
-    ? `${destination.panel}:${destination.section || ""}:${destination.test || ""}`
+    ? `${destination.panel}:${destination.section || ""}:${destination.test || ""}:${destination.select || ""}:${destination.field || ""}`
     : "";
   useEffect(() => {
     if (!destination) {
@@ -1162,7 +1207,8 @@ export default function Editor({
     }
     handledDestination.current = destinationKey;
     blockedDestination.current = "";
-    if (destination.panel === "history") openHistory();
+    if (destination.panel === "step") openStep(destination);
+    else if (destination.panel === "history") openHistory();
     else if (destination.panel === "tools") {
       if (toolsRef.current) toolsRef.current.open = true;
     } else
@@ -1427,6 +1473,7 @@ export default function Editor({
             latest.current.dirty = false;
           }
           setSaveStatus(stillSame ? "All changes saved" : "Unsaved changes");
+          if (stillSame) toast.dismissTopic(UNSAVED_TESTS_TOPIC);
           if (explicit) notify("Draft revision saved.", { tone: "success" });
           return updated;
         } catch (e) {
@@ -2711,6 +2758,84 @@ export default function Editor({
     const saved = await saveDraftNow(false, note);
     if (saved) setSaveNote(null);
   }
+  // Saving from Code applies code that parses, then saves the draft. A save
+  // reads the draft as of the last render, so it waits for the applied draft.
+  const saveAfterApply = useRef<Config | null>(null);
+  function saveCode() {
+    const plan = planCodeSave({
+      code,
+      format,
+      unapplied: importedCodeDirty.current,
+      config,
+    });
+    if (plan.kind === "refuse") {
+      setError(plan.message);
+      setCodeReveal({ offset: plan.offset, nonce: Date.now() });
+      return;
+    }
+    setError("");
+    if (plan.kind === "apply") {
+      saveAfterApply.current = plan.config;
+      replace(plan.config);
+      importedCodeDirty.current = false;
+      return;
+    }
+    // Only the layout or the comments changed: the draft already has it all.
+    if (plan.kind === "same") {
+      importedCodeDirty.current = false;
+      syncCode(config);
+    }
+    void saveDraftNow();
+  }
+  useEffect(() => {
+    const applied = saveAfterApply.current;
+    if (!applied) return;
+    saveAfterApply.current = null;
+    if (config === applied) void saveDraftNow();
+  }, [config]);
+  /** What Save, its menu item and Ctrl/Cmd+S do. */
+  function saveNow() {
+    if (view === "code" && importedCodeDirty.current) saveCode();
+    else if (hasUnappliedImportFields()) {
+      setError(
+        "Apply or discard unfinished code and field edits before saving the draft.",
+      );
+    } else void saveDraftNow();
+  }
+  // The command palette's Deploy… and Duplicate… open the same dialogs as the
+  // buttons here, for this pipeline, when this person and this state allow it.
+  // Once this page knows the pipeline and is idle, a request it cannot answer
+  // ends with a line saying so.
+  const commandRefused = (verb: string, settled: boolean) =>
+    settled
+      ? () =>
+          notify(`${verb} isn't available for this pipeline now.`, {
+            tone: "info",
+          })
+      : undefined;
+  const idle = !!doc && !busy;
+  useCommand(
+    commandFor("pipeline.deploy", id),
+    () => {
+      if (publishedVersion && closeSettings())
+        setDeployVersion(publishedVersion);
+    },
+    can(user, "operate") &&
+      publishedVersionStatus === "ready" &&
+      !!publishedVersion &&
+      !busy &&
+      !deployVersion,
+    commandRefused(
+      "Deploy",
+      idle && publishedVersionStatus !== "loading" && !deployVersion,
+    ),
+  );
+  useCommand(
+    commandFor("pipeline.duplicate", id),
+    () => void openPipelineAction("duplicate"),
+    can(user, "edit") && !!doc && !busy && !pipelineAction,
+    commandRefused("Duplicate", idle && !pipelineAction),
+  );
   // Ctrl/Cmd+S saves the draft anywhere in the editor. The browser's own
   // "save page" never applies here, even when there is nothing to save.
   const saveShortcutState = useRef({ blocked: false, save: () => {} });
@@ -2726,15 +2851,7 @@ export default function Editor({
       !!pipelineAction ||
       !!importCandidate ||
       saveNote !== null,
-    save: () => {
-      if (hasUnappliedImportFields()) {
-        setError(
-          "Apply or discard unfinished code and field edits before saving the draft.",
-        );
-        return;
-      }
-      void saveDraftNow();
-    },
+    save: saveNow,
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -3106,13 +3223,16 @@ export default function Editor({
     [problems, selected],
   );
   const hasPendingFields = !!(pendingFieldCount || importedCodeDirty.current);
+  // Code that has not been applied to the draft yet; saving applies it first.
+  const codeUnapplied = view === "code" && importedCodeDirty.current;
   const displaySaveStatus = saveNeedsReload.current
     ? "Save conflict — reload server draft"
     : saveUncertain.current
       ? "Save status unknown — review server draft"
-      : hasPendingFields
-        ? "Unapplied field changes"
-        : saveStatus;
+      : (unappliedStatus({
+          code: importedCodeDirty.current,
+          fields: pendingFieldCount > 0,
+        }) ?? saveStatus);
   const definition = component
     ? catalog.find(
         (c) => c.type === component.type && c.kind === selectedNode.data.kind,
@@ -3302,6 +3422,38 @@ export default function Editor({
     setSelected(stepId);
     setError("");
   }
+  // A link from a failure names the step to fix, and the field when it can.
+  // A step or field this draft doesn't have opens the pipeline with a note.
+  function openStep(target: PipelineDestination) {
+    const step = nodes.find(
+      (node) => node.id === target.select && !node.data.enrichmentTable,
+    );
+    if (!step) {
+      notify(`There is no step called “${target.select}” in this draft.`, {
+        tone: "info",
+        duration: 8000,
+      });
+      return;
+    }
+    if (view !== "canvas") setView("canvas");
+    if (selected !== step.id) {
+      if (!closeSettings()) return;
+      setSelected(step.id);
+    }
+    const field = target.field;
+    setFocusRequest({
+      component: step.id,
+      field,
+      nonce: Date.now(),
+      onMissing: field
+        ? () =>
+            notify(`${step.id} has no “${field}” setting in this draft.`, {
+              tone: "info",
+              duration: 8000,
+            })
+        : undefined,
+    });
+  }
   // Open the step a problem belongs to and reveal the field and position.
   // Pipeline-wide problems open the matching pipeline settings section.
   function openProblem(problem: Problem) {
@@ -3401,7 +3553,8 @@ export default function Editor({
       tests.length === 1
         ? `Added pipeline test “${tests[0].name}”. Save to keep it.`
         : `Added ${tests.length} pipeline tests. Save to keep them.`,
-      { tone: "success" },
+      // Saving the draft makes this untrue; it leaves with the save.
+      { tone: "success", topic: UNSAVED_TESTS_TOPIC },
     );
   }
   function renameRoute(before: string, after: string) {
@@ -3777,6 +3930,18 @@ export default function Editor({
   if (flowCache.current.size > 4 * (nodes.length + edges.length) + 64)
     flowCache.current.clear();
   const nodeKinds = new Map(nodes.map((node) => [node.id, node.data.kind]));
+  // A connection that would run behind a card in a column it skips is routed
+  // around it; the label and the actions follow the routed line.
+  const routes = useMemo(
+    () => connectionRoutes({ nodes, edges }, connectionStyle),
+    [nodes, edges, connectionStyle],
+  );
+  // Two cards of the same kind share a catalog title; each leads with its ID.
+  const titleCounts = new Map<string, number>();
+  for (const node of nodes) {
+    const shown = nodeTitle(node);
+    titleCounts.set(shown, (titleCounts.get(shown) ?? 0) + 1);
+  }
   const currentFlowNodes = nodes.map((node) => {
     const highlight = highlightedConnection
       ? [highlightedConnection.source, highlightedConnection.target].includes(
@@ -3798,12 +3963,14 @@ export default function Editor({
     const liveKey = reading === undefined ? "" : JSON.stringify(reading);
     const traced = trace && trace.id === node.id ? trace.counts : undefined;
     const traceKey = traced ? JSON.stringify(traced) : "";
+    const sharedTitle = (titleCounts.get(nodeTitle(node)) ?? 0) > 1;
     return cachedFlowObject(
       `node:${node.id}`,
       [
         node,
         liveKey,
         traceKey,
+        sharedTitle,
         highlight,
         isSelected,
         problem.hasIssue,
@@ -3819,14 +3986,11 @@ export default function Editor({
       ],
       () => ({
         ...node,
-        ariaLabel: `${componentTitle(
-          String(node.data.component?.type || ""),
-          node.data.kind,
-          {
-            enrichmentTable: node.data.enrichmentTable,
-            implicitSource: node.data.implicitSource,
-          },
-        )} ${node.id}${problem.hasIssue ? ", has problems" : ""}`,
+        ariaLabel: `${sharedTitle ? `${node.id} · ${nodeTitle(node)}` : `${nodeTitle(node)} ${node.id}`}${problem.hasIssue ? ", has problems" : ""}${
+          reading === undefined
+            ? ""
+            : `, ${nodeLiveSummary(node.data.kind, reading)}`
+        }`,
         domAttributes: {
           ...node.domAttributes,
           "data-connection-highlight": highlight,
@@ -3835,6 +3999,7 @@ export default function Editor({
         data: {
           ...node.data,
           ...problem,
+          sharedTitle,
           live: reading,
           trace: traced,
           connectivityWarning: warning,
@@ -3858,14 +4023,16 @@ export default function Editor({
     const rate = liveOn
       ? edgeRate(liveData, edge.source, edge.sourceHandle || "output")
       : undefined;
+    const lanes = routes.get(edge.id);
+    const lanesKey = lanes ? JSON.stringify(lanes) : "";
     return cachedFlowObject(
       `edge:${edge.id}`,
-      [edge, highlight, category, editable, connectionStyle, rate],
+      [edge, highlight, category, editable, connectionStyle, rate, lanesKey],
       () => ({
         ...edge,
         type: "pipeline",
         className: "pipeline-connection",
-        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${formatRate(rate)} events`}`,
+        ariaLabel: `Connection from ${edge.source}${edge.sourceHandle && edge.sourceHandle !== "output" ? "." + edge.sourceHandle : ""} to ${edge.target}${rate === undefined ? "" : rate === null ? ", no live data" : `, ${spokenRate(rate)}`}`,
         domAttributes: {
           ...edge.domAttributes,
           "data-connection-highlight": highlight,
@@ -3875,6 +4042,7 @@ export default function Editor({
           editable,
           connectionStyle,
           liveRate: rate,
+          lanes,
           connectionHighlight: highlight,
           onHoverChange: stableHandlers(`edge:${edge.id}`).hover,
           openMenu: stableHandlers(`edge:${edge.id}`).menu,
@@ -4409,16 +4577,22 @@ export default function Editor({
                         className="editor-save-button"
                         icon={Save}
                         busy={savingDraft}
-                        disabled={busy || hasPendingFields || !dirty}
+                        disabled={
+                          busy ||
+                          pendingFieldCount > 0 ||
+                          (!dirty && !codeUnapplied)
+                        }
                         aria-keyshortcuts="Control+S Meta+S"
                         title={
-                          hasPendingFields
-                            ? "Apply unfinished code and field edits before saving"
-                            : dirty
-                              ? `Save draft (${saveShortcut})`
-                              : "No unsaved changes"
+                          pendingFieldCount > 0
+                            ? "Apply unfinished field edits before saving"
+                            : codeUnapplied
+                              ? `Apply the code and save the draft (${saveShortcut})`
+                              : dirty
+                                ? `Save draft (${saveShortcut})`
+                                : "No unsaved changes"
                         }
-                        onClick={() => void saveDraftNow()}
+                        onClick={saveNow}
                       >
                         Save
                       </Button>
@@ -4453,12 +4627,12 @@ export default function Editor({
                             <DropdownMenu.Item
                               className="editor-save-menu-item"
                               disabled={
-                                hasPendingFields ||
-                                !dirty ||
+                                pendingFieldCount > 0 ||
+                                (!dirty && !codeUnapplied) ||
                                 busy ||
                                 savingDraft
                               }
-                              onSelect={() => void saveDraftNow()}
+                              onSelect={saveNow}
                               aria-keyshortcuts="Control+S Meta+S"
                             >
                               <Save size={16} aria-hidden="true" />
@@ -4485,8 +4659,9 @@ export default function Editor({
                             </DropdownMenu.Item>
                             {hasPendingFields && (
                               <p className="editor-save-menu-hint">
-                                Apply unfinished code and field edits before
-                                saving.
+                                {codeUnapplied
+                                  ? "Save draft applies your code. Apply it first to save with a note."
+                                  : "Apply unfinished field edits before saving."}
                               </p>
                             )}
                           </DropdownMenu.Content>
@@ -4899,6 +5074,7 @@ export default function Editor({
                   maxZoom={2}
                   defaultEdgeOptions={defaultEdgeOptions}
                 >
+                  <ZoomVariable />
                   <ConnectionCancellation
                     active={!!connectionGesture}
                     onCancel={() => {
@@ -4990,20 +5166,33 @@ export default function Editor({
                   )}
                   {liveAvailable && !connectionGesture && (
                     <Panel position="top-right" className="editor-live-panel">
-                      <button
-                        type="button"
-                        className="editor-live-toggle"
-                        aria-pressed={liveOn}
-                        onClick={toggleLive}
-                        title={
-                          liveOn
-                            ? "Hide live numbers"
-                            : "Show events per second from devices running this pipeline"
-                        }
-                      >
-                        <Radio size={15} aria-hidden="true" />
-                        Live
-                      </button>
+                      <div className="editor-live-controls">
+                        {liveOn && (
+                          <button
+                            type="button"
+                            className="editor-live-fit"
+                            onClick={fitGraph}
+                            title="Fit the whole graph in the view"
+                          >
+                            <Maximize size={15} aria-hidden="true" />
+                            Fit
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="editor-live-toggle"
+                          aria-pressed={liveOn}
+                          onClick={toggleLive}
+                          title={
+                            liveOn
+                              ? "Hide live numbers"
+                              : "Show events per second from devices running this pipeline"
+                          }
+                        >
+                          <Radio size={15} aria-hidden="true" />
+                          Live
+                        </button>
+                      </div>
                       {liveOn && (
                         <div
                           className="editor-live-status"
@@ -5037,6 +5226,7 @@ export default function Editor({
                                 Your draft has changes that aren&apos;t running.
                               </small>
                             )}
+                          {liveRows && <LiveTable table={liveRows} />}
                         </div>
                       )}
                     </Panel>
@@ -5825,6 +6015,7 @@ export default function Editor({
           open
           onClose={() => setDeployVersion(null)}
           version={deployVersion}
+          pipelineName={doc.name}
           initialDeviceIds={initialDeviceId ? [initialDeviceId] : []}
           onDone={(message) => notify(message, { tone: "success" })}
         />
