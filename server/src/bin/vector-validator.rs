@@ -382,6 +382,18 @@ async fn pipeline_tests(
             "placeholders": [],
         })));
     }
+    // Vector runs a Lua step's code, and opens an enrichment table's file, when
+    // it builds them for a test: the tests of such a draft run on devices,
+    // whoever asks the worker.
+    if let Some(diagnostic) = validation::tests_on_devices_diagnostic(config)
+        && config["tests"].as_array().is_some_and(|t| !t.is_empty())
+    {
+        return Ok(protocol(json!({
+            "tests_run": false, "tests": [],
+            "diagnostics": [diagnostic.to_json()],
+            "placeholders": [],
+        })));
+    }
     let candidate = validation::static_candidate(config, |section, kind| worker.has(section, kind));
     if !candidate.checkable || config["tests"].as_array().is_none_or(|t| t.is_empty()) {
         return Ok(protocol(json!({

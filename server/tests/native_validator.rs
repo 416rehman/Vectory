@@ -969,3 +969,1043 @@ async fn worker_never_reads_files_an_author_named() {
     assert_eq!(plain["valid"], true, "{plain}");
     child.kill().await.ok();
 }
+
+/// A pipeline whose source and sink are the components under test, with one
+/// trivial unit test so `vector test` has something to run.
+#[cfg(target_os = "linux")]
+fn pipeline(
+    source: serde_json::Value,
+    mut sink: serde_json::Value,
+    data_dir: &std::path::Path,
+) -> serde_json::Value {
+    sink["inputs"] = json!(["t"]);
+    json!({
+        "data_dir": data_dir,
+        "sources": {"s": source},
+        "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": "."}},
+        "sinks": {"k": sink},
+        "tests": [{"name": "t",
+            "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+    })
+}
+
+/// Run pinned Vector with an empty environment and wait for it to end, with
+/// `stdin` held open so a source that reads it has something to read.
+#[cfg(target_os = "linux")]
+async fn vector_ends(
+    vector: &str,
+    args: &[&str],
+    config: &std::path::Path,
+    stdin: Option<&str>,
+) -> (Option<i32>, String) {
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(vector);
+    command
+        .args(args)
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        input.write_all(text.as_bytes()).await.unwrap();
+    }
+    let mut out = child.stdout.take().unwrap();
+    let mut err = child.stderr.take().unwrap();
+    let read = async {
+        use tokio::io::AsyncReadExt;
+        let (mut stdout, mut stderr) = (String::new(), String::new());
+        let _ = tokio::join!(
+            out.read_to_string(&mut stdout),
+            err.read_to_string(&mut stderr)
+        );
+        stdout + &stderr
+    };
+    let status = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let (status, text) = tokio::join!(child.wait(), read);
+        (status.unwrap().code(), text)
+    })
+    .await
+    .expect("vector did not end");
+    drop(input);
+    status
+}
+
+/// Run pinned Vector as it runs a pipeline for real, until `marker` appears
+/// (or ten seconds pass), then stop it. Whether the marker appeared.
+#[cfg(target_os = "linux")]
+async fn vector_runs_until(
+    vector: &str,
+    config: &std::path::Path,
+    stdin: Option<&str>,
+    marker: &std::path::Path,
+) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(vector);
+    command
+        .arg("--config-json")
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    // Held open: Vector drops the events still in flight when stdin ends.
+    let mut input = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        input.write_all(text.as_bytes()).await.unwrap();
+    }
+    let mut seen = false;
+    for _ in 0..100 {
+        if marker.exists() {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    child.kill().await.ok();
+    seen
+}
+
+/// Components that run a program, read what started Vector, or write a file all
+/// act when Vector runs a pipeline. `vector validate --no-environment` and
+/// `vector test`, the only two commands the worker uses on a draft, start none
+/// of them: each marker below appears under a normal run and never under those
+/// two commands, and never through the worker.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn components_that_act_when_vector_runs_never_start_under_validate_or_test() {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; component start guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let marker = |name: &str| dir.path().join(format!("ran-{name}"));
+    // A stand-in for `journalctl` that only leaves its marker.
+    let journalctl = dir.path().join("journalctl");
+    std::fs::write(
+        &journalctl,
+        format!(
+            "#!/bin/sh\ntouch {}\nsleep 30\n",
+            marker("journald").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&journalctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let blackhole = json!({"type": "blackhole"});
+    let to_file =
+        |name: &str| json!({"type": "file", "path": marker(name), "encoding": {"codec": "json"}});
+    let cases = [
+        (
+            "exec",
+            json!({"type": "exec", "command": ["touch", marker("exec")], "mode": "scheduled",
+                "scheduled": {"exec_interval_secs": 1}}),
+            blackhole.clone(),
+            None,
+        ),
+        (
+            "journald",
+            json!({"type": "journald", "journalctl_path": journalctl}),
+            blackhole.clone(),
+            None,
+        ),
+        (
+            "file",
+            json!({"type": "demo_logs", "format": "json"}),
+            to_file("file"),
+            None,
+        ),
+        (
+            "stdin",
+            json!({"type": "stdin"}),
+            to_file("stdin"),
+            Some("hello\n"),
+        ),
+        (
+            "fd",
+            json!({"type": "file_descriptor", "fd": 0}),
+            to_file("fd"),
+            Some("hello\n"),
+        ),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    for (name, source, sink, stdin) in cases {
+        let config = pipeline(source, sink, dir.path());
+        let path = dir.path().join(format!("{name}.json"));
+        std::fs::write(&path, config.to_string()).unwrap();
+        let marker = marker(name);
+
+        // The two commands the worker uses, on the draft as written.
+        for args in [
+            &["validate", "--no-environment"][..],
+            &["test", "--config-json"][..],
+        ] {
+            let (code, text) = vector_ends(&vector, args, &path, stdin).await;
+            assert_eq!(code, Some(0), "{name}: {args:?} did not accept it: {text}");
+            assert!(!marker.exists(), "{name} started under {args:?}");
+        }
+        // The worker, which hands Vector a copy with stand-ins.
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        let tested = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tested["tests_run"], true, "{name}: {tested}");
+        assert_eq!(tested["tests"][0]["passed"], true, "{name}: {tested}");
+        assert!(!marker.exists(), "{name} started through the worker");
+
+        // Control: the same pipeline under a normal run does leave its marker.
+        assert!(
+            vector_runs_until(&vector, &path, stdin, &marker).await,
+            "{name}: the marker never appeared under a normal run, so this test proves nothing"
+        );
+    }
+
+    // A secret backend of type `exec` runs a program when a configuration uses
+    // one of its secrets. The worker removes every backend, and replaces every
+    // reference with a placeholder, before Vector sees the draft.
+    let backend = marker("secret");
+    let secret = json!({
+        "data_dir": dir.path(),
+        "secret": {"vault": {"type": "exec", "command": ["touch", backend]}},
+        "sources": {"s": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": ".token = \"SECRET[vault.token]\""}},
+        "sinks": {"k": {"type": "blackhole", "inputs": ["t"]}},
+        "tests": [{"name": "t",
+            "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+    });
+    let checked = post(&client, &url, "validate", json!({"config": secret})).await;
+    assert_eq!(checked["valid"], true, "{checked}");
+    let tested = post(&client, &url, "tests", json!({"config": secret})).await;
+    assert_eq!(tested["tests_run"], true, "{tested}");
+    assert!(
+        !backend.exists(),
+        "the secret backend ran through the worker"
+    );
+    let path = dir.path().join("secret.json");
+    std::fs::write(&path, secret.to_string()).unwrap();
+    assert!(
+        vector_runs_until(&vector, &path, None, &backend).await,
+        "the marker never appeared under a normal run, so this test proves nothing"
+    );
+    // Vector itself runs the backend under `vector test`, so the removal above
+    // is what keeps the program from running in the worker.
+    std::fs::remove_file(&backend).unwrap();
+    vector_ends(&vector, &["test", "--config-json"], &path, None).await;
+    assert!(
+        backend.exists(),
+        "Vector no longer runs a secret backend for a test: review what the worker removes"
+    );
+    child.kill().await.ok();
+}
+
+/// Signed-in people for the API in front of a worker.
+struct Session {
+    cookie: String,
+    csrf: String,
+}
+
+async fn session(state: &vectory_server::State, role: &str) -> Session {
+    let id = vectory_server::db::id();
+    let token = vectory_server::auth::random_secret();
+    let csrf = vectory_server::auth::random_secret();
+    sqlx::query(
+        "INSERT INTO users(id,email,name,role,password_hash,created_at) VALUES(?,?,?,?,?,?)",
+    )
+    .bind(&id)
+    .bind(format!("{id}@example.test"))
+    .bind(format!("Test {role}"))
+    .bind(role)
+    .bind("unused-test-login")
+    .bind(vectory_server::db::now())
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO sessions VALUES(?,?,?,?)")
+        .bind(vectory_server::db::hash(&token))
+        .bind(&id)
+        .bind(&csrf)
+        .bind("2099-01-01T00:00:00Z")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    Session {
+        cookie: format!("vectory_session={token}"),
+        csrf,
+    }
+}
+
+async fn api(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+    who: &Session,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("cookie", &who.cookie)
+        .header("x-csrf-token", &who.csrf)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// One `lua` transform per form the transform takes, each running a program
+/// that leaves its own marker file. A marker that appears names the form that
+/// ran.
+#[cfg(unix)]
+fn lua_forms(dir: &std::path::Path) -> (serde_json::Value, Vec<std::path::PathBuf>) {
+    let marker = |name: &str| dir.join(format!("ran-{name}"));
+    let touch = |name: &str| format!("os.execute('touch {}')", marker(name).display());
+    let popen = |name: &str| {
+        format!(
+            "local p = io.popen('touch {}'); p:close()",
+            marker(name).display()
+        )
+    };
+    let modules = dir.join("modules");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(
+        modules.join("evil.lua"),
+        format!("{}\nreturn {{}}\n", touch("module")),
+    )
+    .unwrap();
+    let forms = json!({
+        "lua_chunk": {"type":"lua","version":"2","inputs":["in"],
+            "source": format!("{}\nfunction process(e, emit) emit(e) end", touch("chunk")),
+            "hooks":{"process":"process"}},
+        "lua_hooks": {"type":"lua","version":"2","inputs":["in"],
+            "source": format!(
+                "function init(emit) {} end\nfunction process(e, emit) {} {} emit(e) end\nfunction tick(emit) {} end\nfunction shutdown(emit) {} end",
+                popen("init"), touch("process"), popen("popen"), touch("timer"), touch("shutdown")
+            ),
+            "hooks":{"init":"init","process":"process","shutdown":"shutdown"},
+            "timers":[{"interval_seconds":1,"handler":"tick"}]},
+        "lua_v1": {"type":"lua","version":"1","inputs":["in"], "source": touch("v1")},
+        "lua_modules": {"type":"lua","version":"2","inputs":["in"],
+            "search_dirs":[modules.to_string_lossy()],
+            "source":"local evil = require('evil')\nfunction process(e, emit) emit(e) end",
+            "hooks":{"process":"process"}},
+    });
+    let ids: Vec<String> = forms.as_object().unwrap().keys().cloned().collect();
+    let tests: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"name": format!("{id} runs"),
+            "inputs":[{"insert_at":id,"type":"log","log_fields":{"message":"x"}}],
+            "outputs":[{"extract_from":id,"conditions":[{"type":"vrl","source":"true"}]}]})
+        })
+        .collect();
+    let config = json!({
+        "sources":{"in":{"type":"demo_logs","format":"json"}},
+        "transforms": forms,
+        "sinks":{"out":{"type":"blackhole","inputs":ids}},
+        "tests": tests,
+    });
+    let markers = [
+        "chunk", "init", "process", "popen", "timer", "shutdown", "v1", "module",
+    ]
+    .iter()
+    .map(|name| marker(name))
+    .collect();
+    (config, markers)
+}
+
+/// Lua can run any program: `os.execute` and `io.popen` fire when Vector builds
+/// the transform, which `vector test` does. User Lua runs on devices only, so
+/// neither the worker nor the API in front of it may hand a `lua` transform to
+/// Vector, in any form, from any route.
+#[cfg(unix)]
+#[tokio::test]
+async fn lua_never_runs_in_the_validator() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; Lua guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (config, markers) = lua_forms(dir.path());
+    let ran = || -> Vec<String> {
+        markers
+            .iter()
+            .filter(|marker| marker.exists())
+            .map(|marker| marker.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    };
+    let none = Vec::<String>::new();
+    let (mut child, url, client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let operator = session(&state, "operator").await;
+
+    // The worker's own routes never build the transform.
+    let tests = post(&client, &url, "tests", json!({"config": config})).await;
+    assert_eq!(ran(), none, "the worker's /tests ran Lua: {tests}");
+    assert_eq!(tests["tests_run"], false, "{tests}");
+    let checked = post(&client, &url, "validate", json!({"config": config})).await;
+    assert_eq!(ran(), none, "the worker's /validate ran Lua: {checked}");
+    assert_eq!(checked["valid"], true, "{checked}");
+    let mut stubbed: Vec<&str> = checked["stubbed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|id| id.as_str())
+        .collect();
+    stubbed.sort();
+    assert_eq!(
+        stubbed,
+        vec!["lua_chunk", "lua_hooks", "lua_modules", "lua_v1"],
+        "{checked}"
+    );
+    let sample = post(
+        &client,
+        &url,
+        "transform-test",
+        json!({"transform": config["transforms"]["lua_chunk"], "samples": [{"message": "x"}]}),
+    )
+    .await;
+    assert_eq!(ran(), none, "the sample runner ran Lua: {sample}");
+    assert_eq!(sample["compiled"], false, "{sample}");
+
+    // The API: the test route, the validate route and the publish gate.
+    let (status, run) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(ran(), none, "POST /configurations/test ran Lua: {run}");
+    assert_eq!(status, axum::http::StatusCode::OK, "{run}");
+    assert_eq!(run["tests_run"], false, "{run}");
+    assert_eq!(run["deferred"], true, "{run}");
+    assert_eq!(run["tests"], json!([]), "{run}");
+    assert!(
+        run["deferred_reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Lua runs on devices")),
+        "{run}"
+    );
+    assert!(
+        run["errors"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Lua can run any program, so tests that include it run only on devices."),
+        "{run}"
+    );
+
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Lua","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let (status, saved) = api(
+        &app,
+        "PUT",
+        &format!("/api/v1/configurations/{id}/draft"),
+        json!({"revision":created["revision"],"config":config,"graph":created["graph"],"name":"Lua","description":""}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{saved}");
+    let (status, validated) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/validate"),
+        json!({"config": config}),
+        &editor,
+    )
+    .await;
+    assert_eq!(
+        ran(),
+        none,
+        "POST /configurations/{{id}}/validate ran Lua: {validated}"
+    );
+    assert_eq!(status, axum::http::StatusCode::OK, "{validated}");
+    assert_eq!(validated["valid"], true, "{validated}");
+    assert_eq!(validated["deferred"], true, "{validated}");
+    assert_eq!(validated["vector_validated"], false, "{validated}");
+    // The module form also names a device directory, which is its own reason.
+    assert_eq!(
+        validated["deferred_reasons"],
+        json!([
+            "Lua runs on devices",
+            "device-local paths or external code files"
+        ]),
+        "{validated}"
+    );
+    let notes: Vec<&str> = validated["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "device_check" && d["severity"] == "warning")
+        .filter_map(|d| d["component"].as_str())
+        .collect();
+    assert_eq!(
+        notes.len(),
+        4,
+        "each Lua step says a device checks it: {validated}"
+    );
+
+    // Publishing: the draft is valid, its tests did not run, and the existing
+    // acknowledgement is what lets it through.
+    let publish = json!({"revision":saved["revision"],"message":""});
+    let (status, refusal) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        publish.clone(),
+        &operator,
+    )
+    .await;
+    assert_eq!(ran(), none, "publishing ran Lua: {refusal}");
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["error"]["code"], "TESTS_FAILED", "{refusal}");
+    assert_eq!(refusal["tests_run"], false, "{refusal}");
+    assert_eq!(refusal["counts"]["not_run"], 4, "{refusal}");
+    let mut acknowledged = publish;
+    acknowledged["acknowledge_test_failures"] = json!(true);
+    let (status, version) = api(
+        &app,
+        "POST",
+        &format!("/api/v1/configurations/{id}/publish"),
+        acknowledged,
+        &operator,
+    )
+    .await;
+    assert_eq!(ran(), none, "an acknowledged publish ran Lua: {version}");
+    assert_eq!(status, axum::http::StatusCode::OK, "{version}");
+    child.kill().await.ok();
+}
+
+/// A named pipe standing in for a path an author names. A writer's `open`
+/// returns only when something opens the pipe for reading, so `opened()` says
+/// whether anything tried to read the path.
+#[cfg(target_os = "linux")]
+struct Tripwire {
+    path: std::path::PathBuf,
+    opened: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(target_os = "linux")]
+impl Tripwire {
+    fn new(path: std::path::PathBuf) -> Self {
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let opened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (flag, pipe) = (opened.clone(), path.clone());
+        std::thread::spawn(move || {
+            if std::fs::OpenOptions::new().write(true).open(&pipe).is_ok() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        Tripwire { path, opened }
+    }
+    async fn opened(&self) -> bool {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        self.opened.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Tripwire {
+    // Lets a writer that nothing opened for end: on Linux a read-write open of
+    // a pipe does not block.
+    fn drop(&mut self) {
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path);
+    }
+}
+
+/// A pipeline whose one step looks up an enrichment table, and a test of it.
+#[cfg(target_os = "linux")]
+fn enrichment_pipeline(table: serde_json::Value, condition: &str) -> serde_json::Value {
+    json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"look": {"type": "remap", "inputs": ["in"],
+            "source": format!(".row = get_enrichment_table_record!(\"lk\", {condition})")}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["look"]}},
+        "enrichment_tables": {"lk": table},
+        "tests": [{"name": "looks it up",
+            "inputs": [{"insert_at": "look", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "look", "conditions": [{"type": "vrl", "source": "assert_eq!(.row.v, \"nope\")"}]}]}],
+    })
+}
+
+/// An enrichment table that reads a file makes Vector open that file when it
+/// builds the table, which `vector test` does, and the lookup returns the rows
+/// to whoever wrote it. The server never reads a path an author names: a device
+/// reads its own files. Every table type but `memory` stays out of the worker's
+/// Vector, through the worker, the test route and the validate route.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn enrichment_tables_that_read_files_never_reach_the_validator() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; enrichment file guard unverified");
+        return;
+    };
+    const SENTINEL: &str = "SENTINEL-4f9a1c-in-no-reply";
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("lookup.csv");
+    std::fs::write(&csv, format!("k,v\nAAA,{SENTINEL}\n")).unwrap();
+    let table = |kind: &str, path: &std::path::Path| match kind {
+        "file" => json!({"type": "file",
+            "file": {"path": path, "encoding": {"type": "csv", "include_headers": true}},
+            "schema": {"k": "string", "v": "string"}}),
+        other => json!({"type": other, "path": path}),
+    };
+    let by_key = r#"{"k": "AAA"}"#;
+    let by_ip = r#"{"ip": "1.2.3.4"}"#;
+
+    // Control: Vector itself opens each path and returns the file's rows, so a
+    // pipe that stays unopened below means something kept the table away.
+    let control = enrichment_pipeline(table("file", &csv), by_key);
+    let control_path = dir.path().join("control.json");
+    std::fs::write(&control_path, control.to_string()).unwrap();
+    let (_, text) = vector_ends(&vector, &["test", "--config-json"], &control_path, None).await;
+    assert!(
+        text.contains(SENTINEL),
+        "the control lookup did not return the file's row: {text}"
+    );
+    for (kind, condition) in [("file", by_key), ("geoip", by_ip), ("mmdb", by_ip)] {
+        let pipe = Tripwire::new(dir.path().join(format!("control-{kind}")));
+        let config = enrichment_pipeline(table(kind, &pipe.path), condition);
+        let path = dir.path().join(format!("control-{kind}.json"));
+        std::fs::write(&path, config.to_string()).unwrap();
+        vector_ends(&vector, &["test", "--config-json"], &path, None).await;
+        assert!(
+            pipe.opened().await,
+            "{kind}: Vector did not open the path under a normal test, so this test proves nothing"
+        );
+    }
+
+    // The same pipelines through the worker and the API.
+    let cases = vec![
+        (
+            "file with rows",
+            Some(enrichment_pipeline(table("file", &csv), by_key)),
+            None,
+        ),
+        ("file", None, Some(("file", by_key))),
+        ("geoip", None, Some(("geoip", by_ip))),
+        ("mmdb", None, Some(("mmdb", by_ip))),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Enrichment","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let mut replies = Vec::new();
+    let mut pipes = Vec::new();
+    for (name, config, pipe) in cases {
+        let config = match (config, pipe) {
+            (Some(config), _) => config,
+            (None, Some((kind, condition))) => {
+                let tripwire = Tripwire::new(dir.path().join(format!("worker-{kind}")));
+                let config = enrichment_pipeline(table(kind, &tripwire.path), condition);
+                pipes.push((name, tripwire));
+                config
+            }
+            (None, None) => unreachable!(),
+        };
+        let tests = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tests["tests_run"], false, "{name}: {tests}");
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!(["look"]), "{name}: {checked}");
+        let (status, run) = api(
+            &app,
+            "POST",
+            "/api/v1/configurations/test",
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {run}");
+        assert_eq!(run["tests_run"], false, "{name}: {run}");
+        assert_eq!(run["deferred"], true, "{name}: {run}");
+        assert_eq!(run["tests"], json!([]), "{name}: {run}");
+        assert!(
+            run["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Enrichment tables are read on devices")),
+            "{name}: {run}"
+        );
+        assert_eq!(
+            run["errors"],
+            json!([
+                "Enrichment tables are read on devices, so tests that use them run only on devices. Use Check on devices with Also run the pipeline's tests."
+            ]),
+            "{name}: {run}"
+        );
+        let (status, validated) = api(
+            &app,
+            "POST",
+            &format!("/api/v1/configurations/{id}/validate"),
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {validated}");
+        assert_eq!(validated["valid"], true, "{name}: {validated}");
+        assert_eq!(validated["deferred"], true, "{name}: {validated}");
+        assert_eq!(validated["vector_validated"], false, "{name}: {validated}");
+        assert!(
+            validated["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Enrichment tables are read on devices")),
+            "{name}: {validated}"
+        );
+        assert!(
+            validated["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| {
+                    d["code"] == "device_check"
+                        && d["component"] == "look"
+                        && d["message"]
+                            == "This step looks up an enrichment table, which each device reads."
+                }),
+            "{name}: {validated}"
+        );
+        replies.extend([tests, checked, run, validated]);
+    }
+    for reply in &replies {
+        assert!(
+            !reply.to_string().contains(SENTINEL),
+            "a reply carried the file's row: {reply}"
+        );
+    }
+    for (name, pipe) in &pipes {
+        assert!(
+            !pipe.opened().await,
+            "{name}: the worker opened a path the author named"
+        );
+    }
+
+    // A memory table reads no file: its tests still run, as before.
+    let memory = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"keep": {"type": "remap", "inputs": ["in"], "source": ".seen = true"}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["keep"]}},
+        "enrichment_tables": {"memo": {"type": "memory", "ttl": 60}},
+        "tests": [{"name": "keeps working",
+            "inputs": [{"insert_at": "keep", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "keep", "conditions": [{"type": "vrl", "source": ".seen == true"}]}]}],
+    });
+    let tests = post(&client, &url, "tests", json!({"config": memory})).await;
+    assert_eq!(tests["tests_run"], true, "{tests}");
+    assert_eq!(tests["tests"][0]["passed"], true, "{tests}");
+    let (_, run) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": memory}),
+        &editor,
+    )
+    .await;
+    assert_eq!(run["tests_run"], true, "{run}");
+    assert_eq!(run["valid"], true, "{run}");
+    child.kill().await.ok();
+}
+
+/// Run Vector for a moment and stop it, for a program that makes it wait on a
+/// path.
+#[cfg(target_os = "linux")]
+async fn vector_briefly(vector: &str, args: &[&str], config: &std::path::Path) {
+    let mut child = tokio::process::Command::new(vector)
+        .args(args)
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await;
+    child.kill().await.ok();
+}
+
+/// `parse_groks(alias_sources:)` and `parse_etld(psl:)` read the file a call
+/// passes when Vector compiles the program, whichever command compiles it. The
+/// server never opens a path an author names: not in the static check, the
+/// tests or the sample runner.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_vrl_call_that_passes_a_file_never_opens_it_in_the_worker() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; VRL file argument guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline = |source: &str| {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"look": {"type": "remap", "inputs": ["in"], "source": source}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["look"]}},
+            "tests": [{"name": "t",
+                "inputs": [{"insert_at": "look", "type": "log", "log_fields": {"message": "x"}}],
+                "outputs": [{"extract_from": "look", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+        })
+    };
+    let programs: [(&str, fn(&std::path::Path) -> String); 2] = [
+        ("parse_groks", |path| {
+            format!(
+                ".x = parse_groks!(.message, [\"%{{A:a}}\"], alias_sources: [\"{}\"])",
+                path.display()
+            )
+        }),
+        ("parse_etld", |path| {
+            format!(".x = parse_etld!(.message, psl: \"{}\")", path.display())
+        }),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    for (name, program) in programs {
+        // Control: Vector opens the path when it compiles the program.
+        let control = Tripwire::new(dir.path().join(format!("control-{name}")));
+        let path = dir.path().join(format!("control-{name}.json"));
+        std::fs::write(&path, pipeline(&program(&control.path)).to_string()).unwrap();
+        vector_briefly(&vector, &["validate", "--no-environment"], &path).await;
+        assert!(
+            control.opened().await,
+            "{name}: Vector did not open the path, so this test proves nothing"
+        );
+
+        // The worker, on every route that compiles a program.
+        let pipe = Tripwire::new(dir.path().join(format!("worker-{name}")));
+        let source = program(&pipe.path);
+        let config = pipeline(&source);
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!(["look"]), "{name}: {checked}");
+        let tests = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tests["tests_run"], false, "{name}: {tests}");
+        assert_eq!(
+            tests["diagnostics"][0]["code"], "vrl_function_unavailable",
+            "{name}: {tests}"
+        );
+        let sample = post(
+            &client,
+            &url,
+            "transform-test",
+            json!({"transform": {"type": "remap", "source": source}, "samples": [{"message": "x"}]}),
+        )
+        .await;
+        assert_eq!(sample["compiled"], false, "{name}: {sample}");
+        assert_eq!(
+            sample["diagnostics"][0]["code"], "vrl_function_unavailable",
+            "{name}: {sample}"
+        );
+        let single = post(
+            &client,
+            &url,
+            "vrl-test",
+            json!({"program": source, "sample": {"message": "x"}}),
+        )
+        .await;
+        assert_eq!(single["valid"], false, "{name}: {single}");
+        assert!(
+            !pipe.opened().await,
+            "{name}: the worker opened a path a program named"
+        );
+    }
+
+    // Without a file the same functions are ordinary, and stay checked here.
+    for source in [
+        ".x = parse_etld!(.message)",
+        ".x = parse_groks!(.message, [\"%{WORD:w}\"])",
+    ] {
+        let checked = post(
+            &client,
+            &url,
+            "validate",
+            json!({"config": pipeline(source)}),
+        )
+        .await;
+        assert_eq!(checked["valid"], true, "{source}: {checked}");
+        assert_eq!(checked["stubbed"], json!([]), "{source}: {checked}");
+        let sample = post(
+            &client,
+            &url,
+            "transform-test",
+            json!({"transform": {"type": "remap", "source": source}, "samples": [{"message": "www.example.com"}]}),
+        )
+        .await;
+        assert_eq!(sample["compiled"], true, "{source}: {sample}");
+    }
+    child.kill().await.ok();
+}
+
+/// The two commands the worker uses open only the paths the worker keeps out of
+/// them (an enrichment table's file, a `remap` file, a `file` secret backend, the
+/// files a VRL call passes). A TLS file, a codec descriptor, a credentials file,
+/// a kubeconfig, a source's files, a sink's file and `data_dir` are all read or
+/// written only when Vector builds or runs a component, so a device does it and
+/// the server never does. A Vector upgrade that changes this fails here.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn validate_and_test_open_none_of_the_paths_a_component_names() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; path guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline = |extra: serde_json::Value,
+                    source: serde_json::Value,
+                    sink: serde_json::Value| {
+        let mut config = json!({
+            "sources": {"s": source},
+            "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": "."}},
+            "sinks": {"k": sink},
+            "tests": [{"name": "t",
+                "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+                "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            config[key] = value.clone();
+        }
+        config
+    };
+    let demo = json!({"type": "demo_logs", "format": "json"});
+    let blackhole = json!({"type": "blackhole", "inputs": ["t"]});
+    let commands: [&[&str]; 2] = [
+        &["validate", "--no-environment"],
+        &["test", "--config-json"],
+    ];
+
+    // Control: a file enrichment table's path is opened under a test, so a pipe
+    // that stays closed below means Vector did not reach for it.
+    let control = Tripwire::new(dir.path().join("control"));
+    let config = pipeline(
+        json!({"enrichment_tables": {"lk": {"type": "file",
+            "file": {"path": control.path, "encoding": {"type": "csv"}}}}}),
+        demo.clone(),
+        blackhole.clone(),
+    );
+    let path = dir.path().join("control.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    vector_briefly(&vector, commands[1], &path).await;
+    assert!(
+        control.opened().await,
+        "Vector did not open the path under a test, so this test proves nothing"
+    );
+
+    type Build = fn(&std::path::Path) -> serde_json::Value;
+    let cases: Vec<(&str, Build)> = vec![
+        (
+            "source file include",
+            |p| json!({"source": {"type": "file", "include": [p]}}),
+        ),
+        ("source http_server tls files", |p| {
+            json!({"source": {"type": "http_server", "address": "127.0.0.1:1",
+                "tls": {"enabled": true, "ca_file": p, "crt_file": p, "key_file": p}}})
+        }),
+        ("sink http tls ca_file", |p| {
+            json!({"sink": {"type": "http", "inputs": ["t"], "uri": "http://127.0.0.1:1",
+                "encoding": {"codec": "json"}, "tls": {"ca_file": p}}})
+        }),
+        ("source socket protobuf descriptor", |p| {
+            json!({"source": {"type": "socket", "mode": "tcp", "address": "127.0.0.1:1",
+                "decoding": {"codec": "protobuf", "protobuf": {"desc_file": p, "message_type": "x.Y"}}}})
+        }),
+        ("sink console protobuf descriptor", |p| {
+            json!({"sink": {"type": "console", "inputs": ["t"],
+                "encoding": {"codec": "protobuf", "protobuf": {"desc_file": p, "message_type": "x.Y"}}}})
+        }),
+        ("sink aws_s3 credentials file", |p| {
+            json!({"sink": {"type": "aws_s3", "inputs": ["t"], "bucket": "b", "region": "us-east-1",
+                "encoding": {"codec": "json"}, "auth": {"credentials_file": p}}})
+        }),
+        ("sink gcp_cloud_storage credentials", |p| {
+            json!({"sink": {"type": "gcp_cloud_storage", "inputs": ["t"], "bucket": "b",
+                "encoding": {"codec": "json"}, "credentials_path": p}})
+        }),
+        (
+            "source kubernetes_logs kubeconfig",
+            |p| json!({"source": {"type": "kubernetes_logs", "kube_config_file": p}}),
+        ),
+    ];
+    for (index, (name, build)) in cases.into_iter().enumerate() {
+        let pipe = Tripwire::new(dir.path().join(format!("pipe-{index}")));
+        let parts = build(&pipe.path);
+        let config = pipeline(
+            json!({}),
+            parts.get("source").cloned().unwrap_or_else(|| demo.clone()),
+            parts
+                .get("sink")
+                .cloned()
+                .unwrap_or_else(|| blackhole.clone()),
+        );
+        let path = dir.path().join("case.json");
+        std::fs::write(&path, config.to_string()).unwrap();
+        for args in commands {
+            let (code, text) = vector_ends(&vector, args, &path, None).await;
+            assert_eq!(code, Some(0), "{name}: {args:?} did not accept it: {text}");
+        }
+        assert!(
+            !pipe.opened().await,
+            "{name}: validate or test opened the path it names"
+        );
+    }
+
+    // A sink's file is only created when it receives an event, and `data_dir`
+    // only when a component needs it: neither command makes either.
+    let made = dir.path().join("made-by-vector");
+    let config = pipeline(
+        json!({"data_dir": made.join("data")}),
+        demo.clone(),
+        json!({"type": "file", "inputs": ["t"], "path": made.join("events.json"),
+            "encoding": {"codec": "json"}}),
+    );
+    let path = dir.path().join("made.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    for args in commands {
+        let (code, text) = vector_ends(&vector, args, &path, None).await;
+        assert_eq!(code, Some(0), "{args:?}: {text}");
+    }
+    assert!(
+        !made.exists(),
+        "validate or test created a path a draft names"
+    );
+}

@@ -93,7 +93,7 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
                 if text.contains("SECRET[") {
                     reasons.insert("native secret references".into());
                 }
-                if calls_device_function(text) {
+                if calls_device_function(text) || !file_argument_calls(text).is_empty() {
                     reasons.insert("VRL access to device resources".into());
                 }
             }
@@ -149,6 +149,12 @@ pub fn device_context_reasons(config: &Value) -> Vec<String> {
     walk(config, &mut Vec::new(), &mut reasons);
     if !local_secret_scan(config).0.is_empty() {
         reasons.insert("device secrets".into());
+    }
+    if !lua_transforms(config).is_empty() {
+        reasons.insert(LUA_ON_DEVICES.into());
+    }
+    if !file_enrichment_tables(config).is_empty() {
+        reasons.insert(ENRICHMENT_ON_DEVICES.into());
     }
     if let Some(sources) = config["sources"].as_object() {
         for source in sources.values() {
@@ -624,6 +630,85 @@ pub const WORKER_PROTOCOL: u64 = 2;
 /// quotes it describes the placeholder, not the device's real value.
 pub const PLACEHOLDER: &str = "vectory-placeholder";
 
+/// The `deferred_reasons` value for a draft with a `lua` transform. Lua can run
+/// any program (`os.execute`, `io.popen`), and Vector runs a transform's Lua
+/// when it builds the transform, which `vector test` does. User Lua therefore
+/// never runs in the validator: a device checks it, and a device in full mode
+/// runs it.
+pub const LUA_ON_DEVICES: &str = "Lua runs on devices";
+
+/// Why a `lua` step is replaced by a stand-in; the note reads "This step ...".
+const LUA_STAND_IN: &str = "runs Lua code, so only a device checks it";
+
+/// The `deferred_reasons` value for a draft with an enrichment table that reads
+/// a file (`file`, `geoip`, `mmdb`). Vector opens the file when it builds the
+/// table, which `vector test` does, and a lookup returns the rows to whoever
+/// wrote it. The server never reads a path an author names; a device reads its
+/// own files.
+pub const ENRICHMENT_ON_DEVICES: &str = "Enrichment tables are read on devices";
+
+/// Why a step that looks up an enrichment table is replaced by a stand-in.
+const ENRICHMENT_STAND_IN: &str = "looks up an enrichment table, which each device reads";
+
+/// A component's `type` as the checked copy reads it, once references are
+/// replaced the way `static_candidate` replaces them: `${KIND:-lua}` is `lua`.
+fn resolved_type(kind: &Value) -> Option<String> {
+    let text = kind.as_str()?;
+    Some(
+        substitute_references(text, "type", &mut BTreeSet::new())
+            .unwrap_or_else(|| text.to_owned()),
+    )
+}
+
+/// The IDs of the transforms that are Lua in the copy Vector would read.
+pub fn lua_transforms(config: &Value) -> Vec<String> {
+    config["transforms"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, transform)| resolved_type(&transform["type"]).as_deref() == Some("lua"))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// The IDs of the enrichment tables that read a file: every type but `memory`,
+/// so a type this server does not know counts as one that reads a file.
+pub fn file_enrichment_tables(config: &Value) -> Vec<String> {
+    config["enrichment_tables"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, table)| resolved_type(&table["type"]).as_deref() != Some("memory"))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// The finding for tests the server does not run because the draft has a Lua
+/// step or an enrichment table that reads a file: a device runs them, and the
+/// check on devices can include them. `None` for any other draft.
+pub fn tests_on_devices_diagnostic(config: &Value) -> Option<Diagnostic> {
+    let why = match (
+        !lua_transforms(config).is_empty(),
+        !file_enrichment_tables(config).is_empty(),
+    ) {
+        (false, false) => return None,
+        (true, false) => "Lua can run any program, so tests that include it run only on devices.",
+        (false, true) => {
+            "Enrichment tables are read on devices, so tests that use them run only on devices."
+        }
+        (true, true) => {
+            "Lua can run any program and enrichment tables are read on devices, so tests that include them run only on devices."
+        }
+    };
+    Some(Diagnostic {
+        section: Some("tests".into()),
+        code: Some("tests_on_devices".into()),
+        ..Diagnostic::error(format!(
+            "{why} Use Check on devices with Also run the pipeline's tests."
+        ))
+    })
+}
+
 /// A copy of a draft prepared for `vector validate --no-environment` in the
 /// isolated worker. It never contains resolved secrets: native references are
 /// replaced by typed placeholders, secret backends and configuration
@@ -793,6 +878,18 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
     let mut placeholders = BTreeSet::new();
     replace_local_secrets(&mut candidate, &mut placeholders);
     walk(&mut candidate, "", &mut placeholders);
+    // Only a memory table reads no file. The others never reach Vector: it opens
+    // their file when it builds them, which `vector test` does. A step that
+    // looks one up cannot be compiled without it, so it gets a stand-in too.
+    let reads_files = candidate["enrichment_tables"]
+        .as_object()
+        .is_some_and(|tables| tables.values().any(|table| table["type"] != "memory"));
+    if let Some(tables) = candidate
+        .get_mut("enrichment_tables")
+        .and_then(Value::as_object_mut)
+    {
+        tables.retain(|_, table| table["type"] == "memory");
+    }
     let mut stubbed = BTreeMap::new();
     for section in ["sources", "transforms", "sinks"] {
         let Some(components) = candidate.get_mut(section).and_then(Value::as_object_mut) else {
@@ -800,7 +897,12 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
         };
         for (id, component) in components.iter_mut() {
             let kind = component["type"].as_str().unwrap_or("").to_owned();
-            let reason = if known_component(section, &kind) && !available(section, &kind) {
+            // Whatever its form (inline source, hooks, timers, modules, either
+            // version), a Lua step is never built here: its code runs when
+            // Vector builds it, which is any program its author wrote.
+            let reason = if section == "transforms" && kind == "lua" {
+                Some(LUA_STAND_IN.to_owned())
+            } else if known_component(section, &kind) && !available(section, &kind) {
                 Some(format!(
                     "`{kind}` isn't included in this server's Vector build; each device checks it"
                 ))
@@ -809,15 +911,12 @@ pub fn static_candidate(config: &Value, available: impl Fn(&str, &str) -> bool) 
                 && (!component["file"].is_null() || !component["files"].is_null())
             {
                 Some("loads its VRL program from a file on each device".to_owned())
-            } else if section == "transforms"
-                && kind == "lua"
-                && !component["search_dirs"].is_null()
-            {
-                Some("loads Lua modules from each device".to_owned())
-            } else if calls_file_function(component) {
+            } else if reads_a_file(component) {
                 // Compiling these reads the file, and the worker's answer would
                 // describe the worker's files, not the device's.
                 Some("reads a file on each device".to_owned())
+            } else if reads_files && calls_any(component, ENRICHMENT_VRL_FUNCTIONS) {
+                Some(ENRICHMENT_STAND_IN.to_owned())
             } else {
                 None
             };
@@ -1110,8 +1209,9 @@ fn reason_phrase(reasons: &[String]) -> String {
                 "secrets".into()
             }
             "VRL access to device resources" => "VRL that reads device resources".into(),
+            LUA_ON_DEVICES => "Lua code".into(),
             "native configuration provider" => "the configuration provider".into(),
-            "device enrichment data" => "enrichment data files".into(),
+            "device enrichment data" | ENRICHMENT_ON_DEVICES => "enrichment data files".into(),
             "device-local paths or external code files" => "local files and paths".into(),
             other => other.strip_prefix("platform-specific source ").map_or_else(
                 || other.to_owned(),
@@ -1345,7 +1445,10 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
             "Vector rejected the configuration without a specific message.",
         ));
     }
-    if !stubbed.is_empty()
+    // A Lua step's stand-in is explained by its own reason; any other stand-in
+    // is a device-local file or component.
+    let lua = lua_transforms(config);
+    if stubbed.iter().any(|id| !lua.contains(id))
         && !reasons
             .iter()
             .any(|r| r.contains("platform") || r.contains("paths"))
@@ -1386,8 +1489,8 @@ pub fn testable_transform(transform: &Value) -> std::result::Result<&str, &'stat
 /// restricted mode, and a pipeline that calls one needs full mode. The agent
 /// (`externalVRL`) and the dashboard (`deviceVrlFunctions`) list the same
 /// names; `tests/security/test_vrl_function_lists.py` fails when they drift.
-/// `parse_etld(psl:)` and `parse_groks(alias_sources:)` also read files in
-/// newer VRL; the pinned Vector 0.58 binary rejects those arguments.
+/// `parse_etld(psl:)` and `parse_groks(alias_sources:)` read a file only when a
+/// call passes one, so they are not listed here: see `FILE_ARGUMENT_FUNCTIONS`.
 pub const DEVICE_VRL_FUNCTIONS: &[&str] = &[
     "get_env_var",
     "get_secret",
@@ -1433,6 +1536,142 @@ pub fn calls_function(text: &str, name: &str) -> bool {
     })
 }
 
+/// VRL functions that read a file only when a call passes one: `parse_groks`
+/// takes `alias_sources` (JSON files of grok aliases) and `parse_etld` takes
+/// `psl` (a public suffix list). Pinned Vector 0.58 opens the file when it
+/// compiles the program, so a call that passes one is a file read, however the
+/// argument is written. Each entry is the function, its named file argument,
+/// the argument count at which the file is a positional one, and how a refusal
+/// names the call.
+pub const FILE_ARGUMENT_FUNCTIONS: &[(&str, &str, usize, &str)] = &[
+    (
+        "parse_groks",
+        "alias_sources",
+        4,
+        "parse_groks with alias_sources",
+    ),
+    ("parse_etld", "psl", 3, "parse_etld with psl"),
+];
+
+/// How a scan reads quotes. VRL has strings with escapes (`"..."`, `s'...'`)
+/// and raw strings that end at the next `'` (`r'...'`), and one reading must not
+/// be foolable by the other, so every call is read each way, and once more with
+/// quotes ignored.
+#[derive(Clone, Copy)]
+enum Quotes {
+    Escaped,
+    Raw,
+    Ignored,
+}
+
+/// The arguments of one call, from the text after its opening parenthesis up to
+/// the matching one: top-level, trimmed, split on commas that are not inside
+/// brackets, braces, parentheses, strings or comments. The flag says whether
+/// the call closed before the text ended.
+fn call_arguments(body: &str, quotes: Quotes) -> (Vec<String>, bool) {
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match (c, quotes) {
+            ('"' | '\'', Quotes::Escaped | Quotes::Raw) => {
+                current.push(c);
+                while let Some(inner) = chars.next() {
+                    current.push(inner);
+                    if inner == '\\' && (c == '"' || matches!(quotes, Quotes::Escaped)) {
+                        current.extend(chars.next());
+                    } else if inner == c {
+                        break;
+                    }
+                }
+            }
+            ('#', Quotes::Escaped | Quotes::Raw) => {
+                for inner in chars.by_ref() {
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+                current.push(' ');
+            }
+            ('(' | '[' | '{', _) => {
+                depth += 1;
+                current.push(c);
+            }
+            (')' | ']' | '}', _) if depth == 0 => {
+                if !current.trim().is_empty() {
+                    arguments.push(current.trim().to_owned());
+                }
+                return (arguments, true);
+            }
+            (')' | ']' | '}', _) => {
+                depth -= 1;
+                current.push(c);
+            }
+            (',', _) if depth == 0 => {
+                arguments.push(current.trim().to_owned());
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.trim().is_empty() {
+        arguments.push(current.trim().to_owned());
+    }
+    (arguments, false)
+}
+
+/// The most calls to one function, and the most text of one call, that are
+/// read. A program past either is taken to pass a file: no real one is.
+const MAX_FILE_ARGUMENT_CALLS: usize = 256;
+const MAX_CALL_BYTES: usize = 32 * 1024;
+
+/// How `text` names each call it makes to a function with a file argument
+/// (`FILE_ARGUMENT_FUNCTIONS`) that passes one, by name or by position. A call
+/// that is read ambiguously counts as passing one: a stand-in only defers the
+/// check to a device.
+pub fn file_argument_calls(text: &str) -> Vec<&'static str> {
+    FILE_ARGUMENT_FUNCTIONS
+        .iter()
+        .filter(|(name, argument, positional, _)| {
+            let mut read = 0;
+            text.match_indices(name).any(|(start, _)| {
+                let before = text[..start].chars().next_back();
+                if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                    return false;
+                }
+                let rest = text[start + name.len()..].trim_start();
+                let rest = rest.strip_prefix('!').unwrap_or(rest).trim_start();
+                let Some(body) = rest.strip_prefix('(') else {
+                    return false;
+                };
+                read += 1;
+                if read > MAX_FILE_ARGUMENT_CALLS {
+                    return true;
+                }
+                let mut end = body.len().min(MAX_CALL_BYTES);
+                while !body.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let window = &body[..end];
+                [Quotes::Escaped, Quotes::Raw, Quotes::Ignored]
+                    .into_iter()
+                    .any(|quotes| {
+                        let (arguments, closed) = call_arguments(window, quotes);
+                        (!closed && end < body.len())
+                            || arguments.len() >= *positional
+                            || arguments.iter().any(|argument_text| {
+                                argument_text
+                                    .strip_prefix(argument)
+                                    .is_some_and(|after| after.trim_start().starts_with(':'))
+                            })
+                    })
+            })
+        })
+        .map(|(_, _, _, label)| *label)
+        .collect()
+}
+
 /// Whether `text` calls any VRL function that reaches outside the event.
 pub fn calls_device_function(text: &str) -> bool {
     DEVICE_VRL_FUNCTIONS
@@ -1440,14 +1679,35 @@ pub fn calls_device_function(text: &str) -> bool {
         .any(|function| calls_function(text, function))
 }
 
-/// Whether any string in `value` calls a function that reads a file.
-fn calls_file_function(value: &Value) -> bool {
+/// The device functions that look up an enrichment table. Compiling a call
+/// needs the table, and a table that reads a file is never built in the worker.
+pub const ENRICHMENT_VRL_FUNCTIONS: &[&str] = &[
+    "get_enrichment_table_record",
+    "find_enrichment_table_records",
+];
+
+/// Whether any string in `value` calls one of the functions `names`.
+fn calls_any(value: &Value, names: &[&str]) -> bool {
     match value {
-        Value::String(text) => FILE_VRL_FUNCTIONS
-            .iter()
-            .any(|name| calls_function(text, name)),
-        Value::Array(items) => items.iter().any(calls_file_function),
-        Value::Object(fields) => fields.values().any(calls_file_function),
+        Value::String(text) => names.iter().any(|name| calls_function(text, name)),
+        Value::Array(items) => items.iter().any(|item| calls_any(item, names)),
+        Value::Object(fields) => fields.values().any(|item| calls_any(item, names)),
+        _ => false,
+    }
+}
+
+/// Whether any string in `value` reads a file when Vector compiles it: a call
+/// of a file-reading function, or of one that is passed a file.
+fn reads_a_file(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            FILE_VRL_FUNCTIONS
+                .iter()
+                .any(|name| calls_function(text, name))
+                || !file_argument_calls(text).is_empty()
+        }
+        Value::Array(items) => items.iter().any(reads_a_file),
+        Value::Object(fields) => fields.values().any(reads_a_file),
         _ => false,
     }
 }
@@ -1463,6 +1723,7 @@ pub fn unrunnable_vrl_calls(value: &Value) -> BTreeSet<&'static str> {
                         found.insert(*name);
                     }
                 }
+                found.extend(file_argument_calls(text));
             }
             Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
             Value::Object(fields) => fields.values().for_each(|item| walk(item, found)),
@@ -1485,7 +1746,12 @@ pub fn unrunnable_call_diagnostic(
     let network = found
         .iter()
         .any(|name| NETWORK_VRL_FUNCTIONS.contains(name));
-    let files = found.iter().any(|name| FILE_VRL_FUNCTIONS.contains(name));
+    let files = found.iter().any(|name| {
+        FILE_VRL_FUNCTIONS.contains(name)
+            || FILE_ARGUMENT_FUNCTIONS
+                .iter()
+                .any(|(_, _, _, label)| label == name)
+    });
     let (does, never) = match (network, files) {
         (true, true) => (
             "sends network requests and reads files",
@@ -2104,6 +2370,12 @@ pub(crate) async fn run_pipeline_tests(
             vec![],
             vec![],
         );
+        return Ok(finish(result, vec![], false, false));
+    }
+    // Vector runs a Lua step's code, and opens an enrichment table's file, when
+    // it builds them for a test. The worker is not asked: the tests run on devices.
+    if let Some(diagnostic) = tests_on_devices_diagnostic(config) {
+        let result = check_result(vec![diagnostic], false, false, reasons, vec![]);
         return Ok(finish(result, vec![], false, false));
     }
     let _permit = s
@@ -3547,6 +3819,370 @@ mod tests {
         // No section is created where the draft had none.
         let bare = static_candidate(&json!({"sources":{}}), |_, _| true);
         assert!(bare.config.get("transforms").is_none());
+    }
+
+    /// A `lua` step in every form the transform takes.
+    fn lua_pipeline() -> Value {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {
+                "chunk": {"type": "lua", "version": "2", "inputs": ["in"],
+                    "source": "os.execute('touch /x')\nfunction process(e, emit) emit(e) end",
+                    "hooks": {"process": "process"}},
+                "hooks": {"type": "lua", "version": "2", "inputs": ["chunk"],
+                    "source": "function init() io.popen('id') end",
+                    "hooks": {"init": "init"}, "timers": [{"interval_seconds": 1, "handler": "tick"}]},
+                "v1": {"type": "lua", "version": "1", "inputs": ["hooks"], "source": "os.execute('id')"},
+                "modules": {"type": "lua", "version": "2", "inputs": ["v1"],
+                    "search_dirs": ["/device/lua"], "source": "require('m')"},
+                "named": {"type": "lua", "inputs": ["modules"], "source": "x"},
+                "plain": {"type": "remap", "inputs": ["named"], "source": "."}
+            },
+            "sinks": {"out": {"type": "blackhole", "inputs": ["plain"]}},
+        })
+    }
+
+    #[test]
+    fn a_lua_step_is_never_built_here_in_any_form() {
+        let config = lua_pipeline();
+        let candidate = static_candidate(&config, |_, _| true);
+        for id in ["chunk", "hooks", "v1", "modules", "named"] {
+            assert_eq!(
+                candidate.stubbed.get(id).map(String::as_str),
+                Some(LUA_STAND_IN),
+                "{id}"
+            );
+            let step = &candidate.config["transforms"][id];
+            assert_eq!(step["type"], "remap", "{id}");
+            assert_eq!(step["source"], ".", "{id}");
+        }
+        assert!(!candidate.stubbed.contains_key("plain"));
+        // The stand-ins keep the topology, and no Lua text reaches Vector.
+        assert_eq!(
+            candidate.config["transforms"]["v1"]["inputs"],
+            json!(["hooks"])
+        );
+        let text = candidate.config.to_string();
+        for code in [
+            "os.execute",
+            "io.popen",
+            "require",
+            "search_dirs",
+            "\"lua\"",
+        ] {
+            assert!(
+                !text.contains(code),
+                "{code} reached the checked copy: {text}"
+            );
+        }
+        // Even where this worker's Vector build has no `lua` at all.
+        let without = static_candidate(&config, |_, kind| kind != "lua");
+        assert_eq!(without.stubbed["chunk"], LUA_STAND_IN);
+        assert_eq!(lua_transforms(&config).len(), 5);
+    }
+
+    #[test]
+    fn lua_is_found_the_way_vector_would_read_the_checked_copy() {
+        // A default in the type decides what Vector reads, so it counts.
+        let disguised = json!({"transforms": {"x": {"type": "${KIND:-lua}", "inputs": ["in"], "source": "os.execute('id')"}}});
+        assert_eq!(lua_transforms(&disguised), vec!["x".to_owned()]);
+        let candidate = static_candidate(&disguised, |_, _| true);
+        assert_eq!(candidate.stubbed["x"], LUA_STAND_IN);
+        assert!(!candidate.config.to_string().contains("os.execute"));
+        // The word elsewhere is not a Lua step.
+        for config in [
+            json!({"transforms": {"lua": {"type": "remap", "inputs": ["in"], "source": "."}}}),
+            json!({"transforms": {"x": {"type": "remap", "inputs": ["in"], "source": ".kind = \"lua\""}}}),
+            json!({"transforms": {"x": {"type": "${KIND}", "inputs": ["in"]}}}),
+            json!({"transforms": {"x": {"type": "Lua", "inputs": ["in"]}}}),
+            json!({"sources": {"lua": {"type": "demo_logs"}}, "sinks": {"lua": {"type": "blackhole"}}}),
+            json!({"transforms": []}),
+            json!({}),
+        ] {
+            assert!(lua_transforms(&config).is_empty(), "{config}");
+            assert!(
+                !device_context_reasons(&config).contains(&LUA_ON_DEVICES.to_owned()),
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lua_step_defers_to_devices_with_a_sentence_not_a_token() {
+        let config = json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"probe": {"type": "lua", "version": "2", "inputs": ["in"],
+                "source": "function process(e, emit) emit(e) end", "hooks": {"process": "process"}}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["probe"]}},
+        });
+        // Only its own reason: no local path is involved.
+        assert_eq!(
+            device_context_reasons(&config),
+            vec![LUA_ON_DEVICES.to_owned()]
+        );
+        assert_eq!(reason_phrase(&[LUA_ON_DEVICES.to_owned()]), "Lua code");
+        let result = check_result(vec![], true, true, device_context_reasons(&config), vec![]);
+        assert_eq!(result["deferred"], true);
+        assert_eq!(result["vector_validated"], false);
+        assert_eq!(result["deferred_reasons"], json!([LUA_ON_DEVICES]));
+        assert_eq!(
+            result["warnings"],
+            json!(["Each device checks Lua code before applying this version."])
+        );
+        let diagnostic = tests_on_devices_diagnostic(&config).unwrap();
+        assert_eq!(diagnostic.severity, "error");
+        assert_eq!(diagnostic.section.as_deref(), Some("tests"));
+        assert_eq!(diagnostic.code.as_deref(), Some("tests_on_devices"));
+        assert_eq!(
+            diagnostic.message,
+            "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests."
+        );
+        // It survives the API's re-check of a worker reply.
+        let clean = crate::vector_diagnostics::sanitize(&config, &json!([diagnostic.to_json()]));
+        assert_eq!(clean.unwrap()[0]["code"], "tests_on_devices");
+    }
+
+    #[test]
+    fn a_file_argument_is_found_however_it_is_written() {
+        // Named, positional, in any order, with the spacing and bang VRL allows.
+        for text in [
+            r#"parse_groks!(.m, ["%{A:a}"], alias_sources: ["/a.json"])"#,
+            r#"parse_groks!(.m, ["%{A:a}"], aliases: {"A": "x"}, alias_sources: ["/a.json"])"#,
+            r#"parse_groks!(.m, ["%{A:a}"], {"A": "x"}, ["/a.json"])"#,
+            r#"parse_groks ! ( alias_sources : ["/a.json"], value: .m, patterns: ["%{A:a}"] )"#,
+            "parse_groks(.m, [\n\"x\"\n],\n# a comment, with a comma\n{}, [\"/a.json\"])",
+        ] {
+            assert_eq!(
+                file_argument_calls(text),
+                vec!["parse_groks with alias_sources"],
+                "{text}"
+            );
+        }
+        for text in [
+            r#"parse_etld!(.d, psl: "/list.dat")"#,
+            r#"parse_etld!(.d, 1, "/list.dat")"#,
+            r#"parse_etld!(psl : "/list.dat", value: .d)"#,
+            r#"parse_etld(.d, plus_parts: 2, psl: "/p" + "/q")"#,
+        ] {
+            assert_eq!(
+                file_argument_calls(text),
+                vec!["parse_etld with psl"],
+                "{text}"
+            );
+        }
+        // Without a file argument they are ordinary functions, and stay checked.
+        for text in [
+            r#"parse_groks!(.m, ["%{COMMONAPACHELOG}"])"#,
+            r#"parse_groks!(.m, patterns: ["%{A:a}"], aliases: {"A": "[a-z]+"})"#,
+            r#"parse_groks!(.m, ["%{A:a}"], {"A": "x, y, z"})"#,
+            r#"parse_etld!(.domain)"#,
+            r#"parse_etld!(.domain, plus_parts: 1)"#,
+            r#"parse_etld!(.domain, 1)"#,
+            // A word that only looks like the argument, a longer name, a field, prose.
+            r#"parse_etld!(.d, plus_parts: 1) # psl: is not passed"#,
+            r#"my_parse_etld(.d, 1, "x")"#,
+            r#".parse_etld(.d, 1, "x")"#,
+            r#"parse_etld_x(.d, 1, "x")"#,
+            r#".psl = "psl: x""#,
+            // A call that never closes is a syntax error and compiles nothing.
+            "parse_etld!(.d,",
+        ] {
+            assert!(
+                file_argument_calls(text).is_empty(),
+                "{text}: {:?}",
+                file_argument_calls(text)
+            );
+        }
+        // An unfinished call that already passes a file gets no benefit of the doubt.
+        assert_eq!(
+            file_argument_calls(r#"parse_etld!(.d, psl: "/list.dat""#),
+            vec!["parse_etld with psl"]
+        );
+        // One reading of the quotes cannot fool another: a raw string that ends in
+        // a backslash, or a string that holds a parenthesis, before the file.
+        for text in [
+            r#"parse_etld!(.d, r'\', psl: "/p")"#,
+            r#"parse_etld!(.d, ")", psl: "/p")"#,
+            r#"parse_groks!(.m, [r'\'], {}, ["/f"])"#,
+        ] {
+            assert!(!file_argument_calls(text).is_empty(), "{text}");
+        }
+        // The work is bounded, and a program past the bound is taken to pass a file.
+        let many = "parse_etld(".repeat(300);
+        assert_eq!(file_argument_calls(&many), vec!["parse_etld with psl"]);
+        let long = format!("parse_etld!(.d, 1{}", " ".repeat(40_000));
+        assert_eq!(file_argument_calls(&long), vec!["parse_etld with psl"]);
+    }
+
+    #[test]
+    fn a_program_that_passes_a_file_is_never_compiled_here() {
+        let config = json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {
+                "groks": {"type": "remap", "inputs": ["in"],
+                    "source": ".x = parse_groks!(.message, [\"%{A:a}\"], alias_sources: [\"/etc/a.json\"])"},
+                "etld": {"type": "remap", "inputs": ["groks"],
+                    "source": ".y = parse_etld!(.host, psl: \"/etc/list.dat\")"},
+                "plain": {"type": "remap", "inputs": ["etld"],
+                    "source": ".z = parse_etld!(.host)\n.w = parse_groks!(.message, [\"%{WORD:w}\"])"}
+            },
+            "sinks": {"out": {"type": "blackhole", "inputs": ["plain"]}},
+        });
+        let candidate = static_candidate(&config, |_, _| true);
+        for id in ["groks", "etld"] {
+            assert_eq!(
+                candidate.stubbed.get(id).map(String::as_str),
+                Some("reads a file on each device"),
+                "{id}"
+            );
+        }
+        assert!(!candidate.stubbed.contains_key("plain"));
+        let text = candidate.config.to_string();
+        assert!(
+            !text.contains("/etc/a.json") && !text.contains("/etc/list.dat"),
+            "{text}"
+        );
+        assert_eq!(
+            unrunnable_vrl_calls(&config),
+            BTreeSet::from(["parse_groks with alias_sources", "parse_etld with psl"])
+        );
+        let found = unrunnable_vrl_calls(&json!({"source": "parse_etld!(.h, psl: \"/p\")"}));
+        assert_eq!(
+            unrunnable_call_diagnostic(&found, "error").message,
+            "This program calls parse_etld with psl, which reads files. The server never reads device files from samples or tests."
+        );
+        assert!(
+            device_context_reasons(&config).contains(&"VRL access to device resources".to_owned())
+        );
+        let ordinary = json!({"transforms": {"p": {"type": "remap", "inputs": ["i"],
+            "source": "parse_etld!(.h)"}}});
+        assert!(device_context_reasons(&ordinary).is_empty());
+    }
+
+    /// A draft with an enrichment table of the given type and a step that looks it up.
+    fn enrichment_pipeline(table: Value) -> Value {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {
+                "look": {"type": "remap", "inputs": ["in"],
+                    "source": ".row = get_enrichment_table_record!(\"lk\", {\"k\": .message})"},
+                "plain": {"type": "remap", "inputs": ["look"], "source": ".seen = true"}
+            },
+            "sinks": {"out": {"type": "blackhole", "inputs": ["plain"]}},
+            "enrichment_tables": {"lk": table},
+            "tests": [{"name": "t"}],
+        })
+    }
+
+    #[test]
+    fn an_enrichment_table_that_reads_a_file_never_reaches_vector() {
+        for table in [
+            json!({"type": "file", "file": {"path": "/etc/passwd", "encoding": {"type": "csv"}}}),
+            json!({"type": "geoip", "path": "/etc/passwd"}),
+            json!({"type": "mmdb", "path": "/etc/passwd"}),
+            // A type this server does not know may read a file too.
+            json!({"type": "future_kind", "path": "/etc/passwd"}),
+            json!({"path": "/etc/passwd"}),
+            // A default can decide the type.
+            json!({"type": "${KIND:-file}", "file": {"path": "/etc/passwd"}}),
+        ] {
+            let config = enrichment_pipeline(table.clone());
+            assert_eq!(
+                file_enrichment_tables(&config),
+                vec!["lk".to_owned()],
+                "{table}"
+            );
+            let candidate = static_candidate(&config, |_, _| true);
+            assert_eq!(candidate.config["enrichment_tables"], json!({}), "{table}");
+            assert_eq!(
+                candidate.stubbed.get("look").map(String::as_str),
+                Some(ENRICHMENT_STAND_IN),
+                "{table}"
+            );
+            // Only the step that looks the table up is replaced; the topology stays.
+            assert!(!candidate.stubbed.contains_key("plain"), "{table}");
+            assert_eq!(candidate.config["transforms"]["look"]["source"], ".");
+            assert_eq!(
+                candidate.config["transforms"]["plain"]["inputs"],
+                json!(["look"])
+            );
+            assert!(
+                !candidate.config.to_string().contains("/etc/passwd"),
+                "{table}"
+            );
+            assert!(
+                device_context_reasons(&config).contains(&ENRICHMENT_ON_DEVICES.to_owned()),
+                "{table}"
+            );
+        }
+        assert!(
+            ENRICHMENT_VRL_FUNCTIONS
+                .iter()
+                .all(|name| DEVICE_VRL_FUNCTIONS.contains(name))
+        );
+    }
+
+    #[test]
+    fn a_memory_table_stays_in_the_checked_copy() {
+        let config = enrichment_pipeline(json!({"type": "memory", "ttl": 60}));
+        assert!(file_enrichment_tables(&config).is_empty());
+        let candidate = static_candidate(&config, |_, _| true);
+        assert_eq!(
+            candidate.config["enrichment_tables"],
+            config["enrichment_tables"]
+        );
+        assert!(candidate.stubbed.is_empty(), "{:?}", candidate.stubbed);
+        assert_eq!(
+            candidate.config["transforms"]["look"],
+            config["transforms"]["look"]
+        );
+        // As before: the reason is the old one, and the tests still run.
+        let reasons = device_context_reasons(&config);
+        assert!(
+            !reasons.contains(&ENRICHMENT_ON_DEVICES.to_owned()),
+            "{reasons:?}"
+        );
+        assert!(tests_on_devices_diagnostic(&config).is_none());
+        // Mixed with a table that reads a file, the memory table is kept.
+        let mut mixed = config.clone();
+        mixed["enrichment_tables"]["disk"] = json!({"type": "file", "file": {"path": "/x.csv"}});
+        let candidate = static_candidate(&mixed, |_, _| true);
+        assert_eq!(
+            candidate.config["enrichment_tables"],
+            json!({"lk": {"type": "memory", "ttl": 60}})
+        );
+    }
+
+    #[test]
+    fn tests_wait_for_devices_with_one_sentence_that_names_the_cause() {
+        let lua = json!({"transforms": {"x": {"type": "lua", "version": "2", "inputs": ["in"]}}});
+        let table = json!({"enrichment_tables": {"t": {"type": "geoip", "path": "/x.mmdb"}}});
+        let both = json!({
+            "transforms": lua["transforms"].clone(),
+            "enrichment_tables": table["enrichment_tables"].clone(),
+        });
+        let message = |config: &Value| tests_on_devices_diagnostic(config).unwrap().message;
+        assert_eq!(
+            message(&lua),
+            "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests."
+        );
+        assert_eq!(
+            message(&table),
+            "Enrichment tables are read on devices, so tests that use them run only on devices. Use Check on devices with Also run the pipeline's tests."
+        );
+        assert_eq!(
+            message(&both),
+            "Lua can run any program and enrichment tables are read on devices, so tests that include them run only on devices. Use Check on devices with Also run the pipeline's tests."
+        );
+        assert!(tests_on_devices_diagnostic(&json!({"transforms": {}})).is_none());
+        // Both reasons name enrichment data once, not twice.
+        assert_eq!(
+            reason_phrase(&[
+                "device enrichment data".to_owned(),
+                ENRICHMENT_ON_DEVICES.to_owned()
+            ]),
+            "enrichment data files"
+        );
     }
 
     #[test]

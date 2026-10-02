@@ -107,7 +107,7 @@ const testCase = (name, target = "enrich") => ({
     },
   ],
 });
-function baseDocument(tests) {
+function baseDocument(tests, kind) {
   const config = {
     sources: { demo: { type: "demo_logs", format: "json" } },
     transforms: {
@@ -115,6 +115,29 @@ function baseDocument(tests) {
     },
     sinks: { output: { type: "blackhole", inputs: ["enrich"] } },
   };
+  if (kind === "enrichment") {
+    config.enrichment_tables = {
+      regions: {
+        type: "file",
+        file: {
+          path: "/etc/vectory/regions.csv",
+          encoding: { type: "csv", include_headers: true },
+        },
+      },
+    };
+    config.transforms.enrich.source =
+      '.seen = true\n.region = get_enrichment_table_record!("regions", { "id": .id })';
+  }
+  if (kind === "lua") {
+    config.transforms.probe = {
+      type: "lua",
+      version: "2",
+      inputs: ["enrich"],
+      source: "function process(event, emit) emit(event) end",
+      hooks: { process: "process" },
+    };
+    config.sinks.output.inputs = ["probe"];
+  }
   if (tests) config.tests = tests;
   return {
     id: id(1),
@@ -163,7 +186,97 @@ const rows = {
     { name: "third", passed: true },
   ],
 };
+// What the server answers for a draft with a Lua step: it never asks the
+// isolated worker, because Lua can run any program.
+const luaSentence =
+  "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.";
+const luaTestReply = {
+  valid: false,
+  tests_run: false,
+  tests: [],
+  deferred: true,
+  deferred_reasons: ["Lua runs on devices"],
+  errors: [luaSentence],
+  warnings: ["Each device checks Lua code before applying this version."],
+  diagnostics: [
+    {
+      severity: "error",
+      section: "tests",
+      code: "tests_on_devices",
+      message: luaSentence,
+    },
+  ],
+  static_checked: false,
+  vector_validated: false,
+  vector_version: "0.58.0",
+};
+const luaValidation = {
+  valid: true,
+  vector_validated: false,
+  static_checked: true,
+  deferred: true,
+  deferred_reasons: ["Lua runs on devices"],
+  diagnostics: [
+    {
+      severity: "warning",
+      section: "transforms",
+      component: "probe",
+      code: "device_check",
+      message: "This step runs Lua code, so only a device checks it.",
+    },
+  ],
+  errors: [],
+  warnings: [
+    "transforms.probe: This step runs Lua code, so only a device checks it.",
+    "Each device checks Lua code before applying this version.",
+  ],
+  vector_version: "0.58.0",
+};
+// The same for a draft with an enrichment table that reads a file: the isolated
+// worker never opens an author's path.
+const enrichmentSentence =
+  "Enrichment tables are read on devices, so tests that use them run only on devices. Use Check on devices with Also run the pipeline's tests.";
+const enrichmentTestReply = {
+  ...luaTestReply,
+  deferred_reasons: ["Enrichment tables are read on devices"],
+  errors: [enrichmentSentence],
+  warnings: [
+    "Each device checks enrichment data files before applying this version.",
+  ],
+  diagnostics: [
+    {
+      severity: "error",
+      section: "tests",
+      code: "tests_on_devices",
+      message: enrichmentSentence,
+    },
+  ],
+};
+const enrichmentValidation = {
+  ...luaValidation,
+  deferred_reasons: [
+    "Enrichment tables are read on devices",
+    "device enrichment data",
+    "device-local paths or external code files",
+  ],
+  diagnostics: [
+    {
+      severity: "warning",
+      section: "transforms",
+      component: "enrich",
+      code: "device_check",
+      message:
+        "This step looks up an enrichment table, which each device reads.",
+    },
+  ],
+  warnings: [
+    "transforms.enrich: This step looks up an enrichment table, which each device reads.",
+    "Each device checks enrichment data files and local files and paths before applying this version.",
+  ],
+};
 function testReply(mode) {
+  if (mode === "lua") return luaTestReply;
+  if (mode === "enrichment") return enrichmentTestReply;
   const tests = rows[mode];
   const stopped = tests.filter((t) => !t.passed).length;
   return {
@@ -194,6 +307,7 @@ function state(options = {}) {
             ),
           )
         : undefined,
+      ["lua", "enrichment"].includes(options.mode) ? options.mode : undefined,
     ),
     mode: options.mode || "passed",
     versions: [],
@@ -332,16 +446,22 @@ async function start(f, options = {}) {
       method === "POST" &&
       path === `/configurations/${f.document.id}/validate`
     )
-      return reply({
-        valid: true,
-        vector_validated: true,
-        static_checked: true,
-        deferred: false,
-        diagnostics: [],
-        errors: [],
-        warnings: [],
-        vector_version: "0.58.0",
-      });
+      return reply(
+        f.mode === "lua"
+          ? luaValidation
+          : f.mode === "enrichment"
+            ? enrichmentValidation
+            : {
+                valid: true,
+                vector_validated: true,
+                static_checked: true,
+                deferred: false,
+                diagnostics: [],
+                errors: [],
+                warnings: [],
+                vector_version: "0.58.0",
+              },
+      );
     if (
       method === "POST" &&
       path === `/configurations/${f.document.id}/publish`
@@ -692,6 +812,89 @@ try {
     },
   );
 
+  await run(
+    "a Lua step: the tests did not run here, the sentence says why and what to do, and Publish anyway sends the acknowledgement",
+    async () => {
+      const s = await start(state({ mode: "lua" }));
+      try {
+        await openReview(s.page);
+        const region = testsRegion(s.page);
+        await expect(region).toHaveAttribute("data-tests-state", "failing");
+        await expect(region).toContainText(
+          "Tests: Vector didn't run either of the 2 tests",
+        );
+        // Why, and what to do, in the server's own sentence.
+        await expect(region).toContainText(luaSentence);
+        expect(await region.innerText()).not.toContain("Lua runs on devices");
+        // The check keeps its own words: a device checks the Lua.
+        await runCheck(s.page);
+        await expect(reviewDialog(s.page)).toContainText(
+          "Vector 0.58 accepted this pipeline. Each device checks Lua code before applying it.",
+        );
+        expect(await reviewDialog(s.page).innerText()).not.toContain(
+          "Lua runs on devices",
+        );
+        await expect(footer(s.page)).toHaveText([
+          "Back to draft",
+          "Open tests",
+          "Publish anyway",
+        ]);
+        await reviewDialog(s.page)
+          .getByRole("button", { name: "Publish anyway", exact: true })
+          .click();
+        await expect(
+          s.page.getByRole("dialog", { name: "Version 1 published" }),
+        ).toBeVisible();
+        expect(s.f.posts).toHaveLength(1);
+        expect(s.f.posts[0].body.acknowledge_test_failures).toBe(true);
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+
+  await run(
+    "an enrichment table that reads a file: the tests did not run here, the sentence says why, and the check line names the files",
+    async () => {
+      const s = await start(state({ mode: "enrichment" }));
+      try {
+        await openReview(s.page);
+        const region = testsRegion(s.page);
+        await expect(region).toHaveAttribute("data-tests-state", "failing");
+        await expect(region).toContainText(
+          "Tests: Vector didn't run either of the 2 tests",
+        );
+        await expect(region).toContainText(enrichmentSentence);
+        await runCheck(s.page);
+        await expect(reviewDialog(s.page)).toContainText(
+          "Vector 0.58 accepted this pipeline. Each device checks enrichment data files and local files and paths before applying it.",
+        );
+        // The check line keeps its own words, never the raw reason.
+        expect(
+          await reviewDialog(s.page)
+            .locator(".publish-review-check")
+            .innerText(),
+        ).not.toContain("Enrichment tables are read on devices");
+        await expect(footer(s.page)).toHaveText([
+          "Back to draft",
+          "Open tests",
+          "Publish anyway",
+        ]);
+        await reviewDialog(s.page)
+          .getByRole("button", { name: "Publish anyway", exact: true })
+          .click();
+        await expect(
+          s.page.getByRole("dialog", { name: "Version 1 published" }),
+        ).toBeVisible();
+        expect(s.f.posts[0].body.acknowledge_test_failures).toBe(true);
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+
   await run("a pipeline without tests never asks for any", async () => {
     const s = await start(state({ names: [] }));
     try {
@@ -752,6 +955,57 @@ try {
           await openReview(s.page);
           await expect(testsRegion(s.page)).toContainText("2 of 2 passed");
           await scan(s.page, "passed", width, theme);
+          clean(s.f);
+        } finally {
+          await s.close();
+        }
+      },
+    );
+
+  for (const [width, theme] of [
+    [1200, "light"],
+    [1200, "dark"],
+    [390, "light"],
+    [390, "dark"],
+  ])
+    await run(
+      `a Lua step at ${width}px, ${theme}: the review and the editor's Tests panel give the reason as a sentence (Axe)`,
+      async () => {
+        const s = await start(state({ mode: "lua" }), {
+          width,
+          height: width < 600 ? 900 : 950,
+          theme,
+        });
+        try {
+          await openReview(s.page);
+          await expect(testsRegion(s.page)).toContainText(luaSentence);
+          expect(
+            await s.page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth + 1,
+            ),
+          ).toBe(true);
+          await scan(s.page, "lua-review", width, theme);
+          // The editor's Tests panel says the same, and why it is not an error
+          // to fix: the tests wait for a device.
+          await reviewDialog(s.page)
+            .getByRole("button", { name: "Open tests", exact: true })
+            .click();
+          const settings = s.page.getByRole("dialog", {
+            name: "Pipeline settings",
+          });
+          await settings
+            .getByRole("button", { name: "Run pipeline tests", exact: true })
+            .click();
+          const results = settings.locator(".pipeline-test-results");
+          await expect(results).toHaveAttribute("data-state", "deferred");
+          await expect(results).toContainText(
+            "These tests need the device environment",
+          );
+          await expect(results).toContainText(luaSentence);
+          expect(await results.innerText()).not.toContain(
+            "Lua runs on devices",
+          );
+          await scan(s.page, "lua-tests-panel", width, theme);
           clean(s.f);
         } finally {
           await s.close();

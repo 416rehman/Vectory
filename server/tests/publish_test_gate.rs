@@ -162,6 +162,14 @@ impl Env {
     }
     /// A saved draft carrying tests with these names (none for an empty list).
     async fn draft(&self, names: &[&str]) -> Value {
+        let mut config = base();
+        if !names.is_empty() {
+            config["tests"] = json!(names.iter().map(|name| test_case(name)).collect::<Vec<_>>());
+        }
+        self.draft_of(config).await
+    }
+    /// A saved draft with this configuration.
+    async fn draft_of(&self, config: Value) -> Value {
         let (status, created) = call(
             &self.app,
             "POST",
@@ -171,10 +179,6 @@ impl Env {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{created}");
-        let mut config = base();
-        if !names.is_empty() {
-            config["tests"] = json!(names.iter().map(|name| test_case(name)).collect::<Vec<_>>());
-        }
         let (status, saved) = call(
             &self.app,
             "PUT",
@@ -368,6 +372,74 @@ async fn tests_vector_skipped_and_explained_do_not_stop_the_publish() {
     assert_eq!(status, StatusCode::OK, "{version}");
     let audit = env.publish_audit(version["id"].as_str().unwrap()).await;
     assert!(audit[0].get("details").is_none(), "{}", audit[0]);
+}
+
+#[tokio::test]
+async fn tests_of_a_draft_with_lua_never_reach_the_worker_and_need_the_acknowledgement() {
+    let env = env().await;
+    // Were the worker asked, it would say they pass.
+    env.worker_says(verdicts(vec![passed("never asked")]));
+    let mut config = base();
+    config["transforms"] = json!({"probe": {"type": "lua", "version": "2", "inputs": ["sample"],
+        "source": "function process(e, emit) os.execute('id') emit(e) end",
+        "hooks": {"process": "process"}}});
+    config["sinks"]["out"]["inputs"] = json!(["probe"]);
+    config["tests"] = json!([test_case("runs the script")]);
+    let draft = env.draft_of(config.clone()).await;
+
+    // The test route answers for itself: the tests did not run, and why.
+    let (status, run) = call(
+        &env.app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": config}),
+        &env.editor,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(run["tests_run"], false, "{run}");
+    assert_eq!(run["deferred"], true, "{run}");
+    assert_eq!(run["valid"], false, "{run}");
+    assert_eq!(run["tests"], json!([]), "{run}");
+    assert_eq!(
+        run["deferred_reasons"],
+        json!(["Lua runs on devices"]),
+        "{run}"
+    );
+    assert_eq!(
+        run["errors"],
+        json!([
+            "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests."
+        ]),
+        "{run}"
+    );
+    assert_eq!(
+        run["warnings"],
+        json!(["Each device checks Lua code before applying this version."]),
+        "{run}"
+    );
+
+    // Publishing keeps its meaning: tests that did not run need the acknowledgement.
+    let (status, refusal) = env.publish(&draft, json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["error"]["code"], "TESTS_FAILED");
+    assert_eq!(refusal["tests_run"], false);
+    assert_eq!(
+        refusal["counts"],
+        json!({"passed":0,"failed":0,"refused":0,"not_run":1})
+    );
+    assert_eq!(env.versions().await, 0);
+    let (status, version) = env
+        .publish(&draft, json!({"acknowledge_test_failures":true}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{version}");
+    let audit = env.publish_audit(version["id"].as_str().unwrap()).await;
+    assert_eq!(
+        audit[0]["details"]["tests_not_run_count"], 1,
+        "{}",
+        audit[0]
+    );
+    assert_eq!(env.test_runs(), 0, "the worker was asked to run Lua tests");
 }
 
 #[tokio::test]
