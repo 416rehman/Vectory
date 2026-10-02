@@ -2392,6 +2392,33 @@ fn output_exists(kind: &str, item: &Value, port: Option<&str>) -> Option<bool> {
         _ => None,
     }
 }
+/// Whether a component ID could name a place on disk. Vector joins an ID onto
+/// its data directory for checkpoints and disk buffers, so an absolute path
+/// replaces that directory and separators climb out of it. Vector itself
+/// refuses only a dot (measured with 0.58), so this adds exactly the path
+/// separators and the control characters that let an ID forge a log line or a
+/// file name.
+fn names_a_path(id: &str) -> bool {
+    id.chars()
+        .any(|c| matches!(c, '/' | '\\') || c.is_control())
+}
+/// The refusal for such an ID: it names the component and the rule, and shows
+/// a control character as an escape instead of carrying it into a message.
+fn path_like_id(id: &str) -> String {
+    let shown: String = id
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect();
+    format!(
+        "{shown}: component IDs can't contain / or \\ or control characters. Rename this component."
+    )
+}
 pub fn validate(config: &Value) -> Value {
     let mut errors = Vec::<String>::new();
     let mut warnings = Vec::<String>::new();
@@ -2413,6 +2440,9 @@ pub fn validate(config: &Value) -> Value {
                 for (name, item) in items {
                     if name.is_empty() || name.len() > 128 || name.contains('.') {
                         errors.push(format!("Invalid component ID in {section}"))
+                    }
+                    if names_a_path(name) {
+                        errors.push(path_like_id(name));
                     }
                     if !names.insert(name.clone()) {
                         errors.push(format!("Duplicate component ID: {name}"))
@@ -2460,6 +2490,9 @@ pub fn validate(config: &Value) -> Value {
                 if !names.insert(table_name.clone()) {
                     errors.push(format!("Duplicate component ID: {table_name}"));
                 }
+                if names_a_path(table_name) {
+                    errors.push(path_like_id(table_name));
+                }
                 memory_sinks.insert(table_name.clone());
                 if let Some(inputs) = inputs.as_array() {
                     if inputs.iter().any(|input| !input.is_string()) {
@@ -2480,6 +2513,9 @@ pub fn validate(config: &Value) -> Value {
             if let Some(source_key) = table["source_config"]["source_key"].as_str() {
                 if source_key.is_empty() || source_key.len() > 128 || source_key.contains('.') {
                     errors.push(format!("{table_name}: invalid memory source ID"));
+                }
+                if names_a_path(source_key) {
+                    errors.push(path_like_id(source_key));
                 }
                 if source_key == table_name || !names.insert(source_key.to_owned()) {
                     errors.push(format!("Duplicate component ID: {source_key}"));
@@ -3743,6 +3779,118 @@ mod tests {
         let stray = complete_results(&config, vec![passed("stray")]);
         assert_eq!(stray.len(), 5);
         assert_eq!(stray[4]["name"], "stray");
+    }
+
+    fn pipeline_with_source(id: &str) -> Value {
+        json!({
+            "sources": {id: {"type": "demo_logs", "format": "json"}},
+            "sinks": {"out": {"type": "blackhole", "inputs": [id]}},
+        })
+    }
+
+    #[test]
+    fn component_ids_may_not_name_paths_or_hold_control_characters() {
+        // Vector joins a component's ID onto its data directory for
+        // checkpoints and disk buffers, so an absolute path or a path with
+        // separators puts them outside it.
+        for id in [
+            "/tmp/x",
+            "a/b",
+            "/",
+            "a\\b",
+            "C:\\x",
+            "a\nb",
+            "a\tb",
+            "a\u{0}b",
+            "a\u{1b}[0m",
+            "a\u{7f}b",
+            "a\u{85}b",
+        ] {
+            let result = validate(&pipeline_with_source(id));
+            assert_eq!(result["valid"], false, "{id:?}");
+            let errors: Vec<&str> = result["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            // The refusal names the component, and the rule, without echoing a
+            // control character into a message.
+            assert_eq!(errors.len(), 1, "{id:?}: {errors:?}");
+            assert!(
+                errors[0].ends_with(": component IDs can't contain / or \\ or control characters. Rename this component."),
+                "{id:?}: {}",
+                errors[0]
+            );
+            assert!(!errors[0].chars().any(char::is_control), "{id:?}");
+            if !id.chars().any(char::is_control) {
+                assert!(errors[0].starts_with(&format!("{id}: ")), "{}", errors[0]);
+            }
+        }
+        // The same rule for the ID of a memory table's generated source and
+        // of the table that takes its inputs.
+        let memory = |table: &str, source_key: &str| {
+            json!({
+                "sources": {"in": {"type": "demo_logs", "format": "json"}},
+                "sinks": {"out": {"type": "blackhole", "inputs": ["in"]}},
+                "enrichment_tables": {table: {"type": "memory", "inputs": ["in"],
+                    "source_config": {"source_key": source_key, "export_interval": 5}}},
+            })
+        };
+        assert_eq!(validate(&memory("cache", "export"))["valid"], true);
+        for (table, source_key) in [("a/b", "export"), ("cache", "/tmp/x"), ("cache", "e\\x")] {
+            let result = validate(&memory(table, source_key));
+            assert_eq!(result["valid"], false, "{table} {source_key}");
+            assert!(
+                result["errors"]
+                    .to_string()
+                    .contains("component IDs can't contain"),
+                "{result}"
+            );
+        }
+    }
+
+    #[test]
+    fn component_ids_vector_accepts_stay_accepted() {
+        // Measured with Vector 0.58: it refuses only a dot. Vectory adds only
+        // what lets an ID leave the data directory, so these still pass.
+        for id in [
+            "plain",
+            "with space",
+            "-leading-dash",
+            "star*",
+            "bracket[0]",
+            "colon:name",
+            "a,b",
+            "caf\u{e9}",
+            "a$b",
+            "a{b}",
+            "100%",
+            "a\"b",
+            "a'b",
+            "UPPER_lower-123",
+        ] {
+            let result = validate(&pipeline_with_source(id));
+            assert_eq!(result["valid"], true, "{id:?}: {}", result["errors"]);
+        }
+        // A dot, an empty ID and a long one stay refused, as they were.
+        for id in ["a.b", "", &"x".repeat(129)] {
+            assert_eq!(validate(&pipeline_with_source(id))["valid"], false);
+        }
+    }
+
+    #[test]
+    fn a_refused_component_id_becomes_a_diagnostic_on_that_component() {
+        let config = pipeline_with_source("a/b");
+        let result = validate(&config);
+        let diagnostics = structural_diagnostics(&config, &result);
+        let refusal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("component IDs can't contain"))
+            .expect("a diagnostic for the refused ID");
+        assert_eq!(refusal.component.as_deref(), Some("a/b"));
+        assert_eq!(refusal.section.as_deref(), Some("sources"));
+        assert_eq!(refusal.severity, "error");
     }
 
     #[test]
