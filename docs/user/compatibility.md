@@ -8,10 +8,10 @@ Vectory manages an installed Vector; it never installs or upgrades it. Match bot
 
 | Device | Vector 0.58.0 downloads | Status |
 | --- | --- | --- |
-| **Linux x86-64** | `.deb`, `.rpm`, GNU and musl archives | Agent tests with real Vector 0.58.0 run on every change. The full loop (install, enroll, deploy, apply and metrics) works end to end in the local demo fleet. Service, reboot and upgrade tests on each distribution are still to come. |
+| **Linux x86-64** | `.deb`, `.rpm`, GNU and musl archives | Agent tests with real Vector 0.58.0 run on every change. The full loop (install, enroll, deploy, apply and metrics) works end to end in the local demo fleet. A service test on Ubuntu 24.04 (systemd, the generated and the packaged unit) runs on demand; reboot and upgrade tests, and other distributions, are still to come. |
 | **Linux Arm64** | `.deb`, `.rpm`, GNU and musl archives | The agent builds for it. Not yet tested on Arm64 hardware. |
-| **macOS on Apple silicon** | Archive | Apply and rollback are tested on every change on macOS 15 with real Vector 0.58.0. Install, launchd and upgrade are not yet tested on a Mac. |
-| **Windows x86-64** | MSI and ZIP | Apply, recovery, local secrets, metrics and full-mode features are tested on every change on Windows Server 2025. Service, reboot and upgrade tests are still to come. |
+| **macOS on Apple silicon** | Archive | Apply and rollback are tested on every change on macOS 15 with real Vector 0.58.0. A launchd test on macOS 15 runs on demand; upgrade is not tested. |
+| **Windows x86-64** | MSI and ZIP | Apply, recovery, local secrets, metrics and full-mode features are tested on every change on Windows Server 2025. A test of the Windows service runs on demand; reboot and upgrade tests are still to come. |
 | macOS on Intel | None | Not supported: Vector 0.58.0 has no Intel Mac build. |
 | Windows Arm64, 32-bit Arm Linux | Not an agent target | Not supported. |
 
@@ -31,7 +31,7 @@ What each part needs, where that is established. "Not yet established" means not
 | Arm64 CPU | ARMv8.0 | Agents use Go's default, `GOARM64=v8.0`. |
 | Vector on a device | 0.58.0 | Any 0.58.x release is accepted; pre-releases are refused. Vector's own OS requirements aren't recorded here yet: check the [Vector 0.58.0 release notes](https://vector.dev/releases/0.58.0/). |
 | Server host | Not yet established | Docker Compose on one Linux host. CI starts the stack on a clean Ubuntu 24.04 runner with the Docker Engine and Compose plugin that runner provides; older versions aren't tested. |
-| Browser | Not yet established | Only Chromium is tested (see [Browsers](#browsers)). |
+| Browser | Not yet established | Chromium is tested on every change; Firefox and WebKit run four first-use flows on demand (see [Browsers](#browsers)). |
 | Build the agent from source | Go 1.26.0 | Declared in `agent/go.mod`; builds and tests use Go 1.26.8. |
 | Build the server from source | Rust 1.88 | Declared as `rust-version` in `server/Cargo.toml`; builds and tests use Rust 1.94.0. |
 | Build the dashboard from source | Not yet established | No `engines` field is declared; builds and tests use Node 22. |
@@ -47,6 +47,17 @@ Every change runs the same automated checks on GitHub-hosted runners. They prove
 | macOS 15 on Apple silicon | Vector 0.58.0, Go 1.26.8 | The agent's unit and native tests with real Vector, including reload and rollback. | The package, launchd, reboot, upgrade |
 
 Nothing tests the oldest versions of an operating system yet.
+
+### On demand
+
+A second workflow, `platforms`, runs when someone starts it and when its own scripts change, not on every change. On a clean runner of each kind it runs the real server and the pinned Vector 0.58.0, and its results are kept as downloadable evidence.
+
+| Runner | What it runs | Not covered |
+| --- | --- | --- |
+| Ubuntu 24.04 | Installs the agent as a systemd service for an unprivileged account with `vectory setup`, applies a pipeline through it, then restarts, kills and stops the service and removes it. Reads the unit's sandbox from inside the running service, for the unit setup registers and for the packaged unit. | Other distributions, reboot, upgrade, installing the `.deb` or `.rpm`, SELinux and AppArmor |
+| Windows Server 2025 | Runs the server natively, then the agent in the foreground and as the Windows service: restart, kill, stop, start and removal. | An administrator editing the managed file while the service runs, reboot, upgrade, the MSI |
+| macOS 15 on Apple silicon | Runs `scripts/preview.sh` and the installer with macOS's own shell and tools, then the agent as a launch daemon: restart, kill, stop, start and removal. | Reboot, upgrade, the package |
+| Ubuntu 24.04 with Firefox and WebKit | Creates the first administrator, signs in, creates and publishes a pipeline and opens Devices, in each browser. | Everything else the Chromium checks cover |
 
 ## Components
 
@@ -66,7 +77,7 @@ Checks that need the device itself, such as local files, run on the device befor
 
 ## Browsers
 
-The dashboard and this Help center are tested with Chromium on desktop and phone-sized screens, in light and dark themes, with automated accessibility checks. Recent Firefox and Safari aren't tested yet.
+The dashboard and this Help center are tested with Chromium on desktop and phone-sized screens, in light and dark themes, with automated accessibility checks. Firefox and WebKit run four first-use flows on demand, against a real server: creating the first administrator, signing in, creating and publishing a pipeline, and opening Devices. Every other check runs in Chromium only. Safari itself isn't tested (WebKit is its engine, not the browser), and neither are older versions of any browser.
 
 ## Offline use
 
