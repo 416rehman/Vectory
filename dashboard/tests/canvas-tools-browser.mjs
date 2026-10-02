@@ -444,6 +444,44 @@ try {
   );
 
   await check(
+    "a sample saved as a pipeline test says it is not kept yet, and saving the draft takes that note away",
+    async () => {
+      const document = baseDocument();
+      document.config.transforms.parse = {
+        type: "remap",
+        inputs: ["seed"],
+        source: ".a = 1",
+      };
+      await load({
+        document,
+        samples: {
+          version: 1,
+          sets: [
+            {
+              id: "default",
+              name: "Sample events",
+              text: JSON.stringify({ message: "x" }),
+            },
+          ],
+          active: {},
+        },
+        vrl: '{"valid":true,"compiled":true,"output":null,"errors":[],"results":[{"sample":0,"outcome":"emitted","outputs":[{"port":"","event":{"message":"x","a":1},"timestamps":[]}]}]}',
+      });
+      await node("parse").click();
+      await expect(inspector().locator(".sample-result")).toHaveCount(1);
+      await inspector().getByRole("button", { name: "Save as test" }).click();
+      const note = page.getByText(
+        /^Added pipeline test “.*”\. Save to keep it\.$/,
+      );
+      await expect(note).toBeVisible();
+      expect(fixture.document.config.tests).toBeUndefined();
+      await saved((doc) => doc.config.tests?.length === 1);
+      // It is kept now, so the line saying it is not leaves with the save.
+      await expect(note).toHaveCount(0);
+    },
+  );
+
+  await check(
     "a route's samples run through the steps before it and show where each one went, on the tester and on the canvas",
     async () => {
       const document = baseDocument();
@@ -832,7 +870,8 @@ try {
           ],
         }),
       });
-      await button("Live").click();
+      // A device runs it, so Live is already on.
+      await expect(button("Live")).toHaveAttribute("aria-pressed", "true");
       const status = page.locator(".editor-live-status");
       await expect(status).toContainText("Live for v1 · 2 devices");
       await expect(page.locator(".pipeline-edge-rate").first()).toBeVisible();
@@ -868,7 +907,8 @@ try {
           ],
         }),
       });
-      await button("Live").click();
+      // A device runs it, so Live is already on.
+      await expect(button("Live")).toHaveAttribute("aria-pressed", "true");
       const status = page.locator(".editor-live-status");
       await expect(status).toContainText(
         "No device reports metrics for v1 yet.",
@@ -900,7 +940,7 @@ try {
     expect(Math.abs(drawing.width - frame.width)).toBeLessThan(3);
     expect(Math.abs(drawing.height - frame.height)).toBeLessThan(3);
   });
-  expect(results).toHaveLength(14);
+  expect(results).toHaveLength(15);
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
 } catch (error) {

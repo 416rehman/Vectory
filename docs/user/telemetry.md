@@ -203,6 +203,15 @@ This pattern points to a slow or failing destination, but confirm it with the de
 
 [**Activity → Issues**](/#/issues) lists problems devices reported, such as a version that failed to apply. Each issue names the device, the version and the reason, and links to the device and the deployment. Issues are grouped by version and reason; choose **All issues** for one row per device.
 
+Each issue leads with what it most likely needs next, as a link, and only when there is something to open and your role allows it:
+
+| Link | When |
+| --- | --- |
+| **Roll back** | A version that stopped delivering, from one rollout. Needs the Operator or Administrator role. It opens the rollout with its rollback review ready; nothing is sent until you confirm there. |
+| **Fix in pipeline** | Vector named a problem only the pipeline can fix, such as an unknown field. It opens the pipeline at the step and setting Vector named. Needs the Editor or Administrator role. |
+| **Open rollout** | The issue came from one rollout, and neither link above applies. |
+| **Open device** | A card about one device that has no rollout to open. |
+
 - An apply issue resolves by itself when the device next applies a version and confirms it.
 - A delivery issue (**Not delivering**) resolves by itself after three clean checks, or when the device stops running that version.
 - **Acknowledge issue** records that you've looked into it, with an optional note. **Reopen issue** brings it back. Both are recorded in the audit log.

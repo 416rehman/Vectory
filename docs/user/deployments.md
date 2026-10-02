@@ -11,6 +11,8 @@ A deployment sends one published version, or a set of agent settings, to the dev
 4. Choose **Review deployment**. Check the exact device list, what each device runs now and what it will run after.
 5. Choose **Deploy to devices**, then **View deployment** to follow it.
 
+When devices already run a version of this pipeline, the dialog opens with them chosen and says so in one line, for example **Update the 3 devices running v1 (Edge collectors)**, under the title **Deploy Edge syslog processing v2**. The group is named only when it holds all of them. **Change** opens the list with those devices ticked and the cursor in the search; **Clear** empties the choice in one click. Nothing is chosen for you when you open the dialog from a device, for agent settings, or for a pipeline no device runs.
+
 Deploying a new version of a pipeline to devices that run an older version of it replaces the older one there. The review says so, for example "Replace Web access logs v2 → v3 on 3 devices".
 
 After a rollback, deploying a fix of the same pipeline also replaces the rolled-back rollout and its rollback, at the rollback's priority, so every device takes the fix in one review. If an assignment still outranks some devices, the button reads **Deploy to 2 of 3 devices** and asks you to confirm what stays behind, for example "edge-nyc-02 keeps Edge syslog processing v1 (priority 101 rollback)".
@@ -21,7 +23,7 @@ Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md
 
 ### Choose devices in a large fleet
 
-The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
+The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. A pipeline that runs on more than a hundred devices starts with all of them chosen the same way, up to the same limit, and the dialog says how many it took when more run it. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
 
 Each device you tick one by one can have its own value for a pipeline variable. The default you set applies to devices you add in bulk. A device's page lists the values it was offered: see [Read what a device was offered](#read-what-a-device-was-offered).
 
@@ -202,7 +204,7 @@ The page leads with the one action that fits:
 | --- | --- |
 | It was rolled back | **Open rollback** names what the devices returned to, for example "Open rollback (Edge syslog processing v1)". |
 | A device still runs it but isn't delivering | A banner names the device, the step it can't deliver to and how full that buffer is. **Roll back edge-nyc-02** comes first. |
-| Only the pipeline can fix the failure: a port in use, a VRL error or an invalid option | **Fix in pipeline** opens the pipeline. **Retry failed** comes second, since a retry sends the same version. |
+| Only the pipeline can fix the failure: a port in use, a VRL error or an invalid option | **Fix in pipeline** opens the pipeline with the step the failure names selected and the setting it names in view. **Retry failed** comes second, since a retry sends the same version. |
 | Devices failed for another reason | **Retry failed**. |
 | It's paused | **Resume**. |
 
@@ -228,6 +230,8 @@ A rollout's **Stop rollout** menu (**Roll back or remove** once it finished) hol
 | **Remove assignment** | Removes the deployment, so each device falls back to its next-highest assignment. It never stops Vector. |
 | **Pause configuration sync** (agent settings) | Devices keep their current configuration and stop applying new versions. |
 | `vectory pause` on a device | The same, set by the host. Only the host can clear it. |
+
+The command palette (**Ctrl K**, **⌘ K**) starts **Pause**, **Cancel** and **Roll back** too: type the verb and the rollout's name, such as **pause edge**. The rollout's page opens with the same review its button opens, resting on **Keep current state**, and nothing changes until you confirm there. It offers only what the rollout's state and your role allow.
 
 If you cancel a schedule at the moment it starts, the server applies one action and then the other, never a mix. Cancel first: the schedule never starts. Start first: the devices it released keep the version, and the cancel stops the rest. The deployment's activity shows which came first.
 

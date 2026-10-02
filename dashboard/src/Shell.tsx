@@ -313,10 +313,16 @@ export function PageSkeleton({
   );
 }
 
-export const shortcutGroups: {
-  title: string;
-  items: [string[][], string][];
-}[] = [
+/**
+ * Keys and what they do. Several key groups are pressed one after another
+ * ("G" then "O") unless the entry says they are alternatives ("up" or "down").
+ */
+export type Shortcut = [
+  keys: string[][],
+  label: string,
+  between?: "then" | "or",
+];
+export const shortcutGroups: { title: string; items: Shortcut[] }[] = [
   {
     title: "Anywhere",
     items: [
@@ -330,23 +336,23 @@ export const shortcutGroups: {
   },
   {
     title: "Go to",
-    items: primaryNavigation.map(
-      (item) =>
-        [[["G"], [item.key!.toUpperCase()]], item.label] as [
-          string[][],
-          string,
-        ],
-    ),
+    items: primaryNavigation.map((item): Shortcut => [
+      [["G"], [item.key!.toUpperCase()]],
+      item.label,
+    ]),
   },
   {
     title: "In search",
     items: [
-      [[["up"], ["down"]], "Move between results"],
+      [[["up"], ["down"]], "Move between results", "or"],
       [[["enter"]], "Open the result"],
       [[["mod", "enter"]], "Open in a new tab"],
     ],
   },
 ];
+/** How the sheet joins key groups: "then" for a sequence, "/" for a choice. */
+export const betweenKeys = (between: Shortcut[2] = "then") =>
+  between === "or" ? "/" : "then";
 
 export function KeyboardShortcuts({
   open,
@@ -380,14 +386,16 @@ export function KeyboardShortcuts({
           <section key={group.title} className="shortcut-group">
             <h3>{group.title}</h3>
             <dl>
-              {group.items.map(([keys, label]) => (
+              {group.items.map(([keys, label, between]) => (
                 <div key={label}>
                   <dt>{label}</dt>
                   <dd>
                     {keys.map((combo, index) => (
                       <span key={index} className="shortcut-keys">
                         {index > 0 && (
-                          <span className="shortcut-then">then</span>
+                          <span className="shortcut-then">
+                            {betweenKeys(between)}
+                          </span>
                         )}
                         <Kbd keys={combo} />
                       </span>
@@ -409,6 +417,26 @@ const typing = (target: EventTarget | null) =>
     !!target.closest(
       "input, textarea, select, [contenteditable='true'], .cm-editor, .react-flow, [role='combobox'], [role='menu'], [role='listbox']",
     ));
+
+/**
+ * The search box "/" goes to: one the page marked for it, else the first
+ * visible search box in the page (a list's toolbar, a card's own search).
+ */
+export function pageSearch(root: ParentNode = document) {
+  const usable = (input: HTMLInputElement) =>
+    !input.disabled && input.getClientRects().length > 0;
+  for (const selector of [
+    "#main-content [data-page-search]",
+    "#main-content .page-toolbar .search-field input",
+    "#main-content .search-field input",
+  ]) {
+    const found = [...root.querySelectorAll<HTMLInputElement>(selector)].find(
+      usable,
+    );
+    if (found) return found;
+  }
+  return null;
+}
 
 /**
  * Single-key shortcuts: ? sheet, / search, R refresh, [ sidebar, g + key to go.
@@ -484,14 +512,14 @@ export function useGlobalShortcuts({
         event.preventDefault();
         handlers.current.onToggleSidebar();
       } else if (event.key === "/") {
-        const search = document.querySelector<HTMLInputElement>(
-          "#main-content [data-page-search], #main-content .page-toolbar .search-field input",
-        );
+        // The page's own search; a page without one opens the search that
+        // reaches every page, so the key always leads somewhere.
+        event.preventDefault();
+        const search = pageSearch();
         if (search) {
-          event.preventDefault();
           search.focus();
           search.select();
-        }
+        } else handlers.current.onPalette();
       } else if (event.key === "r" || event.key === "R") {
         const refresh = document.querySelector<HTMLButtonElement>(
           "#main-content [data-live-refresh]:not(:disabled)",

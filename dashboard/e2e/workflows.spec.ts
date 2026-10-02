@@ -290,7 +290,7 @@ test("build an empty pipeline, connect steps, preserve raw fields and publish", 
     .getByRole("button", { name: "Choose devices", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Deploy version 1", exact: true }),
+    page.getByRole("heading", { name: `Deploy ${title} v1`, exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Review deployment" }),

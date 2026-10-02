@@ -5,7 +5,11 @@
 // natural name order, chip counts that follow the search, revoked devices only
 // on request, unknown or repeated parameters refused) over whatever devices and
 // groups the harness holds, so a harness edits its own lists and the replies
-// follow. Test data only; nothing here says a device runs anything.
+// follow. A pipeline's telemetry answers which of the harness's versions
+// devices run (none unless it lists versions). Test data only; nothing here
+// says a device runs anything.
+import { pipelineTelemetry } from "./telemetry-replies.mjs";
+
 const BUCKETS = [
   "applied",
   "degraded",
@@ -161,6 +165,8 @@ const runsDesired = (row) =>
  * @param {object} source
  * @param {object[] | (() => object[])} source.devices Device rows as the list shows them.
  * @param {object[] | (() => object[])} source.groups Full groups (with `device_ids`).
+ * @param {object[] | (() => object[])} [source.versions] Published versions
+ *   (`id`, `configuration_id`, `number`), for the pipeline telemetry read.
  * @param {() => number} [source.now]
  * @param {boolean} [source.groupById] Answer `GET /groups/{id}` too. A harness
  *   that scripts that read itself (failures, holds) turns it off.
@@ -168,12 +174,15 @@ const runsDesired = (row) =>
 export function fleetReplies({
   devices,
   groups,
+  versions = [],
   now = () => Date.now(),
   groupById = true,
 }) {
   const deviceRows = () =>
     typeof devices === "function" ? devices() : devices;
   const groupRows = () => (typeof groups === "function" ? groups() : groups);
+  const versionRows = () =>
+    typeof versions === "function" ? versions() : versions;
 
   function project() {
     const at = now();
@@ -523,6 +532,35 @@ export function fleetReplies({
         );
         if (!group) return missing();
         return reply({ revision: 1, ...group });
+      }
+      // Which devices run which versions of one pipeline.
+      found = path.match(/^\/configurations\/([^/]+)\/telemetry$/);
+      if (found) {
+        const configuration = decodeURIComponent(found[1]);
+        const { entries } = project();
+        const running = versionRows()
+          .filter((version) => version.configuration_id === configuration)
+          .map((version) => ({
+            version,
+            devices: entries.filter(
+              (entry) => !entry.revoked && entry.running === version.id,
+            ).length,
+          }))
+          .filter((item) => item.devices > 0)
+          .sort((a, b) => b.version.number - a.version.number);
+        const total = running.reduce((sum, item) => sum + item.devices, 0);
+        return reply(
+          pipelineTelemetry(configuration, {
+            devices_running: total,
+            devices_reporting: total,
+            versions: running.map(({ version, devices }) => ({
+              version_id: version.id,
+              version_number: version.number,
+              devices_running: devices,
+              devices_reporting: devices,
+            })),
+          }),
+        );
       }
       return null;
     },

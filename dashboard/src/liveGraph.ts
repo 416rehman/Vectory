@@ -73,10 +73,70 @@ export function edgeRate(
     : (component.sent_events_per_second ?? null);
 }
 
-/** Stroke width for a rate: thin at a trickle, never louder than 4.5 px. */
+/** Thinnest and thickest connection, in pixels. */
+export const EDGE_WIDTH_MIN = 1.5;
+export const EDGE_WIDTH_MAX = 5;
+/** A connection reaches its full width at 10,000 events a second. */
+const EDGE_WIDTH_DECADES = 4;
+
+/**
+ * Stroke width for a rate, in proportion to its logarithm: 1.5 px for nothing
+ * or no data, about 3 px at 100 events a second, 5 px from 10,000 up.
+ */
 export function edgeWidth(rate: number | null) {
-  if (rate === null || rate <= 0) return 1.5;
-  return Math.min(4.5, 1.75 + Math.log10(1 + rate));
+  if (rate === null || !Number.isFinite(rate) || rate <= 0)
+    return EDGE_WIDTH_MIN;
+  const share = Math.min(1, Math.log10(1 + rate) / EDGE_WIDTH_DECADES);
+  return (
+    Math.round(
+      (EDGE_WIDTH_MIN + (EDGE_WIDTH_MAX - EDGE_WIDTH_MIN) * share) * 100,
+    ) / 100
+  );
+}
+
+/** "12.4k events per second", for screen readers; "no data" when unreported. */
+export function spokenRate(
+  value: number | null | undefined,
+  per: "second" | "minute" = "second",
+  noun = "events",
+) {
+  if (value === null || value === undefined || !Number.isFinite(value))
+    return "no data";
+  return `${formatRate(value, "").trim()} ${noun} per ${per}`;
+}
+
+const LIVE_PREFERENCE = "vectory.editor.live";
+/**
+ * Whether this account turned Live on or off for one pipeline in this
+ * browser. Null when nobody chose: Live then follows whether a device runs
+ * the pipeline.
+ */
+export function readLivePreference(
+  userId: string,
+  pipelineId: string,
+): boolean | null {
+  try {
+    const value = localStorage.getItem(
+      `${LIVE_PREFERENCE}:${userId}:${pipelineId}`,
+    );
+    return value === "on" ? true : value === "off" ? false : null;
+  } catch {
+    return null;
+  }
+}
+export function writeLivePreference(
+  userId: string,
+  pipelineId: string,
+  on: boolean,
+) {
+  try {
+    localStorage.setItem(
+      `${LIVE_PREFERENCE}:${userId}:${pipelineId}`,
+      on ? "on" : "off",
+    );
+  } catch {
+    /* The choice lasts for this visit. */
+  }
 }
 
 export type NodeLive = {
@@ -104,6 +164,84 @@ export function nodeLive(
     filtered: component.filtered_per_minute ?? null,
     buffer: component.buffer_utilization_max ?? null,
     devices: component.devices_reporting,
+  };
+}
+
+/** A step's reading as one phrase, for its accessible name. */
+export function nodeLiveSummary(
+  kind: "sources" | "transforms" | "sinks",
+  reading: NodeLive | null,
+) {
+  if (!reading) return "no device reports it";
+  return [
+    kind !== "sources" && `in ${spokenRate(reading.received)}`,
+    kind !== "sinks" && `out ${spokenRate(reading.sent)}`,
+    !!reading.errors && spokenRate(reading.errors, "minute", "errors"),
+    !!reading.dropped &&
+      spokenRate(reading.dropped, "minute", "dropped events"),
+    reading.buffer !== null &&
+      reading.buffer >= 0.01 &&
+      `buffer ${Math.round(reading.buffer * 100)} percent full`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+export type LiveTable = {
+  steps: {
+    id: string;
+    title: string;
+    kind: "sources" | "transforms" | "sinks";
+    reading: NodeLive | null;
+  }[];
+  connections: {
+    id: string;
+    from: string;
+    to: string;
+    rate: number | null;
+  }[];
+};
+/**
+ * Every number the canvas draws, as rows: each step's reading and each
+ * connection's rate, in the order the canvas lists them. This is what the
+ * "Show as table" alternative shows, so nothing live is available only in a
+ * line's width or a chip's position.
+ */
+export function liveTable(
+  steps: {
+    id: string;
+    title: string;
+    kind: LiveTable["steps"][number]["kind"];
+  }[],
+  connections: {
+    id: string;
+    source: string;
+    sourceHandle?: string | null;
+    target: string;
+  }[],
+  telemetry: PipelineTelemetry | null,
+): LiveTable {
+  return {
+    steps: steps.map((step) => ({
+      ...step,
+      reading: nodeLive(telemetry, step.id),
+    })),
+    connections: connections.map((connection) => {
+      const port =
+        connection.sourceHandle && connection.sourceHandle !== "output"
+          ? `.${connection.sourceHandle}`
+          : "";
+      return {
+        id: connection.id,
+        from: `${connection.source}${port}`,
+        to: connection.target,
+        rate: edgeRate(
+          telemetry,
+          connection.source,
+          connection.sourceHandle || "output",
+        ),
+      };
+    }),
   };
 }
 

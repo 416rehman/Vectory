@@ -11,13 +11,38 @@ import {
   getConnectionPath,
   normalizeConnectionStyle,
 } from "./connectionStyle";
+import { curvePoint, routedPath, type Lane } from "./connectionRoute";
 import { edgeWidth, formatRate } from "./liveGraph";
 import "./pipeline-edge.css";
 import "./live-graph.css";
 
 function PipelineEdge(props: EdgeProps) {
   const connectionStyle = normalizeConnectionStyle(props.data?.connectionStyle);
-  const [path, x, y] = getConnectionPath(connectionStyle, props);
+  const [plain, plainX, plainY] = getConnectionPath(connectionStyle, props);
+  // A line that would run behind a card is routed around it; the label and
+  // the actions follow the routed line.
+  const lanes = props.data?.lanes as readonly Lane[] | undefined;
+  const routed =
+    lanes?.length && connectionStyle !== "straight"
+      ? routedPath(
+          connectionStyle,
+          { x: props.sourceX, y: props.sourceY },
+          { x: props.targetX, y: props.targetY },
+          lanes,
+        )
+      : null;
+  const path = routed?.d ?? plain;
+  const x = routed?.label.x ?? plainX;
+  const y = routed?.label.y ?? plainY;
+  // A rate sits a little before the middle of a curve, clear of the arrowhead.
+  const chip =
+    routed || connectionStyle !== "curved"
+      ? { x, y }
+      : curvePoint(
+          { x: props.sourceX, y: props.sourceY },
+          { x: props.targetX, y: props.targetY },
+          0.45,
+        );
   const endpoints = connectionEndpointPositions(connectionStyle, props);
   const onHoverChange = props.data?.onHoverChange as
     ((hovered: boolean) => void) | undefined;
@@ -82,7 +107,7 @@ function PipelineEdge(props: EdgeProps) {
             data-empty={rate === null || undefined}
             aria-hidden="true"
             style={{
-              transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
+              transform: `translate(-50%, -50%) translate(${chip.x}px, ${chip.y}px) scale(var(--live-scale, 1))`,
             }}
           >
             {rate === null ? "no data" : formatRate(rate)}

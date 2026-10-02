@@ -8,7 +8,10 @@ import {
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  Ban,
   BookOpen,
+  CircleAlert,
+  CopyPlus,
   CornerDownLeft,
   History,
   Keyboard,
@@ -16,12 +19,14 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
   Plus,
   Rocket,
   Search,
   Server,
   ShieldCheck,
   Sun,
+  Undo2,
   UserRound,
   Workflow,
   type LucideIcon,
@@ -55,6 +60,15 @@ import { directoryAnswers } from "./directoryCache";
 import { searchText } from "./deviceInventory";
 import type { ListDevice } from "./deviceModel";
 import { pageEntries } from "./navigation";
+import {
+  askedVerbs,
+  deviceVerbs,
+  pipelineVerbs,
+  rolloutVerbs,
+  wordsNamingThings,
+  type Verb,
+  type VerbEntry,
+} from "./paletteVerbs";
 import { deviceDisplayStatus, type StatusDomain } from "./status";
 import { describeDeployment } from "./deploymentStatus";
 import { relativeTime } from "./time";
@@ -204,8 +218,10 @@ function useDirectory(open: boolean, query: string, user: User) {
     if (!open || text.length < 2) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
+      // The server is asked about what is named: "show issues edge-1" looks
+      // for "edge-1".
       read<DeviceInventoryPage>(
-        `/devices/inventory?q=${encodeURIComponent(searchText(text))}&page_size=${DEVICES_SHOWN}`,
+        `/devices/inventory?q=${encodeURIComponent(searchText(wordsNamingThings(text)))}&page_size=${DEVICES_SHOWN}`,
         controller.signal,
       )
         .then((page) =>
@@ -226,7 +242,7 @@ function useDirectory(open: boolean, query: string, user: User) {
     if (!open || text.length < 2) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      const search = encodeURIComponent(text.slice(0, 200));
+      const search = encodeURIComponent(wordsNamingThings(text).slice(0, 200));
       const merge = <K extends "pipelines" | "deployments">(
         key: K,
         items: Directory[K],
@@ -270,6 +286,14 @@ const kindIcons: Record<RecentItem["kind"], LucideIcon> = {
   pipeline: Workflow,
   group: Layers,
   deployment: Rocket,
+};
+const verbIcons: Record<Verb, LucideIcon> = {
+  pause: Pause,
+  cancel: Ban,
+  rollback: Undo2,
+  deploy: Rocket,
+  duplicate: CopyPlus,
+  issues: CircleAlert,
 };
 const deploymentTitle = (item: DeploymentPage["items"][number]) =>
   item.policy
@@ -525,7 +549,32 @@ export default function CommandPalette({
         href: "#/users",
       })),
     ];
-    return [...pages, ...actions, ...entities];
+    // Verbs on what was found appear when the words typed ask for one ("pause
+    // edge"); each opens what its page opens, and none acts on its own.
+    const roles = { operate: can(user, "operate"), edit: can(user, "edit") };
+    const verbs: Item[] = askedVerbs(text, [
+      ...directory.deployments.flatMap((deployment) =>
+        rolloutVerbs(deployment, deploymentTitle(deployment), roles),
+      ),
+      ...directory.pipelines.flatMap((pipeline) =>
+        pipelineVerbs(pipeline, roles),
+      ),
+      ...found.devices.flatMap((device) => deviceVerbs(device)),
+    ]).map((entry: VerbEntry): Item => {
+      const { command, href } = entry;
+      return {
+        key: entry.key,
+        kind: entry.kind,
+        title: entry.title,
+        subtitle: entry.subtitle,
+        keywords: entry.keywords,
+        icon: verbIcons[entry.verb],
+        ...(command
+          ? { run: () => runCommand(command.name, command.route) }
+          : { href }),
+      };
+    });
+    return [...pages, ...actions, ...verbs, ...entities];
   }, [
     query,
     recents,

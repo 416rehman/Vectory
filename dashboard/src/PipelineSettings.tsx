@@ -43,6 +43,7 @@ import {
   type SecretScope,
 } from "./secretFieldContext";
 import { secretReferences } from "./secretFields";
+import { fieldIsSet } from "./pipelineDestination";
 import {
   checkProblems,
   type Problem,
@@ -310,6 +311,8 @@ export type SettingsFocus = {
   line?: number;
   column?: number;
   nonce: number;
+  /** Called when the field was asked for and this step has no control for it. */
+  onMissing?: () => void;
 };
 
 /** A step's own issue without its `id: ` or `id.field: ` prefix. */
@@ -540,6 +543,9 @@ export default function PipelineSettings({
     let frame = 0,
       attempts = 0;
     const field = focus.field ? canonicalPath(focus.field) : "";
+    // A setting the step writes gets time to appear (a code editor loads
+    // late); one it doesn't write is looked for briefly, then reported.
+    const patience = field && fieldIsSet(component, field) ? 240 : 12;
     const reveal = () => {
       if (field && vrlPath(field)) {
         if (jump(field, focus.line || 1, focus.column || 1)) return;
@@ -558,7 +564,7 @@ export default function PipelineSettings({
           return;
         }
       }
-      if (++attempts < 12) {
+      if (++attempts < patience) {
         frame = requestAnimationFrame(reveal);
         return;
       }
@@ -567,6 +573,8 @@ export default function PipelineSettings({
           ".pipeline-vector-problems, .pipeline-field-errors",
         )
         ?.scrollIntoView?.({ block: "nearest" });
+      // Only a setting the step doesn't have is reported missing.
+      if (field && patience === 12) focus.onMissing?.();
     };
     frame = requestAnimationFrame(reveal);
     return () => cancelAnimationFrame(frame);

@@ -28,7 +28,7 @@ it("finds comments that applying code would drop, not # lines in VRL", () => {
   expect(hasSourceComments('{"a": "#"}', "json")).toBe(false);
 });
 
-it("writes global options first and one blank line between TOML tables", () => {
+it("writes the pipeline before global options, root assignments first in TOML, and one blank line between TOML tables", () => {
   const text = stringifyConfiguration(
     {
       sources: { a: { type: "demo_logs", format: "json" } },
@@ -45,5 +45,5 @@ it("writes global options first and one blank line between TOML tables", () => {
         stringifyConfiguration({ sinks: {}, timezone: "UTC" }, "yaml"),
       ),
     ),
-  ).toEqual(["timezone", "sinks"]);
+  ).toEqual(["sinks", "timezone"]);
 });

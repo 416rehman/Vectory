@@ -108,6 +108,8 @@ import {
 } from "./deploymentStatus";
 import { relativeTime } from "./time";
 import { useHashQuery } from "./urlState";
+import { withStep } from "./pipelineDestination";
+import { commandFor, useCommand } from "./commands";
 import {
   DeviceTimeline,
   EarlyReleaseNote,
@@ -1690,14 +1692,14 @@ function RolloutPage({
   const pipelineHref = deployment?.configuration_id
     ? `#/configurations/${encodeURIComponent(deployment.configuration_id)}`
     : null;
-  // A failure only the pipeline can clear leads with Fix in pipeline.
+  // A failure only the pipeline can clear leads with Fix in pipeline, to the
+  // step and field of the first such failure that names them.
+  const fixing = failures.filter(
+    (failure) => failure.state !== "degraded" && pipelineFixable(failure.code),
+  );
   const fixable =
-    !!pipelineHref &&
-    !deployment?.rolled_back_by &&
-    failures.some(
-      (failure) =>
-        failure.state !== "degraded" && pipelineFixable(failure.code),
-    );
+    !!pipelineHref && !deployment?.rolled_back_by && fixing.length > 0;
+  const fixingStep = fixing.find((failure) => failure.component_id);
   const released = currentTargets - (deployment?.state_counts.pending || 0);
   // The delivery gate stopped it and devices still run it: roll back first.
   const deliveryStop =
@@ -1756,6 +1758,52 @@ function RolloutPage({
       icon: Trash2,
       run: (opener) => removeAssignment(opener),
     });
+  // The command palette's Pause, Cancel and Roll back open the same reviewed
+  // dialog as the buttons here, once this rollout allows them. None changes
+  // anything: the dialog still asks.
+  const stopRun = (key: string) =>
+    operate
+      ? stopActions.find((action) => action.key === key && !action.unavailable)
+          ?.run
+      : undefined;
+  // A request made from a list that was out of date ends here once this page
+  // knows the rollout, with a line saying so, rather than opening a dialog
+  // later on an unrelated click.
+  const refused = (verb: string) =>
+    deployment
+      ? () =>
+          notify(`${verb} isn't available for this rollout now.`, {
+            tone: "info",
+          })
+      : undefined;
+  // A dialog the palette opened rests on its safe choice, so an Enter pressed
+  // again right after the palette's own cannot confirm what it opened.
+  const [openedByPalette, setOpenedByPalette] = useState(false);
+  useEffect(() => {
+    if (!action) setOpenedByPalette(false);
+  }, [action]);
+  const askFirst = (key: string) => () => {
+    setOpenedByPalette(true);
+    stopRun(key)?.(null);
+  };
+  useCommand(
+    commandFor("rollout.pause", id),
+    askFirst("pause"),
+    !!stopRun("pause"),
+    refused("Pause"),
+  );
+  useCommand(
+    commandFor("rollout.cancel", id),
+    askFirst("cancel"),
+    !!stopRun("cancel"),
+    refused("Cancel"),
+  );
+  useCommand(
+    commandFor("rollout.rollback", id),
+    askFirst("rollback"),
+    !!stopRun("rollback"),
+    refused("Roll back"),
+  );
   return (
     <div
       className="control-page rollout-page"
@@ -1923,7 +1971,14 @@ function RolloutPage({
                         : `Roll back ${released} ${released === 1 ? "device" : "devices"}`}
                     </Button>
                   ) : fixable && pipelineHref ? (
-                    <a className="button rollout-fix-link" href={pipelineHref}>
+                    <a
+                      className="button rollout-fix-link"
+                      href={withStep(
+                        pipelineHref,
+                        fixingStep?.component_id,
+                        fixingStep?.field,
+                      )}
+                    >
                       <Wrench size={15} aria-hidden="true" />
                       Fix in pipeline
                     </a>
@@ -2213,6 +2268,7 @@ function RolloutPage({
               : undefined
           }
           label={actionLabel}
+          safeFocus={openedByPalette}
           returnFocusRef={actionReturnFocus}
           onClose={closeAction}
           onConfirm={perform}
@@ -2527,6 +2583,7 @@ function ActionDialog({
   revision,
   onCancelFirst,
   label,
+  safeFocus,
   returnFocusRef,
   onClose,
   onConfirm,
@@ -2550,11 +2607,14 @@ function ActionDialog({
   revision: number;
   onCancelFirst?: () => void;
   label(name: string): string;
+  /** Open on the choice that changes nothing, not on the confirmation. */
+  safeFocus: boolean;
   returnFocusRef: React.RefObject<HTMLElement | null>;
   onClose(): void;
   onConfirm(): void;
   onRemove(): void;
 }) {
+  const keep = useRef<HTMLButtonElement>(null);
   const rollback = action === "rollback";
   const empty =
     rollback && !!rollbackPreview && nothingToRollBackTo(rollbackPreview);
@@ -2566,6 +2626,7 @@ function ActionDialog({
       onClose={onClose}
       returnFocusRef={returnFocusRef}
       title={rollback ? "Review rollback" : label(action)}
+      initialFocus={safeFocus ? keep : undefined}
       wide={rollback}
       className={rollback ? "rollback-review-modal" : ""}
       description={
@@ -2633,7 +2694,12 @@ function ActionDialog({
         )}
       </div>
       <div className="modal-footer">
-        <Button variant="secondary" disabled={committing} onClick={onClose}>
+        <Button
+          ref={keep}
+          variant="secondary"
+          disabled={committing}
+          onClick={onClose}
+        >
           {uncertain ? "Close" : "Keep current state"}
         </Button>
         {empty ? (

@@ -312,7 +312,11 @@ export default function ConfigurationCodeEditor({
       view.state.doc.length,
       normalizeLines(value.slice(0, Math.max(0, reveal.offset))).length,
     );
-    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    // Centered, so the place comes with the lines around it.
+    view.dispatch({
+      selection: { anchor },
+      effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+    });
     view.focus();
   }, [reveal?.nonce]);
 
