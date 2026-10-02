@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -48,16 +47,7 @@ func wellFormedName(text string) bool {
 	if count := utf8.RuneCountInString(text); count < 1 || count > maxDisplayName || strings.TrimSpace(text) == "" {
 		return false
 	}
-	for _, r := range text {
-		switch {
-		case unicode.IsControl(r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
-			return false
-		case r >= '‪' && r <= '‮', r >= '⁦' && r <= '⁩':
-			// Embedding, override and isolate controls reorder what follows them.
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(text, hostileRune)
 }
 
 // desiredIdentity is what makes a desired version the same one across

@@ -1217,6 +1217,69 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatalf("50 refused attempts left %d audit rows for the token", rows)
 		}
 	})
+	t.Run("hostile-log-text-is-replaced-and-never-refuses-a-check-in", func(t *testing.T) {
+		// An agent reports Vector's log text, which can echo event data. A
+		// control character in it must not take the device off the control plane.
+		key, csr := keyCSR(t)
+		own := h.token(map[string]any{"name": "hostile-log-text", "expires_hours": 1, "max_uses": 1, "name_prefix": "sec-"})
+		n, credentials := h.enroll(own, "sec-hostile-text", fmt.Sprintf("%x", serial()), csr)
+		okay(t, n, credentials)
+		agent := h.client(credentials, key)
+		defer agent.CloseIdleConnections()
+		id := credentials["device_id"].(string)
+		beatWith := func(extra map[string]any) (int, map[string]any) {
+			body := map[string]any{}
+			for k, v := range beat {
+				body[k] = v
+			}
+			body["nonce"], body["request_id"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(1 + len(extra))}, 32)), fmt.Sprintf("%x", serial())
+			for k, v := range extra {
+				body[k] = v
+			}
+			n, v, _ := h.req(agent, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+			return n, v
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		group := func(message string) map[string]any {
+			return map[string]any{"fingerprint": "0123456789abcdef", "level": "error", "message": message, "count": 1, "first_seen": now, "last_seen": now}
+		}
+		hostile := "x\x07y\x1b[31m\r\nz\x00"
+		n, v := beatWith(map[string]any{
+			"vector_log_summary": []any{group(hostile)},
+			"apply_state":        "failed",
+			"error": map[string]any{"code": "VALIDATION_FAILED", "stage": "validation", "message": "x", "diagnostics": []any{
+				map[string]any{"severity": "error", "code": "VALIDATION_ERROR", "message": "bad\x07 text\r\n", "hint": "\x1b[2Jtry again", "field": "a\x00b"},
+			}},
+		})
+		okay(t, n, v)
+		n, shown, _ := h.api("GET", "/devices/"+id, nil)
+		okay(t, n, shown)
+		items := shown["vector_log_summary"].(map[string]any)["items"].([]any)
+		if got := items[0].(map[string]any)["message"]; got != "x y [31m z" {
+			t.Fatalf("the stored message is %q", got)
+		}
+		// The empty-looking message says so rather than being refused.
+		n, v = beatWith(map[string]any{"vector_log_summary": []any{group("\x07\x1b")}})
+		okay(t, n, v)
+		n, shown, _ = h.api("GET", "/devices/"+id, nil)
+		okay(t, n, shown)
+		items = shown["vector_log_summary"].(map[string]any)["items"].([]any)
+		if got := items[0].(map[string]any)["message"]; got != "Vector logged a message with no printable text." {
+			t.Fatalf("the stored message is %q", got)
+		}
+		// What the server acts on is still checked exactly.
+		for name, extra := range map[string]map[string]any{
+			"state_dir":          {"state_dir": "/var/lib/vectory\x07"},
+			"component_id":       {"vector_log_summary": []any{func() map[string]any { g := group("m"); g["component_id"] = "out\x07"; return g }()}},
+			"configuration_mode": {"configuration_mode": "full\x07"},
+		} {
+			if n, v = beatWith(extra); n != 400 {
+				t.Fatalf("%s with a control character: HTTP %d %v", name, n, v)
+			}
+		}
+		n, v = beatWith(nil)
+		okay(t, n, v)
+	})
 	t.Run("revoked-pooled-connection-rejected", func(t *testing.T) {
 		n, v, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/revoke", map[string]any{})
 		okay(t, n, v)

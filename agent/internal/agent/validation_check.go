@@ -221,7 +221,7 @@ func (r *redactor) testResults(names []string, run candidateRun, failed bool) []
 	passed := map[string]bool{}
 	failing := map[string]string{}
 	if run.TestsRan {
-		for _, line := range strings.Split(strings.ToValidUTF8(ansiEscape.ReplaceAllString(string(run.TestOutput), ""), ""), "\n") {
+		for _, line := range strings.Split(strings.ToValidUTF8(terminalSequence.ReplaceAllString(string(run.TestOutput), ""), ""), "\n") {
 			if m := testPassedLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 				passed[m[1]] = true
 			}
