@@ -18,7 +18,7 @@ Restricted mode accepts an `elasticsearch` sink with `auth.strategy: aws` and no
 
 ### 3. `vectory allow --file-root` does not enforce the state-directory rule
 
-[Installation](../user/installation.md) says never to allow the state directory as a file root, but `validateInstallPolicy` does not enforce it: a root that covers the managed configuration directory could let a pipeline read resolved device secrets, and a root of `/` covers everything. Reasoned from the code, not tested. **Fix:** refuse `/`, volume roots, and any root that overlaps the state directory, the managed configuration directory or the assets directory. **Test:** each refused root, in `install_options` tests and through `vectory allow`.
+[Installation](../user/installation.md) says never to allow the state directory as a file root, but `validateInstallPolicy` does not enforce it: a root that covers the managed configuration directory could let a pipeline read resolved device secrets, a root that covers a bound secret file (`vectory configure-secrets`) lets a `file` source read it, and a root of `/` covers everything. Reasoned from the code, not tested. **Fix:** refuse `/`, volume roots, and any root that overlaps the state directory, the managed configuration directory, the assets directory or a bound secret file ([ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md) section 3). **Test:** each refused root, in `install_options` tests and through `vectory allow`.
 
 ### 4. A file root covering a socket directory reaches local services
 
