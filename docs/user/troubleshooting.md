@@ -119,7 +119,7 @@ Open the device and read its issue: it names the stage and the reason.
 | Issue code | What happened | Fix |
 | --- | --- | --- |
 | `VALIDATION_FAILED` | Vector rejected the configuration on the device, its tests failed, or `vector validate` didn't finish in time (the finding `VECTOR_TIMEOUT`: the version is never treated as valid). | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
-| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it**, and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. Two reasons apply to every device: an `api` block is never allowed in restricted mode (`LOCAL_API_DENIED`), and a component ID that is a path is refused in both modes (`INVALID_COMPONENT_ID`). | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
+| `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it**, and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. Some reasons no allowance can lift: restricted mode never allows an `api` block (`LOCAL_API_DENIED`), an AWS credentials file (`CREDENTIALS_FILE_DENIED`) or AWS credentials the host supplies (`AMBIENT_CREDENTIALS_DENIED`), and a component ID that is a path is refused in both modes (`INVALID_COMPONENT_ID`). | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
@@ -143,6 +143,8 @@ The issue, the device page and `sudo vectory status --json` (under `configuratio
 | `FILE_NOT_FOUND` | Check that the path exists on the device. |
 | `ENV_VAR_MISSING` | Set it in the Vector service's environment on the device, or remove the reference from the pipeline. |
 | `LOCAL_API_DENIED` | Remove the api block, or deploy to a full-mode device. Vector's local API has no authentication, so no host allowance can permit it. See [Restricted and full mode](security.md#restricted-and-full-mode). |
+| `CREDENTIALS_FILE_DENIED` | A sink sets `credentials_file` under `auth`, and a credentials file can name a program that Vector runs, so restricted mode refuses it. Remove it and give the sink its access keys as device secrets, or deploy to a full-mode device. See [Restricted and full mode](security.md#restricted-and-full-mode). |
+| `AMBIENT_CREDENTIALS_DENIED` | A sink uses `auth.strategy: aws` without explicit keys, so it would sign with this host's own AWS identity. Give it `access_key_id` and `secret_access_key` as device secrets, with no `assume_role`, `imds` or `profile`, or deploy to a full-mode device. The message names where the keys go: `auth` for `elasticsearch`, `auth.auth` for `http`, `loki` and `prometheus_exporter`. |
 | `INVALID_COMPONENT_ID` | Rename the component and the inputs that name it. An ID can't contain a slash, a backslash or a control character, or start with a drive letter and a colon (like `C:`), because Vector uses it as a directory name in its data directory. Devices in both modes refuse it. |
 | `DISK_FULL` | Free some space on that disk. The agent applies this version at its next check-in; there is nothing else to do. |
 | `DOWNLOAD_INTERRUPTED` | Nothing was applied. The agent tries again at its next check-in. If it keeps happening, look for a proxy or firewall that cuts long responses. |
@@ -290,6 +292,18 @@ Stop the agent before changing local settings. A command that needs it stopped n
 ### A capability-policy file is rejected
 
 The file must be one JSON object, saved as UTF-8 without a byte-order mark, with the three lists `allowed_file_roots`, `allowed_network_hosts` and `allowed_listen_addresses` and nothing else. Use absolute file roots, exact `host:port` pairs, unique names and no comments. On Windows, double each backslash. The file is refused, not repaired, if its encoding is broken. See the [allowance format](installation.md#configure-restricted-allowances).
+
+### A file root is refused
+
+`vectory allow`, `install --capability-policy` and `setup` refuse a file root that would give pipelines the agent's own files, and change nothing. The message names the root and what it overlaps, for example `File root /var/lib contains the agent's state directory, /var/lib/vectory-agent.`
+
+A root can't be:
+
+- `/`, the root of a drive (`C:\`) or the root of a network share (`\\server\share`);
+- the agent's state directory, the managed configuration directory, or a directory that holds or lies inside either;
+- a file bound to a device secret, or a directory that holds it.
+
+Allow the directory that holds the files your pipelines need instead, such as `/var/log/app`. If a secret file is in the way, move it out of the directory you want to allow, then bind it again with `vectory configure-secrets`. A root allowed before this check existed stays until you replace the lists with `install --capability-policy`, which checks every root in the file.
 
 ### A secret-binding map is rejected
 

@@ -229,7 +229,7 @@ A new restricted installation can't read files, reach destinations or open liste
 - Save the file as UTF-8 without a byte-order mark, with no comments and no duplicate names. On Windows, double each backslash: `"C:\\ProgramData\\VectoryData"`.
 - The file replaces all three lists. Keep every entry the device still needs; `{}` removes them all.
 - Allowances don't create folders, grant operating-system permissions or turn on full mode.
-- Never allow the agent's own state directory as a file root.
+- A file root can't be `/` or the root of a drive or share. It can't be, hold or lie inside the agent's state directory, the managed configuration directory or a file bound to a device secret either. `install`, `setup` and `vectory allow` refuse such a root, name what it overlaps and change nothing. See [A file root is refused](troubleshooting.md#a-file-root-is-refused).
 
 **Add device** can put the file's path into the generated command, but it never uploads or checks the file. Only someone with access to the host can approve these resources. To add one later and keep the rest, run `sudo vectory allow` with the agent stopped, for example `sudo vectory allow --network logs.example.net:443`. See [Update restricted allowances](agents.md#update-restricted-allowances).
 
