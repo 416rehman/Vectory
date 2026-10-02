@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Server,
+  Undo2,
+  Wrench,
+} from "lucide-react";
 import {
   APIError,
   api,
@@ -33,6 +40,13 @@ import { DataTable, type TableColumn } from "./DataTable";
 import DiagnosticList from "./DiagnosticList";
 import { DeviceApplicationRetry, eligibleState } from "./RecoveryActions";
 import { leadingDiagnostic } from "./runtimeModel";
+import { requestRollbackReview } from "./deploymentStatus";
+import {
+  groupSubject,
+  issueAction,
+  issueSubject,
+  type IssueAction,
+} from "./issueActions";
 import { isDataPlaneCode, issueDispositions } from "./status";
 import { useHashQuery } from "./urlState";
 import "./control.css";
@@ -230,8 +244,15 @@ export default function Issues({
   }
   // Rows from before a failed refresh stay readable, but nothing acts on them.
   const stale = !!active.error;
-  const actions = (issue: Issue) => (
-    <IssueActions issue={issue} user={user} onAct={act} stale={stale} />
+  // A device in a group card has no link of its own: the card leads.
+  const actions = (issue: Issue, primary = true) => (
+    <IssueActions
+      issue={issue}
+      user={user}
+      onAct={act}
+      stale={stale}
+      primary={primary}
+    />
   );
   const columns: TableColumn<Issue>[] = [
     {
@@ -281,7 +302,7 @@ export default function Issues({
     {
       id: "actions",
       header: <span className="sr-only">Issue actions</span>,
-      cell: actions,
+      cell: (issue) => actions(issue),
     },
   ];
   const emptyState = (
@@ -326,6 +347,7 @@ export default function Issues({
           onChange={setSearch}
           maxLength={200}
           placeholder="Search devices, pipelines, or reasons"
+          shortcut
         />
         <SegmentedControl
           label="Issue status"
@@ -423,6 +445,7 @@ export default function Issues({
           retrying={groups.refreshing}
           empty={emptyState}
           actions={actions}
+          user={user}
           onPage={(next) => update({ gpage: next })}
         />
       )}
@@ -606,25 +629,80 @@ function IssueSummary({ issue }: { issue: Issue }) {
   );
 }
 
+const actionIcons = {
+  rollback: Undo2,
+  fix: Wrench,
+  rollout: ArrowRight,
+  device: Server,
+} as const;
+
+/**
+ * What an issue most likely needs next, as a link. Roll back opens the
+ * rollout with its rollback review ready; the review still asks before
+ * anything changes. `about` tells links apart for people who hear them in a
+ * list.
+ */
+function IssueLink({ action, about }: { action: IssueAction; about: string }) {
+  const Icon = actionIcons[action.kind];
+  return (
+    <a
+      className="button compact issue-primary-action"
+      href={action.href}
+      data-issue-action={action.kind}
+      aria-label={`${action.label} for ${about}`}
+      title={
+        action.kind === "rollback"
+          ? "Opens the rollback review. Nothing changes until you confirm there."
+          : undefined
+      }
+      onClick={(event) => {
+        if (
+          action.deployment &&
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey
+        )
+          requestRollbackReview(action.deployment);
+      }}
+    >
+      <Icon size={14} aria-hidden="true" />
+      {action.label}
+    </a>
+  );
+}
+
 function IssueActions({
   issue,
   user,
   onAct,
   stale = false,
+  primary = true,
 }: {
   issue: Issue;
   user: User;
   stale?: boolean;
+  /** Lead with the link to what the issue needs. */
+  primary?: boolean;
   onAct: (
     kind: Dialog["kind"],
     issue: Issue,
     target: HTMLButtonElement,
   ) => void;
 }) {
-  if (!canAct(user, issue)) return null;
+  // A row names its device as a link already; its own next step is the rest.
+  const found = primary ? issueAction(issueSubject(issue), user) : null;
+  const next = found?.kind === "device" ? null : found;
+  const acting = canAct(user, issue);
+  if (!next && !acting) return null;
   return (
     <div className="issue-actions">
-      {!issue.device_revoked &&
+      {next && (
+        <IssueLink action={next} about={issue.device_name || "this device"} />
+      )}
+      {acting &&
+        !issue.device_revoked &&
         issue.desired_version_id &&
         !isDataPlaneCode(issue.code) && (
           <Button
@@ -636,14 +714,16 @@ function IssueActions({
             Retry on device
           </Button>
         )}
-      <Button
-        variant="ghost compact"
-        aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
-        disabled={stale}
-        onClick={(event) => onAct("disposition", issue, event.currentTarget)}
-      >
-        {issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"}
-      </Button>
+      {acting && (
+        <Button
+          variant="ghost compact"
+          aria-label={`${issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"} issue on ${issue.device_name || "this device"}`}
+          disabled={stale}
+          onClick={(event) => onAct("disposition", issue, event.currentTarget)}
+        >
+          {issue.disposition === "acknowledged" ? "Reopen" : "Acknowledge"}
+        </Button>
+      )}
     </div>
   );
 }
@@ -657,6 +737,7 @@ function IssueGroups({
   retrying,
   empty,
   actions,
+  user,
   onPage,
 }: {
   page: IssueGroupPage;
@@ -666,7 +747,8 @@ function IssueGroups({
   retry: () => void;
   retrying: boolean;
   empty: React.ReactNode;
-  actions: (issue: Issue) => React.ReactNode;
+  actions: (issue: Issue, primary?: boolean) => React.ReactNode;
+  user: User;
   onPage: (page: number) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -708,6 +790,7 @@ function IssueGroups({
             })
           }
           actions={actions}
+          user={user}
         />
       ))}
       {page.total > page.page_size && (
@@ -727,13 +810,16 @@ function IssueGroupCard({
   expanded,
   onToggle,
   actions,
+  user,
 }: {
   group: IssueGroup;
   expanded: boolean;
   onToggle: () => void;
-  actions: (issue: Issue) => React.ReactNode;
+  actions: (issue: Issue, primary?: boolean) => React.ReactNode;
+  user: User;
 }) {
   const fix = leadingDiagnostic(group.diagnostics)?.hint;
+  const next = issueAction(groupSubject(group), user);
   const counts = (["open", "acknowledged", "resolved"] as const)
     .map((disposition) => ({
       disposition,
@@ -781,7 +867,7 @@ function IssueGroupCard({
     {
       id: "actions",
       header: <span className="sr-only">Device actions</span>,
-      cell: actions,
+      cell: (issue) => actions(issue, false),
     },
   ];
   return (
@@ -839,16 +925,19 @@ function IssueGroupCard({
         )}
         {group.last_seen && <> · last reported {issueTime(group.last_seen)}</>}
       </p>
-      <button
-        type="button"
-        className="issue-group-toggle"
-        aria-expanded={expanded}
-        aria-controls={detailsId}
-        onClick={onToggle}
-      >
-        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        {expanded ? "Hide devices and findings" : "Show devices and findings"}
-      </button>
+      <div className="issue-group-footer">
+        <button
+          type="button"
+          className="issue-group-toggle"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={onToggle}
+        >
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          {expanded ? "Hide devices and findings" : "Show devices and findings"}
+        </button>
+        {next && <IssueLink action={next} about={group.title} />}
+      </div>
       {expanded && (
         <div className="issue-group-details" id={detailsId}>
           {group.diagnostics.length > 0 && (

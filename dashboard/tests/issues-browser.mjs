@@ -41,7 +41,7 @@ const server = await createServer({
       },
       load(id) {
         if (id !== virtual) return;
-        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import {AuditLog} from '/src/AuditLog.tsx';import {setCSRF} from '/src/api.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
+        return `import React from 'react';import {createRoot} from 'react-dom/client';import Issues from '/src/Issues.tsx';import {AuditLog} from '/src/AuditLog.tsx';import {setCSRF} from '/src/api.ts';import {takeRollbackReview} from '/src/deploymentStatus.ts';import '/src/styles.css';setCSRF('synthetic-csrf');const root=createRoot(document.getElementById('root'));let key=0;window.takeRollbackReview=takeRollbackReview;window.renderIssues=(props={})=>{window.notifications=[];window.lastNavigation='';root.render(React.createElement(Issues,{key:++key,user:{id:'synthetic-admin',name:'Synthetic admin',email:'admin@example.test',role:'admin',enabled:true,revision:1},notify:message=>window.notifications.push(message),navigate:path=>window.lastNavigation=path,...props}));};window.renderAudit=()=>root.render(React.createElement(AuditLog,{key:++key}));window.ready=true;`;
       },
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
@@ -1376,6 +1376,211 @@ try {
             exact: true,
           }),
         ).toBeFocused();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  const person = (role) => ({
+    id: `synthetic-${role}`,
+    name: `Synthetic ${role}`,
+    email: `${role}@example.test`,
+    role,
+    enabled: true,
+    revision: 1,
+  });
+  await check(
+    "issue cards lead with what each needs next: roll back, fix at the step and field, open the rollout or the device, and only for the roles that can",
+    async () => {
+      const pipelineId = "00000000-0000-4000-8000-00000000c0f1";
+      const f = await groupFixture();
+      try {
+        const card = (title) =>
+          f.page.locator("article.issue-group").filter({
+            has: f.page.getByRole("heading", { name: title, exact: true }),
+          });
+        const lead = (scope, label, title) =>
+          scope.getByRole("link", {
+            name: `${label} for ${title}`,
+            exact: true,
+          });
+        const as = (role, view = "groups") =>
+          f.mount({ user: person(role) }, view);
+        const rejected = "Vector rejected the configuration";
+        const failures = (patch) => {
+          for (const index of failing)
+            Object.assign(f.state.records[index], patch);
+        };
+
+        // A missing directory on two rollouts is the devices' to fix: nothing
+        // leads, and the card with no pipeline version has nothing to open.
+        await as("admin");
+        await expect(f.groups).toHaveCount(2);
+        await expect(f.page.locator("[data-issue-action]")).toHaveCount(0);
+
+        // One rollout and a finding only the pipeline can clear: the people who
+        // edit go to the step and field; the others can open the rollout.
+        failures({
+          deployment_id: deployments[0],
+          diagnostics: [
+            {
+              severity: "error",
+              code: "VRL_E100",
+              component_id: "parse",
+              field: "source",
+              message: "The VRL source of this step has a syntax error.",
+              hint: "Fix the VRL source of this step.",
+            },
+          ],
+        });
+        for (const role of ["admin", "editor"]) {
+          await as(role);
+          const fix = lead(card(rejected), "Fix in pipeline", rejected);
+          await expect(fix).toHaveAttribute(
+            "href",
+            `#/configurations/${pipelineId}?select=parse&field=source`,
+          );
+          await expect(fix).toHaveText("Fix in pipeline");
+          await expect(
+            card(rejected).locator("[data-issue-action]"),
+          ).toHaveCount(1);
+        }
+        for (const role of ["operator", "viewer"]) {
+          await as(role);
+          await expect(
+            lead(card(rejected), "Open rollout", rejected),
+          ).toHaveAttribute("href", `#/deployments/${deployments[0]}`);
+          await expect(
+            card(rejected).locator("[data-issue-action]"),
+          ).toHaveCount(1);
+        }
+
+        // A step that cannot deliver, on one rollout: rolling back leads for
+        // those who can operate, and its page still asks before anything moves.
+        const delivery = "out can't deliver events";
+        failures({
+          code: "DATA_PLANE_SINK_ERRORS",
+          stage: "delivery",
+          title: delivery,
+          message: "The sink out reports delivery errors.",
+          diagnostics: [
+            {
+              severity: "error",
+              code: "DATA_PLANE_SINK_ERRORS",
+              component_id: "out",
+              message: "The sink out reports delivery errors.",
+            },
+          ],
+        });
+        for (const role of ["admin", "operator"]) {
+          await as(role);
+          await expect(
+            lead(card(delivery), "Roll back", delivery),
+          ).toHaveAttribute("href", `#/deployments/${deployments[0]}`);
+          await expect(
+            card(delivery).locator("[data-issue-action]"),
+          ).toHaveCount(1);
+        }
+        for (const role of ["editor", "viewer"]) {
+          await as(role);
+          await expect(
+            lead(card(delivery), "Open rollout", delivery),
+          ).toHaveAttribute("href", `#/deployments/${deployments[0]}`);
+          await expect(lead(card(delivery), "Roll back", delivery)).toHaveCount(
+            0,
+          );
+        }
+        await as("operator");
+        const asked = () =>
+          f.page.evaluate(
+            (id) => window.takeRollbackReview(id),
+            deployments[0],
+          );
+        expect(await asked()).toBe(false);
+        await lead(card(delivery), "Roll back", delivery).click();
+        // The rollout is told to open its review once, and nothing was sent.
+        expect(await asked()).toBe(true);
+        expect(await asked()).toBe(false);
+        expect(f.state.postRequests).toEqual([]);
+
+        // A card about one device opens it; a device that is gone has no page.
+        await as("viewer");
+        const search = f.page.getByRole("textbox", {
+          name: "Search devices, pipelines, or reasons",
+          exact: true,
+        });
+        const apply = "The device couldn't apply the configuration";
+        const meta = card(apply).locator(".issue-group-meta");
+        await search.fill("device 010");
+        await expect(meta).toContainText("1 device ·");
+        await expect(lead(card(apply), "Open device", apply)).toHaveAttribute(
+          "href",
+          "#/devices/00000000-0000-4000-8000-000000000010",
+        );
+        await search.fill("device 002");
+        await expect(meta).toContainText("1 device ·");
+        await expect(card(apply).getByRole("link")).toHaveCount(0);
+        await search.fill("device 01");
+        await expect(meta).toContainText("10 devices ·");
+        await expect(card(apply).getByRole("link")).toHaveCount(0);
+
+        // Rows lead too, except to the device their name already links to, and
+        // the devices inside a card leave the leading to the card.
+        await as("admin", "list");
+        const row = f.row(1);
+        await expect(lead(row, "Roll back", deviceName(1))).toHaveAttribute(
+          "href",
+          `#/deployments/${deployments[0]}`,
+        );
+        await expect(f.row(0).locator("[data-issue-action]")).toHaveCount(0);
+        await expect(
+          f.row(0).getByRole("link", { name: deviceName(0), exact: true }),
+        ).toBeVisible();
+        await as("admin");
+        await card(delivery)
+          .getByRole("button", { name: "Show devices and findings" })
+          .click();
+        await expect(card(delivery).getByRole("table")).toBeVisible();
+        await expect(card(delivery).locator("[data-issue-action]")).toHaveCount(
+          1,
+        );
+
+        // Both widths and themes: the link sits opposite the disclosure, fits,
+        // and passes the accessibility scan.
+        for (const width of [1280, 390])
+          for (const theme of ["light", "dark"]) {
+            await f.page.setViewportSize({
+              width,
+              height: width === 390 ? 844 : 960,
+            });
+            await f.page.evaluate(
+              (theme) => (document.documentElement.dataset.theme = theme),
+              theme,
+            );
+            await expect(
+              lead(card(delivery), "Roll back", delivery),
+            ).toBeVisible();
+            expect(
+              await f.page.evaluate(
+                () => document.documentElement.scrollWidth <= innerWidth,
+              ),
+            ).toBe(true);
+            const audit = await new AxeBuilder({ page: f.page }).analyze();
+            accessibility.push({
+              width,
+              theme,
+              view: "issue-actions",
+              violations: audit.violations.map((x) => x.id),
+            });
+            expect(audit.violations.map((x) => x.id)).toEqual([]);
+            await f.page.screenshot({
+              path: resolve(
+                output,
+                `actions-${width === 390 ? "mobile" : "desktop"}-${theme}.png`,
+              ),
+              animations: "disabled",
+            });
+          }
       } finally {
         await f.close();
       }
