@@ -1304,32 +1304,119 @@ fn worker_client() -> crate::error::Result<reqwest::Client> {
         .map_err(|_| crate::error::ApiError::invalid("Validator client unavailable"))
 }
 
+/// Say in the server's log why the worker's answer was unusable. Every check
+/// reports the same sentence when that happens (the validator is unavailable),
+/// so the log is where an operator finds the cause. Only fixed phrases and
+/// numbers go in: nothing the worker or a draft sent.
+fn worker_fault(path: &str, reason: &str) {
+    tracing::warn!(
+        path,
+        reason,
+        "the isolated validator gave no usable answer; the checks that need it are blocked"
+    );
+}
+
+fn request_fault(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "it did not answer within 8 seconds"
+    } else if error.is_connect() {
+        "the server could not connect to it"
+    } else if error.is_body() || error.is_decode() {
+        "its answer could not be read"
+    } else {
+        "the request to it failed"
+    }
+}
+
 /// POST to the isolated worker and read a bounded JSON reply.
 async fn worker_call(url: &str, path: &str, body: &Value, limit: usize) -> Option<Value> {
     let client = worker_client().ok()?;
-    let mut response = client
+    let mut response = match client
         .post(format!("{}/{path}", url.trim_end_matches('/')))
         .json(body)
         .send()
         .await
-        .ok()?;
-    if !response.status().is_success()
-        || response
-            .content_length()
-            .is_some_and(|n| n as usize > limit)
     {
+        Ok(response) => response,
+        Err(error) => {
+            worker_fault(path, request_fault(&error));
+            return None;
+        }
+    };
+    if !response.status().is_success() {
+        worker_fault(
+            path,
+            &format!("it answered HTTP {}", response.status().as_u16()),
+        );
+        return None;
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n as usize > limit)
+    {
+        worker_fault(path, "its answer is larger than the server accepts");
         return None;
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len() + chunk.len() > limit {
-            return None;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if bytes.len() + chunk.len() <= limit => {
+                bytes.extend_from_slice(&chunk)
+            }
+            Ok(Some(_)) => {
+                worker_fault(path, "its answer is larger than the server accepts");
+                return None;
+            }
+            Ok(None) => break,
+            Err(error) => {
+                worker_fault(path, request_fault(&error));
+                return None;
+            }
         }
-        bytes.extend_from_slice(&chunk);
     }
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    (value["worker_protocol"] == WORKER_PROTOCOL && value["vector_version"] == VECTOR_VERSION)
-        .then_some(value)
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        worker_fault(path, "its answer is not JSON");
+        return None;
+    };
+    if value["worker_protocol"] != WORKER_PROTOCOL || value["vector_version"] != VECTOR_VERSION {
+        worker_fault(
+            path,
+            "it speaks another protocol, or runs another Vector, than this server expects",
+        );
+        return None;
+    }
+    Some(value)
+}
+
+/// What the server reads from a worker's `/validate` answer: the diagnostics,
+/// placeholders and stand-ins, whether Vector ran and whether it accepted the
+/// draft. The error says what is wrong with an answer that cannot be used.
+type ValidateReply = (Vec<Value>, Vec<String>, Vec<String>, bool, bool);
+
+fn read_validate_reply(config: &Value, value: &Value) -> Result<ValidateReply, &'static str> {
+    let native = crate::vector_diagnostics::sanitize(config, &value["diagnostics"])
+        .ok_or("its diagnostics are not in the expected form")?;
+    let placeholders = worker_placeholders(config, &value["placeholders"])
+        .ok_or("a placeholder it names is not in the draft")?;
+    let stubbed = value["stubbed"]
+        .as_array()
+        .filter(|list| list.len() <= 64)
+        .ok_or("its list of stand-ins is missing or too long")?;
+    if !value["static_checked"].is_boolean() || !value["valid"].is_boolean() {
+        return Err("its answer lacks a true-or-false verdict");
+    }
+    let stubbed: Vec<String> = stubbed
+        .iter()
+        .map(|id| id.as_str().filter(|id| id.len() <= 128).map(str::to_owned))
+        .collect::<Option<_>>()
+        .ok_or("a stand-in it names is not a short text")?;
+    Ok((
+        native,
+        placeholders,
+        stubbed,
+        value["static_checked"] == true,
+        value["valid"] == true,
+    ))
 }
 
 fn worker_busy() -> crate::error::ApiError {
@@ -1387,28 +1474,17 @@ pub async fn validate_isolated(s: &crate::State, config: &Value) -> crate::error
         .try_acquire()
         .map_err(|_| worker_busy())?;
     let reply = worker_call(url, "validate", &json!({"config":config}), 256 * 1024).await;
-    let checked = reply.as_ref().and_then(|value| {
-        let native = crate::vector_diagnostics::sanitize(config, &value["diagnostics"])?;
-        let placeholders = worker_placeholders(config, &value["placeholders"])?;
-        let stubbed = value["stubbed"].as_array()?;
-        if stubbed.len() > 64
-            || !value["static_checked"].is_boolean()
-            || !value["valid"].is_boolean()
-        {
-            return None;
+    let checked = match reply
+        .as_ref()
+        .map(|value| read_validate_reply(config, value))
+    {
+        Some(Ok(parts)) => Some(parts),
+        Some(Err(reason)) => {
+            worker_fault("validate", reason);
+            None
         }
-        let stubbed: Vec<String> = stubbed
-            .iter()
-            .map(|id| id.as_str().filter(|id| id.len() <= 128).map(str::to_owned))
-            .collect::<Option<_>>()?;
-        Some((
-            native,
-            placeholders,
-            stubbed,
-            value["static_checked"] == true,
-            value["valid"] == true,
-        ))
-    });
+        None => None,
+    };
     let Some((native, placeholders, stubbed, ran, worker_valid)) = checked else {
         diagnostics.push(Diagnostic {
             code: Some("validator_unavailable".into()),
