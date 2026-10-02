@@ -4,6 +4,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import { fleetReplies, slimOverview } from "./fleet-replies.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,19 +146,15 @@ const devices = [
     reported_generation: 0,
   }),
 ];
-const overview = {
-  devices_total: devices.length,
-  devices_online: 6,
+// The counts come from the devices above, as the server computes them; the
+// rows of "needs you" are given.
+const overview = slimOverview(devices, {
   configurations_total: 1,
   deployments_active: 1,
   issues_open: 1,
-  devices,
-  recent_activity: [],
   devices_managed: 6,
   devices_on_desired: 3,
   versions_total: 3,
-  versions: {},
-  rollouts: [],
   attention: [
     {
       cause: "failed",
@@ -190,9 +187,7 @@ const overview = {
       rollback_available: false,
     },
   ],
-  fleet_activity: [],
-  security_events_hidden: 0,
-};
+});
 async function open(name, { width = 1280, theme = "light" } = {}) {
   const context = await browser.newContext({
     viewport: { width, height: 900 },
@@ -206,6 +201,7 @@ async function open(name, { width = 1280, theme = "light" } = {}) {
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   page.on("pageerror", (e) => errors.push(e.message));
+  const fleet = fleetReplies({ devices: () => devices, groups: [] });
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url());
@@ -220,7 +216,8 @@ async function open(name, { width = 1280, theme = "light" } = {}) {
       errors.push("Unexpected " + req.method() + " " + path);
       return reply({ error: { code: "UNEXPECTED", message: path } }, 500);
     }
-    if (path === "/devices") return reply(devices);
+    const paged = fleet.handle(req.method(), url);
+    if (paged) return reply(paged.json, paged.status);
     if (path === "/groups") return reply([]);
     if (path === "/overview") return reply(overview);
     if (path === "/notifications/channels") return reply(configuredChannels);

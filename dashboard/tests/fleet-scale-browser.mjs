@@ -352,7 +352,9 @@ try {
       expect(number(await offline.innerText())).toBe(
         inventory.counts.views.offline,
       );
-      const failing = page.getByRole("button", { name: /^Failing\s*[\d,]+$/ });
+      const failing = page.getByRole("button", {
+        name: /^Needs attention\s*[\d,]+$/,
+      });
       expect(number(await failing.innerText())).toBe(
         inventory.counts.views.failing,
       );

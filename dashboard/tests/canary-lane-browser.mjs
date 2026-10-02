@@ -3,6 +3,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import { fleetReplies } from "./fleet-replies.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -250,6 +251,7 @@ async function launch(f, { width = 899, theme = "light" } = {}) {
   const page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror", (e) => f.errors.push(e.message));
+  const fleet = fleetReplies({ devices: () => f.devices || [], groups: [] });
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url());
@@ -353,6 +355,9 @@ async function launch(f, { width = 899, theme = "light" } = {}) {
         page: 1,
         page_size: 12,
       });
+    // The deploy review reads devices a page at a time.
+    const paged = fleet.handle(method, url);
+    if (paged) return reply(paged.json, paged.status);
     if (path === "/devices") return reply(f.devices || []);
     if (path === "/groups") return reply([]);
     if (path === "/issues/history" || path === "/audit/history")
