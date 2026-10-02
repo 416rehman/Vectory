@@ -23,7 +23,7 @@ Choosing devices doesn't publish unsaved edits. [Check and publish](pipelines.md
 
 The device list in the dialog shows a page at a time and searches on the server, so it opens as quickly with thousands of devices as with ten. Search by name, platform, pipeline, version or group, tick devices, and move on to other pages or searches: your choices stay. **Select all 84 matching** adds every device the search finds in one step, up to 10,000, and says so if more match. Groups are listed by name with their device count; a group's members are counted when you choose it, and the server reads the group again when it reviews and when it sends. **Clear selection** starts over.
 
-Each device you tick one by one can have its own value for a pipeline variable. The default you set applies to devices you add in bulk.
+Each device you tick one by one can have its own value for a pipeline variable. The default you set applies to devices you add in bulk. A device's page lists the values it was offered: see [Read what a device was offered](#read-what-a-device-was-offered).
 
 ## Review the target set
 
@@ -160,6 +160,37 @@ The Overview's **Fleet health** and the **Status** of the [Devices](/#/devices) 
 | **Offline**, **Sync paused**, **No pipeline** | No check-in for three intervals, a pause, or nothing assigned. | [Reconnect the device](troubleshooting.md#a-device-is-offline-or-never-connects), resume sync where it was paused, or deploy a pipeline. |
 
 The Devices page's **Needs attention** filter lists the devices that want a look: failed or rolled back, held on their previous version, not delivering, in conflict or waiting for a check. Hover it to see what it holds. A held device also counts as not on its desired version.
+
+## Read what a device was offered
+
+A device's page shows **Effective configuration**: the exact text Vectory offered that device, with its own values applied. Every signed-in role can read it. It's read-only: nothing there applies, restores or verifies anything, and a copy or download is not proof that the device runs it.
+
+- **Configuration** shows the text with line numbers, folding and search. **Copy** and **Download** give exactly these bytes. Secrets stay references such as `vectory-secret:API_TOKEN`, so the text never holds a secret.
+- **Changes** compares it with the previous offer: how many lines were added, removed and changed, then the changed lines, each group named by the components around it. A change longer than 2,000 lines is cut and says so. The counts always cover the whole change.
+- **Variables** lists the values this device was offered and where each came from: **Set for this device** or **Deployment default**. A field that can hold a credential reads **Not shown**.
+- **Generation** opens an earlier offer, with its version and when it was offered. A generation that offered the same text as the one before it says **same as 10**.
+- **Digests** shows the digest of what was offered next to the one the agent reported.
+
+The page reads the generation you chose once, and doesn't poll. It reads again only when the device reports a different file or generation.
+
+### How Vectory compares them
+
+At each check-in, the agent reports the SHA-256 digest of its managed file. Vectory compares it with the digest of what it offered. Equal digests mean identical bytes. Vectory never sees the file itself, so it never says what a file contains.
+
+| The line says | What it establishes |
+| --- | --- |
+| **Running matches what Vectory offered.** | The agent's last report is the offered text, byte for byte. It's a report from the last check-in, not a check made now. |
+| **The running configuration differs from what Vectory offered at generation 12: it matches generation 11.** | The file is an earlier offer. Generation 12 may not be applied yet, or it failed and the agent returned to the one before it. |
+| **The running configuration differs from what Vectory offered at generation 12.** | The file isn't any text Vectory offered this device. A local edit does this, and so does the configuration adopted at setup. With sync on, the agent restores the offered configuration at its next check-in. With sync paused, it leaves the file as it is. |
+| **The device doesn't run generation 11.** | You're reading an earlier offer, and the agent reports a different file. |
+| **Not reported by this agent.** | No digest was reported, so Vectory can't say. |
+| **This device hasn't checked in yet.** | Nothing was reported yet. |
+
+An offline device shows its last report and says so. A revoked device is never compared. A device with nothing assigned says **Nothing is offered to this device now** and, when its file is an earlier offer, which generation.
+
+A pipeline that reads [device secrets](resources.md#keep-credentials-on-the-device) is written to the host with the host's own values, so its file's digest never equals the offered one. For those, Vectory checks that the agent applied this exact template and that the file hasn't changed since the agent verified it. The line says so, and **Digests** adds the template the agent applied. Until the agent reports a template, the line reads **Vectory can't compare this version with the file on the host**.
+
+To check the file yourself, see [Compare the managed file with what was offered](agents.md#compare-the-managed-file-with-what-was-offered).
 
 ## Follow a rollout
 
