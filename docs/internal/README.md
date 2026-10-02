@@ -8,6 +8,7 @@ Engineering history and test evidence, kept for review and audit. These document
 | [ACCEPTANCE.md](ACCEPTANCE.md) | Historical acceptance record of 2026-09-26 to 2026-09-28. Most evidence files it names were not committed. |
 | [CI.md](CI.md) | What each CI job proves and does not, and the checks CI leaves out. |
 | [CONTINUATION.md](CONTINUATION.md) | Where the work stands and how to pick it up: what landed since the last handoff, how to verify, what is unstable, the definition of done. Start here. |
+| [RELEASE-0.1.md](RELEASE-0.1.md) | The first release: what ships, what is deferred, the gates and their status, the maintainer's publication steps. |
 | [WORK-QUEUE.md](WORK-QUEUE.md) | What to build or fix next, in order, with scope and acceptance. |
 | [AUTHORING-GAPS.md](AUTHORING-GAPS.md) | What an operator still cannot do with Vector from Vectory, and the defects found while authoring pipelines. |
 | [REVIEW-PLAYBOOK.md](REVIEW-PLAYBOOK.md) | How to review a batch of changes with fresh eyes, by area. |
