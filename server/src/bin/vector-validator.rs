@@ -382,14 +382,15 @@ async fn pipeline_tests(
             "placeholders": [],
         })));
     }
-    // Vector builds a step's Lua to run a test, and Lua can run any program: the
-    // tests of a draft with a Lua step run on devices, whoever asks the worker.
-    if !validation::lua_transforms(config).is_empty()
+    // Vector runs a Lua step's code, and opens an enrichment table's file, when
+    // it builds them for a test: the tests of such a draft run on devices,
+    // whoever asks the worker.
+    if let Some(diagnostic) = validation::tests_on_devices_diagnostic(config)
         && config["tests"].as_array().is_some_and(|t| !t.is_empty())
     {
         return Ok(protocol(json!({
             "tests_run": false, "tests": [],
-            "diagnostics": [validation::lua_tests_diagnostic().to_json()],
+            "diagnostics": [diagnostic.to_json()],
             "placeholders": [],
         })));
     }
