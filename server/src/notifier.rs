@@ -1298,7 +1298,9 @@ fn context_line(s: &crate::App, notice: &Value) -> String {
     parts.join(" · ")
 }
 /// Slack-compatible body: `text` for the notification, `blocks` for the
-/// message, and `event` for any other receiver.
+/// message, and `event` for any other receiver. Slack renders `text` with its
+/// markup, as it does the blocks, so a pipeline's name can't ping a channel or
+/// disguise a link: both are escaped. `event` carries the words as written.
 pub fn webhook_body(s: &crate::App, notice: &Value) -> Value {
     let headline = notice["headline"].as_str().unwrap_or("");
     let message = notice["message"].as_str().unwrap_or("");
@@ -1310,7 +1312,8 @@ pub fn webhook_body(s: &crate::App, notice: &Value) -> Value {
         blocks.push(json!({"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Open in Vectory"}, "url": link}]}));
     }
     json!({
-        "text": bounded(headline, 300),
+        // Bounded first, so the cut never falls inside an escape.
+        "text": slack_escape(&bounded(headline, 300)),
         "blocks": blocks,
         "event": event_json(s, notice),
     })
@@ -1540,5 +1543,46 @@ mod tests {
                 .ends_with("…and 21 more.")
         );
         assert_eq!(notice["severity"], "error");
+    }
+
+    #[tokio::test]
+    async fn slack_markup_in_a_headline_is_escaped_in_the_text_and_kept_raw_in_the_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = crate::initialize(crate::Settings {
+            data_dir: temp.path().join("state"),
+            bootstrap_secret: "isolated-test-bootstrap-secret-123456789".into(),
+            instance_name: "Test".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        // A pipeline named by someone who wants the whole channel to be pinged,
+        // or a link that reads as something else.
+        let headline =
+            "Rollout of <!channel> <@U123ABC> *bold* <https://evil.example|click here> R&D";
+        let notice = json!({"type":"deployment.failed","severity":"error","headline":headline,"message":"It <failed> & stopped","context":["Pipeline: <b>"],"path":"/"});
+        let body = webhook_body(&s, &notice);
+        let escaped = "Rollout of &lt;!channel&gt; &lt;@U123ABC&gt; *bold* &lt;https://evil.example|click here&gt; R&amp;D";
+        // Slack renders `text` with its markup (for notifications and as the
+        // fallback), so it is escaped like the blocks; receivers that read the
+        // event get the headline as written.
+        assert_eq!(body["text"], escaped);
+        assert_eq!(body["event"]["headline"], headline);
+        assert!(
+            body["blocks"][0]["text"]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("*{escaped}*"))
+        );
+        // The bound counts the headline's own characters and never cuts an escape in two.
+        let long = format!("{}&&z", "x".repeat(298));
+        let body = webhook_body(
+            &s,
+            &json!({"type":"issue.opened","headline":long,"message":"m"}),
+        );
+        let text = body["text"].as_str().unwrap();
+        assert_eq!(text, format!("{}&amp;…", "x".repeat(298)));
+        assert_eq!(body["event"]["headline"], long);
+        s.pool.close().await;
     }
 }
