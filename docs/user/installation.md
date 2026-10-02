@@ -236,6 +236,19 @@ The installer registers a service: systemd on Linux, launchd on macOS, and the S
 
 To try the agent without a service, run it in the foreground with `sudo vectory run`. Ctrl-C stops the agent and the Vector process it manages, after Vector finishes its in-flight events. Closing the terminal does the same. Stopping or restarting the service drains Vector the same way.
 
+### What the systemd service can write
+
+`vectory setup` and `vectory service-install` register a unit with `ProtectSystem=full` and `ProtectHome=read-only`. The agent and the Vector it runs can't write to `/usr`, `/boot`, `/etc` or home directories, except the state directory and the managed configuration directory. Everywhere else they write wherever the service account's permissions allow. Tying the sandbox to the host's allowances and mode is planned work.
+
+The unit in the `.deb` and `.rpm` packages (`/usr/lib/systemd/system/vectory.service`) is stricter. `ProtectSystem=strict` makes the whole file system read-only and `ProtectHome=true` hides home directories, except `/var/lib/vectory-agent`, `/etc/vectory/managed` and `/var/lib/vector`. A unit that `vectory setup` registered in `/etc/systemd/system` takes precedence over it.
+
+Under the packaged unit, a pipeline that writes anywhere else fails with `Read-only file system (os error 30)`. That includes full mode and a restricted-mode file root from `vectory allow --file-root`. Add the folder to the service: run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`.
+
+```ini
+[Service]
+ReadWritePaths=/srv/logs
+```
+
 ### Hosts without a service manager
 
 Containers, WSL and Alpine (OpenRC) usually have no systemd for the agent. There, setup still installs and enrolls the agent and checks in once, then stops and says so:

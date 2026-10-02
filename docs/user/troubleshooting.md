@@ -49,6 +49,8 @@ For security, the server never tells a device why it refused. Administrators see
 | `DEVICE_REVOKED` | the device this request enrolled was revoked | Create a new command to add the host again. |
 | `MALFORMED` | the request was incomplete or used an unsupported agent | Use the agent from this server's install command. |
 
+A refusal that repeats for the same token and reason is recorded once a minute, so a host that keeps retrying doesn't fill the audit log.
+
 A device that enrolled but "checked in once, but nothing keeps its agent running" has no service manager: start the agent with the command setup printed, as in [A device is offline](#a-device-is-offline-or-never-connects).
 
 ## Setup stops because Vector is already running
@@ -178,6 +180,28 @@ Vector can't listen on 0.0.0.0:514: ports below 1024 need a privilege the servic
   ```
 
 On a restricted device, the address must also be in the host's allowed listeners. macOS and Windows have no privileged ports.
+
+## A pipeline can't write a file: read-only file system
+
+A file sink, a disk buffer or a `data_dir` in a read-only part of the file system fails. Vector logs it, and `sudo vectory logs` shows it:
+
+```text
+Unable to open the file. path=/srv/logs/out-2026-10-02.log error=Read-only file system (os error 30)
+```
+
+Which parts are read-only depends on the unit that runs the agent:
+
+| Unit | Read-only to the agent and Vector |
+| --- | --- |
+| Registered by `vectory setup` or `vectory service-install` | `/usr`, `/boot`, `/etc` and home directories, except the state and managed configuration directories. |
+| Packaged (`/usr/lib/systemd/system/vectory.service`) | The whole file system, and home directories are hidden, except `/var/lib/vectory-agent`, `/etc/vectory/managed` and `/var/lib/vector`. |
+
+Add the folder to the service. Run `sudo systemctl edit vectory.service`, add the lines below, then `sudo systemctl restart vectory.service`. This applies to full mode and to a restricted-mode file root from `vectory allow --file-root`. See [What the systemd service can write](installation.md#what-the-systemd-service-can-write).
+
+```ini
+[Service]
+ReadWritePaths=/srv/logs
+```
 
 ## Validation says deferred or unavailable
 
