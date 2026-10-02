@@ -1,0 +1,3 @@
+[!!] Existing     A Vector that ran here (recorded <date>) loaded configuration the agent doesn't manage:
+                  Vector loads 2 configuration files: <conf>/10-sources.yaml, <conf>/20-sinks.yaml.
+                  Merge what it loads into one JSON file at <managed> (the Help center's Connect a device page, under Keep an existing workload, shows how), or adopt it as it is: the agent then manages only <managed>; what it loads stays where it is (backed up in <state>/adoption-inventory/<time>) and no Vector started by Vectory reads it. Either way, run this command again with --adopt-existing.

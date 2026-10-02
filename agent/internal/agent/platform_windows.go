@@ -154,6 +154,10 @@ func checkPrivateFile(path string) error {
 	}
 	return f.Close()
 }
+
+// keepOwner does nothing on Windows: the replacement carries its own protected
+// access list (protect), which names only SYSTEM and the writing account.
+func keepOwner(tmp, path string) {}
 func rejectPlatformLink(path string) error {
 	p, e := windows.UTF16PtrFromString(path)
 	if e != nil {

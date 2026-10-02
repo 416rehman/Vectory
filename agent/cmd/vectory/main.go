@@ -185,14 +185,23 @@ func (c *cli) output(v any) { writeJSON(c.stdout, v) }
 
 // fail prints err for people (stderr) or scripts (a JSON document on stdout).
 func (c *cli) fail(err error) int {
+	var full *agent.DiskFullError
+	isFull := errors.As(err, &full)
 	if c.json != nil && *c.json {
 		document := map[string]any{"error": err.Error()}
 		if ce, ok := agent.AsConnectionError(err); ok {
 			document["code"], document["message"], document["fix"] = ce.Code, ce.Message, ce.Fix
 		}
+		if isFull {
+			document["code"], document["fix"] = "DISK_FULL", full.Fix("run the command again")
+		}
 		c.output(document)
 	} else {
-		fmt.Fprintln(c.stderr, "vectory:", agent.IndentLines(err.Error(), len("vectory: ")))
+		message := err.Error()
+		if isFull {
+			message += ". " + full.Fix("run the command again")
+		}
+		fmt.Fprintln(c.stderr, "vectory:", agent.IndentLines(message, len("vectory: ")))
 	}
 	return exitFailed
 }

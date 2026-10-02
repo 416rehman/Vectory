@@ -168,7 +168,7 @@ func printGeneralHelp(w io.Writer) {
 	fmt.Fprintln(w, "  sudo sh vectory-install.sh")
 	fmt.Fprintln(w, "  sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint>")
 	fmt.Fprintln(w, "  sudo vectory status")
-	fmt.Fprintln(w, "\nRun 'vectory help <command>' for details. Exit codes: 0 ok, 1 failed, 2 usage error, 78 not installed or not enrolled, 130 setup interrupted.")
+	fmt.Fprintln(w, "\nRun 'vectory help <command>' for details. Exit codes: 0 ok, 1 failed, 2 usage error, 3 setup finished but nothing keeps the agent running, 78 not installed or not enrolled, 130 setup interrupted.")
 }
 
 func findCommand(name string) *command {

@@ -125,13 +125,29 @@ func (c *Client) request(ctx context.Context, method, path string, body any) ([]
 	}
 	b, e := io.ReadAll(io.LimitReader(res.Body, MaxArtifact+1))
 	if e != nil {
-		return nil, errors.New("response interrupted")
+		return nil, &bodyInterrupted{cause: e}
 	}
 	if len(b) > MaxArtifact {
-		return nil, errors.New("response exceeds limit")
+		return nil, errResponseTooLarge
 	}
 	return b, nil
 }
+
+// bodyInterrupted is a response the server began and did not finish: it
+// closed the connection, reset it or stopped sending before the client's time
+// limit.
+type bodyInterrupted struct{ cause error }
+
+func (e *bodyInterrupted) Error() string { return "response interrupted" }
+func (e *bodyInterrupted) Unwrap() error { return e.cause }
+
+// timedOut reports a body that stopped arriving rather than one cut short.
+func (e *bodyInterrupted) timedOut() bool {
+	var timeout interface{ Timeout() bool }
+	return errors.Is(e.cause, context.DeadlineExceeded) || errors.As(e.cause, &timeout) && timeout.Timeout()
+}
+
+var errResponseTooLarge = errors.New("response exceeds limit")
 
 // retryAfter is the server's Retry-After on a 429 or 503 answer, in seconds
 // or as a date, at most an hour; zero for any other answer.

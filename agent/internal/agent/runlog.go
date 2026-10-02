@@ -73,6 +73,8 @@ func outcomeLine(s State) (key, line string) {
 		version := versionLabel(s, generation)
 		version = strings.ToUpper(version[:1]) + version[1:]
 		switch {
+		case diagnostic(s.Error, "DISK_FULL") != nil:
+			return key, version + " couldn't be applied yet: " + problemText(s.Error) + " Vector runs the last working configuration."
 		case s.ApplyState == "rolled_back":
 			return key, version + " didn't apply: " + problemText(s.Error) + " Vector runs the last working configuration again."
 		case s.Error.Code == "ROLLBACK_UNAVAILABLE":

@@ -135,6 +135,7 @@ func TestGeneralHelpListsEveryExitCode(t *testing.T) {
 		exitOK:          "0 ok",
 		exitFailed:      "1 failed",
 		exitUsage:       "2 usage error",
+		exitAttention:   "3 setup finished but nothing keeps the agent running",
 		exitNotReady:    "78 not installed or not enrolled",
 		exitInterrupted: "130 setup interrupted",
 	} {

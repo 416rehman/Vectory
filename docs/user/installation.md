@@ -18,7 +18,7 @@ Install the Vectory agent on a host that runs Vector 0.58 (any patch release, su
 | Option | Choose it when | What happens |
 | --- | --- | --- |
 | **Start without a workload** (recommended) | The host should wait for its first pipeline. | Vector doesn't run until you deploy a version. |
-| **Keep an existing workload** | Vector already ships data that must not stop. | You hand its configuration to the agent first. |
+| **Keep an existing workload** | Vector already ships data that must not stop. | You hand its configuration to the agent first, and setup copies the old files. |
 
 ### Start without a workload
 
@@ -32,13 +32,14 @@ Prepare the handover while the old Vector is still running:
 1. In Vectory, open **Pipelines → Create pipeline**, then **Actions → Import configuration file** and choose the running config (YAML, TOML or JSON; combine several files into one first). Fix anything the import flags.
 2. In **Code** view, choose **JSON**, then **Actions → Export configuration**.
 3. Copy the exported file to the host as the agent's managed configuration, for example `/etc/vectory/managed/vector.json`. Provision everything it reads: files, credentials, `data_dir`, and in restricted mode the [allowances](#configure-restricted-allowances) it needs.
-4. Stop and disable the old Vector service, then install and enroll the agent as below.
-5. Confirm your outputs still flow. The device shows no assignment until you deploy a version; its adopted configuration keeps running meanwhile.
+4. With the old Vector still running, run the install command from [Install and enroll](#install-and-enroll). Setup never takes over a running Vector: it records how it was started, copies every configuration file it loads and stops, telling you what to do next. If it names files the agent won't manage, see [Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs).
+5. Stop and disable the old Vector service, then run the same command again to install and enroll the agent. Add `--adopt-existing` if setup asked for it.
+6. Confirm your outputs still flow. The device shows no assignment until you deploy a version; its adopted configuration keeps running meanwhile.
 
 > [!CAUTION]
 > Don't convert the configuration with `vector convert-config`. In Vector 0.58 its JSON output expands every default and fails `vector validate`.
 
-The agent backs up the managed file it adopts. It doesn't copy other configuration files or the old service definition, so keep your own backup of those.
+The agent backs up the managed file it adopts and, when the old Vector runs as setup starts, every configuration file that Vector loads (in `adoption-inventory` in the state directory). It doesn't copy the files those configurations refer to, such as certificates, lookup tables and secret files, or the old service definition, so keep your own backup of those.
 
 ## Choose restricted or full mode
 
