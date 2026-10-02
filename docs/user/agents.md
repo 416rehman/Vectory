@@ -9,7 +9,7 @@ Commands that change local settings need the agent stopped. Stopping the agent a
 ```sh
 sudo vectory status           # identity, server, pipeline and version, check-in schedule, next step
 sudo vectory doctor           # local setup and server connection, with a fix for each problem
-sudo vectory logs --follow    # Vector's own log (never your events)
+sudo vectory logs --follow    # Vector's own log, and anything your pipelines log()
 ```
 
 Add `--json` to `status` or `doctor` for scripts. Both only read: they never change settings, retry state or counters.
