@@ -4,7 +4,7 @@ Where Vectory is heading. Order reflects priority, not promised dates. To discus
 
 ## Now: 0.1 developer preview
 
-The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents in the local demo on Linux. See [What's new](user/whats-new.md).
+The full loop (build, publish, canary, apply and roll back) runs against real Vector 0.58.0 agents on Linux, macOS and Windows, and the agent runs as an operating-system service on each. See [What's new](user/whats-new.md) and [Compatibility](user/compatibility.md).
 
 Shipped from earlier versions of this list: starter pipelines such as syslog to Loki and files to Amazon S3, live events per second on the pipeline canvas, and canary gates that also check delivery, such as sink errors and full buffers.
 
@@ -12,6 +12,7 @@ Shipped from earlier versions of this list: starter pipelines such as syslog to 
 
 - **Published images and packages.** Pull-and-run server images, and agent packages for apt, rpm, Homebrew and MSI, so trying Vectory takes one `docker compose up`.
 - **Signed releases.** Signed checksums for every download, verified by the server before it offers an agent.
+- **Operator-issued agent updates.** Update agents from the dashboard instead of on each host: opt-in per host, signed builds, staged installs that roll back, rolled out like pipelines. Needs signed releases first; the design is [ADR 0015](adr/0015-operator-issued-agent-updates.md). Until then an agent is upgraded on its host with one command.
 - **API tokens.** Scoped, revocable tokens for automation, instead of session cookies.
 - **Guided adoption.** `vectory adopt` hands a running Vector to the agent with a plan, validation and automatic rollback.
 - **Container and Kubernetes devices.** An agent image that manages Vector in the same container, and a Helm chart.
@@ -27,7 +28,7 @@ These gates must pass before Vectory calls itself production-ready:
 
 - Service, reboot and upgrade tests on every supported operating system, including the oldest supported versions.
 - Privileged account and access-control checks on each platform.
-- Container start and validator isolation tested on a clean host. CI builds both images but doesn't start them.
+- Container start and validator isolation tested beyond CI's one clean runner: other distributions, a public certificate and a real network.
 - Reproducible builds from independent builders, signed packages and an approved distribution namespace.
 - Key rotation and disaster-recovery drills.
 - Sustained load with real agents on dedicated hosts, and outage and fault exercises.

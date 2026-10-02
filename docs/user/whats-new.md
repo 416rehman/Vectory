@@ -43,6 +43,7 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 
 - Images and packages aren't published yet; the server builds from source.
 - Agent downloads carry SHA-256 checksums but aren't signed.
+- An agent is upgraded on its host, one command per device. Agents don't update themselves and the dashboard can't update them; see [Upgrade many devices](agents.md#upgrade-many-devices).
 - Service, reboot and upgrade tests are still to come on some platforms. See [Compatibility](compatibility.md).
 - The API uses session cookies; API tokens are planned.
 - One server per installation.

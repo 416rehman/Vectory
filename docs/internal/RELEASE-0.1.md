@@ -20,6 +20,7 @@ Designed and recorded for the next release, not built now:
 | Authoring gaps (secrets in headers and URLs, merge-aware conflicts, Vector warnings as problems) | [AUTHORING-GAPS.md](AUTHORING-GAPS.md), [WORK-QUEUE.md](WORK-QUEUE.md) item 8 |
 | Step-up authentication, labels and selectors, single sign-on, Kubernetes | [WORK-QUEUE.md](WORK-QUEUE.md) item 11 |
 | Signed releases, published images and packages | [packaging/README.md](../../packaging/README.md), [HANDOFF.md](HANDOFF.md) |
+| Operator-issued agent updates (opt-in per host, signed builds, staged installs that roll back) | [ADR 0015](../adr/0015-operator-issued-agent-updates.md) |
 
 ## Gates
 

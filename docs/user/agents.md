@@ -155,6 +155,17 @@ On the device page, confirm the same device identity, a fresh check-in and the e
 > [!CAUTION]
 > Don't re-enroll, purge state or reset counters as part of an upgrade. To go back, restore the previous binary. Restoring an older state backup can roll back security counters, so treat it as a last resort.
 
+### Upgrade many devices
+
+Vectory doesn't send an agent update to a device: each host replaces its own agent, and an agent never updates itself. To upgrade a fleet without logging in to every host by hand, run the same command from your own tooling:
+
+<!-- steps -->
+1. On a Linux or macOS device's page, choose **Upgrade agent** and copy the command. It holds no token or secret: it names this server's address, its installer's SHA-256 and, for a private certificate authority, that authority's certificate.
+2. Save it as `upgrade-agent.sh` and run it on each host as an account that can use `sudo` without a password (the command calls `sudo` itself), for example over SSH: `for host in edge-01 edge-02; do ssh "$host" sh -s < upgrade-agent.sh || echo "not upgraded: $host"; done`.
+3. Check the result on the **Devices** page. Each device reports its agent version at its next check-in, and a device that already runs this server's build says so in its **Upgrade agent** dialog.
+
+A device that keeps its state outside the default directory, or has no service, gets `--state-dir` or `--service none` in its own command, so copy the command of one device of each kind. Copy it again after you upgrade the server: it carries the installer's checksum, which changes with the server's build. Upgrade a few hosts first and look at them before the rest. On Windows, follow the by-hand steps above with your own deployment tooling.
+
 ## Replace the Vector binary
 
 The agent pins the SHA-256 of the Vector binary it adopted and refuses a changed binary. After you upgrade or move Vector on purpose, approve the new binary:
