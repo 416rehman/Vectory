@@ -64,7 +64,7 @@ A few security harnesses (`tests/security/*.mjs`) write `docs/evidence/*.json` w
 
 ## Known unstable or unproven
 
-1. **The help-popover harness flakes** (`dashboard/tests/schema-control-browser.mjs`, the test named "help pointer hover and clicks close on departure and reopen without losing focus behavior"). In CI it failed in runs 65, 66 and 69 and passed in run 67, always at the same line: after the Close button was clicked, `help.focus()` on the trigger and `await expect(popup).toBeVisible()` times out, and the popup is not in the page at all. On the development machine it never failed in 25 full-file runs and fails about once in 40 to 150 repetitions of this one test in a long browser session, so CI's browser (Playwright's own headless shell; the development container only had an older Chromium) behaves differently from it. Reproduce with the repeat knob:
+1. **The help-popover harness flakes** (`dashboard/tests/schema-control-browser.mjs`, the test named "help pointer hover and clicks close on departure and reopen without losing focus behavior"). In CI it failed in runs 65, 66 and 69 and passed in run 67, always at the same line: after the Close button was clicked, `help.focus()` on the trigger and `await expect(popup).toBeVisible()` times out, and the popup is not in the page at all. On the development machine it passed every time the whole file ran and failed only about once in 40 to 150 repetitions of this one test in a long browser session, so CI's browser (Playwright's own headless shell; the development container only had an older Chromium) behaves differently from it. Reproduce with the repeat knob:
 
    ```sh
    cd dashboard
