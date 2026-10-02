@@ -6,6 +6,7 @@
 // policy, and only a host operator can change it.
 import type { Device } from "./api";
 import {
+  CommandValueError,
   continued,
   platformDefaults,
   quote,
@@ -28,11 +29,27 @@ function hostOS(os: string): HostOS {
   return os === "windows" || os === "darwin" ? os : "linux";
 }
 
-/** The commands for one device: stop its agent, allow, start it again. */
+/**
+ * The commands for one device: stop its agent, allow, start it again. A value
+ * no command can carry safely, such as a path with a control character, gets
+ * a note in place of the commands.
+ */
 export function hostCommands(
   approvals: HostApprovals,
   device: HostDevice,
 ): string {
+  try {
+    return commandsFor(approvals, device);
+  } catch (error) {
+    if (!(error instanceof CommandValueError)) throw error;
+    return [
+      `# No command can be shown for this host: a destination, listener, path or state directory contains ${error.reason === "control" ? "a control character" : "a double quote"}.`,
+      "# Check what this version uses and where the agent keeps its state, then write the vectory allow command by hand.",
+    ].join("\n");
+  }
+}
+
+function commandsFor(approvals: HostApprovals, device: HostDevice): string {
   const os = hostOS(device.os);
   const stateDir =
     device.state_dir && device.state_dir !== platformDefaults(os).stateDir

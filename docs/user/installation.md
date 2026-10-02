@@ -52,7 +52,7 @@ The agent backs up the managed file it adopts and, when the old Vector runs as s
 > **Only the host can turn on full mode**
 > Full mode is chosen with a local flag when you install the agent. The dashboard shows each device's mode and blocks deployments that need full mode on restricted devices, but it can never grant full mode or widen local allowances.
 
-Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`, `http_server`, `syslog` and `opentelemetry` sources; `remap`, `filter`, `route`, `sample`, `reduce` and `log_to_metric` transforms; `console` (to stderr), `blackhole`, `http`, `loki`, `elasticsearch` and `prometheus_exporter` sinks. It also blocks environment variables, `{{ }}` templates, secret providers and anything that runs a program. [Security model](security.md#restricted-and-full-mode) has the complete rules.
+Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`, `http_server`, `syslog` and `opentelemetry` sources; `remap`, `filter`, `route`, `sample`, `reduce` and `log_to_metric` transforms; `console` (to stderr), `blackhole`, `http`, `loki`, `elasticsearch` and `prometheus_exporter` sinks. It also blocks environment variables, `{{ }}` templates, secret providers, the `api` block (Vector's local API has no authentication) and anything that runs a program. [Security model](security.md#restricted-and-full-mode) has the complete rules.
 
 ## Install and enroll
 
@@ -62,20 +62,26 @@ Restricted mode allows these components: `demo_logs`, `internal_metrics`, `file`
 On **Add device**, choose **Restricted** or **Full Vector**, then **Create install command**, and run the result on the host. With a private CA (the usual case) it looks like this:
 
 ```sh
-printf '%s\n' '-----BEGIN CERTIFICATE-----
+(
+  set -e
+  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)
+  trap 'rm -rf "$dir"' EXIT
+  printf '%s\n' '-----BEGIN CERTIFICATE-----
 <your server's CA certificate, as Add device shows it>
------END CERTIFICATE-----' > vectory-ca.pem &&
-curl -fsSL --cacert vectory-ca.pem \
-  -o vectory-install.sh \
-  https://vectory.example.com:8443/agent/v1/install.sh &&
-echo '<sha256 shown on Add device>  vectory-install.sh' \
-  | sha256sum -c - &&
-sudo sh vectory-install.sh \
-  --mode restricted \
-  --create-user
+-----END CERTIFICATE-----' > "$dir/vectory-ca.pem"
+  curl -fsSL --proto '=https' --proto-redir '=https' \
+    --cacert "$dir/vectory-ca.pem" \
+    -o "$dir/vectory-install.sh" \
+    https://vectory.example.com:8443/agent/v1/install.sh
+  echo '<sha256 shown on Add device>  vectory-install.sh' \
+    | (cd "$dir" && sha256sum -c -)
+  sudo sh "$dir/vectory-install.sh" \
+    --mode restricted \
+    --create-user
+)
 ```
 
-Every step checks what it receives, and nothing turns certificate verification off. The command saves your server's CA certificate (public, like its fingerprint) as `vectory-ca.pem`, and curl verifies the server against it. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
+Every step checks what it receives, and nothing turns certificate verification off. The command works in a directory only you can enter, so no one else on the host can swap a file between the check and the run. It stops at the first step that fails and removes the directory when it ends. It saves your server's CA certificate (public, like its fingerprint) there as `vectory-ca.pem`, and curl verifies the server against it; `--proto` and `--proto-redir` keep every request, a redirect included, on https. The SHA-256 from your dashboard then proves the installer is the one the page describes, and the installer checks the agent and pins the CA for setup. The command works in any POSIX shell: sh, dash, bash and zsh. With another choice under [**How the host checks this server**](#trust-the-server-certificate), curl uses that CA file or the host's own certificate store instead.
 
 #### macOS
 
@@ -85,7 +91,7 @@ The installer finds Vector through your `PATH` and Homebrew, and adopts the real
 
 #### Windows
 
-On **Add device**, choose **Windows**, download `vectory.exe` from the page, and run the command it shows in an elevated PowerShell in the same folder. The command checks the file's SHA-256 before it runs setup. It makes no web request of its own, so there is no certificate check to skip; the agent then verifies the server itself, the way you chose. For configuration management, use the [manual steps](#install-manually).
+On **Add device**, choose **Windows**, download `vectory.exe` from the page, and run the command it shows in an elevated PowerShell in the same folder. The command checks the file's SHA-256 before it runs setup. It makes no web request of its own, so there is no certificate check to skip; the agent then verifies the server itself, the way you chose. The command quotes what you type under **Advanced** for PowerShell, and **Advanced** refuses curly quotes (‘ ’ ‚ ‛), double quotes and control characters in a path, because PowerShell reads a curly quote as a quote. For configuration management, use the [manual steps](#install-manually).
 <!-- /tabs -->
 
 The installer and `vectory setup` then:
@@ -187,7 +193,7 @@ Choose how under **Advanced → How the host checks this server** on **Add devic
 
 | Choice | Use it when | The commands get |
 | --- | --- | --- |
-| **Pin this server's CA** (the default for a private CA) | Typical self-hosting: the agent listener's certificate comes from your own CA. | `--ca-sha256` with the CA's fingerprint for setup. The install command writes the CA certificate to `vectory-ca.pem`, and curl checks the download against it. Nothing to copy first. |
+| **Pin this server's CA** (the default for a private CA) | Typical self-hosting: the agent listener's certificate comes from your own CA. | `--ca-sha256` with the CA's fingerprint for setup. The install command writes the CA certificate to `vectory-ca.pem` in its private directory, and curl checks the download against it. Nothing to copy first. |
 | **A CA certificate file on the host** | Your team already distributes the CA. Put its certificate (PEM) on the host first. | `--ca-file PATH` for setup, and `curl --cacert PATH` for the download. |
 | **The host's trusted certificates** (the default for a publicly trusted certificate) | A public certificate, or a private CA the host's trust store already contains. | `--ca-file=` (empty: the host's store) for setup; curl uses the same store. |
 

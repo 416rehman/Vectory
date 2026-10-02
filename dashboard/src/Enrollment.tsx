@@ -50,6 +50,7 @@ import EnrollmentTokenFlow, {
 } from "./EnrollmentTokenFlow";
 import {
   accountPatterns,
+  commandValueProblem,
   detectOS,
   deviceNamePattern,
   effectiveTrust,
@@ -461,20 +462,23 @@ export function Enrollment({
     !serviceUser.trim() ||
     (accountPatterns[os].test(serviceUser.trim()) &&
       serviceUser.trim() !== "root");
-  const pathProblem = (value: string, json = false) =>
-    value.trim() &&
+  // What a path field can't hold is said first, naming the field: a command
+  // can't carry it (see commandValueProblem).
+  const pathProblem = (value: string, json = false, field = "This path") =>
+    commandValueProblem(field, value.trim(), os) ||
+    (value.trim() &&
     (!isAbsoluteLocalFilePath(value.trim(), os) ||
       (json && !value.trim().endsWith(".json")))
       ? os === "windows"
         ? "Use a full path on a local drive."
         : "Use a full path on the host."
-      : "";
+      : "");
   // A CA file is required once that choice is made; a typed path is only a
   // path until setup reads it on the host.
   const caFileProblem =
     trustChoice === "file"
       ? caFile.trim()
-        ? pathProblem(caFile)
+        ? pathProblem(caFile, false, "CA certificate on the host")
         : "Enter where the CA certificate is on the host."
       : "";
   const agentDirectory = directoryPath(installDir);
@@ -483,7 +487,7 @@ export function Enrollment({
       ? ""
       : agentDirectory === "/"
         ? "Choose a directory of its own for the agent, not /."
-        : pathProblem(agentDirectory);
+        : pathProblem(agentDirectory, false, "Agent install directory");
   const prefixValid = /^[a-z0-9-]{0,80}$/.test(prefix);
   const prefixMatches =
     !prefix || !trimmedName || trimmedName.toLowerCase().startsWith(prefix);
@@ -946,7 +950,7 @@ export function Enrollment({
                 <Field
                   label="Agent state directory"
                   hint={
-                    pathProblem(stateDir) ||
+                    pathProblem(stateDir, false, "Agent state directory") ||
                     "The agent's identity and state. Keep it private."
                   }
                 >
@@ -962,8 +966,12 @@ export function Enrollment({
                 <Field
                   label="Managed configuration file"
                   hint={
-                    pathProblem(managedConfig, true)
-                      ? `${pathProblem(managedConfig, true)} It must end in .json.`
+                    pathProblem(
+                      managedConfig,
+                      true,
+                      "Managed configuration file",
+                    )
+                      ? `${pathProblem(managedConfig, true, "Managed configuration file")} It must end in .json.`
                       : "The one Vector configuration the agent manages, in its own directory."
                   }
                 >
@@ -981,7 +989,11 @@ export function Enrollment({
                 <Field
                   label="Restricted-mode allowances file on the host (optional)"
                   hint={
-                    pathProblem(capabilityPolicy, true) ||
+                    pathProblem(
+                      capabilityPolicy,
+                      true,
+                      "Restricted-mode allowances file on the host",
+                    ) ||
                     "A JSON file listing the files, destinations and listeners this host approves. The dashboard can't grant them."
                   }
                 >
@@ -1005,7 +1017,7 @@ export function Enrollment({
                 <Field
                   label="Vector binary (optional)"
                   hint={
-                    pathProblem(vectorBinary) ||
+                    pathProblem(vectorBinary, false, "Vector binary") ||
                     "Set this if Vector isn't on PATH, for example a downloaded archive."
                   }
                 >

@@ -41,7 +41,7 @@ The review also blocks devices that can't run the version, and says why:
 - **Full mode needed.** The version uses something only full-mode devices allow. Only the host can [switch modes](agents.md#switch-between-restricted-and-full-mode).
 - **Wrong Vector version.** The device doesn't report a Vector 0.58.x release.
 
-When restricted devices must first approve a destination, listener or file root the version uses, the review says which ones, and each row says the host refuses the version until then. **Commands for the host** gives the commands for each host, made from what its agent reports: its state directory, and whether a service or `vectory run` keeps the agent running. They use [`vectory allow`](agents.md#update-restricted-allowances), which adds to what the host already allows.
+When restricted devices must first approve a destination, listener or file root the version uses, the review says which ones, and each row says the host refuses the version until then. **Commands for the host** gives the commands for each host, made from what its agent reports: its state directory, and whether a service or `vectory run` keeps the agent running. They use [`vectory allow`](agents.md#update-restricted-allowances), which adds to what the host already allows. Each value is quoted for the host's shell. When a value can't be carried safely, such as a path with a control character, the block says so instead of giving a command.
 
 The server checks again when the deployment starts, at each canary stage and when group membership changes, so a device that changes after your review is never slipped in. Devices can still fail for host reasons, such as a missing file or credential.
 

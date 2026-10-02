@@ -4,6 +4,7 @@ import {
   platformDefaults,
   quote,
   shortDigest,
+  unlessUnquotable,
   type HostOS,
 } from "./enrollmentCommands";
 
@@ -79,7 +80,8 @@ export function runningBuild(
  * keeps its state (when it reports a directory other than the default) and
  * `--service none` when nothing keeps the agent running, so setup doesn't
  * register a service the host didn't have. Null where it doesn't apply:
- * Windows, a server without the installer, or no verified download.
+ * Windows, a server without the installer, no verified download, or a state
+ * directory the device reports that no command can carry (control characters).
  */
 export function upgradeCommand(
   install: AgentInstall,
@@ -87,11 +89,13 @@ export function upgradeCommand(
 ): string | null {
   if (device.os !== "linux" && device.os !== "darwin") return null;
   const os: HostOS = device.os;
-  const args: string[] = [];
-  if (device.state_dir && device.state_dir !== platformDefaults(os).stateDir)
-    args.push("--state-dir", quote(device.state_dir, os));
-  if (device.service_manager === "none") args.push("--service", "none");
-  return installerRun(install, { os }, [], args);
+  return unlessUnquotable(() => {
+    const args: string[] = [];
+    if (device.state_dir && device.state_dir !== platformDefaults(os).stateDir)
+      args.push("--state-dir", quote(device.state_dir, os));
+    if (device.service_manager === "none") args.push("--service", "none");
+    return installerRun(install, { os }, [], args);
+  });
 }
 
 /**
