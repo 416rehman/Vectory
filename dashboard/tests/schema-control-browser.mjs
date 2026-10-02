@@ -25,6 +25,33 @@ const browser = await chromium.launch(),
   }),
   page = await context.newPage();
 page.setDefaultTimeout(6000);
+// Chromium runs the zero-delay timers a click queues only after its next
+// frame, while the next test step may already be running. A test can hold
+// them, so the late case is tested on purpose rather than left to chance.
+await page.addInitScript(() => {
+  const set = window.setTimeout.bind(window),
+    clear = window.clearTimeout.bind(window),
+    held = new Map();
+  let holding = false,
+    next = 1e9;
+  window.setTimeout = (run, delay, ...args) => {
+    if (!holding || delay > 0 || typeof run !== "function")
+      return set(run, delay, ...args);
+    held.set(++next, () => run(...args));
+    return next;
+  };
+  window.clearTimeout = (id) => {
+    if (!held.delete(id)) clear(id);
+  };
+  window.holdZeroDelayTimers = () => (holding = true);
+  window.releaseZeroDelayTimers = () => {
+    holding = false;
+    for (const [id, run] of [...held]) {
+      held.delete(id);
+      run();
+    }
+  };
+});
 const errors = [],
   results = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -1117,6 +1144,89 @@ try {
     await expect(popup).toHaveCount(0);
     await expect(help).toBeFocused();
     expect((await stored()).rate).toBe(10);
+  });
+  const sampleRate = {
+    mode: "settings",
+    kind: "transforms",
+    value: { type: "sample", inputs: ["seed"], rate: 10 },
+    config: {
+      sources: { seed: { type: "demo_logs" } },
+      transforms: {},
+      sinks: {},
+    },
+  };
+  await test("keyboard focus reopens help after its Close button even when the click's timers run late", async () => {
+    await fixture(sampleRate);
+    const help = page.getByRole("button", {
+        name: "Help for One in every",
+        exact: true,
+      }),
+      popup = page.getByRole("dialog", {
+        name: "Help for One in every",
+        exact: true,
+      });
+    await help.hover();
+    await help.click();
+    await expect(popup).toBeVisible();
+    await page.evaluate(() => window.holdZeroDelayTimers());
+    try {
+      await page
+        .getByRole("button", {
+          name: "Close help for One in every",
+          exact: true,
+        })
+        .click();
+      await expect(popup).toHaveCount(0);
+      await expect(help).toBeFocused();
+      await page.getByLabel("One in every", { exact: true }).focus();
+      await help.focus();
+      await expect(popup).toBeVisible();
+    } finally {
+      await page.evaluate(() => window.releaseZeroDelayTimers());
+    }
+    await page.keyboard.press("Escape");
+    await expect(popup).toHaveCount(0);
+    await expect(help).toBeFocused();
+  });
+  await test("help opened by keyboard under a resting pointer stays open when the pointer moves away", async () => {
+    await fixture(sampleRate);
+    const help = page.getByRole("button", {
+        name: "Help for One in every",
+        exact: true,
+      }),
+      popup = page.getByRole("dialog", {
+        name: "Help for One in every",
+        exact: true,
+      }),
+      close = page.getByRole("button", {
+        name: "Close help for One in every",
+        exact: true,
+      });
+    await help.hover();
+    await expect(popup).toBeVisible();
+    const box = await close.boundingBox();
+    await page.mouse.move(950, 900);
+    await expect(popup).toHaveCount(0);
+    // Rest the pointer where the help opens, then open it from the keyboard.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.getByLabel("One in every", { exact: true }).focus();
+    await help.focus();
+    await expect(popup).toBeVisible();
+    // The browser reports the pointer over the help it opened under it.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          document.querySelector(".schema-help-popover")?.matches(":hover"),
+        ),
+      )
+      .toBe(true);
+    await page.mouse.move(950, 900);
+    await page.waitForTimeout(400);
+    await expect(popup).toBeVisible();
+    await expect(help).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(popup).toHaveCount(0);
+    await expect(help).toBeFocused();
   });
   await test("global API and secret records keep attached actions and fit narrow settings", async () => {
     const config = {

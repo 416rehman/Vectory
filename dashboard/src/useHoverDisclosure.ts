@@ -1,96 +1,112 @@
 import {
-  useEffect,
   useCallback,
+  useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import {
+  createHoverDisclosure,
+  type HelpPart,
+  type HoverDisclosure,
+  type PressKind,
+} from "./hoverDisclosureModel";
+
+const pressKind = (pointerType: string): PressKind =>
+  pointerType === "touch" ? "touch" : pointerType === "pen" ? "pen" : "mouse";
 
 /** Non-modal help: hover bridges the trigger/popup; only keyboard focus retains it. */
 export function useHoverDisclosure() {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null),
-    contentRef = useRef<HTMLDivElement>(null),
-    isOpen = useRef(false),
-    mode = useRef<"pointer" | "keyboard" | "touch">("pointer"),
-    pointerInside = useRef({ trigger: false, content: false }),
+    content = useRef<HTMLDivElement | null>(null),
     ignoreFocus = useRef(false),
-    pointerFocus = useRef(false),
-    closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
-    focusTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
-    focusFrame = useRef<number | undefined>(undefined);
+    focusContentOnOpen = useRef(false),
+    endPress = useRef<(() => void) | undefined>(undefined);
+  const inside = (node: EventTarget | null) =>
+    node instanceof Node &&
+    (!!triggerRef.current?.contains(node) || !!content.current?.contains(node));
+  const model = useRef<HoverDisclosure | null>(null);
+  model.current ??= createHoverDisclosure({
+    onChange: setOpen,
+    focusInside: () => inside(document.activeElement),
+  });
+  const help = model.current;
 
-  const clearClose = useCallback(() => {
-    clearTimeout(closeTimer.current);
-    closeTimer.current = undefined;
-  }, []);
-  const update = useCallback((next: boolean) => {
-    isOpen.current = next;
-    setOpen(next);
-  }, []);
   const close = useCallback(
     (returnFocus = false) => {
-      clearClose();
-      if (focusFrame.current !== undefined)
-        cancelAnimationFrame(focusFrame.current);
-      update(false);
+      focusContentOnOpen.current = false;
+      help.dismiss();
       if (returnFocus) {
         ignoreFocus.current = true;
         triggerRef.current?.focus();
         ignoreFocus.current = false;
       }
     },
-    [clearClose, update],
+    [help],
   );
-  function scheduleClose() {
-    if (closeTimer.current !== undefined) return;
-    closeTimer.current = setTimeout(() => {
-      closeTimer.current = undefined;
-      const focused = document.activeElement;
-      if (
-        pointerInside.current.trigger ||
-        pointerInside.current.content ||
-        mode.current === "touch" ||
-        (mode.current === "keyboard" &&
-          (focused === triggerRef.current ||
-            contentRef.current?.contains(focused)))
-      )
-        return;
-      close();
-    }, 180);
+  // The help takes focus as it mounts when ArrowDown asked for it, in the same
+  // commit, so no later frame can move focus a person has moved since.
+  const contentRef = useCallback((node: HTMLDivElement | null) => {
+    content.current = node;
+    if (node && focusContentOnOpen.current) {
+      focusContentOnOpen.current = false;
+      node.focus({ preventScroll: true });
+    }
+  }, []);
+  /**
+   * A press on the trigger or in the help lasts until its pointer is released
+   * (for a tap, until its click, which comes after the focus it causes), is
+   * cancelled, or a key is pressed. Focus during a press is the pointer's.
+   */
+  function startPress(event: ReactPointerEvent<HTMLElement>) {
+    endPress.current?.();
+    const kind = pressKind(event.pointerType);
+    help.pressStart(kind);
+    const owner = event.currentTarget.ownerDocument;
+    // A tap focuses on its compatibility mousedown, after pointerup and before
+    // its click, so a tap's press ends at the click (after the trigger's own
+    // click handler, which reads it). A mouse or pen focuses before pointerup.
+    const ends: [string, boolean][] = [
+      ...(kind === "touch"
+        ? []
+        : ([
+            ["pointerup", true],
+            ["mouseup", true],
+          ] as [string, boolean][])),
+      ["click", false],
+      ["pointercancel", true],
+      ["contextmenu", true],
+      ["dragstart", true],
+      ["keydown", true],
+    ];
+    const finish = () => {
+      for (const [type, capture] of ends)
+        owner.removeEventListener(type, finish, capture);
+      if (endPress.current === finish) endPress.current = undefined;
+      help.pressEnd();
+    };
+    for (const [type, capture] of ends)
+      owner.addEventListener(type, finish, capture);
+    endPress.current = finish;
   }
-  function pointerDown(event: ReactPointerEvent<HTMLElement>) {
-    mode.current = event.pointerType === "touch" ? "touch" : "pointer";
-    // Focus caused by pointerdown is not keyboard intent, even after click.
-    pointerFocus.current = true;
-    clearTimeout(focusTimer.current);
-    focusTimer.current = setTimeout(() => {
-      pointerFocus.current = false;
-    }, 0);
+  function enter(part: HelpPart, event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType === "mouse") help.pointerEnter(part);
   }
-  function enter(
-    part: "trigger" | "content",
-    event: ReactPointerEvent<HTMLElement>,
-  ) {
-    if (event.pointerType !== "mouse") return;
-    mode.current = "pointer";
-    pointerInside.current[part] = true;
-    clearClose();
-    update(true);
+  function leave(part: HelpPart, event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType === "mouse") help.pointerLeave(part);
   }
-  function leave(
-    part: "trigger" | "content",
-    event: ReactPointerEvent<HTMLElement>,
-  ) {
-    if (event.pointerType !== "mouse") return;
-    pointerInside.current[part] = false;
-    scheduleClose();
+  function focusEnter() {
+    if (!ignoreFocus.current) help.focusEnter();
   }
-  function keyboardFocus() {
-    if (ignoreFocus.current || pointerFocus.current) return;
-    mode.current = "keyboard";
-    clearClose();
-    update(true);
+  function focusLeave(event: ReactFocusEvent<HTMLElement>) {
+    // Moving between the trigger and the help is not leaving; neither is the
+    // window losing focus, which keeps the focused element.
+    if (inside(event.relatedTarget) || inside(document.activeElement)) return;
+    help.focusLeave();
   }
   function onEscapeKeyDown(event: {
     preventDefault(): void;
@@ -102,12 +118,10 @@ export function useHoverDisclosure() {
   }
   useEffect(
     () => () => {
-      clearTimeout(closeTimer.current);
-      clearTimeout(focusTimer.current);
-      if (focusFrame.current !== undefined)
-        cancelAnimationFrame(focusFrame.current);
+      endPress.current?.();
+      help.dispose();
     },
-    [],
+    [help],
   );
   useEffect(() => {
     if (!open) return;
@@ -126,20 +140,13 @@ export function useHoverDisclosure() {
     const move = (event: PointerEvent) => {
       if (event.pointerType !== "mouse") return;
       // Inert/disabled ancestors may suppress local pointerleave events.
-      pointerInside.current = {
-        trigger: within(triggerRef.current, event),
-        content: within(contentRef.current, event),
-      };
-      if (pointerInside.current.trigger || pointerInside.current.content)
-        clearClose();
-      else scheduleClose();
+      help.pointerAt(
+        within(triggerRef.current, event),
+        within(content.current, event),
+      );
     };
     const outside = (event: PointerEvent) => {
-      if (
-        !triggerRef.current?.contains(event.target as Node) &&
-        !contentRef.current?.contains(event.target as Node)
-      )
-        close();
+      if (!inside(event.target)) close();
     };
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerdown", outside, true);
@@ -147,59 +154,56 @@ export function useHoverDisclosure() {
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerdown", outside, true);
     };
-  }, [open]);
+  }, [open, help, close]);
+  function keyDown(event: ReactKeyboardEvent<HTMLElement>, part: HelpPart) {
+    help.keyboardUse();
+    if (event.key === "Escape") onEscapeKeyDown(event);
+    else if (part === "trigger" && event.key === "ArrowDown") {
+      event.preventDefault();
+      if (help.isOpen() && content.current)
+        content.current.focus({ preventScroll: true });
+      else {
+        focusContentOnOpen.current = true;
+        help.openByKeyboard();
+      }
+    }
+  }
   return {
     open,
     triggerRef,
     contentRef,
     close,
-    onOpenChange: (next: boolean) => (next ? update(true) : close()),
+    // Radix only asks to close: opening is decided by the trigger's click.
+    onOpenChange: (next: boolean) => {
+      if (!next) close();
+    },
     onEscapeKeyDown,
     triggerProps: {
       onPointerEnter: (event: ReactPointerEvent<HTMLButtonElement>) =>
         enter("trigger", event),
       onPointerLeave: (event: ReactPointerEvent<HTMLButtonElement>) =>
         leave("trigger", event),
-      onPointerDown: pointerDown,
-      onFocus: keyboardFocus,
-      onBlur: scheduleClose,
-      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+      onPointerDown: startPress,
+      onFocus: focusEnter,
+      onBlur: focusLeave,
+      onClick: (event: ReactMouseEvent<HTMLButtonElement>) => {
         // Radix must know the real trigger, but should not toggle hover-open help.
         event.preventDefault();
-        clearClose();
-        if (mode.current === "touch") update(!isOpen.current);
-        else {
-          mode.current = event.detail === 0 ? "keyboard" : "pointer";
-          update(true);
-        }
+        help.activate(event.detail === 0);
       },
-      onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => {
-        mode.current = "keyboard";
-        pointerFocus.current = false;
-        if (event.key === "Escape") onEscapeKeyDown(event);
-        else if (event.key === "ArrowDown") {
-          event.preventDefault();
-          clearClose();
-          update(true);
-          focusFrame.current = requestAnimationFrame(() =>
-            contentRef.current?.focus(),
-          );
-        }
-      },
+      onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) =>
+        keyDown(event, "trigger"),
     },
     contentProps: {
       onPointerEnter: (event: ReactPointerEvent<HTMLDivElement>) =>
         enter("content", event),
       onPointerLeave: (event: ReactPointerEvent<HTMLDivElement>) =>
         leave("content", event),
-      onPointerDownCapture: pointerDown,
-      onFocusCapture: keyboardFocus,
-      onBlurCapture: scheduleClose,
-      onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
-        mode.current = "keyboard";
-        pointerFocus.current = false;
-        if (event.key === "Escape") onEscapeKeyDown(event);
-      },
+      onPointerDownCapture: startPress,
+      onFocusCapture: focusEnter,
+      onBlurCapture: focusLeave,
+      onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) =>
+        keyDown(event, "content"),
     },
   };
 }
