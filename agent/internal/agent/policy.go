@@ -114,8 +114,8 @@ var (
 // or a protobuf descriptor). Restricted mode denies them because they bypass
 // the host's allowances. The server's DEVICE_VRL_FUNCTIONS and the dashboard's
 // deviceVrlFunctions list the same names; tests/security/test_vrl_function_lists.py
-// fails when they drift. parse_etld(psl:) and parse_groks(alias_sources:) also
-// read files in newer VRL; the pinned Vector 0.58 binary rejects those arguments.
+// fails when they drift. parse_etld and parse_groks reach a file only when a
+// call passes one, so they are not listed here: see fileArgumentFunctions.
 var externalVRL = []string{"get_env_var", "get_secret", "set_secret", "remove_secret", "get_enrichment_table_record", "find_enrichment_table_records", "dns_lookup", "reverse_dns", "http_request", "validate_json_schema", "parse_proto", "encode_proto"}
 
 // externalCalls matches a call of each external function: `name(` or
@@ -142,6 +142,7 @@ type PolicyRefusal struct {
 	ComponentType string
 	Field         string
 	Resource      string // host:port, listen address, path, setting or VRL function
+	Argument      string // the argument that passes a file to the VRL function in Resource, such as alias_sources
 	Allowance     string // allowed_network_hosts, allowed_listen_addresses, allowed_file_roots
 	Suggested     string // the allowance entry that would permit it
 	problem       string // INVALID_COMPONENT_ID: what is wrong with the ID, such as "a slash in its ID"
@@ -229,6 +230,9 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	case e.Code == "UNSUPPORTED_LOCAL_CAPABILITY" && e.Resource != "":
 		d.Message = `The top-level setting "` + e.Resource + `" isn't allowed in restricted mode.`
 		d.Hint = "Remove it, or deploy to a full-mode device."
+	case e.Code == "DYNAMIC_CAPABILITY_DENIED" && e.Argument != "":
+		d.Message = subject + " reads a file with " + e.Resource + " (" + e.Argument + "), which restricted mode doesn't allow."
+		d.Hint = "Remove the " + e.Argument + " argument, or deploy to a full-mode device. No allowance on a restricted host can permit it."
 	case e.Code == "DYNAMIC_CAPABILITY_DENIED" && e.Resource != "":
 		d.Message = subject + " calls " + e.Resource + ", which restricted mode doesn't allow."
 		d.Hint = "Use fixed values in the pipeline, or deploy to a full-mode device."
@@ -673,11 +677,7 @@ func checkTests(v any) *PolicyRefusal {
 				}
 			}
 		case string:
-			if function := externalFunction(x); function != "" {
-				r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: external VRL capability")
-				r.Field, r.Resource = "tests", function
-				return r
-			}
+			return vrlRefusal(x, "tests")
 		}
 		return nil
 	}
@@ -692,6 +692,24 @@ func externalFunction(program string) string {
 		}
 	}
 	return ""
+}
+
+// vrlRefusal refuses a string that calls a VRL function restricted mode doesn't
+// allow: one that reaches outside the event, or one that passes a file, which
+// Vector reads when it compiles the program. field is the setting that holds
+// the string.
+func vrlRefusal(program, field string) *PolicyRefusal {
+	if function := externalFunction(program); function != "" {
+		r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: external VRL capability")
+		r.Field, r.Resource = field, function
+		return r
+	}
+	if calls := fileArgumentCalls(program); len(calls) > 0 {
+		r := refusal("DYNAMIC_CAPABILITY_DENIED", calls[0].category())
+		r.Field, r.Resource, r.Argument = field, calls[0].name, calls[0].argument
+		return r
+	}
+	return nil
 }
 
 func (p CapabilityPolicy) walk(v any, key string) *PolicyRefusal {
@@ -734,9 +752,7 @@ func (p CapabilityPolicy) walkIn(v any, key string, pathIsFile bool) *PolicyRefu
 			r.Field = key
 			return r
 		}
-		if function := externalFunction(x); function != "" {
-			r := refusal("DYNAMIC_CAPABILITY_DENIED", "capability denied: external VRL capability")
-			r.Field, r.Resource = key, function
+		if r := vrlRefusal(x, key); r != nil {
 			return r
 		}
 		if key == "endpoint" || key == "endpoints" || key == "uri" || key == "url" || strings.Contains(x, "://") {
