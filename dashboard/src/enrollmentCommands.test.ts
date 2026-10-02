@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AgentInstallSchema, type AgentInstall } from "./api";
+import { powerShellWords } from "./powershellText.test-support";
 import {
+  CommandValueError,
+  commandValueProblem,
   effectiveTrust,
   fingerprint,
   installerCommand,
@@ -102,15 +105,21 @@ describe("install commands", () => {
   it("pin the server's CA for the download, check the installer's SHA-256 and pass only choices", () => {
     expect(installerCommand(install, choices())).toBe(
       [
-        `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
-        "curl -fsSL --cacert vectory-ca.pem \\",
-        "  -o vectory-install.sh \\",
-        "  https://vectory.example.test:8443/agent/v1/install.sh &&",
-        `echo '${installerSha}  vectory-install.sh' \\`,
-        "  | sha256sum -c - &&",
-        "sudo sh vectory-install.sh \\",
-        "  --mode restricted \\",
-        "  --create-user",
+        "(",
+        "  set -e",
+        "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+        `  trap 'rm -rf "$dir"' EXIT`,
+        `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
+        `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+        `    --cacert "$dir/vectory-ca.pem" \\`,
+        `    -o "$dir/vectory-install.sh" \\`,
+        "    https://vectory.example.test:8443/agent/v1/install.sh",
+        `  echo '${installerSha}  vectory-install.sh' \\`,
+        `    | (cd "$dir" && sha256sum -c -)`,
+        `  sudo sh "$dir/vectory-install.sh" \\`,
+        "    --mode restricted \\",
+        "    --create-user",
+        ")",
       ].join("\n"),
     );
     const mac = installerCommand(
@@ -118,8 +127,49 @@ describe("install commands", () => {
       choices({ os: "darwin", mode: "full" }),
     );
     expect(mac).toContain(
-      "  | shasum -a 256 -c - &&\nsudo sh vectory-install.sh \\\n  --mode full",
+      `    | (cd "$dir" && shasum -a 256 -c -)\n  sudo sh "$dir/vectory-install.sh" \\\n    --mode full \\\n    --create-user\n)`,
     );
+  });
+
+  // The files are in a directory of their own that nobody else can enter, never
+  // beside the person's other files, so no one can swap one between the check
+  // and the run; the check and the run are one command that stops on the first
+  // failure, and the download never leaves https.
+  it("keeps the installer in a private directory, checks it and runs it as one unit", () => {
+    for (const os of ["linux", "darwin"] as const)
+      for (const trust of [undefined, "pinned", "file", "system"] as const) {
+        const command = installerCommand(
+          install,
+          choices({ os, trust, caFile: "/etc/vectory/server-ca.pem" }),
+        )!;
+        const lines = command.split("\n");
+        expect(lines[0], command).toBe("(");
+        expect(lines.at(-1)).toBe(")");
+        expect(lines[1]).toBe("  set -e");
+        expect(command).toContain("dir=$(mktemp -d");
+        expect(command).toContain(`trap 'rm -rf "$dir"' EXIT`);
+        // No file is named in the working directory: every path is under $dir
+        // (the checksum line names its file relative to the directory it enters).
+        expect(
+          lines.filter((line) => !line.includes("echo '")).join("\n"),
+        ).not.toMatch(/(^|[\s>])vectory-(install\.sh|ca\.pem)/);
+        expect(command).toContain(`-o "$dir/vectory-install.sh"`);
+        expect(command).toContain(`(cd "$dir" && `);
+        expect(command).toContain(`sudo sh "$dir/vectory-install.sh"`);
+        // Every hop of the download stays on https, a redirect included. The
+        // values are quoted: zsh looks up an unquoted =https as a command.
+        expect(command).toContain("--proto '=https' --proto-redir '=https'");
+        // The check precedes the run, and nothing runs after a failed step: set -e
+        // ends the subshell, so no step needs a trailing &&.
+        const check = Math.max(
+          command.indexOf("sha256sum -c -"),
+          command.indexOf("shasum -a 256 -c -"),
+        );
+        expect(check).toBeGreaterThan(-1);
+        expect(check).toBeLessThan(command.indexOf("sudo sh"));
+        expect(command).not.toContain("&&\n");
+        expect(command.split("sudo sh")).toHaveLength(2);
+      }
   });
 
   it("gives each certificate choice its exact option, for the download and for setup", () => {
@@ -131,15 +181,21 @@ describe("install commands", () => {
       ),
     ).toBe(
       [
-        "curl -fsSL --cacert /etc/vectory/server-ca.pem \\",
-        "  -o vectory-install.sh \\",
-        "  https://vectory.example.test:8443/agent/v1/install.sh &&",
-        `echo '${installerSha}  vectory-install.sh' \\`,
-        "  | sha256sum -c - &&",
-        "sudo sh vectory-install.sh \\",
-        "  --mode restricted \\",
-        "  --ca-file /etc/vectory/server-ca.pem \\",
-        "  --create-user",
+        "(",
+        "  set -e",
+        "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+        `  trap 'rm -rf "$dir"' EXIT`,
+        "  curl -fsSL --proto '=https' --proto-redir '=https' \\",
+        "    --cacert /etc/vectory/server-ca.pem \\",
+        `    -o "$dir/vectory-install.sh" \\`,
+        "    https://vectory.example.test:8443/agent/v1/install.sh",
+        `  echo '${installerSha}  vectory-install.sh' \\`,
+        `    | (cd "$dir" && sha256sum -c -)`,
+        `  sudo sh "$dir/vectory-install.sh" \\`,
+        "    --mode restricted \\",
+        "    --ca-file /etc/vectory/server-ca.pem \\",
+        "    --create-user",
+        ")",
       ].join("\n"),
     );
     expect(
@@ -150,12 +206,12 @@ describe("install commands", () => {
     ).toContain("  --ca-file /etc/vectory/server-ca.pem \\");
     // The host's own trusted certificates: an explicit, empty --ca-file=.
     const system = installerCommand(install, choices({ trust: "system" }))!;
-    expect(system.split("\n").slice(0, 3)).toEqual([
-      "curl -fsSL \\",
-      "  -o vectory-install.sh \\",
-      "  https://vectory.example.test:8443/agent/v1/install.sh &&",
+    expect(system.split("\n").slice(4, 7)).toEqual([
+      "  curl -fsSL --proto '=https' --proto-redir '=https' \\",
+      `    -o "$dir/vectory-install.sh" \\`,
+      "    https://vectory.example.test:8443/agent/v1/install.sh",
     ]);
-    expect(system).toContain("  --ca-file= \\");
+    expect(system).toContain("    --ca-file= \\");
     expect(setupCommand(install, choices({ trust: "system" }))).toContain(
       "  --ca-file= \\",
     );
@@ -181,7 +237,7 @@ describe("install commands", () => {
       choices({ installDir: "/opt/vectory agent/bin" }),
     )!;
     expect(command).toContain(
-      "sudo sh vectory-install.sh \\\n  --mode restricted \\\n  --install-dir '/opt/vectory agent/bin' \\\n",
+      `  sudo sh "$dir/vectory-install.sh" \\\n    --mode restricted \\\n    --install-dir '/opt/vectory agent/bin' \\\n`,
     );
     expect(
       runCommand(
@@ -269,7 +325,7 @@ describe("install commands", () => {
     // A pin chosen before is not offered for a public certificate.
     expect(effectiveTrust(publicInstall, "pinned")).toBe("system");
     expect(installerCommand(publicInstall, choices())).toMatch(
-      /^curl -fsSL \\\n {2}-o vectory-install\.sh \\\n {2}https:/,
+      /\n {2}curl -fsSL --proto '=https' --proto-redir '=https' \\\n {4}-o "\$dir\/vectory-install\.sh" \\\n {4}https:/,
     );
     expect(setupCommand(publicInstall, choices())).not.toContain("--ca-sha256");
     expect(setupCommand(publicInstall, choices())).toContain("--ca-file=");
@@ -348,6 +404,205 @@ describe("install commands", () => {
 
   it("shows fingerprints in full, the way the agent prints them", () => {
     expect(fingerprint(pin)).toBe("1F:3C:" + "00:".repeat(28) + "9A:B0");
+  });
+
+  // PowerShell reads U+2018 to U+201B as single quotes, like the apostrophe, so
+  // one of them in a pasted value would end its string and run the rest in the
+  // elevated shell. Each is doubled, the way the apostrophe is.
+  describe("PowerShell quoting", () => {
+    const curlyQuotes = ["\u2018", "\u2019", "\u201A", "\u201B"];
+    const valueOf = (quoted: string) => powerShellWords(`cmd ${quoted}`);
+
+    it.each(curlyQuotes)(
+      "keeps %s inside its string, so nothing after it runs",
+      (character) => {
+        const hostile = `a${character}; calc; ${character}`;
+        const quoted = quote(hostile, "windows");
+        expect(quoted).toBe(
+          `'a${character}${character}; calc; ${character}${character}'`,
+        );
+        expect(valueOf(quoted)).toEqual(["cmd", hostile]);
+      },
+    );
+
+    it("returns every value exactly as one argument", () => {
+      const values = [
+        "plain",
+        "two words",
+        "C:\\Owner's Vector\\vector.json",
+        "C:\\Program Files\\Vectory\\agent",
+        "a'b",
+        "'",
+        "''",
+        "'a'",
+        "\u2019",
+        "\u2018\u2019",
+        "\u2019'\u2018",
+        "\u201A\u201B\u2019\u2018'",
+        "x\u2019\u2019y",
+        "a;b | c & d",
+        "$(calc)",
+        "`calc`",
+        "$env:USERNAME",
+        "a,b",
+        "@foo",
+        "@(calc)",
+        "100%",
+        "C:\\data #1",
+        "~",
+        "*.log",
+        "{a}",
+        "--%",
+        "-NoProfile",
+      ];
+      for (const value of values)
+        expect(valueOf(quote(value, "windows")), value).toEqual(["cmd", value]);
+    });
+
+    it("quotes a value PowerShell would read as syntax, and leaves plain ones bare", () => {
+      expect(quote(pin, "windows")).toBe(pin);
+      expect(quote("https://vectory.example.test:8443", "windows")).toBe(
+        "https://vectory.example.test:8443",
+      );
+      expect(quote("edge-01.example_net", "windows")).toBe(
+        "edge-01.example_net",
+      );
+      for (const value of ["a,b", "@foo", "--%", "100%", "a b", "a;b", "-b"])
+        expect(quote(value, "windows"), value).toMatch(/^'.*'$/);
+    });
+
+    it("refuses what no command can carry, for either shell", () => {
+      for (const os of ["linux", "darwin", "windows"] as const) {
+        for (const value of [
+          "a\nb",
+          "a\rb",
+          "a\tb",
+          "a\u0000b",
+          "a\u001bb",
+          "a\u007fb",
+          "a\u0085b",
+          "a\u2028b",
+          "a\u2029b",
+          "a\u202eb",
+          "a\u2066b",
+        ])
+          expect(() => quote(value, os), JSON.stringify(value)).toThrow(
+            CommandValueError,
+          );
+      }
+      // A double quote is a character of a native command line, which Windows
+      // PowerShell passes on unescaped; no Windows path or name holds one.
+      expect(() => quote('a" --mode "full', "windows")).toThrow(
+        CommandValueError,
+      );
+      expect(quote('a" --mode "full', "linux")).toBe(`'a" --mode "full'`);
+    });
+
+    // The advanced fields that reach a Windows command, each with a value that
+    // would close its string, run `calc` and open another.
+    const hostile = "C:\\x\u2019; calc; \u2019";
+    const fields: [string, Partial<SetupChoices>, string][] = [
+      ["name", { name: hostile }, "--name"],
+      ["state directory", { stateDir: hostile }, "--state-dir"],
+      ["managed configuration", { managedConfig: hostile }, "--managed-config"],
+      ["allowances file", { capabilityPolicy: hostile }, "--capability-policy"],
+      ["Vector binary", { vectorBinary: hostile }, "--vector-binary"],
+      ["CA file", { trust: "file", caFile: hostile }, "--ca-file"],
+    ];
+
+    it.each(fields)(
+      "never lets a hostile %s end its string in the Windows command",
+      (_name, overrides, flag) => {
+        const picked = choices({ os: "windows", ...overrides });
+        const command = windowsCommand(install, picked, install.releases[0])!;
+        const words = powerShellWords(command.split("\n")[1]);
+        expect(words[0]).toBe(".\\vectory.exe");
+        expect(words[words.indexOf(flag) + 1]).toBe(hostile);
+        expect(words.filter((word) => word === "calc")).toEqual([]);
+        // The manual setup command is the same text without the hash check.
+        expect(powerShellWords(setupCommand(install, picked)!)).toEqual(words);
+      },
+    );
+
+    it("builds no command from a value no command can carry, rather than a wrong one", () => {
+      for (const os of ["linux", "darwin", "windows"] as const) {
+        const picked = choices({ os, stateDir: "/var/lib/a\nb" });
+        expect(setupCommand(install, picked), os).toBeNull();
+        expect(installerCommand(install, picked), os).toBeNull();
+        expect(
+          windowsCommand(install, picked, install.releases[0]),
+          os,
+        ).toBeNull();
+        expect(runCommand(install, picked, true), os).toBe("");
+      }
+      // The values only the installer command quotes: where the agent goes and
+      // the CA file it downloads with.
+      expect(
+        installerCommand(install, choices({ installDir: "/opt/a\tb" })),
+      ).toBeNull();
+      expect(
+        installerCommand(
+          install,
+          choices({ trust: "file", caFile: "/etc/a\u202eb.pem" }),
+        ),
+      ).toBeNull();
+      expect(
+        installerCommand(install, choices({ installDir: "/opt/vectory" })),
+      ).not.toBeNull();
+      // The same value a POSIX shell keeps: only Windows refuses a double quote.
+      expect(
+        setupCommand(install, choices({ stateDir: '/srv/a"b' })),
+      ).toContain(`--state-dir '/srv/a"b'`);
+      expect(
+        setupCommand(install, choices({ os: "windows", stateDir: 'C:\\a"b' })),
+      ).toBeNull();
+    });
+
+    it("quotes a value that starts with = for a POSIX shell, because zsh looks it up as a command", () => {
+      expect(quote("=ls", "linux")).toBe("'=ls'");
+      expect(quote("=ls", "darwin")).toBe("'=ls'");
+      expect(quote("a=b", "linux")).toBe("a=b");
+    });
+
+    it("leaves a curly quote alone for a POSIX shell, where it is not a quote", () => {
+      expect(quote("/srv/o\u2019s", "linux")).toBe("'/srv/o\u2019s'");
+      expect(quote("o\u2019s", "darwin")).toBe("'o\u2019s'");
+    });
+
+    it("names the field when it refuses a typed value", () => {
+      const field = "Agent state directory";
+      expect(commandValueProblem(field, "C:\\o\u2019s", "windows")).toBe(
+        "Agent state directory can't contain curly quotes (‘ ’ ‚ ‛), which PowerShell reads as quotes. Use a plain apostrophe or remove them.",
+      );
+      for (const character of curlyQuotes)
+        expect(
+          commandValueProblem(field, `C:\\o${character}s`, "windows"),
+        ).toContain("curly quotes");
+      expect(commandValueProblem(field, "C:\\o's", "windows")).toBe("");
+      expect(commandValueProblem(field, "/srv/o\u2019s", "linux")).toBe("");
+      for (const os of ["linux", "darwin", "windows"] as const)
+        expect(commandValueProblem(field, "/srv/a\u007fb", os)).toBe(
+          "Agent state directory can't contain control characters. Retype it.",
+        );
+      expect(commandValueProblem(field, 'C:\\a"b', "windows")).toBe(
+        "Agent state directory can't contain a double quote. Remove it.",
+      );
+      expect(commandValueProblem(field, "", "windows")).toBe("");
+    });
+
+    it("quotes the state directory of the run command too", () => {
+      const command = runCommand(
+        install,
+        choices({ os: "windows", stateDir: hostile }),
+        false,
+      );
+      expect(powerShellWords(command)).toEqual([
+        ".\\vectory.exe",
+        "run",
+        "--state-dir",
+        hostile,
+      ]);
+    });
   });
 
   it("starts an agent without a service where this page's command put it", () => {

@@ -395,13 +395,19 @@ const linuxDevice = (extra = {}) => ({
   ...extra,
 });
 const upgradeCommandText = [
-  `printf '%s\\n' '${caPem.trimEnd()}' > vectory-ca.pem &&`,
-  "curl -fsSL --cacert vectory-ca.pem \\",
-  "  -o vectory-install.sh \\",
-  "  https://vectory.example.test:8443/agent/v1/install.sh &&",
-  `echo '${installerSha}  vectory-install.sh' \\`,
-  "  | sha256sum -c - &&",
-  "sudo sh vectory-install.sh",
+  "(",
+  "  set -e",
+  "  dir=$(mktemp -d 2>/dev/null || mktemp -d -t vectory)",
+  `  trap 'rm -rf "$dir"' EXIT`,
+  `  printf '%s\\n' '${caPem.trimEnd()}' > "$dir/vectory-ca.pem"`,
+  `  curl -fsSL --proto '=https' --proto-redir '=https' \\`,
+  `    --cacert "$dir/vectory-ca.pem" \\`,
+  `    -o "$dir/vectory-install.sh" \\`,
+  "    https://vectory.example.test:8443/agent/v1/install.sh",
+  `  echo '${installerSha}  vectory-install.sh' \\`,
+  `    | (cd "$dir" && sha256sum -c -)`,
+  `  sudo sh "$dir/vectory-install.sh"`,
+  ")",
 ].join("\n");
 const dialog = () =>
   page.getByRole("dialog", { name: "Upgrade agent", exact: true });
@@ -534,8 +540,8 @@ try {
       await openGuide();
       expect(await commandText()).toBe(
         upgradeCommandText.replace(
-          "sudo sh vectory-install.sh",
-          "sudo sh vectory-install.sh \\\n  --state-dir '/srv/vectory state' \\\n  --service none",
+          `  sudo sh "$dir/vectory-install.sh"`,
+          `  sudo sh "$dir/vectory-install.sh" \\\n    --state-dir '/srv/vectory state' \\\n    --service none`,
         ),
       );
       await expect(dialog()).toContainText(

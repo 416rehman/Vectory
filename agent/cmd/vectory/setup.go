@@ -25,8 +25,10 @@ Without a service manager (a container, WSL, Alpine's OpenRC), setup checks
 in once and exits 3, because nothing keeps the agent running: run it under
 your own supervisor with the command setup prints, and pass --service none
 to say you will. Copy the whole command from Add device: it carries your
-server's CA certificate for curl (vectory-ca.pem). Never use curl -k, which
-turns certificate checks off; pass --cacert with your CA instead.
+server's CA certificate for curl (vectory-ca.pem) and keeps every file in a
+directory only you can enter. By hand, do the same: make that directory first,
+as the examples do. Never use curl -k, which turns certificate checks off;
+pass --cacert with your CA instead.
 Setup never takes over a Vector that is running. It records how that Vector
 was started, copies every configuration file it loads into the state
 directory (adoption-inventory, private to this account) and stops. When the
@@ -34,7 +36,8 @@ Vector loads several files, a directory, includes or configuration chosen by
 an environment variable, setup names them: merge them into the one JSON file
 the agent manages, or adopt them as they are with --adopt-existing.`,
 	examples: []string{
-		"curl -fsSL --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
+		`cd "$(mktemp -d)"`,
+		"curl -fsSL --proto '=https' --proto-redir '=https' --cacert vectory-ca.pem -o vectory-install.sh https://vectory.example.com:8443/agent/v1/install.sh",
 		"echo '<SHA-256 from Add device>  vectory-install.sh' | sha256sum -c -",
 		"sudo sh vectory-install.sh --create-user",
 		"sudo vectory setup --server https://vectory.example.com:8443 --ca-sha256 <64-hex-fingerprint> --create-user",
