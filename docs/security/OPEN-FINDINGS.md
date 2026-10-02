@@ -1,46 +1,20 @@
 # Open security findings
 
-An independent, read-only source and runtime review of commit `f4d1826`, run against private instances with a real agent and Vector 0.58. It found no way for an unauthenticated peer, a lower role or a device to read a secret, take over an account, cross a role boundary or destroy data. It did find six availability or containment defects that are cheap to exploit, and several smaller ones. **None of the findings below is fixed yet.** Each lists where the code is, what happens, and the regression test that closes it.
+An independent, read-only source and runtime review of commit `f4d1826`, run against private instances with a real agent and Vector 0.58. It found no way for an unauthenticated peer, a lower role or a device to read a secret, take over an account, cross a role boundary or destroy data. It did find six availability or containment defects that are cheap to exploit, and several smaller ones. A finding is deleted from this file in the change that fixes it, together with its regression test; what is left below is what is still open, followed by the residual risks the fixes themselves left, which the next independent review should attack first.
+
+Fixed since the review (server side, with regression tests; see the [changelog](../../CHANGELOG.md)): the shared sign-in, reset, invite, enrollment and installer buckets, the combined password-and-code sign-in, the `accept()` loop, idle handshakes, the Slack `text` field, enrollment audit rows, the Azure platform address, the packaged systemd unit, and the server halves of the restricted-mode `api` block and of component IDs. The agent and dashboard halves are listed below.
 
 Severity: **P1** is exploitable without special access or weakens a stated guarantee; **P2** is bounded or needs a precondition; **P3** is hygiene. Where a step could not be run in the review environment (for example PowerShell, Slack), the finding says so.
 
 ## P1
 
-### 1. One address can lock every user out of sign-in, password reset, enrollment and the installer
+### 5. Restricted mode lets a pipeline open Vector's unauthenticated local API (agent half open)
 
-- **What happens.** The global bucket of each public endpoint is charged before the per-client bucket, and refused calls still count. A client that sends more than the global budget from one address keeps the bucket full for every other address for as long as it keeps sending. Measured with two loopback addresses: 700 failed sign-ins from one address made a valid sign-in from another answer `429`; 350 reset requests blocked reset and invite redemption; 700 enrollment attempts blocked enrollment; 1,250 installer requests blocked `install.sh` for everyone with `Retry-After: 57` while agent downloads (a separate bucket) still answered `200`.
-- **Where.** `server/src/auth.rs` `login` (`login-global` 600 per minute runs before `login-client:{group}` at 60); `server/src/accounts.rs` `public_code` (`password-reset-global` 300, no per-client cap; invite redemption); `server/src/device.rs` `enroll` (`enrollment` 600 per minute, then 60 per client); `server/src/install.rs` (1,200 global, then per client); `server/src/ledger.rs` `hit` counts refused calls.
-- **Impact.** Remote and unauthenticated. One host at about 10 requests a second keeps sign-in unusable, so the operator who would respond cannot sign in, and it blocks first enrollment, installer downloads and password recovery. Existing sessions and enrolled devices are unaffected.
-- **Fix.** Check the per-client bucket first and charge the global bucket only for requests that passed it. Reserve a small share of the global bucket for clients that recently authenticated (`login-known` already exists). Add a per-client cap to `password-reset-global`.
-- **Test.** 700 bad sign-ins from address A, then a valid sign-in from address B succeeds; the same for reset, enrollment and installer. A unit test that a request refused by the per-client bucket does not advance the global counter.
-
-### 2. Combined password and TOTP sign-in has no limit on guessing the second factor
-
-- **What happens.** Posting `{email, password, totp_code}` to `/api/v1/login` refunds the failure budget right after the password check (`keys.succeeded`), and `mfa::verify_login` has only replay protection, no attempt counter. The five-attempt lock of the two-step challenge never applies. With a known password, only the per-client limiter of 60 a minute applies. The verifier accepts three time steps, so each guess succeeds with probability 3 in 10^6: about 23% a day from one address (arithmetic, not measured). The threat model's "stolen password, five attempts" does not hold for this path.
-- **Where.** `server/src/auth.rs` `login` (the `succeeded` call near the password check); `server/src/mfa.rs` `verify_login`; the two-step path in `server/src/login_challenges.rs` is the correct pattern. The dashboard uses the two-step form; the combined form is kept for existing clients.
-- **Fix.** Call `succeeded` only after the factor verified (or when the account has none), and count wrong factors against the same per-account budget as the challenge. Better: remove the combined form once the CLI uses the challenge.
-- **Test.** A correct password plus six wrong codes from two addresses ends in `SIGNIN_THROTTLED` or `MFA_TOO_MANY_ATTEMPTS`; a correct code inside the lock is refused too.
-
-### 3. One failed `accept()` on the agent listener ends the whole server
-
-- **What happens.** In `serve_tls`, `listener.accept().await?` propagates the first error out of the accept loop and out of `main`, so the dashboard exits as well as the agent listener; parked wake-up waits are dropped instead of answered. Reproduced with a low descriptor limit and about 400 raw connections. At a production limit it needs proportionally more sockets, but the path is unconditional for any transient `accept()` error, including `ENFILE` caused by another process.
-- **Where.** `server/src/device.rs` `serve_tls` (the `accept().await?`); `server/src/main.rs` (the `select!` over `axum::serve` and `serve_tls`).
-- **Fix.** Treat `accept()` errors as recoverable: log, back off 10 to 100 ms on `EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`, continue on `ECONNABORTED` and `EINTR`, return only when the listener is unusable. Do the same for the dashboard listener if `axum::serve` can surface it.
-- **Test.** `serve_tls` with an injected listener that returns `Err(EMFILE)` once and then a real connection serves the second connection. An integration test with a low descriptor limit asserts `/api/v1/status` still answers.
-
-### 4. 260 idle raw connections make a real device request fail for several seconds
-
-- **What happens.** Each accepted connection waits for one of 128 handshake permits and then up to 10 seconds for a ClientHello. A connection that sends nothing holds its permit for the full 10 seconds. With 260 such sockets a real device's request failed after 10 s (connection reset), then took 2.7 s, then recovered once the flood stopped. A continuous flood keeps the effect continuous. The server stays up (unlike finding 3).
-- **Where.** `server/src/device.rs` `serve_tls` (`handshakes = Semaphore::new(128)`, the 10 s acquire and accept timeouts).
-- **Fix.** A read-idle timeout well under 10 s for a connection that has sent no bytes, independent of the handshake-completion timeout, and size the handshake semaphore relative to `VECTORY_MAX_AGENT_CONNECTIONS`.
-- **Test.** Open 200 raw sockets and assert a concurrent mutually authenticated request completes within a fixed short bound (for example 2 s).
-
-### 5. Restricted mode lets a pipeline open Vector's unauthenticated local API
-
-- **What happens.** A restricted-compatible pipeline containing `"api": {"enabled": true, "address": "127.0.0.1:8686"}` is accepted. Vector's API has no authentication, so any local user (even uid 65534) can run `vector tap` and read live events, including secrets in log lines. Reproduced on a real restricted agent.
-- **Where.** `agent/internal/agent/policy.go` (`case "api"` accepts a loopback address); `server/src/rollout.rs` `requires_full_mode` (`api` is in the restricted roots).
-- **Fix.** Refuse a top-level `api` block in restricted mode in both places with a stable code. Vectory injects its own loopback API only where a feature needs one (see [the event sampling plan](../internal/TAP-IMPLEMENTATION-PLAN.md), WP0).
-- **Test.** A policy test that a restricted device refuses `{"api":{"enabled":true,"address":"127.0.0.1:8686"}}`, and a server test that `requires_full_mode` returns true for it.
+- **What happens.** A restricted-compatible pipeline containing `"api": {"enabled": true, "address": "127.0.0.1:8686"}` is accepted by the agent. Vector's API has no authentication, so any local user (even uid 65534) can run `vector tap` and read live events, including secrets in log lines. Reproduced on a real restricted agent.
+- **Fixed.** The server: a version with a top-level `api` block (enabled or not, any address) now needs full mode, so a restricted device is never offered it and the deploy review reports `FULL_VECTOR_MODE_REQUIRED`.
+- **Still open.** `agent/internal/agent/policy.go` (`case "api"` accepts a loopback address), and the dashboard's own compatibility check (`dashboard/src/hostRequirements.ts` still lists `api` among the restricted roots and has an "API listener outside loopback" requirement), which now disagrees with the server.
+- **Fix.** Refuse a top-level `api` block in restricted mode on the agent with a stable code, and make the dashboard's check agree with the server. Vectory injects its own loopback API only where a feature needs one (see [the event sampling plan](../internal/TAP-IMPLEMENTATION-PLAN.md), WP0).
+- **Test.** A policy test that a restricted device refuses `{"api":{"enabled":true,"address":"127.0.0.1:8686"}}`; full mode unchanged.
 
 ### 6. The Windows Add device command can be injected through typographic quotes
 
@@ -51,31 +25,31 @@ Severity: **P1** is exploitable without special access or weakens a stated guara
 
 ## P2
 
-### 7. Absolute-path component IDs make Vector create state outside `data_dir`
+### 7. Absolute-path component IDs make Vector create state outside `data_dir` (agent half open)
 
-A component named `/some/dir/snk` makes Vector join the ID onto `data_dir` for checkpoints and disk buffers, and an absolute path replaces the base. A real restricted agent created buffer files outside its state directory and outside every allowed file root. A publisher can create directories and Vector's fixed-name files anywhere the service account can write; names and content are constrained, so this is a containment gap, not code execution. **Where:** `server/src/validation.rs` `validate` (component ID checks: empty, longer than 128, contains `.`); `agent/internal/agent/policy.go` ignores component IDs. **Fix:** reject IDs containing `/` or `\`, and any character outside `[A-Za-z0-9_-]`, in `validate` and in `policy.go`. **Test:** `"/tmp/x"` and `"a/b"` are refused in both.
+A component named `/some/dir/snk` makes Vector join the ID onto `data_dir` for checkpoints and disk buffers, and an absolute path replaces the base. A real restricted agent created buffer files outside its state directory and outside every allowed file root. A publisher can create directories and Vector's fixed-name files anywhere the service account can write; names and content are constrained, so this is a containment gap, not code execution. **Fixed:** the server's `validate` refuses `/`, `\` and control characters in component IDs, memory table names and `source_key`, naming the component and the rule (Vector 0.58 itself refuses only `.`, so nothing else is refused). **Still open:** `agent/internal/agent/policy.go` ignores component IDs. **Fix:** refuse the same set in restricted and in full mode (a state-directory containment issue, not a capability), and refuse an ID that starts with a Windows drive prefix such as `C:x` on both the agent and the server: Vector accepts `:`, and `Path::join` on Windows lets a drive prefix replace the base. **Test:** `"/tmp/x"`, `"a/b"` and `"C:\\x"` are refused by both; ordinary IDs still pass; a native test with the real Vector that the directory outside `data_dir` is never created.
 
-### 8. Slack-style webhook payloads carry the headline unescaped in the top-level `text`
+### 9. The unit that `vectory setup` registers is weaker than the packaged unit
 
-An editor who names a pipeline `<!channel> <@U123ABC> *bold* <https://evil.example|click here>` gets the blocks escaped but the top-level `text` field (bounded to 300 characters) raw. Slack renders `text` as fallback text with its markup, so this may trigger a channel-wide mention or a disguised link (Slack was not run; this is a hypothesis). **Where:** `server/src/notifier.rs` `webhook_body`. **Fix:** pass `text` through `slack_escape` for Slack destinations and keep the raw headline only in `event.headline` of the generic format. **Test:** a headline with `<`, `>` and `&` yields an escaped `text`.
-
-### 9. The packaged systemd unit is weaker than it was
-
-`packaging/systemd/vectory.service` has `ProtectSystem=full` where it had `strict`, `ProtectHome=read-only` where it had `true`, and `ReadWritePaths` changed to `-/var/lib/vectory-agent -/etc/vectory/managed`. Under `full`, everything outside `/usr`, `/boot` and `/etc` is writable wherever file permissions allow, and home directories are readable; finding 7 or any Vector escape then reaches more of the host. **Fix:** restore `ProtectSystem=strict` with explicit `ReadWritePaths` (the leading `-` is fine) and `ProtectHome=true`; keep `KillMode=mixed`. **Test:** a packaging test that greps the unit for both.
-
-### 10. Refused enrollment attempts with a real token write one audit row each
-
-With a real but revoked, used-up or expired token, 50 refused attempts added 50 audit rows (junk tokens are deduplicated to one). The growth is bounded only by the enrollment limiters, which finding 1 shows are shared. **Fix:** deduplicate per (token id, reason) per window, as for junk tokens. **Test:** 50 refused attempts add at most a handful of rows.
-
-### 11. Azure's platform address is accepted as a notification destination
-
-`168.63.129.16` (the Azure WireServer, reachable from every Azure VM and not link-local) is classified public, so a webhook destination pointing at it is accepted even though the policy blocks every other cloud metadata address. **Where:** `server/src/outbound.rs` `classify_v4` (the explicit metadata list beside `100.100.100.200` and `192.0.0.192`). **Fix:** add it to that list, with the same message. **Test:** the existing metadata table in `outbound.rs` gains the address, also with private addresses allowed.
+The packaged unit (`packaging/systemd/vectory.service`) is fixed: `ProtectSystem=strict`, `ProtectHome=true`, `ReadWritePaths=-/var/lib/vectory-agent -/etc/vectory/managed -/var/lib/vector`, `KillMode=mixed`, and a packaging test that keeps it so. The unit that `vectory setup` and `vectory service-install` write (`systemdUnitFile` in `agent/internal/agent/service_linux.go`) still has `ProtectSystem=full` and `ProtectHome=read-only`, so everything outside `/usr`, `/boot` and `/etc` stays writable wherever file permissions allow and home directories stay readable, and a unit in `/etc/systemd/system` takes precedence over the packaged one. It is left as it is on purpose: pipelines may write wherever the host allows (full mode, or a restricted-mode file root from `vectory allow --file-root`), and a strict sandbox would break them silently. **Fix:** the sandbox follows the host's allowances and mode, with one source for both units and a drop-in directory setup never overwrites; the design is part of [the capability tiers decision](../internal/WORK-QUEUE.md#9-capability-tiers-and-managed-assets). **Test:** the generated and the packaged unit agree on the sandbox lines; a restricted-mode file root appears in the generated `ReadWritePaths`.
 
 ## P3
 
 - The pinned install command writes `vectory-ca.pem` and `vectory-install.sh` with fixed names in the current directory and runs the script with `sudo sh` after `sha256sum -c`. A local user who can write that directory can swap the file between the check and the run. Use a `mktemp -d` and keep the check and the run in one shell function. The `curl -L` also lacks `--proto =https --proto-redir =https`.
-- `login` marks a client as known after the password alone, so a password holder without the second factor is exempt from the account-wide throttle for that window (`SignInKeys::succeeded`). Fixing finding 2 covers it.
 - Hypothesis, not demonstrated: a flood of a public endpoint delaying writers through the process-wide writer mutex. A control flood showed the same or higher write latency without the lock in the path.
+
+## Residual risks the fixes left
+
+Named by the authors of the fixes; none is a reproduced defect.
+
+- Many addresses can still spend the shared budgets: about ten addresses at 60 a minute reach the 600 a minute shared sign-in budget. Enrollment, installer, downloads, password reset and invite redemption keep no reserve for known operators. The sign-in reserve (100 of the 600) is opened by any completed sign-in, including a low-privilege account's, and lives in memory.
+- Valid ClientHellos that then stall still hold a handshake slot for up to 10 seconds. Slots are the connection limit divided by eight, clamped to 128 to 4,096 (2,048 by default); there is no per-address cap on handshakes in flight.
+- An `accept()` error the listener does not recognize is treated as passing (a pause of at most 100 ms, one log line per 10 seconds) and never ends the server, so a permanent error of an unknown kind would retry quietly.
+- The combined sign-in form: anyone who knows a password can lock it and spend the account's factor budget (the second step pauses for up to five minutes per window) until an administrator resets the password; a right combined code does not clear its wrong-code count; a password step whose second step never completes keeps its reservation (10 per account and client in 15 minutes).
+- Enrollment refusals are audited once per (token, reason, minute), which hides a second host retrying the same dead token within that minute.
+- The packaged unit was verified with `systemd-analyze verify`, `systemd-analyze security --offline`, its unit test and a read-only mount namespace, not on a running systemd. A path under `/home` probably also needs `ProtectHome=read-only` in the operator's drop-in; that is untested and not documented.
+- Some regression tests depend on the host: the descriptor-exhaustion tests use `ulimit -n` (POSIX only), two Go subtests skip without the loopback addresses 127.0.0.2 and 127.0.0.3, and the listener test skips when fewer than 140 sockets fit.
+- The recorded load measurements in `docs/internal/CAPACITY.md` and `docs/security/SECURITY-REVIEW.md` were taken with 128 handshake permits; the limit now scales with the connection limit, so the runs should be repeated.
 
 ## What was attacked and held
 
@@ -83,4 +57,4 @@ Wake-up hint authentication order and bounds; device certificate checks and devi
 
 ## Not covered
 
-List, sort and filter parameters of the fleet-scale reads; live response headers (security headers were read from source, not from a running proxy); the sample-test change in the validator worker (`server/src/bin/vector-validator.rs`, which holds stdin open until the last sample's output arrives); Windows and macOS hosts; anything after commit `f4d1826`, which includes the publish gate, canary choice, held-device, fleet-scale dashboard and agent adoption work.
+List, sort and filter parameters of the fleet-scale reads; live response headers (security headers were read from source, not from a running proxy); the sample-test change in the validator worker (`server/src/bin/vector-validator.rs`, which holds stdin open until the last sample's output arrives); Windows and macOS hosts; anything after commit `f4d1826`, which includes the publish gate, canary choice, held-device, fleet-scale dashboard and agent adoption work, and the fixes listed at the top.

@@ -21,9 +21,9 @@ Rules for every item: real data only (a synthetic fleet is always labeled as suc
 
 ## 1. Fix the open security findings
 
-[docs/security/OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) lists eleven findings with the code location, the fix and the regression test for each. Do the P1 availability and containment ones first, in this order, because each is small and the first two are cheap to exploit: the `accept()` loop (3), the shared rate buckets (1), the combined password-and-TOTP sign-in (2), idle handshakes (4), the restricted-mode `api` block (5, which is also the first work package of the sampling plan), the Windows command quoting (6). Then 11, 9, 7, 8 and 10.
+[docs/security/OPEN-FINDINGS.md](../security/OPEN-FINDINGS.md) lists what is still open with the code location, the fix and the regression test for each. The server-side fixes are in (the shared rate buckets, the combined password-and-code sign-in, the `accept()` loop, idle handshakes, Slack escaping, enrollment audit rows, the Azure address, the strict packaged systemd unit, and the server halves of the `api` block and of component IDs). What remains, in order: the agent halves of the restricted-mode `api` block (5) and of component IDs (7, including Windows drive prefixes on both sides), the Windows command quoting (6), the install command's local race (a P3), and the generated systemd unit (9), which waits for the capability design in item 9.
 
-Acceptance: each finding has its regression test, the independent adversarial suite (`tests/security/protocol_test.go`) gains a subtest where the finding is reachable over the agent listener, `docs/security/THREAT-MODEL.md` is corrected where a stated guarantee did not hold (the five-attempt MFA claim), and the finding is deleted from OPEN-FINDINGS.md in the same change.
+Acceptance: each remaining finding has its regression test, the independent adversarial suite (`tests/security/protocol_test.go`) gains a subtest where the finding is reachable over the agent listener, `docs/security/THREAT-MODEL.md` is corrected where a stated guarantee did not hold, and the finding is deleted from OPEN-FINDINGS.md in the same change. Then run a fresh independent review of the code the fixes touched, starting from the residual risks that file lists.
 
 ## 2. Server capacity
 
