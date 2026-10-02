@@ -832,7 +832,8 @@ try {
           ],
         }),
       });
-      await button("Live").click();
+      // A device runs it, so Live is already on.
+      await expect(button("Live")).toHaveAttribute("aria-pressed", "true");
       const status = page.locator(".editor-live-status");
       await expect(status).toContainText("Live for v1 · 2 devices");
       await expect(page.locator(".pipeline-edge-rate").first()).toBeVisible();
@@ -868,7 +869,8 @@ try {
           ],
         }),
       });
-      await button("Live").click();
+      // A device runs it, so Live is already on.
+      await expect(button("Live")).toHaveAttribute("aria-pressed", "true");
       const status = page.locator(".editor-live-status");
       await expect(status).toContainText(
         "No device reports metrics for v1 yet.",
