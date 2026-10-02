@@ -23,6 +23,7 @@ The agent listener gates every connection (a 3 second ClientHello timeout, a han
 ## P3
 
 - `POST /account/password` and `POST /account/revoke-sessions` validate the request body before authenticating, so an anonymous caller with a malformed body gets 400 instead of 401 (a well-formed body gets 401; nothing is disclosed). Authenticate first, as the `mfa/*` and administrator account routes do, and test that an anonymous POST with any body answers 401.
+- The release-candidate workflow's SBOM job uses a SHA-pinned action that downloads the SBOM tool's install script from that project's main branch at job time (the tool's version is pinned, the script is not). Replace it with the tool's release archive pinned by checksum. The job has a read-only token and runs only when started by hand.
 - Hypothesis, not demonstrated: a flood of a public endpoint delaying writers through the process-wide writer mutex. A control flood showed the same or higher write latency without the lock in the path.
 
 ## Residual risks the fixes left
