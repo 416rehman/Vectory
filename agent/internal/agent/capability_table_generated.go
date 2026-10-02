@@ -11,7 +11,7 @@ package agent
 // generated schema, and the table's identity (the release and a digest of the
 // table's contents).
 const (
-	capabilityTableID       = "0.58.0/046f6c732c20eadb"
+	capabilityTableID       = "0.58.0/35297f0e84f9331e"
 	capabilityVectorVersion = "0.58.0"
 	capabilitySchemaSHA256  = "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff"
 )
@@ -277,6 +277,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sources/aws_s3", Path: "assume_role", Class: "ambient", Capability: "instance-credentials", Reason: "assumes an AWS role starting from this host's own credentials"},
 	{Scope: "sources/aws_s3", Path: "decoding.protobuf.desc_file", Class: "resource", Kind: "file", From: "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"},
 	{Scope: "sources/aws_s3", Path: "endpoint", Class: "resource", Kind: "url", From: "vector::aws::region::RegionOrEndpoint"},
+	{Scope: "sources/aws_s3", Path: "force_path_style", Class: "data", Reason: "puts the bucket in the URL path instead of the host name"},
 	{Scope: "sources/aws_s3", Path: "proxy.enabled", Class: "data", Reason: "turns the proxy on", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/aws_s3", Path: "proxy.http", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/aws_s3", Path: "proxy.https", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
@@ -329,6 +330,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sources/http_server", Path: "address", Class: "resource", Kind: "listen", Required: true},
 	{Scope: "sources/http_server", Path: "decoding.protobuf.desc_file", Class: "resource", Kind: "file", From: "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"},
 	{Scope: "sources/http_server", Path: "path", Class: "data", Reason: "the URL path it serves"},
+	{Scope: "sources/http_server", Path: "path_key", Class: "data", Reason: "the event field that receives the request path"},
 	{Scope: "sources/http_server", Path: "proxy.enabled", Class: "data", Reason: "turns the proxy on", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/http_server", Path: "proxy.http", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/http_server", Path: "proxy.https", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
@@ -364,6 +366,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sources/kafka", Path: "proxy.https", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/kafka", Path: "proxy.no_proxy", Class: "data", Reason: "hosts reached without the proxy, each still named elsewhere in the pipeline", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/kafka", Path: "sasl.mechanism", Class: "constrained", When: []capabilityCondition{{"sasl.enabled", []string{"true"}}}, Default: "\"GSSAPI\"", Allowed: []string{"\"PLAIN\"", "\"SCRAM-SHA-256\"", "\"SCRAM-SHA-512\""}, Code: "UNSUPPORTED_LOCAL_CAPABILITY", Reason: "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"},
+	{Scope: "sources/kafka", Path: "socket_timeout_ms", Class: "data", Reason: "a timeout for broker connections"},
 	{Scope: "sources/kafka", Path: "tls.alpn_protocols", Class: "data", Reason: "protocols offered during the handshake", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sources/kafka", Path: "tls.ca_file", Class: "resource", Kind: "file", Asset: "pem_certificates", AssetCapability: "managed-ca", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sources/kafka", Path: "tls.crt_file", Class: "resource", Kind: "file", Asset: "pem_certificates", From: "vector_core::tls::settings::TlsConfig"},
@@ -407,6 +410,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sources/syslog", Path: "proxy.http", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/syslog", Path: "proxy.https", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sources/syslog", Path: "proxy.no_proxy", Class: "data", Reason: "hosts reached without the proxy, each still named elsewhere in the pipeline", From: "vector_core::config::proxy::ProxyConfig"},
+	{Scope: "sources/syslog", Path: "socket_file_mode", Class: "data", Reason: "the permissions of the socket it creates"},
 	{Scope: "sources/syslog", Path: "tls.alpn_protocols", Class: "data", Reason: "protocols offered during the handshake", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sources/syslog", Path: "tls.ca_file", Class: "resource", Kind: "file", Asset: "pem_certificates", AssetCapability: "managed-ca", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sources/syslog", Path: "tls.client_metadata_key", Class: "data", Reason: "an event field for the client certificate's metadata", From: "vector_core::tls::settings::TlsSourceConfig"},
@@ -432,6 +436,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sinks/aws_s3", Path: "dangerously_allow_unconfined_template_resolution", Class: "constrained", RefusedValues: []string{"true"}, Code: "UNCONFINED_TEMPLATE_DENIED", Reason: "turns off Vector's template confinement"},
 	{Scope: "sinks/aws_s3", Path: "encoding.protobuf.desc_file", Class: "resource", Kind: "file", From: "codecs::encoding::format::protobuf::ProtobufSerializerOptions"},
 	{Scope: "sinks/aws_s3", Path: "endpoint", Class: "resource", Kind: "url", From: "vector::aws::region::RegionOrEndpoint"},
+	{Scope: "sinks/aws_s3", Path: "force_path_style", Class: "data", Reason: "puts the bucket in the URL path instead of the host name"},
 	{Scope: "sinks/aws_s3", Path: "healthcheck.uri", Class: "resource", Kind: "url", From: "vector::sinks::util::uri::UriSerde"},
 	{Scope: "sinks/aws_s3", Path: "healthcheck_uri", Class: "resource", Kind: "url", From: "vector::sinks::util::uri::UriSerde"},
 	{Scope: "sinks/aws_s3", Path: "key_prefix", Class: "template", Reason: "an object key prefix within the bucket"},
@@ -569,6 +574,7 @@ var capabilityRules = [...]capabilityRule{
 	{Scope: "sinks/kafka", Path: "proxy.https", Class: "resource", Kind: "url", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sinks/kafka", Path: "proxy.no_proxy", Class: "data", Reason: "hosts reached without the proxy, each still named elsewhere in the pipeline", From: "vector_core::config::proxy::ProxyConfig"},
 	{Scope: "sinks/kafka", Path: "sasl.mechanism", Class: "constrained", When: []capabilityCondition{{"sasl.enabled", []string{"true"}}}, Default: "\"GSSAPI\"", Allowed: []string{"\"PLAIN\"", "\"SCRAM-SHA-256\"", "\"SCRAM-SHA-512\""}, Code: "UNSUPPORTED_LOCAL_CAPABILITY", Reason: "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"},
+	{Scope: "sinks/kafka", Path: "socket_timeout_ms", Class: "data", Reason: "a timeout for broker connections"},
 	{Scope: "sinks/kafka", Path: "tls.alpn_protocols", Class: "data", Reason: "protocols offered during the handshake", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sinks/kafka", Path: "tls.ca_file", Class: "resource", Kind: "file", Asset: "pem_certificates", AssetCapability: "managed-ca", From: "vector_core::tls::settings::TlsConfig"},
 	{Scope: "sinks/kafka", Path: "tls.crt_file", Class: "resource", Kind: "file", Asset: "pem_certificates", From: "vector_core::tls::settings::TlsConfig"},

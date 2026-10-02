@@ -58,6 +58,25 @@ test("a new path-typed field fails even when its name looks harmless", () => {
   ]);
 });
 
+test("a resource word inside a new field's name is enough to fail", () => {
+  const changed = copy();
+  changed.schema.definitions[
+    "vectory::components::sources::demo_logs"
+  ].allOf.push({
+    properties: {
+      endpoint_override: { type: "string" },
+      relay_socket_name: { type: "string" },
+      seed_host_key: { type: "string" },
+      spool_path_prefix: { type: "string" },
+    },
+  });
+  assert.deepEqual(problemsOf(changed), [
+    "components.sources.demo_logs: field endpoint_override looks like a resource (its name) and has no rule",
+    "components.sources.demo_logs: field relay_socket_name looks like a resource (its name) and has no rule",
+    "components.sources.demo_logs: field spool_path_prefix looks like a resource (its name) and has no rule",
+  ]);
+});
+
 test("a new template field in a reviewed component fails until it is classified", () => {
   const changed = copy();
   changed.schema.definitions["vectory::components::sinks::http"].allOf.push({
