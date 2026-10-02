@@ -2,7 +2,18 @@
 
 Vectory 0.1 is a developer preview. The whole loop works today against real Vector 0.58.0: build, publish, canary, apply and roll back.
 
-## In this update
+## Highlights
+
+- **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export, VRL and pipeline tests, and immutable history with diffs.
+- **Safe publishing.** Every version is checked by a sandboxed Vector before it can be published.
+- **Controlled rollouts.** Target devices and groups with a preview, set priorities, release as a canary or on a schedule, pause, cancel and roll back.
+- **Outbound-only agents.** Mutual TLS, per-device signed configurations, protection against rollback to older versions, and automatic restore of the last working configuration.
+- **Host-owned safety.** Restricted and full modes, local allowances, and credentials that stay on the device.
+- **Operations.** Device metrics, issues, and an exportable audit log.
+- **Accounts.** Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
+- **This Help center**, bundled with your server, searchable offline and available as Markdown.
+
+## The details
 
 - **Check on devices before you deploy.** The deploy review can ask the devices it would reach to validate the version on their own hosts first, without applying anything. Each answers **Passes here**, **Needs a fix** (with the step and setting) or names the device secret it hasn't bound, with the command to bind it. Results are advice: Deploy never waits for them. See [Check on devices](deployments.md#check-on-devices).
 - **A live graph you can read.** Rates sit on labels and connections route around the steps, so nothing runs behind a card. **Fit** keeps the numbers readable, **Show as table** lists them, and **Live** is on when a device runs the pipeline. See [Add and connect components](pipelines.md#add-and-connect-components).
@@ -28,23 +39,14 @@ Vectory 0.1 is a developer preview. The whole loop works today against real Vect
 - **Smoother accounts.** A guided first run, invite links, and a way back in when an administrator is locked out.
 - **A reorganized Help center** with a quickstart, a security model, and references for the agent CLI, server configuration and ports.
 
-## In Vectory 0.1
-
-- **Visual pipeline editor** for all 128 component types of Vector 0.58.0, with typed settings, a code view (YAML, TOML or JSON), import and export, VRL and pipeline tests, and immutable history with diffs.
-- **Safe publishing.** Every version is checked by a sandboxed Vector before it can be published.
-- **Controlled rollouts.** Target devices and groups with a preview, set priorities, release as a canary or on a schedule, pause, cancel and roll back.
-- **Outbound-only agents.** Mutual TLS, per-device signed configurations, protection against rollback to older versions, and automatic restore of the last working configuration.
-- **Host-owned safety.** Restricted and full modes, local allowances, and credentials that stay on the device.
-- **Operations.** Device metrics, issues, and an exportable audit log.
-- **Accounts.** Roles, two-factor sign-in with recovery codes, and administrator-issued reset links.
-- **This Help center**, bundled with your server, searchable offline and available as Markdown.
-
 ## Known limits
 
 - Images and packages aren't published yet; the server builds from source.
 - Agent downloads carry SHA-256 checksums but aren't signed.
 - An agent is upgraded on its host, one command per device. Agents don't update themselves and the dashboard can't update them; see [Upgrade many devices](agents.md#upgrade-many-devices).
-- Service, reboot and upgrade tests are still to come on some platforms. See [Compatibility](compatibility.md).
+- Reboot and upgrade tests aren't done on any platform, and the service tests run on Ubuntu 24.04, macOS 15 and Windows Server 2025 only. See [Compatibility](compatibility.md).
+- On a restricted host, **Check on devices** reports one finding at a time (a missing secret first, then each allowance the host hasn't approved), so run it again after each fix.
+- Agent settings and groups can't be deleted or archived yet.
 - The API uses session cookies; API tokens are planned.
 - One server per installation.
 
