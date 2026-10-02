@@ -2829,7 +2829,11 @@ try {
             name: "One in every",
             exact: true,
           });
-        const note = (text) => page.getByText(text, { exact: true });
+        // The toast: the same words also sit in the screen-reader live region.
+        const note = (text) =>
+          page
+            .getByRole("region", { name: "Notifications" })
+            .getByText(text, { exact: true });
         await visit("?select=sample&field=rate");
         await expect(inspector()).toBeVisible();
         await expect(rate()).toBeFocused();
