@@ -30,8 +30,9 @@ func (e *Engine) serverSupports(feature string) bool {
 }
 
 // addHeartbeatFeatures adds host runtime, Vector log summaries, rich
-// telemetry, diagnostics and bound secret names where the server accepts
-// them. It never mutates persisted state: the heartbeat holds clones.
+// telemetry, diagnostics, bound secret names and what a check on request needs
+// (validation.go) where the server accepts them. It never mutates persisted
+// state: the heartbeat holds clones.
 func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSource, metricsAddress string) {
 	if e.serverSupports(featureSecretNames) {
 		// Names only, at most 64: never a file path or a value.
@@ -76,6 +77,15 @@ func (e *Engine) addHeartbeatFeatures(h *Heartbeat, running []byte, metricsSourc
 	}
 	if e.serverSupports(featureStateDir) && filepath.IsAbs(e.Dir) {
 		h.StateDir = e.Dir
+	}
+	// What this agent can do and how ready the host is go in every heartbeat
+	// while the server lists the feature: a heartbeat without them says "not
+	// announced now". A pending result goes with them until the manifest stops
+	// carrying its check.
+	if e.serverSupports(featureValidation) && !e.validation.optionalRefused {
+		h.AgentFeatures = []string{featureValidation}
+		h.Readiness = e.readiness(running)
+		h.ValidationResult = e.validation.pending
 	}
 }
 

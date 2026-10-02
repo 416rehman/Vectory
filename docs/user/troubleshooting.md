@@ -5,7 +5,7 @@ Find your symptom, check the likely causes in order, and fix the first one that 
 ## A device is offline or never connects
 
 <!-- steps -->
-1. **Is the agent running?** On the device, `sudo vectory status`. If the service is stopped, `sudo vectory service-start`. Don't start a second agent by hand: only one can use the state directory.
+1. **Is the agent running?** On the device, `sudo vectory status`. It shows the last check-in and when the next is due: `overdue by 2 min` means the agent runs but isn't getting through. If the service is stopped, `sudo vectory service-start`. Don't start a second agent by hand: only one can use the state directory.
 2. **Does anything keep it running?** On a host without a service manager (most containers, WSL, Alpine with OpenRC), setup checks in once and stops: it prints `[!!] Service` with the command to run and exits with code 3, and **Add device** reads "checked in once, but nothing keeps its agent running". Start the agent with that command, such as `sudo /usr/local/bin/vectory run --state-dir /var/lib/vectory-agent`, under whatever keeps processes running there. See [Keep the agent running](installation.md#keep-the-agent-running).
 3. **Can it reach the server?** Run `sudo vectory doctor`. It checks name resolution, the TLS connection, the certificate, the clock and the device's credentials, and prints a fix for each failure.
 4. **Is the address right?** Agents use port **8443**; browsers use **443**. `--server` must be `https://` with the agent listener's name.

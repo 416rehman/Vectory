@@ -26,6 +26,9 @@ func (d *fakeDriver) Validate(context.Context, string) error {
 	}
 	return nil
 }
+func (d *fakeDriver) CheckCandidate(ctx context.Context, path string, _ bool) (candidateRun, error) {
+	return candidateRun{}, d.Validate(ctx, path)
+}
 func (d *fakeDriver) Activate(context.Context, string) error {
 	d.starts++
 	if d.failNext {

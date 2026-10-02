@@ -450,5 +450,15 @@ func VerifyEnvelope(env Envelope, pub, device, nonce string, now time.Time, st S
 	}
 	return m, nil
 }
-func Identity(v any) string       { b, _ := json.Marshal(v); return Digest(b) }
+
+// Identity is a digest of what makes a desired version or a policy the same
+// across manifests. A desired version counts by its original five fields only
+// (see desiredIdentity), never by the display fields the server added.
+func Identity(v any) string {
+	if d, ok := v.(*Desired); ok && d != nil {
+		v = d.identity()
+	}
+	b, _ := json.Marshal(v)
+	return Digest(b)
+}
 func SamePublicKey(a, b any) bool { return reflect.DeepEqual(a, b) }

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,6 +38,8 @@ type Engine struct {
 	// launchd, windows or none), reported to servers that accept it.
 	ServiceManager string
 	supervisor     *workloadSupervisor
+	// validation is what the engine keeps about checks on request.
+	validation validationState
 }
 
 func (e *Engine) now() time.Time {
@@ -102,9 +105,12 @@ func (e *Engine) Recover(ctx context.Context) error {
 // removeStaleLeftovers deletes what an earlier run of this agent left behind
 // when it was killed in the middle of a write or a validation: temporary
 // files, staged candidates and the validation copy of Vector's runtime
-// settings, once they are older than any of those could last. It runs at
-// startup under the agent lock, and a failure to delete one is not an error.
+// settings, once they are older than any of those could last. What a check on
+// request left in its own staging directory goes at once: nothing can be using
+// it. It runs at startup under the agent lock, and a failure to delete one is
+// not an error.
 func (e *Engine) removeStaleLeftovers() {
+	e.clearValidationStaging()
 	dirs := []string{e.Dir}
 	if e.Settings.ManagedConfig != "" {
 		if managed := filepath.Dir(e.Settings.ManagedConfig); filepath.Clean(managed) != filepath.Clean(e.Dir) {
@@ -279,7 +285,7 @@ func (e *Engine) poll(ctx context.Context) error {
 	}
 	heartbeat := Heartbeat{ProtocolVersion: 1, RequestID: RandomID(), Nonce: nonce, BootID: e.BootID, AgentVersion: Version, VectorVersion: e.Settings.adoptedVectorVersion(), ConfigurationMode: e.Settings.CapabilityPolicy.ConfigurationMode(), ReportedGeneration: e.State.ReportedGeneration, PolicyGeneration: e.State.HighestPolicyGeneration, ActualSHA256: e.State.ActualSHA256, ApplyState: e.State.ApplyState, LocalPaused: LocalPaused(e.Dir), RemotePauseAcknowledged: e.State.RemotePauseAcknowledged, Error: cloneIssue(e.State.Error), Telemetry: e.State.Telemetry, AppliedTemplateSHA256: e.State.AppliedTemplateSHA256, SecretRevision: e.State.SecretRevision, ConfigurationAttempt: cloneAttempt(e.currentAttempt())}
 	e.addHeartbeatFeatures(&heartbeat, running, metricsSource, metricsAddress)
-	b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", heartbeat)
+	b, nonce, err := e.exchange(ctx, heartbeat)
 	if err != nil {
 		return err
 	}
@@ -319,7 +325,50 @@ func (e *Engine) poll(ctx context.Context) error {
 	if err = e.boundary("accepted"); err != nil {
 		return err
 	}
-	return e.Reconcile(ctx, m)
+	// A check on request is answered after the apply, never during it, and never
+	// fails the check-in: whatever it finds goes in its result.
+	check := validationRequest(m, e.now())
+	e.settleValidation(check)
+	err = e.Reconcile(ctx, m)
+	e.checkCandidate(ctx, check)
+	return err
+}
+
+// exchange sends the heartbeat and returns the server's answer with the nonce
+// of the request it answers. What a server that lists "validation" asks for is
+// advisory, so it can never take the device offline: a server that refuses a
+// heartbeat as invalid (400) while it carries a result is never sent that
+// result again, and one that refuses the announcements themselves gets none for
+// the rest of this process. Each retry has its own nonce and request id.
+func (e *Engine) exchange(ctx context.Context, h Heartbeat) ([]byte, string, error) {
+	announcementsDropped := false
+	for {
+		b, err := e.Client.request(ctx, "POST", "/agent/v1/heartbeat", h)
+		if err == nil {
+			if announcementsDropped {
+				e.validation.optionalRefused = true
+			}
+			return b, h.Nonce, nil
+		}
+		if ce, ok := AsConnectionError(err); !ok || ce.Status != http.StatusBadRequest {
+			return nil, h.Nonce, err
+		}
+		switch {
+		case h.ValidationResult != nil:
+			e.dropValidationResult()
+			h.ValidationResult = nil
+		case h.AgentFeatures != nil || h.Readiness != nil:
+			h.AgentFeatures, h.Readiness = nil, nil
+			announcementsDropped = true
+		default:
+			return nil, h.Nonce, err
+		}
+		var raw [32]byte
+		if _, err = rand.Read(raw[:]); err != nil {
+			return nil, h.Nonce, err
+		}
+		h.Nonce, h.RequestID = base64.StdEncoding.EncodeToString(raw[:]), RandomID()
+	}
 }
 
 // incompatibleVectorMessage names both versions. The manifest is signed, and
@@ -405,7 +454,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	e.State.ActualSHA256 = actual
 	if actual == effectiveSHA && e.State.LastGoodSHA256 == effectiveSHA {
 		if e.Driver.Alive() {
-			e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
+			e.markApplied(m.Generation, d, effectiveSHA, attemptRevision, usesSecrets)
 			if err = e.save(); err != nil {
 				return err
 			}
@@ -526,7 +575,7 @@ func (e *Engine) Reconcile(ctx context.Context, m Manifest) error {
 	if err = AtomicWrite(filepath.Join(e.Dir, "good-"+effectiveSHA+".json"), data); err != nil {
 		return e.rollbackAfterWriteFailure(ctx, m.Generation, "Cannot persist verified recovery content", j.ConfigurationAttempt, err)
 	}
-	e.markApplied(m.Generation, d.SHA256, effectiveSHA, attemptRevision, usesSecrets)
+	e.markApplied(m.Generation, d, effectiveSHA, attemptRevision, usesSecrets)
 	if err = e.save(); err != nil {
 		return err
 	}
@@ -565,14 +614,15 @@ func (e *Engine) completeTransaction(effectiveSHA string) error {
 	return e.cleanupGood()
 }
 
-func (e *Engine) markApplied(generation uint64, templateSHA, effectiveSHA string, revision uint64, usesSecrets bool) {
+func (e *Engine) markApplied(generation uint64, d *Desired, effectiveSHA string, revision uint64, usesSecrets bool) {
 	e.State.LastGoodSHA256 = effectiveSHA
 	e.State.ActualSHA256 = effectiveSHA
 	e.State.ReportedGeneration = generation
 	e.State.AppliedTemplateSHA256 = ""
 	if usesSecrets {
-		e.State.AppliedTemplateSHA256 = templateSHA
+		e.State.AppliedTemplateSHA256 = d.SHA256
 	}
+	e.noteApplied(generation, d)
 	e.State.AppliedSecretRevision = revision
 	e.attemptProgress("verified_applied")
 	e.State.FailedGeneration = nil
@@ -999,12 +1049,20 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 	failures, followed, complete := 0, false, false
 	supervisor := &workloadSupervisor{}
 	e.supervisor = supervisor
+	// `vectory status` reads this from the state: a run that never waits says so
+	// at the start, and one that waits clears what the last run saw.
+	if options.noWake {
+		e.noteWake(wakeOffRun)
+	} else {
+		e.noteWake("")
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		reported := appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration}
 		known := slices.Clone(e.State.ServerFeatures)
+		checks := e.validation.runs
 		if e.takeQueuedRetry() {
 			report("Retry requested on this host: trying the failed version again.")
 		}
@@ -1064,6 +1122,11 @@ func runWith(ctx context.Context, dir string, options runOptions, report func(st
 		// the check-in cadence.
 		followed = err == nil && !followed && followUp(reported, appliedOutcome{e.State.ApplyState, e.State.ReportedGeneration})
 		if followed {
+			delay = followUpDelay
+		}
+		if e.validation.runs != checks {
+			// The result of a check on request goes out at once, once, instead of
+			// at the next interval: validationSpacing bounds how often.
 			delay = followUpDelay
 		}
 		if delay < e.Client.RetryAfter {
