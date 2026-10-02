@@ -514,7 +514,15 @@ fn host_runtime(v: &Value) -> Result<Value> {
     Ok(v.clone())
 }
 
-/// Redacted groups of recent Vector warnings and errors (at most 20).
+/// What a summary group's message says when nothing printable is left of it.
+const NO_PRINTABLE_TEXT: &str = "Vector logged a message with no printable text.";
+
+/// Redacted groups of recent Vector warnings and errors (at most 20), as they
+/// are stored and served. A message is Vector's own log text, which can echo
+/// event data, so it is display text: a control character in it is replaced
+/// (`db::display_text`) and never refuses the check-in. Every other member
+/// names something the server acts on or shows as a token, and still must be
+/// exactly right.
 fn log_summary(v: &Value) -> Result<Value> {
     let invalid = || ApiError::invalid("Invalid vector_log_summary");
     let items = v.as_array().filter(|a| a.len() <= 20).ok_or_else(invalid)?;
@@ -525,8 +533,10 @@ fn log_summary(v: &Value) -> Result<Value> {
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .is_some()
     };
+    let mut kept = Vec::with_capacity(items.len());
     for item in items {
         let fields = item.as_object().ok_or_else(invalid)?;
+        let mut group = fields.clone();
         for (key, value) in fields {
             let ok = match key.as_str() {
                 "fingerprint" => value.as_str().is_some_and(|f| {
@@ -539,7 +549,18 @@ fn log_summary(v: &Value) -> Result<Value> {
                 "component_kind" => matches!(value.as_str(), Some("source" | "transform" | "sink")),
                 "component_type" | "error_type" | "stage" => token(value, 64, b"_"),
                 "reason" => token(value, 32, b"_"),
-                "message" => plain(value, 300),
+                "message" => match db::display_text(value, 300) {
+                    Some(text) => {
+                        let shown = if text.is_empty() {
+                            NO_PRINTABLE_TEXT.to_owned()
+                        } else {
+                            text
+                        };
+                        group.insert(key.clone(), json!(shown));
+                        true
+                    }
+                    None => false,
+                },
                 "count" => value
                     .as_u64()
                     .is_some_and(|n| (1..=9_007_199_254_740_991).contains(&n)),
@@ -562,8 +583,42 @@ fn log_summary(v: &Value) -> Result<Value> {
                 return Err(invalid());
             }
         }
+        kept.push(Value::Object(group));
     }
-    Ok(v.clone())
+    Ok(Value::Array(kept))
+}
+
+/// How many rows of each kind a device may add to the audit log in one minute.
+///
+/// A device authors three kinds of audit row about itself, on any check-in that
+/// carries a change: `device.apply_state`, `device.configuration_mode_reported`
+/// and `device.secret_reconciliation`. The log is append-only and never pruned,
+/// so what a device writes stays, and a device that flaps (or lies) must not
+/// decide how fast it grows. Two rules bound it:
+///
+/// - A row is written only when the reported value differs from the one the
+///   device record held before this check-in. Identical check-ins add nothing,
+///   and a new generation under the same apply state adds nothing either: the
+///   row records the state, not the generation.
+/// - A device adds at most this many rows of each kind in a minute (a fixed
+///   window, counted per device and kind), so one that flips between two values
+///   on every check-in adds a few rows a minute, not one per check-in. A busy
+///   device never spends another's rows.
+///
+/// A change that the limit skips is not written later: the device record holds
+/// the current value, the audit log holds what fitted. The count lives in memory
+/// and starts again with the server, like the other request limits.
+pub const DEVICE_AUDIT_ROWS_PER_MINUTE: u32 = 4;
+
+/// Whether `device` may add a row of `action` to the audit log now, counting it
+/// when it may. Call it only when the value changed.
+fn audit_row_allowed(s: &State, device: &str, action: &str) -> bool {
+    s.limit(
+        format!("device-audit:{device}:{action}"),
+        DEVICE_AUDIT_ROWS_PER_MINUTE,
+        std::time::Duration::from_secs(60),
+    )
+    .is_ok()
 }
 
 pub async fn heartbeat(
@@ -766,7 +821,7 @@ pub async fn heartbeat(
     let old_mode = device["configuration_mode"]
         .as_str()
         .unwrap_or("restricted");
-    if old_mode != mode {
+    if old_mode != mode && audit_row_allowed(&s, &id, "device.configuration_mode_reported") {
         db::audit(
             &mut tx,
             &id,
@@ -778,7 +833,6 @@ pub async fn heartbeat(
     }
     device["configuration_mode"] = json!(mode);
     let old_state = device["apply_state"].clone();
-    let old_reported = device["reported_generation"].clone();
     let old_secret_revision = device["secret_revision"].as_i64().unwrap_or(0);
     if secret_revision < old_secret_revision {
         return Err(ApiError::conflict(
@@ -1033,7 +1087,7 @@ pub async fn heartbeat(
         }
     }
     crate::canary_gate::invalidate_unproven_device(&mut tx, &id).await?;
-    if old_state != device["apply_state"] || old_reported != device["reported_generation"] {
+    if old_state != device["apply_state"] && audit_row_allowed(&s, &id, "device.apply_state") {
         db::audit(
             &mut tx,
             &id,
@@ -1045,6 +1099,7 @@ pub async fn heartbeat(
     }
     if uses_local_secrets
         && (secret_revision != old_secret_revision || old_actual != device["actual_sha256"])
+        && audit_row_allowed(&s, &id, "device.secret_reconciliation")
     {
         let event = json!({"id":db::id(),"actor":id,"action":"device.secret_reconciliation","target":id,"outcome":device["apply_state"],"created_at":db::now(),"secret_revision":secret_revision,"previous_secret_revision":old_secret_revision,"actual_sha256":device["actual_sha256"],"applied_template_sha256":device["applied_template_sha256"]});
         db::insert(&mut tx, "audit", &event).await?;

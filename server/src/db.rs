@@ -270,6 +270,35 @@ pub fn string<'a>(v: &'a Value, key: &str, max: usize) -> Result<&'a str> {
     }
     Ok(x)
 }
+/// A character that can't be shown safely in one line of text: a control
+/// character (C0, DEL or C1), a line or paragraph separator, or a bidirectional
+/// embedding, override or isolate control, which reorders the text after it.
+/// The agent holds pipeline names and its own reports to the same rule.
+pub fn hostile_display_char(c: char) -> bool {
+    c.is_control() || matches!(u32::from(c), 0x2028 | 0x2029 | 0x202a..=0x202e | 0x2066..=0x2069)
+}
+
+/// Text a device reports for people to read: a log message, or a diagnostic's
+/// message, hint or field. It is best effort, so a character that can't be
+/// shown safely is replaced and never a reason to refuse the check-in: each one
+/// becomes a space, runs of white space collapse and the ends are trimmed. Text
+/// without such a character is kept exactly as sent. The result is empty when
+/// nothing printable is left. `None` when the value isn't a string or has no
+/// characters or more than `max`, counted as sent: those are a malformed report.
+pub fn display_text(value: &Value, max: usize) -> Option<String> {
+    let text = value.as_str()?;
+    if !(1..=max).contains(&text.chars().count()) {
+        return None;
+    }
+    if !text.chars().any(hostile_display_char) {
+        return Some(text.to_owned());
+    }
+    let spaced: String = text
+        .chars()
+        .map(|c| if hostile_display_char(c) { ' ' } else { c })
+        .collect();
+    Some(spaced.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 pub fn default_policy() -> Value {
     json!({"heartbeat_seconds":60,"sync_paused":false,"telemetry_enabled":true})
 }
@@ -287,4 +316,79 @@ pub fn validate_policy(v: &Value) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod display_text_tests {
+    use super::*;
+
+    fn shown(text: &str) -> Option<String> {
+        display_text(&json!(text), 300)
+    }
+
+    #[test]
+    fn text_that_can_be_shown_is_kept_exactly() {
+        for text in [
+            "Request failed: the destination refused the connection.",
+            "  spaced   out  ",
+            "émoji 🙂 and 日本語",
+        ] {
+            assert_eq!(shown(text).as_deref(), Some(text));
+        }
+    }
+
+    #[test]
+    fn hostile_characters_become_one_space_each_run() {
+        // Built from code points: C0 and C1 controls, DEL, line and paragraph
+        // separators, and the embedding, override and isolate controls.
+        for code in [
+            0x00, 0x01, 0x07, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x2028, 0x2029, 0x202a,
+            0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+        ] {
+            let c = char::from_u32(code).unwrap();
+            assert!(hostile_display_char(c) || c.is_whitespace(), "U+{code:04X}");
+            assert_eq!(
+                shown(&format!("a{c}b")).as_deref(),
+                Some("a b"),
+                "U+{code:04X}"
+            );
+            assert_eq!(
+                shown(&format!("{c}{c} a {c}{c}b{c}")).as_deref(),
+                Some("a b"),
+                "U+{code:04X}"
+            );
+        }
+        assert_eq!(shown("one\r\ntwo\nthree").as_deref(), Some("one two three"));
+        // Nothing printable is left: the caller decides what to say.
+        assert_eq!(shown("\u{7}\u{1b}").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn bounds_and_types_are_the_reports_not_the_text() {
+        assert_eq!(display_text(&json!(""), 300), None);
+        assert_eq!(display_text(&json!(7), 300), None);
+        assert_eq!(display_text(&Value::Null, 300), None);
+        // Counted as sent: 301 bell characters are too long though they leave
+        // nothing, and 300 are accepted.
+        assert_eq!(display_text(&json!("\u{7}".repeat(301)), 300), None);
+        assert_eq!(
+            display_text(&json!("\u{7}".repeat(300)), 300).as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            display_text(&json!("é".repeat(300)), 300).map(|t| t.chars().count()),
+            Some(300)
+        );
+        assert_eq!(display_text(&json!("é".repeat(301)), 300), None);
+    }
+
+    #[test]
+    fn marks_that_do_not_reorder_text_stay() {
+        let marks = format!(
+            "a{}b{}c",
+            char::from_u32(0x200e).unwrap(),
+            char::from_u32(0x200f).unwrap()
+        );
+        assert_eq!(shown(&marks).as_deref(), Some(marks.as_str()));
+    }
 }

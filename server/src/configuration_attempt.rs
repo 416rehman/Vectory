@@ -73,15 +73,17 @@ fn token(value: &Value, max: usize, extra: &[u8]) -> bool {
                 .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
     })
 }
-fn text(value: &Value, min: usize, max: usize) -> bool {
-    value.as_str().is_some_and(|s| {
-        (min..=max).contains(&s.chars().count()) && !s.chars().any(|c| c.is_control())
-    })
-}
+/// What a diagnostic's message says when nothing printable is left of it.
+const NO_PRINTABLE_MESSAGE: &str = "Vector reported an error.";
 
 /// Validate redacted agent diagnostics: at most 10 records of at most 512
 /// bytes, each field allowlisted and bounded. Unknown fields reject the
-/// heartbeat rather than being silently dropped.
+/// heartbeat rather than being silently dropped. The `message`, `hint` and
+/// `field` are display text drawn from Vector's own output, which can echo
+/// event data: a control character in one is replaced (`db::display_text`) and
+/// never refuses the heartbeat, and the records returned carry the replaced
+/// text. A hint or field with nothing printable left is left out, and a message
+/// says so. Every other member must be exactly right.
 pub fn diagnostics(list: &Value) -> Result<Value> {
     diagnostics_up_to(list, MAX_DIAGNOSTICS)
 }
@@ -97,9 +99,7 @@ pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         let fields = item.as_object().ok_or_else(invalid)?;
-        if serde_json::to_vec(item).map_or(true, |b| b.len() > MAX_DIAGNOSTIC_BYTES) {
-            return Err(invalid());
-        }
+        let mut record = fields.clone();
         for (key, value) in fields {
             let ok = match key.as_str() {
                 "severity" => matches!(value.as_str(), Some("error" | "warning")),
@@ -113,7 +113,28 @@ pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
                 }
                 "component_kind" => matches!(value.as_str(), Some("source" | "transform" | "sink")),
                 "component_id" | "route_output" => token(value, 100, b"_.-"),
-                "field" => text(value, 1, 128),
+                "field" | "message" | "hint" => {
+                    let most = match key.as_str() {
+                        "field" => 128,
+                        "message" => 300,
+                        _ => 200,
+                    };
+                    match crate::db::display_text(value, most) {
+                        Some(text) if !text.is_empty() => {
+                            record.insert(key.clone(), json!(text));
+                            true
+                        }
+                        Some(_) if key == "message" => {
+                            record.insert(key.clone(), json!(NO_PRINTABLE_MESSAGE));
+                            true
+                        }
+                        Some(_) => {
+                            record.remove(key);
+                            true
+                        }
+                        None => false,
+                    }
+                }
                 "line" | "column" => value.as_u64().is_some_and(|n| (1..=1_000_000).contains(&n)),
                 "reason" => {
                     token(value, 32, b"_")
@@ -123,8 +144,6 @@ pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
                             .bytes()
                             .all(|b| !b.is_ascii_uppercase())
                 }
-                "message" => text(value, 1, 300),
-                "hint" => text(value, 1, 200),
                 _ => false,
             };
             if !ok {
@@ -137,7 +156,13 @@ pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
         {
             return Err(invalid());
         }
-        out.push(item.clone());
+        // The bound is on what is kept, so text that was only hostile
+        // characters, six bytes each as JSON, never makes a record too long.
+        let record = Value::Object(record);
+        if serde_json::to_vec(&record).map_or(true, |b| b.len() > MAX_DIAGNOSTIC_BYTES) {
+            return Err(invalid());
+        }
+        out.push(record);
     }
     Ok(Value::Array(out))
 }

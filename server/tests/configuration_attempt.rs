@@ -80,9 +80,11 @@ fn attempt(generation: i64, state: &str) -> Value {
     json!({"generation":generation,"version_id":B,"sha256":db::hash(artifact(B)),"state":state,"error":{"code":"VALIDATION_FAILED","stage":"validation","message":"synthetic private diagnostic must not be persisted"}})
 }
 async fn beat(s: &State, body: Value) -> (StatusCode, Value) {
-    let app = device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(
-        "attempt-test-peer".into(),
-    ))));
+    beat_as(s, "attempt-test-peer", body).await
+}
+async fn beat_as(s: &State, peer: &str, body: Value) -> (StatusCode, Value) {
+    let app =
+        device::router(s.clone()).layer(Extension(device::PeerCertificate(Some(peer.to_owned()))));
     let r = app
         .oneshot(
             Request::builder()
@@ -1007,7 +1009,6 @@ async fn diagnostics_host_runtime_and_log_summaries_are_bounded_and_atomic() {
         with("message", Value::Null),
         with("code", json!("data_dir_missing")),
         with("severity", json!("fatal")),
-        with("message", json!("line\nbreak")),
         with("line", json!(0)),
         with("component_id", json!("has space")),
         top_level,
@@ -1165,4 +1166,383 @@ async fn issues_are_keyed_by_version_and_grouped_newest_first() {
     assert_eq!(groups["items"][0]["version_id"], A);
     assert_eq!(groups["items"][0]["version_number"], 1);
     assert_eq!(groups["items"][1]["version_id"], B);
+}
+
+fn collapsed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// What an event or a Vector error can put into a log line, and what the server
+/// keeps in its place. The characters come from their code points: control
+/// characters, the line and paragraph separators and the text-direction controls.
+fn hostile_texts() -> Vec<(&'static str, String, &'static str)> {
+    let c = |code: u32| char::from_u32(code).unwrap();
+    vec![
+        ("NUL", format!("a{}b", c(0x00)), "a b"),
+        ("SOH", format!("a{}b", c(0x01)), "a b"),
+        ("BEL", format!("a{}b", c(0x07)), "a b"),
+        ("a lone ESC", format!("a{}b", c(0x1b)), "a b"),
+        ("DEL", format!("a{}b", c(0x7f)), "a b"),
+        ("a C1 control", format!("a{}b", c(0x9b)), "a b"),
+        ("CR", "a\rb".into(), "a b"),
+        ("CR LF", "a\r\nb".into(), "a b"),
+        ("a tab", "a\tb".into(), "a b"),
+        ("a line separator", format!("a{}b", c(0x2028)), "a b"),
+        ("a paragraph separator", format!("a{}b", c(0x2029)), "a b"),
+        (
+            "a right-to-left override",
+            format!("a{}b", c(0x202e)),
+            "a b",
+        ),
+        ("a left-to-right isolate", format!("a{}b", c(0x2066)), "a b"),
+        (
+            "an OSC title",
+            format!("x{}]0;TITLE{}y", c(0x1b), c(0x07)),
+            "x ]0;TITLE y",
+        ),
+        (
+            "nothing but controls",
+            format!("{}{}", c(0x07), c(0x1b)),
+            "",
+        ),
+    ]
+}
+
+fn no_hostile_text(value: &Value) {
+    match value {
+        Value::String(text) => assert!(
+            !text.chars().any(db::hostile_display_char),
+            "hostile character in {text:?}"
+        ),
+        Value::Array(items) => items.iter().for_each(no_hostile_text),
+        Value::Object(fields) => fields.values().for_each(no_hostile_text),
+        _ => {}
+    }
+}
+
+fn log_group(message: &str) -> Value {
+    json!({"fingerprint":"0123456789abcdef","level":"error","component_id":"out","component_kind":"sink","component_type":"http","message":message,"count":3,"first_seen":"2026-09-29T00:00:00Z","last_seen":"2026-09-29T00:01:00Z"})
+}
+
+fn failed_with(diagnostic: Value) -> Value {
+    let mut a = attempt(2, "failed");
+    a["error"]["diagnostics"] = json!([diagnostic]);
+    heartbeat("failed", Some(a))
+}
+
+fn diagnostic(message: &str, hint: &str, field: &str) -> Value {
+    json!({"severity":"error","code":"VALIDATION_ERROR","component_id":"out","component_kind":"sink","field":field,"message":message,"hint":hint})
+}
+
+// Vector's log text can echo event data, and the agent reports it. A control
+// character in it must cost the device nothing: the text is stored and served
+// with the character replaced, and the check-in is accepted.
+#[tokio::test]
+async fn hostile_text_in_a_log_summary_or_a_diagnostic_is_replaced_and_never_refused() {
+    let (_temp, s, _candidate) = fixture().await;
+    for (name, input, kept) in hostile_texts() {
+        let mut v = failed_with(diagnostic(
+            &format!("Before {input} after"),
+            &format!("Hint {input} end"),
+            &format!("f {input} g"),
+        ));
+        v["vector_log_summary"] = json!([log_group(&format!("Before {input} after"))]);
+        let (status, body) = beat(&s, v).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+        let d = shown(&s).await;
+        no_hostile_text(&d);
+        let message = collapsed(&format!("Before {kept} after"));
+        assert_eq!(
+            d["vector_log_summary"]["items"][0]["message"], message,
+            "{name}"
+        );
+        let found = &d["configuration_attempt"]["error"]["diagnostics"][0];
+        assert_eq!(found["message"], message, "{name}");
+        assert_eq!(
+            found["hint"],
+            collapsed(&format!("Hint {kept} end")),
+            "{name}"
+        );
+        assert_eq!(found["field"], collapsed(&format!("f {kept} g")), "{name}");
+    }
+
+    // Every response carries the replaced text, not only the first read.
+    let api = session(&s).await;
+    let (status, device) = read_api(&s, &format!("/api/v1/devices/{DEVICE}"), &api).await;
+    assert_eq!(status, StatusCode::OK, "{device}");
+    no_hostile_text(&device);
+    let (status, page) = read_api(&s, "/api/v1/issues/history", &api).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page["total"].as_i64().unwrap() >= 1, "{page}");
+    no_hostile_text(&page);
+
+    // A message that is nothing but control characters says so; a hint or a
+    // field that is is left out. The size bound is on what is kept, so a long
+    // run of them, six bytes each as JSON, doesn't push a record over it.
+    let bells = "\u{7}".repeat(100);
+    let mut v = failed_with(diagnostic(&bells, &bells, &bells));
+    v["vector_log_summary"] = json!([log_group(&bells)]);
+    assert_eq!(beat(&s, v).await.0, StatusCode::OK);
+    let d = shown(&s).await;
+    assert_eq!(
+        d["vector_log_summary"]["items"][0]["message"],
+        "Vector logged a message with no printable text."
+    );
+    let found = &d["configuration_attempt"]["error"]["diagnostics"][0];
+    assert_eq!(found["message"], "Vector reported an error.");
+    assert!(
+        found.get("hint").is_none() && found.get("field").is_none(),
+        "{found}"
+    );
+
+    // The length bound is on the report as sent: this is a malformed one.
+    let too_long = "\u{7}".repeat(301);
+    let mut long_summary = verified(2, true);
+    long_summary["vector_log_summary"] = json!([log_group(&too_long)]);
+    for body in [
+        long_summary,
+        failed_with(diagnostic(&too_long, "hint", "field")),
+        failed_with(diagnostic("message", &"\u{7}".repeat(201), "field")),
+        failed_with(diagnostic("message", "hint", &"\u{7}".repeat(129))),
+    ] {
+        let before = snapshot(&s).await;
+        let (status, error) = beat(&s, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(snapshot(&s).await, before);
+    }
+}
+
+// The members the server acts on or shows as tokens, and the device's own
+// identity, keep their exact rules: only display text is forgiving.
+#[tokio::test]
+async fn control_characters_in_identity_and_token_members_still_refuse_the_check_in() {
+    let (_temp, s, _candidate) = fixture().await;
+    let bel = "\u{7}";
+    let group = |key: &str, value: &str| {
+        let mut g = log_group("Request failed.");
+        g[key] = json!(format!("{value}{bel}"));
+        let mut v = verified(2, true);
+        v["vector_log_summary"] = json!([g]);
+        v
+    };
+    let found = |key: &str, value: &str| {
+        let mut d = diagnostic("Request failed.", "Check it.", "field");
+        d[key] = json!(format!("{value}{bel}"));
+        failed_with(d)
+    };
+    let with = |key: &str, value: Value| {
+        let mut v = verified(2, true);
+        v[key] = value;
+        v
+    };
+    let bodies = vec![
+        ("summary component_id", group("component_id", "out")),
+        ("summary component_kind", group("component_kind", "sink")),
+        ("summary component_type", group("component_type", "http")),
+        ("summary error_type", group("error_type", "request_failed")),
+        ("summary stage", group("stage", "processing")),
+        ("summary reason", group("reason", "timeout")),
+        (
+            "summary fingerprint",
+            group("fingerprint", "0123456789abcde"),
+        ),
+        ("summary level", group("level", "error")),
+        ("diagnostic code", found("code", "VALIDATION_ERROR")),
+        ("diagnostic component_id", found("component_id", "out")),
+        ("diagnostic route_output", found("route_output", "ok")),
+        ("diagnostic component_kind", found("component_kind", "sink")),
+        ("diagnostic reason", found("reason", "timeout")),
+        ("diagnostic severity", found("severity", "error")),
+        (
+            "state_dir",
+            with("state_dir", json!(format!("/var/lib/vectory{bel}"))),
+        ),
+        (
+            "host_runtime data_dir",
+            with(
+                "host_runtime",
+                json!({"data_dir":format!("/var/lib/vector{bel}")}),
+            ),
+        ),
+        (
+            "configuration_mode",
+            with("configuration_mode", json!(format!("full{bel}"))),
+        ),
+        (
+            "apply_state",
+            with("apply_state", json!(format!("failed{bel}"))),
+        ),
+        (
+            "service_manager",
+            with("service_manager", json!(format!("systemd{bel}"))),
+        ),
+        (
+            "agent_sha256",
+            with("agent_sha256", json!(format!("{}{bel}", "a".repeat(63)))),
+        ),
+        (
+            "secret_names",
+            with("secret_names", json!([format!("API{bel}TOKEN")])),
+        ),
+        ("agent_version", with("agent_version", json!("0.1\u{0}"))),
+    ];
+    for (label, body) in bodies {
+        let before = snapshot(&s).await;
+        let (status, error) = beat(&s, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {error}");
+        assert_eq!(snapshot(&s).await, before, "{label}");
+    }
+    // None of those refusals leaves the device unable to check in.
+    assert_eq!(beat(&s, verified(2, true)).await.0, StatusCode::OK);
+    // A heartbeat carries no device name. The name is fixed at enrollment, by
+    // a strict character set that no control character, separator or
+    // text-direction control is in.
+    for code in [
+        0x00, 0x07, 0x0a, 0x1b, 0x7f, 0x9b, 0x2028, 0x2029, 0x202e, 0x2066,
+    ] {
+        let name = format!("edge{}01", char::from_u32(code).unwrap());
+        assert_eq!(
+            vectory_server::enrollment_scope::device_name(&name),
+            None,
+            "U+{code:04X}"
+        );
+    }
+}
+
+async fn audit_rows(s: &State, device: &str, action: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT json_extract(r.data,'$.outcome') FROM records r JOIN audit_sequence q ON q.audit_id=r.id WHERE r.kind='audit' AND json_extract(r.data,'$.actor')=? AND json_extract(r.data,'$.action')=? ORDER BY q.sequence")
+        .bind(device)
+        .bind(action)
+        .fetch_all(&s.pool)
+        .await
+        .unwrap()
+}
+
+// A report that changes nothing records nothing. One that changes on every
+// check-in records a few rows a minute, per device and kind, and the device
+// record still holds what it reported last.
+#[tokio::test]
+async fn a_device_that_flaps_writes_a_bounded_number_of_audit_rows() {
+    let bound = device::DEVICE_AUDIT_ROWS_PER_MINUTE as usize;
+    let (_temp, s, _candidate) = fixture().await;
+    sqlx::query("INSERT INTO credentials(fingerprint,device_id,expires_at) VALUES('attempt-test-peer-other',?,?)")
+        .bind(OTHER)
+        .bind((chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let report = |state: &str, generation: i64, mode: &str| {
+        let mut v = heartbeat(state, None);
+        v["reported_generation"] = json!(generation);
+        v["configuration_mode"] = json!(mode);
+        v
+    };
+
+    // The first report of a new state is one row; the same report again, and a
+    // new generation under the same state, add none.
+    assert_eq!(
+        beat(&s, report("written", 2, "restricted")).await.0,
+        StatusCode::OK
+    );
+    for _ in 0..8 {
+        assert_eq!(
+            beat(&s, report("written", 2, "restricted")).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        audit_rows(&s, DEVICE, "device.apply_state").await,
+        ["written"]
+    );
+    assert!(
+        audit_rows(&s, DEVICE, "device.configuration_mode_reported")
+            .await
+            .is_empty()
+    );
+
+    // Fourteen check-ins that each change both the apply state and the mode.
+    for i in 0..14 {
+        let (state, mode) = if i % 2 == 0 {
+            ("downloaded", "full")
+        } else {
+            ("written", "restricted")
+        };
+        assert_eq!(
+            beat(&s, report(state, 2, mode)).await.0,
+            StatusCode::OK,
+            "{i}"
+        );
+    }
+    let apply = audit_rows(&s, DEVICE, "device.apply_state").await;
+    let modes = audit_rows(&s, DEVICE, "device.configuration_mode_reported").await;
+    // The rows are the first changes, in order: written, then downloaded and
+    // written again; full, then restricted and full again.
+    let alternate = |first: &'static str, second: &'static str| -> Vec<&'static str> {
+        (0..bound)
+            .map(|i| if i % 2 == 0 { first } else { second })
+            .collect()
+    };
+    assert_eq!(apply, alternate("written", "downloaded"));
+    assert_eq!(modes, alternate("full", "restricted"));
+    // The rows skipped don't hold the device record back.
+    let d = shown(&s).await;
+    assert_eq!(d["apply_state"], "written");
+    assert_eq!(d["configuration_mode"], "restricted");
+
+    // Another device has its own rows: it changes three times and writes three.
+    for (state, mode) in [
+        ("written", "full"),
+        ("verified_applied", "restricted"),
+        ("written", "full"),
+    ] {
+        let mut v = report(state, 1, mode);
+        v["actual_sha256"] = json!(db::hash(artifact(A)));
+        assert_eq!(
+            beat_as(&s, "attempt-test-peer-other", v).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        audit_rows(&s, OTHER, "device.apply_state").await,
+        ["written", "verified_applied", "written"]
+    );
+    assert_eq!(
+        audit_rows(&s, OTHER, "device.configuration_mode_reported").await,
+        ["full", "restricted", "full"]
+    );
+    // The first device's rows are what they were.
+    assert_eq!(
+        audit_rows(&s, DEVICE, "device.apply_state").await.len(),
+        bound
+    );
+}
+
+#[tokio::test]
+async fn a_device_that_flaps_its_secret_evidence_writes_a_bounded_number_of_reconciliation_rows() {
+    let bound = device::DEVICE_AUDIT_ROWS_PER_MINUTE as usize;
+    let (_temp, s, _candidate) = fixture_with_secrets(true).await;
+    let report = |actual: &str| {
+        let mut v = heartbeat("written", None);
+        v["reported_generation"] = json!(2);
+        v["actual_sha256"] = json!(db::hash(actual));
+        v["applied_template_sha256"] = json!(db::hash(artifact(B)));
+        v["secret_revision"] = json!(1);
+        v
+    };
+    for i in 0..12 {
+        let actual = if i % 2 == 0 { "one" } else { "two" };
+        assert_eq!(beat(&s, report(actual)).await.0, StatusCode::OK, "{i}");
+    }
+    assert_eq!(
+        audit_rows(&s, DEVICE, "device.secret_reconciliation")
+            .await
+            .len(),
+        bound
+    );
+    // Each kind has its own rows: the apply state changed once.
+    assert_eq!(
+        audit_rows(&s, DEVICE, "device.apply_state").await,
+        ["written"]
+    );
+    assert_eq!(shown(&s).await["actual_sha256"], db::hash("two"));
 }

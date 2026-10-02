@@ -482,12 +482,22 @@ pub(crate) async fn issue_resolved(db: &mut SqliteConnection, issue: &Value) -> 
 
 /* ---------- Channel API ---------- */
 
+/// A single line of display text: one to `max` characters, trimmed, and with no
+/// character that can't be shown safely (`db::hostile_display_char`: control
+/// characters, line and paragraph separators, text-direction controls). A
+/// channel name appears in the notifications it sends, in the destination's
+/// chat or inbox, so it is held to the rule the agent applies to pipeline names.
 fn text_field<'a>(v: &'a Value, key: &str, max: usize, label: &str) -> Result<&'a str> {
     let text = v[key]
         .as_str()
         .map(str::trim)
         .ok_or_else(|| ApiError::invalid(format!("Enter {label}")))?;
-    if text.is_empty() || text.chars().count() > max || text.chars().any(char::is_control) {
+    if text.chars().any(db::hostile_display_char) {
+        return Err(ApiError::invalid(format!(
+            "Enter {label} without line breaks, control characters or text-direction overrides"
+        )));
+    }
+    if text.is_empty() || text.chars().count() > max {
         return Err(ApiError::invalid(format!(
             "Enter {label} of at most {max} characters"
         )));
@@ -1371,6 +1381,53 @@ mod tests {
 
     fn rules(v: Value) -> std::result::Result<Rules, String> {
         Rules::parse(&v)
+    }
+
+    fn channel_name(text: &str) -> std::result::Result<String, String> {
+        text_field(&json!({ "name": text }), "name", 80, "a channel name")
+            .map(str::to_owned)
+            .map_err(|e| e.message)
+    }
+
+    #[test]
+    fn a_channel_name_is_one_line_that_can_be_shown_safely() {
+        assert_eq!(channel_name("  Ops on-call  ").unwrap(), "Ops on-call");
+        assert_eq!(
+            channel_name("Équipe d'astreinte 🙂 運用").unwrap(),
+            "Équipe d'astreinte 🙂 運用"
+        );
+        // The characters come from their code points: control characters, the
+        // line and paragraph separators, and the embedding, override and
+        // isolate controls the agent also refuses in a pipeline name.
+        for code in [
+            0x00, 0x07, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c,
+            0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+        ] {
+            let c = char::from_u32(code).unwrap();
+            let refused = channel_name(&format!("Ops{c}on-call")).unwrap_err();
+            assert_eq!(
+                refused,
+                "Enter a channel name without line breaks, control characters or text-direction overrides",
+                "U+{code:04X}"
+            );
+            // At the ends the white-space ones are trimmed, as before; the rest
+            // are still refused.
+            let end = channel_name(&format!("Ops on-call{c}"));
+            assert_eq!(end.is_ok(), c.is_whitespace(), "U+{code:04X} at the end");
+        }
+        // Marks that don't reorder or end a line are ordinary text.
+        let marks = format!("Ops {}on-call{}", '\u{200e}', '\u{200f}');
+        assert_eq!(channel_name(&marks).unwrap(), marks);
+        // The other limits keep their own message.
+        assert_eq!(
+            channel_name("   ").unwrap_err(),
+            "Enter a channel name of at most 80 characters"
+        );
+        assert_eq!(
+            channel_name(&"x".repeat(81)).unwrap_err(),
+            "Enter a channel name of at most 80 characters"
+        );
+        assert!(channel_name(&"x".repeat(80)).is_ok());
     }
 
     #[test]

@@ -240,7 +240,8 @@ impl App {
             || key.starts_with("artifact:")
             || key.starts_with("renew:")
             || key.starts_with("identity:")
-            || key.starts_with("wait:");
+            || key.starts_with("wait:")
+            || key.starts_with("device-audit:");
         let partition = if authenticated_device {
             &self.device_limits
         } else if PUBLIC_LIMIT_PREFIXES
