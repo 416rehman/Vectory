@@ -364,7 +364,8 @@ async function generated(evidence) {
       );
       const runtime = (await api(`/devices/${context.deviceId}`)).host_runtime;
       evidence.observe("host_runtime", runtime);
-      if (runtime?.data_dir !== "/var/lib/vector")
+      // The agent reports it with a closing slash.
+      if (runtime?.data_dir?.replace(/\/+$/, "") !== "/var/lib/vector")
         throw new Error(
           `The agent chose ${runtime?.data_dir} (${runtime?.data_dir_source}), not /var/lib/vector, so the packaged unit's writable folder is not exercised. Device: ${JSON.stringify(row)}`,
         );
