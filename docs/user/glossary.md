@@ -51,6 +51,8 @@ An **event template**, such as `{{ hostname }}`, reads a value from each event. 
 | **Fixed or following targets** | A deployment either keeps the devices chosen when it started, or also includes future members of its groups. |
 | **Applied** | The agent saw Vector start with the version and keep running. A download or written file alone isn't applied. |
 | **Rolled back** | The version failed, so the agent restored the last working configuration. |
+| **Held on previous version** | The newest version failed on a device that still runs the one before it and delivers on it. Not failed: nothing is broken on the host. |
+| **Canary size** | How many devices a canary releases first. You choose which ones when you review. |
 | **Drift** | The device's configuration file no longer matches what it should run. The agent restores it, unless sync is paused. |
 
 See [Deploy and roll back](deployments.md) for the workflow and [Read the apply states](deployments.md#read-the-apply-states) for every state.

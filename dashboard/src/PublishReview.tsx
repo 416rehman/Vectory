@@ -8,9 +8,12 @@ import {
 } from "lucide-react";
 import type { Config, Version } from "./api";
 import { relativeTime } from "./time";
-import { Button } from "./ui";
+import { Button, Spinner } from "./ui";
 import ProblemText from "./ProblemText";
-import { displayLabel, type Kind } from "./catalog";
+import type { Kind } from "./catalog";
+import { componentTitle } from "./pipelineNodeModel";
+import PipelineTestResults from "./PipelineTestResults";
+import { testsHeadline, type TestsView } from "./publishTests";
 import type { CheckStatus, Problem } from "./pipelineProblems";
 import { SecretBindingSteps } from "./SecretReferenceField";
 import { secretReview } from "./secretFields";
@@ -44,7 +47,9 @@ const changeWords: Record<ComponentChange["change"], string> = {
 const checkerDown = (code: string) =>
   code === "CAPABILITY_DENIED" || code === "WORKER_BUSY";
 
+const squash = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 function ChangeRow({ component }: { component: ComponentChange }) {
+  const title = describe(component);
   return (
     <li>
       <div className="publish-change-row">
@@ -53,10 +58,15 @@ function ChangeRow({ component }: { component: ComponentChange }) {
         </span>
         <code>{component.id}</code>
         <span className="publish-change-detail">
-          {describe(component)}
-          {component.change !== "changed" && component.type && (
-            <code className="publish-change-type">{component.type}</code>
-          )}
+          {title}
+          {component.change !== "changed" &&
+            component.type &&
+            squash(title) !== squash(component.type) && (
+              <>
+                {" "}
+                <code className="publish-change-type">{component.type}</code>
+              </>
+            )}
         </span>
       </div>
       {component.change === "changed" &&
@@ -72,7 +82,7 @@ function ChangeRow({ component }: { component: ComponentChange }) {
 
 function describe(component: ComponentChange) {
   if (component.change !== "changed")
-    return displayLabel(component.type, component.section as Kind);
+    return componentTitle(component.type, component.section as Kind);
   const parts = component.programs.map((program) => `${program.label} changed`);
   if (component.options.length) {
     // "rate 10 → 7" where the values are short, "endpoint changed" where not.
@@ -91,6 +101,64 @@ function describe(component: ComponentChange) {
   }
   if (component.rewired) parts.push("inputs changed");
   return parts.join(" · ");
+}
+
+/** The draft's tests, judged the way the server judges them at publish. */
+function TestsBlock({
+  tests,
+  steps,
+  onRun,
+}: {
+  tests: TestsView;
+  steps: string[];
+  onRun: () => void;
+}) {
+  if (tests.state === "none") return null;
+  const Icon =
+    tests.state === "passed"
+      ? CircleCheck
+      : tests.state === "failing"
+        ? CircleX
+        : tests.state === "skipped"
+          ? CircleDashed
+          : CircleAlert;
+  return (
+    <section
+      className="publish-review-tests"
+      data-tests-state={tests.state}
+      aria-label="Pipeline tests"
+    >
+      <div className="publish-review-test-line">
+        {tests.state === "running" ? (
+          <Spinner size={16} label="Running the tests" />
+        ) : (
+          <Icon size={16} aria-hidden="true" />
+        )}
+        <strong>Tests:</strong> <span>{testsHeadline(tests)}</span>
+        {tests.state === "unavailable" && (
+          <Button variant="secondary compact" onClick={onRun}>
+            Run tests again
+          </Button>
+        )}
+      </div>
+      {tests.state === "skipped" && tests.run.warnings?.[0] && (
+        <p className="publish-review-tests-note">{tests.run.warnings[0]}</p>
+      )}
+      {tests.state === "failing" && (
+        <>
+          <PipelineTestResults
+            run={tests.run}
+            expected={tests.total}
+            steps={steps}
+            headline={null}
+          />
+          <p className="publish-review-tests-note">
+            Publishing anyway is recorded in the audit log.
+          </p>
+        </>
+      )}
+    </section>
+  );
 }
 
 function ProgramDiff({ before, after }: { before: string; after: string }) {
@@ -139,6 +207,8 @@ export default function PublishReview({
   verdict,
   problems,
   rejection,
+  tests,
+  onRunTests,
   onCheck,
   onGoToProblem,
 }: {
@@ -152,6 +222,9 @@ export default function PublishReview({
   problems: readonly Problem[];
   /** A definitive refusal of the last publish attempt. */
   rejection: { code: string; message: string } | null;
+  /** What the draft's own tests said, run when the review opened. */
+  tests: TestsView;
+  onRunTests: () => void;
   onCheck?: () => void;
   onGoToProblem: (problem: Problem) => void;
 }) {
@@ -171,6 +244,7 @@ export default function PublishReview({
     [published, config],
   );
   const newSecrets = secrets.filter((secret) => secret.added).length;
+  const steps = useMemo(() => Object.keys(config.transforms || {}), [config]);
   const empty =
     !review.components.length && !review.settings.length && !review.tests;
   return (
@@ -182,13 +256,17 @@ export default function PublishReview({
               ? "Vector rejected this version. Nothing was published."
               : rejection.code === "STALE_REVISION"
                 ? "The draft changed while you reviewed it. Nothing was published."
-                : checkerDown(rejection.code)
-                  ? "Not published. Vector's checker is unavailable, so Vectory couldn't verify this draft."
-                  : "The server refused to publish. Nothing was published."}
+                : rejection.code === "TESTS_FAILED"
+                  ? "The pipeline tests didn't pass. Nothing was published."
+                  : checkerDown(rejection.code)
+                    ? "Not published. Vector's checker is unavailable, so Vectory couldn't verify this draft."
+                    : "The server refused to publish. Nothing was published."}
           </strong>
           <p>
             {checkerDown(rejection.code) ? (
               "Try again in a minute."
+            ) : rejection.code === "TESTS_FAILED" ? (
+              "The results are below. Publish anyway records that they were failing."
             ) : (
               <ProblemText text={rejection.message} />
             )}
@@ -214,6 +292,7 @@ export default function PublishReview({
             </Button>
           )}
       </div>
+      <TestsBlock tests={tests} steps={steps} onRun={onRunTests} />
       {errors.length > 0 && (
         <ul className="publish-review-problems" aria-label="Problems to fix">
           {errors.slice(0, 8).map((problem) => (

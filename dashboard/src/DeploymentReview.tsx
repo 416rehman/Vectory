@@ -226,11 +226,12 @@ export function ReleaseStrategyFields({
       {usesCanary(value) && (
         <div className="release-canary">
           <NumberField
-            label="Canary devices"
+            label="Canary size"
             value={value.canary}
             min={1}
             max={10000}
             error={errors.canary}
+            hint="You choose which devices when you review."
             onChange={(canary) => onChange({ canary })}
           />
           <NumberField

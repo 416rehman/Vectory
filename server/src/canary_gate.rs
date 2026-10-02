@@ -20,7 +20,7 @@ pub fn enabled(d: &Value) -> bool {
     d["rollout"]["kind"] == "canary" && matches!(d["status"].as_str(), Some("active" | "paused"))
 }
 pub async fn load(db: &mut SqliteConnection, id: &str) -> Result<Value> {
-    let raw:Option<String>=sqlx::query_scalar("SELECT json_object('id',id,'version_id',json_extract(data,'$.version_id'),'policy',json_extract(data,'$.policy'),'status',json_extract(data,'$.status'),'rollout',json_extract(data,'$.rollout'),'target_mode',json_extract(data,'$.target_mode'),'selector',json_extract(data,'$.selector'),'observation_started_at',json_extract(data,'$.observation_started_at'),'observation_evidence',json_extract(data,'$.observation_evidence')) FROM records WHERE kind='deployment' AND id=?").bind(id).fetch_optional(db).await?;
+    let raw:Option<String>=sqlx::query_scalar("SELECT json_object('id',id,'version_id',json_extract(data,'$.version_id'),'policy',json_extract(data,'$.policy'),'status',json_extract(data,'$.status'),'rollout',json_extract(data,'$.rollout'),'target_mode',json_extract(data,'$.target_mode'),'selector',json_extract(data,'$.selector'),'observation_started_at',json_extract(data,'$.observation_started_at'),'observation_evidence',json_extract(data,'$.observation_evidence'),'early_releases',json_extract(data,'$.early_releases')) FROM records WHERE kind='deployment' AND id=?").bind(id).fetch_optional(db).await?;
     raw.map(|s| db::parse(&s))
         .transpose()
         .map(|v| v.unwrap_or(Value::Null))

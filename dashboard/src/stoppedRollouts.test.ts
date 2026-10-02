@@ -172,6 +172,38 @@ describe("Needs you order", () => {
       ),
     ).toEqual(["degraded+21", "failed", "rollout 22", "offline", "paused"]);
   });
+  it("reads a held device and the rollout that stopped around it as one row", () => {
+    const stopped = stoppedRollouts(
+      [
+        summary(),
+        summary({
+          id: "00000000-0000-4000-8000-000000000022",
+          failed_at: "2026-09-29T08:30:00Z",
+        }),
+      ],
+      now,
+    );
+    const id = stopped.find((row) => row.deployment.id.endsWith("21"))!
+      .deployment.id;
+    const rows = needsYouRows(
+      [
+        group("offline"),
+        group("held", id),
+        // No rollout stopped for this one: it stays with the rest.
+        group("held", "00000000-0000-4000-8000-000000000098"),
+        group("failed"),
+      ],
+      stopped,
+      new Set(),
+    );
+    expect(
+      rows.map((row) =>
+        row.kind === "group"
+          ? `${row.group.cause}${row.rollout ? `+${row.rollout.deployment.id.slice(-2)}` : ""}`
+          : `rollout ${row.rollout.deployment.id.slice(-2)}`,
+      ),
+    ).toEqual(["failed", "held+21", "rollout 22", "offline", "held"]);
+  });
   it("merges a rollout into one group only and leaves dismissed rollouts out", () => {
     const stopped = stoppedRollouts([summary()], now);
     const id = stopped[0].deployment.id;

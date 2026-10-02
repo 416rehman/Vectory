@@ -164,7 +164,7 @@ Devices receive JSON. Comments and formatting from an imported file aren't kept.
 <!-- steps -->
 1. Choose the check button in the toolbar. It checks connections, required fields and types, then asks the sandboxed Vector on your server to validate the configuration. The **Problems** panel under the canvas lists every problem by step; choose one to jump to the step, field or line. With **Auto-check** on, the editor checks again shortly after you stop editing.
 2. Run your tests under [**Pipeline settings → Tests**](/#/configurations?panel=settings&section=tests).
-3. Choose **Review & publish**. The review checks again and lists what changes since the last version, with line-by-line differences for VRL programs. Add a note and choose **Publish version**. Unsaved edits are saved first.
+3. Choose **Review & publish**. The review checks again, runs the pipeline's tests and lists what changes since the last version, with line-by-line differences for VRL programs. Add a note and choose **Publish version**. Unsaved edits are saved first. While a test is failing, the button reads **Publish anyway**: see [Tests gate publishing](resources.md#test-transformations).
 4. Deploy it: choose **Choose devices** when the version is published, or see [Deploy a published version](deployments.md#deploy-a-published-version).
 
 | Check button | Meaning |

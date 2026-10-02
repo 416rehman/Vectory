@@ -578,8 +578,23 @@ export type PreviewReplacement = {
   device_ids: string[];
   retires_assignment?: boolean;
 };
+/** Who a canary rollout releases first, in order, and why. */
+export type CanaryPlan = {
+  size: number;
+  chosen_by_you: boolean;
+  device_ids: string[];
+  devices: {
+    device_id: string;
+    device_name: string | null;
+    chosen: boolean;
+    readiness: "ready" | "no_metrics" | "failing" | "paused" | "away";
+    reason: string;
+  }[];
+};
 export type DeploymentPreview = {
   request_correlation?: boolean;
+  /** Canary rollouts only: null for others, absent on older servers. */
+  canary?: CanaryPlan | null;
   /** The previewed version's pipeline name; older servers omit it. */
   configuration_name?: string | null;
   devices: Device[];
@@ -659,6 +674,12 @@ export type Device = {
   service_manager?: "systemd" | "launchd" | "windows" | "none";
   /** Whether Vector runs, from the latest check-in; absent when unknown. */
   vector_running?: boolean;
+  /**
+   * Its newest version failed, but it verifiably keeps running an earlier one
+   * and delivers on it. Present only then; `status` stays what the agent
+   * reported.
+   */
+  held_on_previous_version?: boolean;
   /** `GET /devices/{id}?include=groups` only: its groups by name, at most 100. */
   groups?: DeviceGroups;
   /** `GET /devices/{id}` from servers offering wake-ups. */
@@ -870,6 +891,8 @@ export type Deployment = {
     batch_size: number;
     observation_seconds: number;
     failure_threshold: number;
+    /** The devices the request chose to release first, when it chose any. */
+    canary_device_ids?: string[];
   };
 };
 const deploymentUUID = z.string().uuid();
@@ -933,6 +956,7 @@ export const DeploymentReceiptSchema = z
       batch_size: z.number().int().min(1).max(10000),
       observation_seconds: z.number().int().min(0).max(86400),
       failure_threshold: z.number().int().min(0).max(10000),
+      canary_device_ids: z.array(deploymentUUID).max(100).optional(),
     }),
     rollback_review: z.boolean().optional(),
     rollback_idempotency: z.boolean().optional(),
@@ -1108,9 +1132,38 @@ export type RolloutLane = {
   state: "verified" | "in_progress" | "failed" | "queued" | "stopped";
   released_at: string | null;
   verified_at: string | null;
+  /** Someone released this stage before the one ahead of it finished. */
+  released_early?: { by_name: string | null; at: string } | null;
   size: number;
   counts: Record<string, number>;
   devices: { device_id: string; device_name: string | null; state: string }[];
+  more: number;
+};
+/** What a canary device delivers: events per second, errors per minute, buffer fill. */
+export type CanaryWatchReading = {
+  events_in_per_second: number | null;
+  events_out_per_second: number | null;
+  errors_per_minute: number | null;
+  buffer_utilization: number | null;
+};
+export type CanaryWatchDevice = {
+  device_id: string;
+  device_name: string | null;
+  released_at: string;
+  /** Why the gate is not counting this device as verified; null when it is. */
+  gate_reason: string | null;
+  /** Its latest sample; null when it reports no fresh telemetry. */
+  now: (CanaryWatchReading & { sampled_at: string }) | null;
+  /** Averages over the minutes before its release; null when there are none. */
+  baseline: (CanaryWatchReading & { minutes: number }) | null;
+  /** Delivery checks so far against the number the gate needs. */
+  samples: { measured: number; needed: number } | null;
+};
+export type CanaryWatch = {
+  window_seconds: number;
+  evaluated_at: string;
+  devices: CanaryWatchDevice[];
+  /** Canary devices beyond the ones listed. */
   more: number;
 };
 export type RolloutFailure = {
@@ -1140,6 +1193,8 @@ export type RolloutLanes = {
   removed_count: number;
   check_in_seconds: number | null;
   next_admission_at: string | null;
+  /** Canary rollouts with a released canary; absent on older servers. */
+  canary_watch?: CanaryWatch | null;
 };
 export type SavedPolicyListItem = SavedPolicy & {
   revision?: number;
@@ -1819,6 +1874,7 @@ export type DeviceGroups = z.infer<ReturnType<typeof groupRefs>>;
 export const inventoryStatuses = [
   "applied",
   "degraded",
+  "held",
   "updating",
   "check",
   "failed",
@@ -1889,7 +1945,7 @@ export const OverviewCountsSchema = z.object({
   total: count,
   health: z.object(
     Object.fromEntries(
-      inventoryStatuses.slice(0, 8).map((s) => [s, count]),
+      inventoryStatuses.filter((s) => s !== "revoked").map((s) => [s, count]),
     ) as Record<
       Exclude<(typeof inventoryStatuses)[number], "revoked">,
       typeof count
@@ -1920,6 +1976,7 @@ export const OverviewAttentionDeviceSchema = z.object({
     "failed",
     "rolled_back",
     "check_required",
+    "held",
     "offline",
   ]),
   status: z.string(),

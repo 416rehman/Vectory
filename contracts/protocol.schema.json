@@ -584,6 +584,61 @@
             "client_address": {
               "type": "string",
               "maxLength": 64
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "tests_failed": {
+              "type": "boolean"
+            },
+            "tests_failed_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tests_refused_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tests_not_run_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tests_passed_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "stage": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "gate_state": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "released_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "verified_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "measuring_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "next_released_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": [],
@@ -752,7 +807,7 @@
           "properties": {
             "code": {
               "type": "string",
-              "description": "Stable machine-readable code. Common: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, STALE_REVISION, INVALID_INPUT, RATE_LIMITED, SIGNIN_THROTTLED, CAPACITY_BUSY (agent listener or download slots busy, or a membership preview found the writer busy; retry after Retry-After), REQUEST_TIMEOUT (agent request deadline), PAYLOAD_TOO_LARGE (body over its limit), EXPORT_BUSY, EXPORT_CAPACITY, EXPORT_STORAGE, EXPORT_TIMEOUT, EXPORT_TOO_LARGE, VALIDATION_FAILED, INTERNAL. CONTRACT.md lists every code."
+              "description": "Stable machine-readable code. Common: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, STALE_REVISION, INVALID_INPUT, RATE_LIMITED, SIGNIN_THROTTLED, CAPACITY_BUSY (agent listener or download slots busy, or a membership preview found the writer busy; retry after Retry-After), REQUEST_TIMEOUT (agent request deadline), PAYLOAD_TOO_LARGE (body over its limit), EXPORT_BUSY, EXPORT_CAPACITY, EXPORT_STORAGE, EXPORT_TIMEOUT, EXPORT_TOO_LARGE, VALIDATION_FAILED, TESTS_FAILED, INTERNAL. CONTRACT.md lists every code."
             },
             "message": {
               "type": "string"
@@ -3003,13 +3058,14 @@
           "enum": [
             "failed",
             "degraded",
+            "held",
             "check_required",
             "stuck",
             "offline",
             "paused",
             "unmanaged"
           ],
-          "description": "degraded: verified on the desired version, with an open DATA_PLANE_* issue measured on it."
+          "description": "degraded: verified on the desired version, with an open DATA_PLANE_* issue measured on it. held: the desired version failed, but the device verifiably keeps running an earlier one and delivers on it (severity warning; failed keeps the devices that have no working version)."
         },
         "severity": {
           "enum": [
@@ -4296,6 +4352,15 @@
         "failure_threshold": {
           "type": "integer",
           "minimum": 0
+        },
+        "canary_device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "maxItems": 100,
+          "description": "Canary rollouts only: the devices to release first. Distinct lowercase device UUIDs, at most canary_size and at most 100, each a device the request targets (otherwise 400 INVALID_INPUT on preview and create). Fewer than canary_size: the most ready of the remaining targets fill the canary. Absent, null or empty: the scheduler chooses, online and healthy devices that report metrics first and device ID order among equals."
         }
       },
       "required": [
@@ -5257,6 +5322,10 @@
           ],
           "additionalProperties": false,
           "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
+        },
+        "held_on_previous_version": {
+          "const": true,
+          "description": "Present only, and true, on a device whose status is failed or rolled_back but which verifiably keeps running an earlier version (its managed file still matches the digest the agent verified for it), whose Vector is not reported stopped, and which has no open delivery issue measured on that version. It is held there, not failed: status stays what the agent reported. Absent otherwise, and on older servers."
         },
         "secret_names": {
           "type": "array",
@@ -7221,6 +7290,17 @@
           ],
           "description": "Lowest priority that would outrank every existing winner on conflicting or outranked devices, when one exists."
         },
+        "canary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanaryPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Canary rollouts only, null otherwise. A chosen device that is not checking in, paused or failing adds a warning: the rollout waits for it. Omitted by older servers."
+        },
         "paused_device_ids": {
           "type": "array",
           "items": {
@@ -8919,6 +8999,10 @@
           "type": "boolean",
           "description": "True when Vector did not run this test, for example because another test could not be read or built. Such a test never passes."
         },
+        "refused": {
+          "type": "boolean",
+          "description": "True when Vector could not read or build this test, so it never ran. Its message says why."
+        },
         "message": {
           "type": "string",
           "maxLength": 600
@@ -8939,6 +9023,77 @@
       "required": [
         "name",
         "passed"
+      ],
+      "additionalProperties": false
+    },
+    "TestsFailed": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "const": "TESTS_FAILED"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineTest"
+          },
+          "maxItems": 100,
+          "description": "One row per configured test, not_run rows included. Each detail is cut to 1,000 characters and outputs are left out; POST /configurations/test returns the full rows."
+        },
+        "tests_run": {
+          "type": "boolean",
+          "description": "Vector ran the tests, so each row is its verdict. False when no runner answered."
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "passed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector ran the test and it failed."
+            },
+            "refused": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector could not read or build the test."
+            },
+            "not_run": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Vector did not run the test."
+            }
+          },
+          "required": [
+            "passed",
+            "failed",
+            "refused",
+            "not_run"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "error",
+        "tests",
+        "tests_run",
+        "counts"
       ],
       "additionalProperties": false
     },
@@ -12160,6 +12315,85 @@
       "additionalProperties": false,
       "description": "Display metadata for an assignment. Names and numbers only: never selectors, targets, variable values or artifacts."
     },
+    "CanaryPlan": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "chosen_by_you": {
+          "type": "boolean",
+          "description": "The request named at least one canary device."
+        },
+        "device_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "maxItems": 100
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "device_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "chosen": {
+                "type": "boolean",
+                "description": "Named by the request rather than picked by the scheduler."
+              },
+              "readiness": {
+                "enum": [
+                  "ready",
+                  "no_metrics",
+                  "failing",
+                  "paused",
+                  "away"
+                ],
+                "description": "ready: online, healthy and reporting metrics. no_metrics: online and healthy but nothing to measure delivery against. failing: online but failing or not delivering. paused: sync paused. away: not checking in."
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "device_id",
+              "device_name",
+              "chosen",
+              "readiness",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "size",
+        "chosen_by_you",
+        "device_ids",
+        "devices"
+      ],
+      "additionalProperties": false,
+      "description": "Who a canary rollout releases first, in release order, and why. The scheduler releases exactly these devices as the first stage."
+    },
     "RolloutLane": {
       "type": "object",
       "properties": {
@@ -12254,6 +12488,39 @@
         "more": {
           "type": "integer",
           "minimum": 0
+        },
+        "released_early": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "by_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "by_name",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set on a stage that someone released before the stage ahead of it finished observing or measuring (POST /deployments/{id}/release-next-stage): who, and when. Null otherwise. Omitted by older servers."
         }
       },
       "required": [
@@ -12472,6 +12739,17 @@
               "type": "null"
             }
           ]
+        },
+        "canary_watch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanaryWatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Canary rollouts with a released canary; null otherwise. Omitted by older servers."
         }
       },
       "required": [
@@ -12486,6 +12764,265 @@
       ],
       "additionalProperties": false,
       "description": "Waves recovered from persisted release times; queued waves follow the scheduler order (pending targets by device ID, canary first, then batches). Failures group current failed targets by diagnostic or error."
+    },
+    "CanaryWatch": {
+      "type": "object",
+      "properties": {
+        "window_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "description": "How far before its release a device's baseline reaches."
+        },
+        "evaluated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "device_name": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "released_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "gate_reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "superseded",
+                      "stale",
+                      "paused",
+                      "unverified",
+                      "unavailable",
+                      "measuring",
+                      "degraded"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Why the canary gate is not counting this device as verified right now, by the same predicate that decides whether the rollout may go on; null when it is counted."
+              },
+              "now": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "sampled_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "events_in_per_second": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "events_out_per_second": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "errors_per_minute": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "buffer_utilization": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "sampled_at",
+                      "events_in_per_second",
+                      "events_out_per_second",
+                      "errors_per_minute",
+                      "buffer_utilization"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The device's latest sample, or null when it reports no fresh telemetry."
+              },
+              "baseline": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Minutes of stored telemetry the averages cover."
+                      },
+                      "events_in_per_second": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "events_out_per_second": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "errors_per_minute": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "buffer_utilization": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "minutes",
+                      "events_in_per_second",
+                      "events_out_per_second",
+                      "errors_per_minute",
+                      "buffer_utilization"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Averages of the stored minute samples before the release, or null when there are none. Never a zero standing in for missing history."
+              },
+              "samples": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "measured": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "needed": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "measured",
+                      "needed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Delivery checks on this version so far, against the number the gate needs. Null when the device reports no metrics."
+              }
+            },
+            "required": [
+              "device_id",
+              "device_name",
+              "released_at",
+              "gate_reason",
+              "now",
+              "baseline",
+              "samples"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "more": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Canary devices beyond the five listed."
+        }
+      },
+      "required": [
+        "window_seconds",
+        "evaluated_at",
+        "devices",
+        "more"
+      ],
+      "additionalProperties": false,
+      "description": "What the canary devices of a running canary rollout deliver now, beside the same numbers over the minutes before their release, read from telemetry the server already stores. At most five devices, by name."
     },
     "DeviceListTelemetry": {
       "type": "object",
@@ -12998,6 +13535,10 @@
           "additionalProperties": false,
           "description": "Data-plane health measured from telemetry on the version the device verifiably runs, or, when the device reports no metrics, from sink request failures in its Vector log summary (weaker evidence; evaluations stays 0); absent until the first evaluation. The device reads Not delivering while status is verified, version_id equals desired_version_id and issues is nonempty."
         },
+        "held_on_previous_version": {
+          "const": true,
+          "description": "Present only, and true, on a device whose status is failed or rolled_back but which verifiably keeps running an earlier version (its managed file still matches the digest the agent verified for it), whose Vector is not reported stopped, and which has no open delivery issue measured on that version. It is held there, not failed: status stays what the agent reported. Absent otherwise, and on older servers."
+        },
         "secret_names": {
           "type": "array",
           "maxItems": 64,
@@ -13483,6 +14024,10 @@
               "type": "integer",
               "minimum": 0
             },
+            "held": {
+              "type": "integer",
+              "minimum": 0
+            },
             "updating": {
               "type": "integer",
               "minimum": 0
@@ -13515,6 +14060,7 @@
           "required": [
             "applied",
             "degraded",
+            "held",
             "updating",
             "check",
             "failed",
@@ -13564,7 +14110,7 @@
         "views"
       ],
       "additionalProperties": false,
-      "description": "Devices matching q, group, version, desired_version and running_version (every filter but status and view), by status and by view, so each chip can show what picking it would list. status buckets are the Devices page's: applied (verified), degraded (applied but not delivering), updating (applying), check (verification_unknown), failed (failed, rolled_back, conflict), offline (offline, awaiting_first_check_in), paused (paused, pause_requested), unmanaged; a state added later counts as updating. Views never count revoked devices."
+      "description": "Devices matching q, group, version, desired_version and running_version (every filter but status and view), by status and by view, so each chip can show what picking it would list. status buckets are the Devices page's: applied (verified), degraded (applied but not delivering), held (its newest version failed; it still runs an earlier one and delivers on it, see Device.held_on_previous_version), updating (applying), check (verification_unknown), failed (failed, rolled_back, conflict), offline (offline, awaiting_first_check_in), paused (paused, pause_requested), unmanaged; a state added later counts as updating. Views never count revoked devices."
     },
     "DeviceInventoryPage": {
       "type": "object",
@@ -13682,7 +14228,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "The state the device's badge shows: its status, degraded while applied but not delivering, pause_requested until the agent acknowledges a pause, or unavailable."
+          "description": "The state the device's badge shows: its status, degraded while applied but not delivering, held while its newest version failed and it keeps running an earlier one, pause_requested until the agent acknowledges a pause, or unavailable."
         }
       },
       "required": [
@@ -13782,6 +14328,10 @@
               "type": "integer",
               "minimum": 0
             },
+            "held": {
+              "type": "integer",
+              "minimum": 0
+            },
             "updating": {
               "type": "integer",
               "minimum": 0
@@ -13810,6 +14360,7 @@
           "required": [
             "applied",
             "degraded",
+            "held",
             "updating",
             "check",
             "failed",
@@ -14003,9 +14554,10 @@
             "failed",
             "rolled_back",
             "check_required",
+            "held",
             "offline"
           ],
-          "description": "Most urgent first: not delivering, failed, rolled back, check required, offline."
+          "description": "Most urgent first: not delivering, failed, rolled back, check required, held on the previous version, offline."
         },
         "status": {
           "type": "string"

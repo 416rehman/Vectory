@@ -100,6 +100,14 @@ const reasonLabels = {
   unverified: "Waiting for the device to confirm",
   unavailable: "Device is unavailable",
 };
+// What the gate's headline says for each single reason, naming the device count.
+const reasonTitles = {
+  superseded: "Another assignment is effective on 1 released device",
+  stale: "Waiting for 1 released device to check in",
+  paused: "Sync is paused on 1 released device",
+  unverified: "Waiting for 1 released device to apply",
+  unavailable: "1 released device was revoked or replaced",
+};
 const gate = (extra = {}) => ({
   state: "waiting",
   released_count: 1,
@@ -365,15 +373,21 @@ try {
         const { page } = app;
         await open(page);
         await expect(panel(page)).toBeVisible();
-        await expect(panel(page)).toContainText("0 of 1");
+        await expect(panel(page)).toContainText(reasonTitles.superseded);
+        await expect(panel(page)).not.toContainText("currently verified");
         await expect(dialog(page)).toContainText("1 of 2");
         await expect(table(page)).toContainText("Applied");
         await expect(table(page)).toContainText(
           "Canary gate: Another assignment is effective",
         );
-        await expect(dialog(page)).toContainText(
-          "Recorded progress: historical results; current readiness is shown below.",
-        );
+        // One truth: the recorded counts and the gate no longer need a note
+        // to say they differ.
+        await expect(dialog(page)).not.toContainText("Recorded progress");
+        // One refresh control (the page's), and no countdown in the gate.
+        await expect(
+          dialog(page).getByRole("button", { name: "Refresh now" }),
+        ).toHaveCount(1);
+        await expect(panel(page).getByRole("button")).toHaveCount(0);
         const link = table(page).locator(`a[href="#/devices/${id(1)}"]`);
         await expect(link).toHaveCount(1);
         await link.focus();
@@ -389,7 +403,7 @@ try {
         ).toBeVisible();
         await page.goBack();
         await expect(dialog(page)).toBeVisible();
-        await expect(panel(page)).toContainText("0 of 1");
+        await expect(panel(page)).toContainText(reasonTitles.superseded);
         expect(
           f.calls.filter((c) => c.path === "/devices/" + id(2)),
         ).toHaveLength(0);
@@ -420,9 +434,8 @@ try {
         try {
           await open(app.page);
           await expect(panel(app.page)).toBeVisible();
-          await expect(panel(app.page)).toContainText("0 of 1");
+          await expect(panel(app.page)).toContainText(reasonTitles[reason]);
           await expect(table(app.page)).toContainText("Applied");
-          await expect(panel(app.page)).toContainText(reasonLabels[reason]);
           await expect(table(app.page)).toContainText(
             "Canary gate: " + reasonLabels[reason],
           );
@@ -461,9 +474,10 @@ try {
           app = await start(f);
         try {
           await open(app.page);
-          await expect(panel(app.page)).toContainText("1 of 1");
           await expect(panel(app.page)).toContainText(
-            state === "observing" ? /observ/i : /paused/i,
+            state === "observing"
+              ? "Observation in progress"
+              : "Rollout paused",
           );
           await expect(panel(app.page)).not.toContainText(
             /rollout complete|ready to release now/i,
@@ -498,7 +512,9 @@ try {
         try {
           await open(app.page);
           await expect(panel(app.page)).toContainText(/unavailable/i);
-          await expect(panel(app.page)).not.toContainText("1 of 1");
+          await expect(panel(app.page)).not.toContainText(
+            /observation in progress|measuring|waiting for/i,
+          );
           await expect(dialog(app.page)).toContainText("1 of 2");
           await noWrites(f);
         } finally {
@@ -523,10 +539,10 @@ try {
         app = await start(f);
       try {
         await open(app.page);
-        await expect(panel(app.page)).toContainText("1 of 1");
+        await expect(panel(app.page)).toContainText("Observation in progress");
         f.failSummary = true;
-        await panel(app.page)
-          .getByRole("button", { name: "Refresh canary gate", exact: true })
+        await dialog(app.page)
+          .getByRole("button", { name: "Refresh now", exact: true })
           .click();
         // Earlier data is still on screen, so the server's reason is behind Details.
         await app.page
@@ -537,12 +553,14 @@ try {
           app.page.getByText("Synthetic summary unavailable", { exact: true }),
         ).toBeVisible();
         await expect(panel(app.page)).toContainText(/unavailable|could not/i);
-        await expect(panel(app.page)).not.toContainText("1 of 1");
+        await expect(panel(app.page)).not.toContainText(
+          "Observation in progress",
+        );
         f.failSummary = false;
         await app.page
           .getByRole("button", { name: "Retry", exact: true })
           .click();
-        await expect(panel(app.page)).toContainText("1 of 1");
+        await expect(panel(app.page)).toContainText("Observation in progress");
         await noWrites(f);
       } finally {
         await app.close();
@@ -586,7 +604,7 @@ try {
         app = await start(f);
       try {
         await open(app.page);
-        await expect(panel(app.page)).toContainText("0 of 1");
+        await expect(panel(app.page)).toContainText(reasonTitles.superseded);
         await dialog(app.page)
           .getByRole("button", { name: "Next", exact: true })
           .click();
@@ -597,7 +615,7 @@ try {
             ),
           )
           .toBe(true);
-        await expect(panel(app.page)).toContainText("0 of 1");
+        await expect(panel(app.page)).toContainText(reasonTitles.superseded);
         await dialog(app.page)
           .getByRole("textbox", { name: "Search deployment devices" })
           .fill("device 14");
@@ -612,7 +630,7 @@ try {
           )
           .toBe(true);
         await expect(table(app.page)).toContainText("Synthetic device 14");
-        await expect(panel(app.page)).toContainText("0 of 1");
+        await expect(panel(app.page)).toContainText(reasonTitles.superseded);
         await noWrites(f);
       } finally {
         await app.close();

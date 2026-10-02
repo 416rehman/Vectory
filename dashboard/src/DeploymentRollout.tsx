@@ -1,5 +1,10 @@
-import { CircleCheck, Clock3, Wrench } from "lucide-react";
-import type { DeploymentTarget, RolloutFailure, RolloutLane } from "./api";
+import { CircleCheck, Clock3, FastForward, Wrench } from "lucide-react";
+import type {
+  CanaryWatch,
+  DeploymentTarget,
+  RolloutFailure,
+  RolloutLane,
+} from "./api";
 import {
   countdown,
   exactTime,
@@ -11,8 +16,15 @@ import {
   timelineSteps,
   type ProgressSegment,
 } from "./deploymentStatus";
+import {
+  watchRows,
+  watchWindow,
+  type EarlyRelease,
+  type WatchCell,
+  type WatchRow,
+} from "./canaryWatch";
 
-import { StatusBadge, useNow } from "./ui";
+import { Button, StatusBadge, useNow } from "./ui";
 import "./deployment-rollout.css";
 
 function share(count: number, total: number) {
@@ -143,42 +155,153 @@ export function NextAdmission({
   );
 }
 
+/** A watched device's reading, and the same reading before the release. */
+function WatchValue({
+  cell,
+  missing,
+  note,
+}: {
+  cell: WatchCell;
+  /** Why there is no current reading; said once, in the row's first cell. */
+  missing?: string | null;
+  note?: string | null;
+}) {
+  return (
+    <td>
+      {missing ? (
+        <span className="rollout-watch-missing" aria-hidden="true">
+          {missing}
+        </span>
+      ) : (
+        <strong aria-hidden="true">{cell.now}</strong>
+      )}
+      <small aria-hidden="true">
+        {cell.before !== null ? `was ${cell.before}` : note || ""}
+      </small>
+      <span className="sr-only">{cell.speech}</span>
+    </td>
+  );
+}
+
+/**
+ * What the canary devices deliver now beside the average of the minutes before
+ * their release, from telemetry the server already stores. A device with
+ * nothing from before its release says so rather than showing a zero.
+ */
+export function CanaryWatchTable({
+  watch,
+  navigate,
+}: {
+  watch: CanaryWatch;
+  navigate(path: string): void;
+}) {
+  const rows = watchRows(watch);
+  if (!rows.length) return null;
+  return (
+    <div className="rollout-watch">
+      <table>
+        <caption>
+          <strong>Canary delivery</strong>
+          <span>
+            Now, and the average of the {watchWindow(watch)} before release
+          </span>
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Device</th>
+            <th scope="col">Events in → out per second</th>
+            <th scope="col">Errors per minute</th>
+            <th scope="col">Buffer full</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row: WatchRow) => (
+            <tr key={row.id}>
+              <th scope="row">
+                <a
+                  href={`#/devices/${encodeURIComponent(row.id)}`}
+                  onClick={(event) => {
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey)
+                      return;
+                    event.preventDefault();
+                    navigate(`devices/${encodeURIComponent(row.id)}`);
+                  }}
+                >
+                  {row.name}
+                </a>
+                {row.note && <small>{row.note}</small>}
+              </th>
+              <WatchValue
+                cell={row.events}
+                missing={row.noReading}
+                note={row.noBaseline ? "No baseline yet" : null}
+              />
+              <WatchValue cell={row.errors} />
+              <WatchValue cell={row.buffer} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {watch.more > 0 && (
+        <p className="rollout-watch-more">
+          {watch.more} more canary {watch.more === 1 ? "device" : "devices"} not
+          shown
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
  * Canary → batches as lanes, each with one mark per device colored by state
- * (with an icon legend and per-device labels on hover and focus).
+ * (with an icon legend and per-device labels on hover and focus). The canary
+ * lane carries what its devices deliver; the stage being observed carries the
+ * one countdown, and the button that releases the next stage early.
  */
 export function StageLanes({
   lanes,
   nextAdmissionAt,
   observationSeconds,
   clockOffset,
-  failureThreshold,
+  watch,
+  onReleaseEarly,
+  releaseDisabled = false,
   navigate,
 }: {
   lanes: RolloutLane[];
   nextAdmissionAt: string | null;
   observationSeconds: number;
   clockOffset: number;
-  failureThreshold: number | null;
+  /** What the canary devices deliver, shown in the canary lane. */
+  watch?: CanaryWatch | null;
+  /** Offered on the stage being waited on, while the next may go early. */
+  onReleaseEarly?: ((opener: HTMLElement) => void) | null;
+  releaseDisabled?: boolean;
   navigate(path: string): void;
 }) {
   const current = lanes.findIndex(
     (lane) => lane.state === "in_progress" || lane.state === "failed",
   );
-  let observing = -1;
-  if (nextAdmissionAt !== null)
-    lanes.forEach((lane, index) => {
-      if (lane.released_at !== null) observing = index;
-    });
+  // The last released stage is the one whose wait holds the next one back.
+  let held = -1;
+  lanes.forEach((lane, index) => {
+    if (lane.released_at !== null) held = index;
+  });
+  const observing = nextAdmissionAt !== null ? held : -1;
   return (
     <ol className="rollout-lanes" aria-label="Release stages">
       {lanes.map((lane, index) => {
         const verified = lane.counts.verified_applied || 0;
+        const delivery =
+          index === 0 && lane.kind === "canary" && watch?.devices.length
+            ? watch
+            : null;
         return (
           <li
             key={`${lane.kind}-${lane.index}-${index}`}
             className="rollout-lane"
             data-state={lane.state}
+            data-watch={delivery ? "" : undefined}
             aria-current={index === current ? "step" : undefined}
           >
             <header>
@@ -226,6 +349,9 @@ export function StageLanes({
                 <li className="rollout-dots-more">+{lane.more}</li>
               )}
             </ul>
+            {delivery && (
+              <CanaryWatchTable watch={delivery} navigate={navigate} />
+            )}
             <footer>
               {index === observing && nextAdmissionAt ? (
                 <NextAdmission
@@ -248,19 +374,68 @@ export function StageLanes({
                 <span>The rollout stopped before these devices.</span>
               ) : (
                 <span>
-                  Waits for {index === 0 ? "release" : "the stage before"}
-                  {index > 0 && failureThreshold !== null
-                    ? failureThreshold === 0
-                      ? ". Stops on the first failure."
-                      : `. Stops after ${failureThreshold + 1} failures.`
-                    : "."}
+                  Waits for {index === 0 ? "release" : "the stage before"}.
                 </span>
+              )}
+              {lane.released_early && (
+                <span className="rollout-lane-early">
+                  <FastForward size={13} aria-hidden="true" />
+                  Released early
+                  {lane.released_early.by_name
+                    ? ` by ${lane.released_early.by_name}`
+                    : ""}{" "}
+                  {exactTime(lane.released_early.at)}
+                </span>
+              )}
+              {index === held && onReleaseEarly && (
+                <Button
+                  variant="secondary compact"
+                  icon={FastForward}
+                  disabled={releaseDisabled}
+                  onClick={(event) => onReleaseEarly(event.currentTarget)}
+                >
+                  Release next stage now
+                </Button>
               )}
             </footer>
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * What releasing the next stage now does, before someone confirms it: which
+ * devices it releases, and which check on the released ones it cuts short.
+ */
+export function EarlyReleaseNote({ early }: { early: EarlyRelease | null }) {
+  if (!early)
+    return (
+      <p>
+        <strong>Release the next stage now?</strong> The server checks the
+        rollout again and refuses if it isn&apos;t waiting on a stage.
+      </p>
+    );
+  const everyone = early.next === early.waiting;
+  const devices = (count: number) => (count === 1 ? "device" : "devices");
+  return (
+    <>
+      <p>
+        <strong>
+          {everyone
+            ? `Release to the remaining ${early.waiting} ${devices(early.waiting)} now?`
+            : `Release to the next ${early.next} of ${early.waiting} waiting devices now?`}
+        </strong>{" "}
+        {early.skipping === "measuring"
+          ? `The delivery check on ${early.subject} is still measuring.`
+          : `The observation of ${early.subject} hasn't finished.`}
+      </p>
+      <p className="control-muted">
+        {everyone ? "" : "Later stages still wait for their own checks. "}
+        It is recorded on the rollout and in the audit log.
+      </p>
+    </>
   );
 }
 

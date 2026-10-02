@@ -807,8 +807,17 @@ fn no_consumers(config: &Value, message: &str) -> Diagnostic {
 }
 
 const BUILD_FAILURE: &str = "Vector could not build this test.";
+const BUILD_SUMMARY: &str = "Could not build this test";
 const TEST_REFUSAL: &str = "Failed to execute tests:";
 const TEST_UNREADABLE: &str = "Vector can't read this test";
+
+/// Whether a failed test's message says Vector could not read or build the
+/// test, so it never ran, as opposed to running it and seeing it fail.
+pub fn is_refusal(message: &str) -> bool {
+    [BUILD_SUMMARY, BUILD_FAILURE, TEST_UNREADABLE]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
+}
 
 /// What Vector said when it stopped without a verdict for the tests.
 pub struct TestRefusal {
@@ -1046,10 +1055,10 @@ pub fn parse_tests(stdout: &[u8], stderr: &[u8]) -> Vec<Value> {
                 Some(bounded(
                     &match (summary, step) {
                         (Some(reason), Some(id)) => {
-                            format!("Could not build this test: {reason} in {id}.")
+                            format!("{BUILD_SUMMARY}: {reason} in {id}.")
                         }
-                        (Some(reason), None) => format!("Could not build this test: {reason}."),
-                        (None, _) => "Vector could not build this test.".to_owned(),
+                        (Some(reason), None) => format!("{BUILD_SUMMARY}: {reason}."),
+                        (None, _) => BUILD_FAILURE.to_owned(),
                     },
                     MAX_MESSAGE,
                 ))
@@ -1385,6 +1394,34 @@ mod tests {
         );
         assert_eq!(ran.len(), 2);
         assert!(ran.iter().all(|r| r["passed"] == true));
+    }
+
+    #[test]
+    fn a_refused_test_is_told_apart_from_one_that_ran_and_failed() {
+        // Every message the two producers write for a test Vector never ran.
+        for built in [
+            &b"Failed to execute tests:\nFailed to build test 't':\n  Transform \"x\": \n  error[E100]: unhandled error\n"[..],
+            b"Failed to execute tests:\nFailed to build test 't':\n  inputs[0]: unable to locate target transform 'nope'.\n",
+            b"Failed to execute tests:\nFailed to build test 't':\n",
+        ] {
+            let results = parse_tests(b"Running tests\n", built);
+            let message = results[0]["message"].as_str().unwrap();
+            assert!(is_refusal(message), "{message}");
+        }
+        let refusal = test_refusal(
+            &json!({"tests": [{"name": "typo"}]}),
+            b"Running tests\n",
+            b"Failed to execute tests:\ntests[0].inputs[0].log_fieldz: unknown field `log_fieldz`.\n",
+        );
+        assert!(is_refusal(refusal.tests[0]["message"].as_str().unwrap()));
+        // A test that ran and failed says what it saw, never that it was refused.
+        for ran in [
+            "assertion failed",
+            "Test failed.",
+            "condition 0 failed: .a == 1",
+        ] {
+            assert!(!is_refusal(ran), "{ran}");
+        }
     }
 
     #[test]

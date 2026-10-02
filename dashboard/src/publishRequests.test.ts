@@ -326,6 +326,36 @@ describe("durable publication registry", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("keeps a chosen Publish anyway in the saved request, so a recovered retry repeats it exactly", () => {
+    const plain = beginPublishOperation(actor, pipeline, request);
+    expect(plain.request).not.toHaveProperty("acknowledge_test_failures");
+    finishPublishOperation(plain);
+    const anyway = beginPublishOperation(actor, pipeline, {
+      ...request,
+      acknowledge_test_failures: true,
+    });
+    expect(anyway.request.acknowledge_test_failures).toBe(true);
+    // What a reload reads back is what was saved, flag included.
+    const [reread] = readPublishOperations(actor, pipeline).operations;
+    expect(reread.request).toEqual({
+      ...request,
+      acknowledge_test_failures: true,
+      request_id: anyway.id,
+    });
+    expect(JSON.parse(JSON.stringify(reread.request))).toEqual(reread.request);
+    // Only an explicit true is an acknowledgement.
+    finishPublishOperation(anyway);
+    for (const invalid of [false, "true", 1, null]) {
+      expect(() =>
+        beginPublishOperation(actor, pipeline, {
+          ...request,
+          acknowledge_test_failures: invalid,
+        } as never),
+      ).toThrow();
+    }
+    expect(storage.length).toBe(0);
+  });
+
   it("isolates pipeline requests and scoped corruption while unknown scope blocks conservatively", () => {
     const first = beginPublishOperation(actor, pipeline, request);
     const second = beginPublishOperation(actor, otherPipeline, request);

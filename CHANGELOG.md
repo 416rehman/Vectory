@@ -29,6 +29,14 @@ The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboar
 - **One vocabulary.** "Applied" and "Not delivering" everywhere a device state is named; every status badge says what it means in plain words.
 - Pipelines and Issues share one list pattern, with cards on a phone.
 
+### Publishing and rollouts
+
+- **Failing tests stop a publish.** Publishing a pipeline whose tests fail, that Vector couldn't build or that didn't run answers `409 TESTS_FAILED` with the same rows as the test run, and nothing is published, unless the request sends `acknowledge_test_failures: true`. The publish review runs the tests when it opens and says how they went; while a test isn't passing the primary button reads **Publish anyway**, beside **Open tests**. A publish over failing tests is audited with the counts, never the tests' contents. Pipelines without tests, or with passing ones, publish as before.
+- **Choose the canary.** A canary rollout takes `rollout.canary_device_ids`, among the devices it targets, and the deploy review has **Canary devices: edge-nyc-02** with a searchable choice by name, a **Stage** column (**Canary** or **Then**) and the reason for the default. Without a choice the canary is no longer always the lowest device IDs: devices that are online, healthy and reporting metrics go first.
+- **Watch the canary.** Its lane shows each canary device's events in and out per second, errors per minute and buffer fill now, against the 10 minutes before its release (`canary_watch` on `GET /deployments/{id}/rollout`); a device with nothing recorded reads **No baseline yet**, never zero. **Canary gate** says in one line what it waits for, naming the devices ("Measuring delivery on edge-nyc-02 (2 of 3 samples)"), from the same evidence as the lanes and the progress bar. One countdown, in the lane, and one refresh control.
+- **Release the next stage early.** `POST /deployments/{id}/release-next-stage` releases the next stage of a canary whose released devices have applied and are delivering, without waiting for the delivery check or the observation period. It refuses otherwise, changes nothing when it refuses, records who released the stage on the rollout and audits `deployment.stage_released_early` with the stage and the gate state.
+- **Held on previous version.** A device whose newest version failed but which verifiably keeps running an earlier one and delivers on it is amber **Held on previous version**, counted on its own in Fleet health, the Overview's KPI ("3 / 4 · 1 held on previous version") and `held` in the device counts and filters, not red **Failed**. **Failed** stays for devices with no working version. The Devices quick filter that read **Failing** reads **Needs attention** and lists what it holds on hover.
+
 ### Fixed during development
 
 Agents built before these fixes behave differently. Rebuild agents from this revision.
