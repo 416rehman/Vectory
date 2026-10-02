@@ -1,0 +1,42 @@
+{
+  "description": "A root that contains the agent's state directory can't be approved either.",
+  "host": {
+    "state_dir": "/var/lib/vectory-agent",
+    "managed_config_dir": "/etc/vectory/managed"
+  },
+  "vector": "valid",
+  "config": {
+    "data_dir": "/var/lib",
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/data_dir"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

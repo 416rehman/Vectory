@@ -1,0 +1,42 @@
+{
+  "description": "A root inside the managed configuration directory can't be approved: it holds resolved device secrets.",
+  "host": {
+    "state_dir": "/var/lib/vectory-agent",
+    "managed_config_dir": "/etc/vectory/managed"
+  },
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "/etc/vectory/managed/*.json"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sources/in/include/0"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

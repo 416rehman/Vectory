@@ -1,0 +1,62 @@
+{
+  "description": "Datadog sinks need approval for their site's endpoints; an explicit endpoint is a destination too.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "m": {
+        "type": "log_to_metric",
+        "inputs": [
+          "in"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines"
+          }
+        ]
+      }
+    },
+    "sinks": {
+      "logs": {
+        "type": "datadog_logs",
+        "inputs": [
+          "in"
+        ],
+        "default_api_key": "vectory-secret:dd-api-key",
+        "site": "datadoghq.eu"
+      },
+      "metrics": {
+        "type": "datadog_metrics",
+        "inputs": [
+          "m"
+        ],
+        "default_api_key": "vectory-secret:dd-api-key",
+        "endpoint": "https://dd-relay.example.net:8443"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "datadog_logs",
+      "datadog_metrics"
+    ],
+    "capabilities": [],
+    "network": [
+      "dd-relay.example.net:8443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

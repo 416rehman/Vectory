@@ -1,0 +1,36 @@
+{
+  "description": "expire_metrics tunes Vector's own metrics.",
+  "vector": "valid",
+  "config": {
+    "expire_metrics": {
+      "secs": 300,
+      "nanos": 0
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

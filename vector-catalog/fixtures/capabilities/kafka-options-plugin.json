@@ -1,0 +1,48 @@
+{
+  "description": "plugin.library.paths loads a shared library (measured: Vector tried to dlopen it), so it needs full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9092",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ],
+        "librdkafka_options": {
+          "plugin.library.paths": "/srv/plugins/monitor.so",
+          "fetch.min.bytes": "1"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "PASSTHROUGH_OPTION_DENIED",
+        "at": "/sources/in/librdkafka_options/plugin.library.paths"
+      }
+    ],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9092"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

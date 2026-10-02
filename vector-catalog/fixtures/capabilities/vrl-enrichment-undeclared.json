@@ -1,0 +1,42 @@
+{
+  "description": "A lookup of a table the configuration doesn't declare passes restricted mode and fails Vector's compile (measured).",
+  "vector": "invalid",
+  "vector_error": "invalid enum variant",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "r": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": "row, err = get_enrichment_table_record(\"undeclared\", {\"id\": \"1\"})"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "r"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

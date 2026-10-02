@@ -1,0 +1,38 @@
+{
+  "description": "Percent-encoding in a URL's path, written %% because Vector reads % as a time format, leaves the destination as written.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.net/a%%2Fb%%20c",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

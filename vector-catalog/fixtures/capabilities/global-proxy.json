@@ -1,0 +1,44 @@
+{
+  "description": "Each proxy URL is a destination; hosts in no_proxy aren't.",
+  "vector": "valid",
+  "config": {
+    "proxy": {
+      "enabled": true,
+      "http": "http://proxy.example.net:3128",
+      "https": "http://proxy.example.net:3129",
+      "no_proxy": [
+        "localhost",
+        ".internal"
+      ]
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "proxy.example.net:3128",
+      "proxy.example.net:3129"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

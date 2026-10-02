@@ -1,0 +1,42 @@
+{
+  "description": "A bootstrap server without a port can't be approved: restricted mode won't assume librdkafka's default.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "b1.example.net",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "NETWORK_DESTINATION_DENIED",
+        "at": "/sources/in/bootstrap_servers"
+      }
+    ],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

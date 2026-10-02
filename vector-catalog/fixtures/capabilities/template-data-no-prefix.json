@@ -1,0 +1,103 @@
+{
+  "description": "Templates that choose data within a destination pass restricted mode; without a literal prefix Vector refuses them.",
+  "vector": "invalid",
+  "vector_error": "no literal string prefix",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "header": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.com/x",
+        "encoding": {
+          "codec": "json"
+        },
+        "request": {
+          "headers": {
+            "X-Tenant": "{{ tenant }}"
+          }
+        }
+      },
+      "index": {
+        "type": "elasticsearch",
+        "inputs": [
+          "in"
+        ],
+        "endpoints": [
+          "https://es.example.com:9200"
+        ],
+        "bulk": {
+          "index": "{{ service }}"
+        }
+      },
+      "topic": {
+        "type": "kafka",
+        "inputs": [
+          "in"
+        ],
+        "bootstrap_servers": "broker.example.com:9092",
+        "topic": "{{ topic }}",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "tenant": {
+        "type": "loki",
+        "inputs": [
+          "in"
+        ],
+        "endpoint": "https://loki.example.com",
+        "tenant_id": "{{ tenant }}",
+        "labels": {
+          "app": "vector"
+        },
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "objects": {
+        "type": "aws_s3",
+        "inputs": [
+          "in"
+        ],
+        "bucket": "logs",
+        "region": "us-east-1",
+        "key_prefix": "{{ host }}/",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "access_key_id": "vectory-secret:aws-key-id",
+          "secret_access_key": "vectory-secret:aws-secret"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "aws_s3",
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.com:9092",
+      "collector.example.com:443",
+      "es.example.com:9200",
+      "loki.example.com:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

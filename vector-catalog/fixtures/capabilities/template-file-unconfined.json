@@ -1,0 +1,46 @@
+{
+  "description": "Turning confinement off needs full mode, whatever the path; Vector accepts it.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        },
+        "path": "{{ host }}.log",
+        "dangerously_allow_unconfined_template_resolution": true
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNCONFINED_TEMPLATE_DENIED",
+        "at": "/sinks/out/dangerously_allow_unconfined_template_resolution"
+      },
+      {
+        "code": "TEMPLATE_RESOURCE_DENIED",
+        "at": "/sinks/out/path"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

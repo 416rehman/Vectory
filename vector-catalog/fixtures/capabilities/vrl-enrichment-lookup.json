@@ -1,0 +1,58 @@
+{
+  "description": "Enrichment lookups leave the refused functions: they can only name tables the same configuration declares.",
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "users": {
+        "type": "file",
+        "file": {
+          "path": "/etc/vector/users.csv",
+          "encoding": {
+            "type": "csv"
+          }
+        },
+        "schema": {
+          "id": "string",
+          "name": "string"
+        }
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "r": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": "row, err = get_enrichment_table_record(\"users\", {\"id\": \"1\"})\nif err == null { .user = row.name }\nrows = find_enrichment_table_records!(\"users\", {\"name\": \"a\"})\n.count = length(rows)"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "r"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/etc/vector/users.csv"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

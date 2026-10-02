@@ -1,0 +1,37 @@
+{
+  "description": "data_dir is a directory Vector writes, under an allowed root.",
+  "vector": "valid",
+  "config": {
+    "data_dir": "/var/lib/vector/",
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/lib/vector"
+    ],
+    "writes": [
+      "/var/lib/vector"
+    ],
+    "assets": []
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "description": "Tuning the instance metadata client is ambient.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "aws_s3",
+        "inputs": [
+          "in"
+        ],
+        "bucket": "logs",
+        "region": "us-east-1",
+        "encoding": {
+          "codec": "json"
+        },
+        "auth": {
+          "imds": {
+            "max_attempts": 2
+          }
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "aws_s3"
+    ],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

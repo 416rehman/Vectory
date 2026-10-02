@@ -1,0 +1,91 @@
+{
+  "description": "SASL PLAIN and SCRAM pass; GSSAPI, which librdkafka also picks when no mechanism is set, reaches Kerberos and runs kinit.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "scram": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9093",
+        "group_id": "g",
+        "topics": [
+          "a"
+        ],
+        "sasl": {
+          "enabled": true,
+          "mechanism": "SCRAM-SHA-512",
+          "username": "vectory-secret:kafka-user",
+          "password": "vectory-secret:kafka-password"
+        }
+      },
+      "gssapi": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9093",
+        "group_id": "g",
+        "topics": [
+          "b"
+        ],
+        "sasl": {
+          "enabled": true,
+          "mechanism": "GSSAPI"
+        }
+      },
+      "implicit": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9093",
+        "group_id": "g",
+        "topics": [
+          "c"
+        ],
+        "sasl": {
+          "enabled": true
+        }
+      },
+      "disabled": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9093",
+        "group_id": "g",
+        "topics": [
+          "d"
+        ],
+        "sasl": {
+          "enabled": false
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "scram",
+          "gssapi",
+          "implicit",
+          "disabled"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/gssapi/sasl/mechanism"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/implicit/sasl/mechanism"
+      }
+    ],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9093"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

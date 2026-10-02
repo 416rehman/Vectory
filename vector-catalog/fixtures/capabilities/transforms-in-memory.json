@@ -1,0 +1,186 @@
+{
+  "description": "All sixteen in-memory transforms are built in: only the OpenTelemetry source that feeds traces needs its listeners.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      },
+      "otel": {
+        "type": "opentelemetry",
+        "grpc": {
+          "address": "127.0.0.1:4317"
+        },
+        "http": {
+          "address": "127.0.0.1:4318"
+        }
+      }
+    },
+    "transforms": {
+      "shaped": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".level = \"info\""
+      },
+      "kept": {
+        "type": "filter",
+        "inputs": [
+          "shaped"
+        ],
+        "condition": ".level != \"debug\""
+      },
+      "routed": {
+        "type": "route",
+        "inputs": [
+          "kept"
+        ],
+        "route": {
+          "errors": ".level == \"error\""
+        }
+      },
+      "exclusive": {
+        "type": "exclusive_route",
+        "inputs": [
+          "kept"
+        ],
+        "routes": [
+          {
+            "name": "warnings",
+            "condition": ".level == \"warn\""
+          }
+        ]
+      },
+      "sampled": {
+        "type": "sample",
+        "inputs": [
+          "kept"
+        ],
+        "rate": 10
+      },
+      "reduced": {
+        "type": "reduce",
+        "inputs": [
+          "kept"
+        ],
+        "group_by": [
+          "host"
+        ]
+      },
+      "unique": {
+        "type": "dedupe",
+        "inputs": [
+          "kept"
+        ]
+      },
+      "delayed": {
+        "type": "delay",
+        "inputs": [
+          "kept"
+        ],
+        "delay_ms": 10
+      },
+      "limited": {
+        "type": "throttle",
+        "inputs": [
+          "kept"
+        ],
+        "threshold": 100,
+        "window_secs": 1
+      },
+      "windowed": {
+        "type": "window",
+        "inputs": [
+          "kept"
+        ],
+        "flush_when": ".level == \"error\""
+      },
+      "counted": {
+        "type": "log_to_metric",
+        "inputs": [
+          "kept"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines"
+          }
+        ]
+      },
+      "aggregated": {
+        "type": "aggregate",
+        "inputs": [
+          "counted"
+        ],
+        "interval_ms": 1000
+      },
+      "absolute": {
+        "type": "incremental_to_absolute",
+        "inputs": [
+          "counted"
+        ]
+      },
+      "tagged": {
+        "type": "tag_cardinality_limit",
+        "inputs": [
+          "counted"
+        ],
+        "mode": "exact",
+        "value_limit": 100
+      },
+      "logged": {
+        "type": "metric_to_log",
+        "inputs": [
+          "aggregated",
+          "absolute",
+          "tagged"
+        ]
+      },
+      "spans": {
+        "type": "trace_to_log",
+        "inputs": [
+          "otel.traces"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "routed.errors",
+          "routed._unmatched",
+          "exclusive.warnings",
+          "exclusive._unmatched",
+          "sampled",
+          "reduced",
+          "unique",
+          "delayed",
+          "limited",
+          "windowed",
+          "logged",
+          "spans",
+          "otel.logs",
+          "otel.metrics"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "127.0.0.1:4317",
+      "127.0.0.1:4318"
+    ],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

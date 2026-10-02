@@ -1,0 +1,38 @@
+{
+  "description": "A pattern whose root is / can't be approved: a file root may not be the filesystem root.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "/*.log"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sources/in/include/0"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

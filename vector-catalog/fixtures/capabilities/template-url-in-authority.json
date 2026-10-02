@@ -1,0 +1,42 @@
+{
+  "description": "A template inside a URL's authority is refused; Vector refuses it too.",
+  "vector": "invalid",
+  "vector_error": "inside the authority",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.com{{ suffix }}/x",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "TEMPLATE_RESOURCE_DENIED",
+        "at": "/sinks/out/uri"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}
