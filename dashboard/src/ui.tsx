@@ -43,14 +43,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import {
-  api,
-  APIError,
-  isSessionInterruption,
-  isSessionValid,
-  when,
-  withRequestDeadline,
-} from "./api";
+import { APIError, isSessionValid, when } from "./api";
+import { readPath, subscribe, type Reader, type ReadMode } from "./sharedReads";
 import DocLink, {
   HelpLink,
   type DocTopic,
@@ -71,9 +65,10 @@ const visible = () =>
 
 /**
  * Bounded, cancellable reads that poll while the tab is visible.
- * Background polls never supersede an in-flight read; an explicit refresh does.
- * A failed refresh keeps the last loaded data with an error.
- * `interval: 0` reads once (static data); changing the interval only
+ * Components reading the same path share one request and one answer (see
+ * sharedReads). Background polls never supersede an in-flight read; an
+ * explicit refresh does. A failed refresh keeps the last loaded data with an
+ * error. `interval: 0` reads once (static data); changing the interval only
  * reschedules the next poll.
  */
 export function useResource<T>(
@@ -103,75 +98,33 @@ export function useResource<T>(
   const currentPath = useRef(path),
     initialValue = useRef(initial),
     mounted = useRef(false),
-    requestId = useRef(0),
     lastSuccess = useRef(0),
-    activeRequest = useRef<{
-      id: number;
-      controller: AbortController;
-      explicit: boolean;
-    } | null>(null);
+    asked = useRef(0),
+    lastRefresh = useRef(refresh),
+    reading = useRef<{ path: string; reader: Reader } | null>(null);
   currentPath.current = path;
   initialValue.current = initial;
   const load = useCallback(
-    async (background = false) => {
-      if (!path || !mounted.current || currentPath.current !== path) return;
-      // A slow read must get a chance to finish. Only an explicit refresh replaces
-      // an in-flight request; polling never invalidates its eventual response.
-      if (background && activeRequest.current) return;
-      activeRequest.current?.controller.abort();
-      const id = ++requestId.current;
-      const controller = new AbortController();
-      activeRequest.current = { id, controller, explicit: !background };
-      if (!background) setRefreshing(true);
-      const current = () =>
-        mounted.current &&
-        currentPath.current === path &&
-        requestId.current === id;
+    async (mode: ReadMode = "fresh", adoptWithin = 0) => {
+      const active = reading.current;
+      if (
+        !path ||
+        !mounted.current ||
+        currentPath.current !== path ||
+        active?.path !== path
+      )
+        return undefined;
+      // A poll shows nothing; every other read shows the refresh spinner
+      // until it (or the read that replaced it) settles.
+      const explicit = mode !== "poll";
+      const ask = ++asked.current;
+      if (explicit) setRefreshing(true);
       try {
-        const result = await withRequestDeadline(
-          (signal) => api<T>(path, { signal }),
-          30000,
-          controller.signal,
-        );
-        if (current()) {
-          lastSuccess.current = Date.now();
-          setState({
-            path,
-            data: result,
-            loading: false,
-            error: "",
-            errorStatus: null,
-            updatedAt: lastSuccess.current,
-          });
-          return result;
-        }
-      } catch (e) {
-        // The re-sign-in dialog explains an ended session; keep this page as it
-        // was and read again when the session resumes.
-        if (isSessionInterruption(e)) return;
-        if (current())
-          setState((previous) => {
-            const same = previous.path === path;
-            const keep =
-              same &&
-              !(e instanceof APIError && e.code === "IDENTITY_MISMATCH");
-            return {
-              path,
-              // A mismatched identity invalidates this resource's display until
-              // a fresh matching read. Ordinary transient errors keep prior data.
-              data: keep ? previous.data : initialValue.current,
-              loading: false,
-              error: (e as Error).message,
-              errorStatus:
-                e instanceof APIError && e.status > 0 ? e.status : null,
-              updatedAt: keep ? previous.updatedAt : null,
-            };
-          });
+        return (await readPath(path, active.reader, mode, adoptWithin)) as
+          T | undefined;
       } finally {
-        if (activeRequest.current?.id === id) {
-          activeRequest.current = null;
-          if (mounted.current) setRefreshing(false);
-        }
+        if (explicit && mounted.current && asked.current === ask)
+          setRefreshing(false);
       }
     },
     [path],
@@ -182,7 +135,8 @@ export function useResource<T>(
   const reloadResult = useCallback(() => load(), [load]);
   useEffect(() => {
     mounted.current = true;
-    ++requestId.current;
+    const bumped = lastRefresh.current !== refresh;
+    lastRefresh.current = refresh;
     setState((previous) => {
       // A refresh of data already on screen is not a first load: keep the
       // data, its error and `loading: false` until the new read settles.
@@ -197,16 +151,61 @@ export function useResource<T>(
         updatedAt: same ? previous.updatedAt : null,
       };
     });
-    void load();
+    let release: (() => void) | null = null;
+    if (path) {
+      const reader: Reader = {
+        receive(outcome) {
+          if (!mounted.current || currentPath.current !== path) return;
+          if (outcome.ok) {
+            lastSuccess.current = outcome.at;
+            setState({
+              path,
+              data: outcome.data as T,
+              loading: false,
+              error: "",
+              errorStatus: null,
+              updatedAt: outcome.at,
+            });
+            return;
+          }
+          const failure = outcome.error;
+          setState((previous) => {
+            const same = previous.path === path;
+            const keep =
+              same &&
+              !(
+                failure instanceof APIError &&
+                failure.code === "IDENTITY_MISMATCH"
+              );
+            return {
+              path,
+              // A mismatched identity invalidates this resource's display until
+              // a fresh matching read. Ordinary transient errors keep prior data.
+              data: keep ? previous.data : initialValue.current,
+              loading: false,
+              error: (failure as Error).message,
+              errorStatus:
+                failure instanceof APIError && failure.status > 0
+                  ? failure.status
+                  : null,
+              updatedAt: keep ? previous.updatedAt : null,
+            };
+          });
+        },
+      };
+      reading.current = { path, reader };
+      release = subscribe(path, reader);
+    }
+    // A new reader takes a read already in flight; a refresh key asks again.
+    void load(bumped ? "fresh" : "join");
     const renewed = () => {
-      if (isSessionValid()) void load();
+      if (isSessionValid()) void load("join");
     };
     window.addEventListener("vectory:session-changed", renewed);
     return () => {
       mounted.current = false;
-      ++requestId.current;
-      activeRequest.current?.controller.abort();
-      activeRequest.current = null;
+      release?.();
+      reading.current = null;
       window.removeEventListener("vectory:session-changed", renewed);
     };
   }, [path, refresh, load]);
@@ -214,11 +213,11 @@ export function useResource<T>(
     if (!path || !(interval > 0)) return;
     // Hidden tabs stop polling; returning to the tab refreshes stale data.
     const timer = setInterval(() => {
-      if (visible()) void load(true);
+      if (visible()) void load("poll", interval / 2);
     }, interval);
     const returned = () => {
       if (visible() && Date.now() - lastSuccess.current > interval / 2)
-        void load(true);
+        void load("poll", interval / 2);
     };
     document.addEventListener("visibilitychange", returned);
     return () => {

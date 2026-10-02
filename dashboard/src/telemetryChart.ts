@@ -1,4 +1,23 @@
-import type { TelemetryHistory, TelemetrySample } from "./runtimeModel";
+import type {
+  TelemetryHistory,
+  TelemetryRange,
+  TelemetrySample,
+} from "./runtimeModel";
+
+/**
+ * How often a range's history is read again. Only the newest chart step
+ * changes, and a longer range has longer steps, so reading a week every 15
+ * seconds would repeat the same answer 20 times per new point.
+ */
+export const telemetryPollMs: Record<TelemetryRange, number> = {
+  "15m": 15_000,
+  "1h": 15_000,
+  "2h": 30_000,
+  "6h": 60_000,
+  "24h": 60_000,
+  "7d": 300_000,
+  "30d": 600_000,
+};
 
 export type TimelinePoint = {
   /** First minute (Unix minutes) of this slot. */

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -142,6 +143,7 @@ async function load(name, props = {}) {
     previews: [],
     failDevices: false,
   };
+  const replies = fleetReplies({ devices, groups: () => state.groups });
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url());
@@ -149,21 +151,22 @@ async function load(name, props = {}) {
     if (!url.pathname.startsWith("/api/v1/")) return route.continue();
     const path = url.pathname.slice(7),
       method = req.method();
-    requests.push({ path, method });
+    requests.push({ path, method, search: url.search });
     const reply = (json) => route.fulfill({ json });
     if (method === "GET") {
-      if (path === "/devices")
-        return state.failDevices
-          ? route.fulfill({
-              status: 503,
-              json: {
-                error: {
-                  code: "FIXTURE_FAILURE",
-                  message: "Synthetic device inventory unavailable",
-                },
-              },
-            })
-          : reply(devices);
+      if (state.failDevices && path === "/devices/inventory")
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: "FIXTURE_FAILURE",
+              message: "Synthetic device inventory unavailable",
+            },
+          },
+        });
+      if (await fulfillFleetRead(replies, route)) return;
+      // Add device still lists the fleet once to know which devices are new.
+      if (path === "/devices") return reply(devices);
       if (path === "/groups") return reply(state.groups);
       if (path === "/policies") return reply(policies);
       if (path === "/tokens") return reply(tokens);
@@ -341,6 +344,36 @@ async function sort(label) {
     .getByRole("button", { name: new RegExp(`^Sort by ${label}(?:,|$)`) })
     .click();
 }
+/**
+ * A page of devices in a picker scrolls inside its own box: the box is no
+ * taller than 22rem, its rows are clipped by it, and the pager and buttons
+ * under it are never covered by them.
+ */
+async function pickerScrollsInsideItsBox() {
+  const box = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      ".device-picker .data-table-scroll",
+    );
+    const rect = scroller.getBoundingClientRect();
+    const below = [".data-table-pagination", ".device-picker-actions"].map(
+      (selector) => {
+        const element = document.querySelector(`.device-picker ${selector}`);
+        return element ? element.getBoundingClientRect().top : Infinity;
+      },
+    );
+    return {
+      overflowY: getComputedStyle(scroller).overflowY,
+      height: rect.height,
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      bottom: rect.bottom,
+      nextTop: Math.min(...below),
+    };
+  });
+  expect(["auto", "scroll"]).toContain(box.overflowY);
+  expect(box.height).toBeLessThanOrEqual(22 * 16 + 2);
+  expect(box.scrolls).toBe(true);
+  expect(box.bottom).toBeLessThanOrEqual(box.nextTop + 1);
+}
 async function check(name, run) {
   if (
     process.env.VECTORY_FLEET_TABLES_ONLY &&
@@ -354,24 +387,41 @@ async function check(name, run) {
 let failure;
 try {
   await check(
-    "1000 devices: URL-synced filters apply before pagination and selection survives sorting and pages",
+    "1000 devices: the server pages, filters and sorts them; the URL keeps the view and selection survives sorting and pages",
     async () => {
+      const first = requests.length;
       await load("devices");
+      // The server hides the revoked device unless asked, so the first page is
+      // 25 live devices and the fleet is 999.
       await expect(rows("Devices")).toHaveCount(25);
-      await page.getByLabel("Select visible devices", { exact: true }).check();
-      // Device 0020 is revoked on the first page, so it can't be selected.
       await expect(
-        page.getByText("24 selected", { exact: true }),
+        page.getByText("999 devices", { exact: true }),
       ).toBeVisible();
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      await expect(rows("Devices").first()).toContainText("Device 0025");
-      await page.getByLabel("Select Device 0025", { exact: true }).check();
-      await sort("Device");
-      await expect(rows("Devices").first()).toContainText("Device 0999");
+      await page.getByLabel("Select visible devices", { exact: true }).check();
       await expect(
         page.getByText("25 selected", { exact: true }),
       ).toBeVisible();
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      await expect(rows("Devices").first()).toContainText("Device 0026");
+      await page.getByLabel("Select Device 0026", { exact: true }).check();
+      await sort("Device");
+      await expect(rows("Devices").first()).toContainText("Device 0999");
+      await expect(
+        page.getByText("26 selected", { exact: true }),
+      ).toBeVisible();
       expect(new URL(page.url()).hash).toContain("dir=desc");
+      // The page asked for one page at a time, never the whole list.
+      expect(
+        requests.slice(first).filter((r) => r.path === "/devices").length,
+        "the Devices page never lists every device",
+      ).toBe(0);
+      expect(
+        requests
+          .slice(first)
+          .filter((r) => r.path === "/devices/inventory")
+          .every((r) => /page_size=25/.test(r.search)),
+        "each read asks for one page",
+      ).toBe(true);
       await filter("Status", "Revoked");
       await expect(rows("Devices")).toHaveCount(1);
       await expect(
@@ -462,8 +512,9 @@ try {
     },
   );
   await check(
-    "deployment picker reaches devices beyond its first hundred without losing earlier selections",
+    "deployment picker pages through the fleet on the server, keeps picks across pages and searches, and selects everything a search finds",
     async () => {
+      const first = requests.length;
       await load("target", {
         open: true,
         policy: {
@@ -472,24 +523,48 @@ try {
           telemetry_enabled: true,
         },
       });
+      await expect(rows("Devices")).toHaveCount(25);
       await expect(
-        page.getByRole("navigation", { name: "Device selection pages" }),
-      ).toContainText("Showing 1–100 of 999 devices");
-      await page.getByRole("button", { name: "Next devices" }).click();
-      await page.getByLabel("Select Device 0150", { exact: true }).check();
+        page.getByText("1–25 of 999", { exact: true }),
+      ).toBeVisible();
+      await pickerScrollsInsideItsBox();
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      await expect(rows("Devices").first()).toContainText("Device 0026");
+      await page.getByLabel("Select Device 0030", { exact: true }).check();
       await page.getByLabel("Find targets").fill("Device 0999");
       await page.getByLabel("Select Device 0999", { exact: true }).check();
       await page.getByLabel("Find targets").fill("");
       await expect(
-        page.getByRole("navigation", { name: "Device selection pages" }),
-      ).toContainText("Page 1 of 10");
+        page.getByText("1–25 of 999", { exact: true }),
+      ).toBeVisible();
       await expect(page.getByText("2 devices selected")).toBeVisible();
+      // Everything a search finds is chosen in one step and says so.
+      await page.getByLabel("Find targets").fill("Device 010");
+      await expect(rows("Devices")).toHaveCount(10);
+      await page
+        .getByRole("button", { name: "Select all 10 matching", exact: true })
+        .click();
+      await expect(page.getByText("12 devices selected")).toBeVisible();
+      await expect(
+        page.getByText("Selected all 10 matching devices.", { exact: true }),
+      ).toBeVisible();
       await page.getByRole("button", { name: "Review deployment" }).click();
       expect(state.previews.at(-1).selector.device_ids).toEqual([
-        devices[150].id,
+        devices[30].id,
         devices[999].id,
+        ...devices.slice(100, 110).map((device) => device.id),
       ]);
       expect(state.writes).toEqual([]);
+      // Only pages were read: no request carried the fleet.
+      expect(
+        requests.slice(first).filter((r) => r.path === "/devices").length,
+      ).toBe(0);
+      expect(
+        requests
+          .slice(first)
+          .filter((r) => r.path === "/devices/inventory")
+          .every((r) => /page_size=25/.test(r.search)),
+      ).toBe(true);
     },
   );
   await check(

@@ -7,7 +7,9 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 
+const fleet = fleetReplies({ devices: [], groups: [] });
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
 const output = resolve(
@@ -183,6 +185,8 @@ async function fixture({ role = "admin", width = 1280, theme = "light" } = {}) {
       return reply({ user: user(role), csrf_token: "synthetic-unused-csrf" });
     if (path === "/settings")
       return reply({ instance_name: "Synthetic enrollment review" });
+    // The device list reads a page of the (empty) fleet and its groups.
+    if (await fulfillFleetRead(fleet, route)) return;
     if (path === "/devices") return reply([]);
     if (path === "/agent-install") return reply(agentInstall);
     if (path === "/agent-install/activity")

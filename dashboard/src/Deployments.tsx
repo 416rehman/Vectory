@@ -93,11 +93,13 @@ import {
   failureText,
   isLive,
   lineageLabel,
+  degradedInLanes,
   pipelineFixable,
   pickupText,
+  progressParts,
   progressSegments,
+  rolloutProgress,
   takeRollbackReview,
-  withDegraded,
   statusFilters,
   targetFilterStates,
   appliedText,
@@ -215,7 +217,7 @@ function DevicesCell({ d }: { d: DeploymentSummary }) {
       </span>
       {current > 0 && (
         <ProgressBar
-          counts={d.state_counts}
+          counts={rolloutProgress(d.state_counts, d.degraded).counts}
           stopped={stopped}
           variant="mini"
           label="Device progress"
@@ -1608,12 +1610,10 @@ function RolloutPage({
         ?.count || 0
     : 0;
   // Devices that verified but aren't delivering read as failed here, as they
-  // do in the stages and failure groups below.
-  const delivery = withDegraded(
+  // do in the stages and failure groups below, and as on the Overview.
+  const progress = rolloutProgress(
     deployment?.state_counts || {},
-    (lanes.data?.failures || [])
-      .filter((failure) => failure.state === "degraded")
-      .reduce((sum, failure) => sum + failure.count, 0),
+    degradedInLanes(lanes.data?.failures || []),
   );
   const operate = can(user, "operate") && !error && !!deployment;
   const locked = committing || actionUncertain || checkingStatus;
@@ -2022,12 +2022,12 @@ function RolloutPage({
                 <>
                   <div className="rollout-summary-head">
                     <p>
-                      <strong>
-                        {deployment.verified_count - delivery.moved} of{" "}
-                        {currentTargets}
-                      </strong>{" "}
-                      {currentTargets === 1 ? "device" : "devices"} applied
+                      <strong>{progressParts(progress).figure}</strong>{" "}
+                      {progressParts(progress).noun} applied
                       {deployment.rolled_back_by ? " before the rollback" : ""}
+                      {progressParts(progress).notes.map((note) => (
+                        <span key={note}> · {note}</span>
+                      ))}
                     </p>
                     <span className="control-muted">
                       {deployment.rollout.kind === "canary"
@@ -2040,7 +2040,7 @@ function RolloutPage({
                     </span>
                   </div>
                   <ProgressBar
-                    counts={delivery.counts}
+                    counts={progress.counts}
                     stopped={!live}
                     label="Device progress"
                   />

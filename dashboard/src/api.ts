@@ -186,6 +186,15 @@ function networkFailure(failure: unknown, method: string, signal: AbortSignal) {
     0,
   );
 }
+let changes = 0;
+/**
+ * How many changes this browser has started or finished sending. A read that
+ * began before the latest change may not show it, so shared reads use this to
+ * keep a later reader from joining such a read.
+ */
+export function changeCount() {
+  return changes;
+}
 export async function api<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -311,9 +320,12 @@ export async function api<T = unknown>(
     assertResponseIdentity(path, method, data);
     return data;
   }
+  const changing = method !== "GET" && method !== "HEAD";
+  if (changing) changes++;
   try {
     return await Promise.race([execute(), interrupted]);
   } finally {
+    if (changing) changes++;
     sessionInterruptions.delete(interrupt);
     options.signal?.removeEventListener("abort", parentAborted);
   }

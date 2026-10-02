@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { APIError, type GroupMembershipPreview } from "./api";
 import {
+  AUTO_PREVIEW,
   BUSY_PREVIEW_RETRIES,
   membershipSentence,
   previewBusy,
+  previewWanted,
   previewWithRetries,
+  readUnavailableMembers,
 } from "./groupMembership";
 
 type Entry = GroupMembershipPreview["devices"][number];
@@ -135,5 +138,88 @@ describe("a busy membership preview", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("when an edit is previewed", () => {
+  it("reads a small edit's preview at once and a large one's only when asked", () => {
+    expect(AUTO_PREVIEW).toBe(500);
+    expect(previewWanted(0, "", "")).toBe(false);
+    expect(previewWanted(1, "a|b", "")).toBe(true);
+    expect(previewWanted(500, "a|b", "")).toBe(true);
+    expect(previewWanted(501, "a|b", "")).toBe(false);
+    // Asked for this very edit; a different edit asks again.
+    expect(previewWanted(4750, "a|b", "a|b")).toBe(true);
+    expect(previewWanted(4751, "a|b,c", "a|b")).toBe(false);
+  });
+});
+
+describe("members the server no longer knows", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const member = (id: string, unavailable = false) => ({
+    id,
+    name: unavailable ? null : `device ${id}`,
+    status: unavailable ? "unavailable" : "verified",
+  });
+  /** A group whose member list is `list`, served a page at a time. */
+  function serve(list: ReturnType<typeof member>[]) {
+    const reads: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), "http://synthetic.test");
+        reads.push(url.pathname.replace("/api/v1", "") + url.search);
+        const page = Number(url.searchParams.get("page"));
+        const size = Number(url.searchParams.get("page_size"));
+        return new Response(
+          JSON.stringify({
+            items: list.slice((page - 1) * size, page * size),
+            total: list.length,
+            page,
+            page_size: size,
+          }),
+        );
+      }),
+    );
+    return reads;
+  }
+  const known = (n: number) =>
+    Array.from({ length: n }, (_, i) => member(`k${i}`));
+  const gone = (n: number) =>
+    Array.from({ length: n }, (_, i) => member(`u${i}`, true));
+  const signal = () => new AbortController().signal;
+
+  it("reads only the last page of a group that has none", async () => {
+    const reads = serve(known(250));
+    expect(await readUnavailableMembers("g1", 250, signal())).toEqual([]);
+    expect(reads).toEqual(["/groups/g1/members?page=3&page_size=100"]);
+  });
+
+  it("finds them at the end, in order, without listing the group", async () => {
+    const reads = serve([...known(4748), ...gone(2)]);
+    expect(await readUnavailableMembers("g1", 4750, signal())).toEqual([
+      "u0",
+      "u1",
+    ]);
+    expect(reads).toEqual(["/groups/g1/members?page=48&page_size=100"]);
+  });
+
+  it("goes back a page while a whole page is unavailable, and stops at five", async () => {
+    let reads = serve([...known(50), ...gone(150)]);
+    expect((await readUnavailableMembers("g1", 200, signal())).length).toBe(
+      150,
+    );
+    expect(reads).toHaveLength(2);
+    reads = serve(gone(900));
+    expect((await readUnavailableMembers("g1", 900, signal())).length).toBe(
+      500,
+    );
+    expect(reads).toHaveLength(5);
+  });
+
+  it("reads one page for an empty group", async () => {
+    const reads = serve([]);
+    expect(await readUnavailableMembers("g1", 0, signal())).toEqual([]);
+    expect(reads).toHaveLength(1);
   });
 });

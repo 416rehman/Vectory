@@ -172,13 +172,19 @@ function display(state: string) {
 export function appliedText(
   d: Pick<
     DeploymentSummary,
-    "target_count" | "verified_count" | "state_counts" | "rolled_back_by"
+    | "target_count"
+    | "verified_count"
+    | "state_counts"
+    | "rolled_back_by"
+    | "degraded"
   >,
 ) {
   const current = d.target_count - (d.state_counts.removed || 0);
   if (!current && d.target_count) return "No devices follow this now";
   if (!current) return "No devices";
-  return `${d.verified_count} of ${current} applied${d.rolled_back_by ? ", then rolled back" : ""}`;
+  // Devices that applied but aren't delivering don't count as applied.
+  const { notDelivering } = rolloutProgress(d.state_counts, d.degraded);
+  return `${d.verified_count - notDelivering} of ${current} applied${notDelivering ? ` · ${notDelivering} not delivering` : ""}${d.rolled_back_by ? ", then rolled back" : ""}`;
 }
 
 /** Whether a rollout can still release devices (and is worth polling fast). */
@@ -294,6 +300,59 @@ export function withDegraded(
   };
 }
 
+/**
+ * How far one rollout got: its recorded target states, with the devices that
+ * applied it but aren't delivering counted as such instead of as applied. The
+ * Overview, the deployment list and the rollout page all read this, so one
+ * rollout reads the same everywhere.
+ */
+export function rolloutProgress(
+  stateCounts: Record<string, number>,
+  degraded = 0,
+) {
+  const delivery = withDegraded(stateCounts || {}, degraded);
+  const segments = progressSegments(delivery.counts);
+  const count = (key: ProgressSegment["key"]) =>
+    segments.find((segment) => segment.key === key)?.count ?? 0;
+  return {
+    /** For the progress bar. */
+    counts: delivery.counts,
+    total: segments.reduce((sum, segment) => sum + segment.count, 0),
+    applied: count("verified"),
+    notDelivering: delivery.moved,
+    /** Failures the apply reported; devices not delivering are counted apart. */
+    failed: Math.max(0, count("failed") - delivery.moved),
+    needsCheck: count("attention"),
+  };
+}
+export type RolloutProgress = ReturnType<typeof rolloutProgress>;
+
+/** The parts of "2 of 3 devices applied · 1 not delivering". */
+export function progressParts(progress: RolloutProgress) {
+  return {
+    figure: `${progress.applied.toLocaleString()} of ${progress.total.toLocaleString()}`,
+    noun: progress.total === 1 ? "device" : "devices",
+    notes: [
+      progress.notDelivering &&
+        `${progress.notDelivering.toLocaleString()} not delivering`,
+      progress.failed && `${progress.failed.toLocaleString()} failed`,
+      progress.needsCheck &&
+        `${progress.needsCheck.toLocaleString()} ${progress.needsCheck === 1 ? "needs" : "need"} a check`,
+    ].filter(Boolean) as string[],
+  };
+}
+/** One line for a rollout's progress, the same words on every surface. */
+export function progressLine(progress: RolloutProgress) {
+  const { figure, noun, notes } = progressParts(progress);
+  return [`${figure} ${noun} applied`, ...notes].join(" · ");
+}
+/** Devices the rollout's lanes report as applied but not delivering. */
+export function degradedInLanes(failures: { state?: string; count: number }[]) {
+  return failures
+    .filter((failure) => failure.state === "degraded")
+    .reduce((sum, failure) => sum + failure.count, 0);
+}
+
 /** A rough duration from seconds: "about 12 min". Not time.ts duration (ms). */
 export function approxDuration(seconds: number) {
   if (seconds < 90) return "about 1 min";
@@ -349,15 +408,15 @@ export function releasePlan(options: {
     return {
       waves,
       seconds,
-      sentence: `${devices === 1 ? "1 device" : `All ${devices} devices`} at once · ${approxDuration(seconds)} ${cadence}`,
+      sentence: `${devices === 1 ? "1 device" : `All ${devices.toLocaleString()} devices`} at once · ${approxDuration(seconds)} ${cadence}`,
     };
   const [canary, ...batches] = waves;
   const sizes = new Set(batches);
   const batchText = !batches.length
     ? ""
     : sizes.size === 1
-      ? ` → ${countLabel(batches.length, "batch", "batches")} of ${batches[0]}`
-      : ` → ${countLabel(batches.length, "batch", "batches")} of up to ${Math.max(...batches)}`;
+      ? ` → ${countLabel(batches.length, "batch", "batches")} of ${batches[0].toLocaleString()}`
+      : ` → ${countLabel(batches.length, "batch", "batches")} of up to ${Math.max(...batches).toLocaleString()}`;
   return {
     waves,
     seconds,

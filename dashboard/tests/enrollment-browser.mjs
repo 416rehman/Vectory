@@ -215,6 +215,9 @@ async function fixture({
     releaseToken: null,
     tokenRequest: null,
     activity: [],
+    // Whole-fleet reads, and reads of the one device the activity names.
+    lists: 0,
+    deviceReads: [],
     revokes: [],
     statuses,
     lookups: [],
@@ -231,7 +234,8 @@ async function fixture({
         /* The page was closed while this read was pending. */
       }
     };
-    if (path === "/devices")
+    if (path === "/devices") {
+      state.lists++;
       return state.failDevices
         ? reply(
             {
@@ -243,6 +247,17 @@ async function fixture({
             503,
           )
         : reply(state.devices);
+    }
+    const single = path.match(/^\/devices\/([^/]+)$/);
+    if (single && method === "GET") {
+      // The watch reads the one device the activity feed names.
+      const id = decodeURIComponent(single[1]);
+      state.deviceReads.push(id);
+      const found = state.devices.find((candidate) => candidate.id === id);
+      return found
+        ? reply(found)
+        : reply({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    }
     if (path === "/agent-install") return reply(state.install);
     if (path === "/agent-install/activity") {
       state.activity.push({
@@ -579,10 +594,15 @@ try {
         });
         await expect(watch).toContainText("Waiting for the device to enroll…");
         const started = f.state.activity.length;
+        const listed = f.state.lists;
         await f.page.waitForTimeout(4500);
         const polls = f.state.activity.length - started;
         expect(polls).toBeGreaterThanOrEqual(2);
         expect(polls).toBeLessThanOrEqual(4);
+        // Waiting reads the activity feed, not the fleet: at most the page's
+        // own slow refresh lists the devices, and no device is read yet.
+        expect(f.state.lists - listed).toBeLessThanOrEqual(1);
+        expect(f.state.deviceReads).toEqual([]);
         expect(f.state.activity.at(-1).since).toBe(
           f.state.tokens[0].created_at,
         );
@@ -624,6 +644,8 @@ try {
         await expect(watch).toContainText(
           "Waiting for edge-02's first check-in…",
         );
+        // Once the feed names the device, each poll reads that one device.
+        expect(new Set(f.state.deviceReads)).toEqual(new Set([deviceId]));
         await expect(f.page.locator(".enroll-secret")).toBeVisible();
         f.state.devices = [device({ name: "edge-02", last_seen: iso(2000) })];
         await expect(

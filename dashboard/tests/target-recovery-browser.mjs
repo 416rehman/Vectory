@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -220,6 +221,15 @@ async function load({
     standing: null,
   };
   const current = state;
+  const groups = () => [
+    {
+      id: id(20),
+      name: "Synthetic group",
+      description: "Fixture only",
+      device_ids: current.devices.map((d) => d.id),
+    },
+  ];
+  const replies = fleetReplies({ devices: () => current.devices, groups });
   context = await browser.newContext({
     viewport: { width, height: 920 },
     reducedMotion: "reduce",
@@ -302,20 +312,11 @@ async function load({
         });
       if (path === "/settings")
         return reply({ instance_name: "Synthetic handoff" });
+      if (path === `/devices/${id(1)}`) current.detailReads++;
+      // A page of devices, one device, and the groups without their members.
+      if (await fulfillFleetRead(replies, route)) return;
       if (path === "/devices") return reply(current.devices);
-      if (path === `/devices/${id(1)}`) {
-        current.detailReads++;
-        return reply(current.devices[0]);
-      }
-      if (path === "/groups")
-        return reply([
-          {
-            id: id(20),
-            name: "Synthetic group",
-            description: "Fixture only",
-            device_ids: current.devices.map((d) => d.id),
-          },
-        ]);
+      if (path === "/groups") return reply(groups());
       if (path === "/mfa") return reply({ enabled: false });
       if (path === "/policies")
         return reply([

@@ -57,3 +57,13 @@ node tests/load/fleet-api.mjs --before /absolute/path/old/vectory-server \
 ```
 
 It copies both binaries into a new private directory, initializes the database with the new build through the API, stops it, seeds, and copies the state so both builds read the same rows. Both servers then run side by side on loopback and are sampled in turn, so a busy machine slows both alike. Reads of the shared projection wait out its two-second lifetime before each sample, and a second read right after it is reported as warm. The harness stamps the fixture's reporting devices as checked in every 45 seconds; nothing enrolls, runs Vector or reports a real apply. The directory is deleted afterwards unless `--keep` is given.
+
+The dashboard is checked against the same fixture by `dashboard/tests/fleet-scale-browser.mjs`: a real server and the real dashboard build with the 5,000-device fleet seeded into a disposable database. It pages through Devices, searches, selects everything a search finds, edits a group of thousands and reads the Overview. It fails when a read returns more than a page of devices, when the Overview reads more than the slim response, or when a click or key press takes a second to paint. It needs a built dashboard and a built server, so CI's dashboard job does not run it:
+
+```sh
+(cd dashboard && npm run build)
+cargo build --manifest-path server/Cargo.toml
+node dashboard/tests/fleet-scale-browser.mjs   # --server, --dist, --port and --out change the defaults
+```
+
+Its report (`.local/fleet-scale/report.json`) lists every read the pages made with its size, the time each scenario took and the measured latencies.

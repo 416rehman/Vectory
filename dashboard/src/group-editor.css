@@ -21,6 +21,22 @@
   flex-direction: column;
   min-height: 0;
 }
+/* What differs from the saved group, with a way back. */
+.group-changes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.group-changes strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
 .group-editor-form > .modal-body {
   min-height: 0;
   overflow-y: auto;
@@ -204,6 +220,52 @@
 }
 .group-overview li > .status-badge {
   justify-self: end;
+}
+/* Saved members that are not devices any more, listed by id so they can go. */
+.group-unavailable {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+.group-unavailable h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.group-unavailable p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.group-unavailable ul {
+  display: grid;
+  gap: var(--space-1-5);
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.group-unavailable label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.group-unavailable strong {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+.group-unavailable small {
+  display: block;
+  color: var(--text-muted);
+}
+.group-unavailable .button {
+  justify-self: start;
 }
 @media (max-width: 720px) {
   .group-overview li {

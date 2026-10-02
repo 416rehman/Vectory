@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import { slimOverview } from "./fleet-replies.mjs";
 import net from "node:net";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -125,15 +126,7 @@ await context.route("**/api/v1/**", async (route) => {
   if (path === "/settings")
     return reply({ instance_name: "Synthetic isolated library check" });
   if (path === "/overview")
-    return reply({
-      devices_total: 0,
-      devices_online: 0,
-      configurations_total: 26,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [],
-      recent_activity: [],
-    });
+    return reply(slimOverview([], { configurations_total: 26 }));
   // The Overview's first-run checklist asks whether agent downloads exist.
   if (path === "/releases") return reply([]);
   // An administrator's Overview asks whether a notification channel exists.

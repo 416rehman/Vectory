@@ -18,7 +18,6 @@ import {
   type AuditHistoryPage,
   type Configuration,
   type Device,
-  type Group,
   type IssueHistoryPage,
   type Policy,
   type User,
@@ -800,9 +799,10 @@ export default function DeviceDetail({
   navigate: Navigate;
 }) {
   // Poll faster while a version is applying; the pace follows the last read.
+  // Each read is this one device with its group names, never the fleet.
   const [fast, setFast] = useState(false);
   const resource = useResource<Device | null>(
-    `/devices/${encodeURIComponent(id)}`,
+    `/devices/${encodeURIComponent(id)}?include=groups`,
     null,
     0,
     { interval: fast ? 5000 : 15000 },
@@ -829,7 +829,6 @@ export default function DeviceDetail({
       : null,
     null,
   );
-  const groups = useResource<Group[]>("/groups", []);
   useEffect(() => {
     if (device?.id && device.name)
       rememberRecent(user.id, {
@@ -928,9 +927,8 @@ export default function DeviceDetail({
     );
   const display = deviceDisplayStatus(device);
   const connection = connectionState(device);
-  const memberOf = groups.data.filter((group) =>
-    group.device_ids.includes(device.id),
-  );
+  const memberOf = device.groups?.items ?? [];
+  const moreGroups = Math.max(0, (device.groups?.total ?? 0) - memberOf.length);
   const number =
     version.data?.number ?? device.desired_version?.number ?? undefined;
   const pipelineName =
@@ -1258,10 +1256,15 @@ export default function DeviceDetail({
                         {group.name}
                       </a>
                     ))}
+                    {moreGroups > 0 && (
+                      <span className="device-muted">
+                        and {moreGroups.toLocaleString()} more
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span className="device-muted">
-                    {groups.loading ? "Loading…" : "None"}
+                    {device.groups ? "None" : "Not reported"}
                   </span>
                 )}
               </Fact>
@@ -1496,6 +1499,7 @@ export default function DeviceDetail({
           policy={policy}
           preserveExistingSettings
           initialDeviceIds={[device.id]}
+          initialDevices={[device]}
           onDone={afterAction}
         />
       )}

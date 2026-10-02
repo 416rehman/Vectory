@@ -1,6 +1,5 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
-  ArrowRight,
   ChartNoAxesCombined,
   Check,
   CircleAlert,
@@ -19,7 +18,7 @@ import {
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
-import type { Audit, Device, User } from "./api";
+import type { Audit, OverviewCounts, OverviewFleet, User } from "./api";
 import { roleAllows } from "./roleAccess";
 import DocLink from "./DocLink";
 import ActivityGlyph from "./ActivityGlyph";
@@ -37,10 +36,7 @@ import {
 import {
   checklist,
   countLabel,
-  deliveryUnmeasured,
-  fleetTelemetry,
   formatRate,
-  healthCounts,
   healthLabels,
   completeSeries,
   healthOrder,
@@ -49,13 +45,16 @@ import {
   niceCeiling,
   present,
   quietSummary,
-  rolloutProgress,
+  telemetryFromCounts,
   unmanagedDetail,
   type ChecklistStep,
   type FleetDeviceRate,
   type HealthBucket,
-  type RolloutProgress,
 } from "./overviewModel";
+import { ProgressBar } from "./DeploymentRollout";
+import { Card, CardLink } from "./OverviewCard";
+import RunningNow from "./RunningNow";
+import { isLive, progressLine, rolloutProgress } from "./deploymentStatus";
 import { pipelineRoute } from "./SelectedDevice";
 import {
   activityTone,
@@ -65,7 +64,6 @@ import {
   type ActivityItem,
   type Part,
 } from "./activityModel";
-import { connectionState } from "./status";
 import { duration, exactLocal, shortLocal } from "./time";
 import {
   StoppedRolloutItem,
@@ -107,6 +105,8 @@ export type AttentionGroup = {
   reason: string | null;
   requested?: number;
   local?: number;
+  /** Unmanaged groups: devices running a local configuration adopted at setup. */
+  adopted?: number;
   /** Degraded groups: the leading delivery issue's title, code and fix. */
   title?: string | null;
   fix?: string | null;
@@ -134,19 +134,23 @@ export type RolloutSummary = {
   batch_size: number | null;
   target_count: number;
   state_counts: Record<string, number>;
+  /** Applied devices whose delivery is failing; state_counts keeps them as applied. */
+  degraded?: number;
 };
-export type OverviewData = {
+/** `GET /overview?slim=1`: the fleet as numbers, never as a list of devices. */
+export type OverviewData = OverviewFleet & {
   devices_total: number;
   devices_online: number;
   configurations_total: number;
   deployments_active: number;
   issues_open: number;
-  devices: Device[];
   recent_activity: Audit[];
   devices_managed?: number;
   devices_on_desired?: number;
-  /** Applied devices with an open data-plane issue (newer servers). */
+  /** Applied devices with an open data-plane issue. */
   devices_degraded?: number;
+  /** Applied devices with no metrics in the last three minutes. */
+  devices_unmeasured?: number;
   versions_total?: number;
   rollouts?: RolloutSummary[];
   attention?: AttentionGroup[];
@@ -260,24 +264,27 @@ export function Overview({
   // render's read is scheduled.
   const [rollingOut, setRollingOut] = useState(false);
   const interval = rollingOut ? 5000 : 15000;
-  const overview = useResource<OverviewData | null>("/overview", null, 0, {
-    interval,
-  });
+  // The fleet arrives as numbers and short lists, never one row per device.
+  const overview = useResource<OverviewData | null>(
+    "/overview?slim=1",
+    null,
+    0,
+    { interval },
+  );
   const data = overview.data;
   const active = !!data?.rollouts?.some(
     (rollout) => rollout.status === "active",
   );
   if (active !== rollingOut) setRollingOut(active);
-  const devices = data?.devices ?? [];
-  const live = devices.filter((device) => device.status !== "revoked");
-  const noDevices = !!data && live.length === 0;
+  const total = data?.counts.total ?? 0;
+  const noDevices = !!data && total === 0;
   const releases = useResource<unknown[] | null>(
     noDevices ? "/releases" : null,
     null,
   );
-  const summary = useTelemetrySummary(!!data && live.length > 0, interval);
+  const summary = useTelemetrySummary(!!data && total > 0, interval);
   // Stopped and rolled-back rollouts leave "in progress" but still need you.
-  const stopped = useStoppedRollouts(!!data && live.length > 0);
+  const stopped = useStoppedRollouts(!!data && total > 0);
   const operate = roleAllows(user, "operate");
   const now = Date.now();
   const steps = data
@@ -287,13 +294,11 @@ export function Overview({
             ? releases.data.length
             : null
           : null,
-        devices: live.length,
-        checkedIn: live.filter((device) => !!device.last_seen).length,
+        devices: total,
+        checkedIn: data.counts.checked_in,
         pipelines: data.configurations_total,
         versions: data.versions_total ?? (data.configurations_total ? 1 : 0),
-        applied:
-          data.devices_on_desired ??
-          live.filter((device) => device.status === "verified").length,
+        applied: data.devices_on_desired ?? data.counts.health.applied,
       })
     : [];
   const showChecklist = steps.some((step) => !step.done);
@@ -340,24 +345,24 @@ export function Overview({
               user={user}
               navigate={navigate}
               data={data}
-              live={live}
               releasesLoading={noDevices && releases.loading}
             />
           )}
-          <KpiTiles data={data} live={live} stopped={stopped.items.length} />
+          <KpiTiles data={data} stopped={stopped.items.length} />
           <div className="overview-grid">
             <div className="overview-column">
-              <FleetHealth live={live} />
-              <NeedsYou
-                data={data}
-                live={live}
-                user={user}
-                now={now}
-                stopped={stopped}
-              />
-              <FleetThroughput live={live} summary={summary} now={now} />
+              <FleetHealth counts={data.counts} />
+              <NeedsYou data={data} user={user} now={now} stopped={stopped} />
+              <FleetThroughput data={data} summary={summary} now={now} />
             </div>
             <div className="overview-column">
+              {total > 0 && (
+                <RunningNow
+                  running={data.running}
+                  total={data.running_total}
+                  canDeploy={operate}
+                />
+              )}
               <Rollouts rollouts={data.rollouts} user={user} now={now} />
               <RecentChanges data={data} />
             </div>
@@ -415,47 +420,6 @@ function OverviewSkeleton() {
   );
 }
 
-/* ---------- Card chrome ---------- */
-
-function Card({
-  title,
-  subtitle,
-  action,
-  className = "",
-  children,
-}: {
-  title: string;
-  subtitle?: ReactNode;
-  action?: ReactNode;
-  className?: string;
-  children: ReactNode;
-}) {
-  const id = useId();
-  return (
-    <section
-      className={`overview-card ${className}`.trim()}
-      aria-labelledby={id}
-    >
-      <div className="overview-card-head">
-        <div className="overview-card-titles">
-          <h2 id={id}>{title}</h2>
-          {subtitle && <p className="overview-card-subtitle">{subtitle}</p>}
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-function CardLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a className="overview-card-link" href={href}>
-      {children}
-      <ArrowRight size={14} aria-hidden="true" />
-    </a>
-  );
-}
-
 /* ---------- First-run checklist ---------- */
 
 const stepTitles: Record<ChecklistStep["id"], string> = {
@@ -470,22 +434,20 @@ function Checklist({
   user,
   navigate,
   data,
-  live,
   releasesLoading,
 }: {
   steps: ChecklistStep[];
   user: User;
   navigate: Navigate;
   data: OverviewData;
-  live: Device[];
   releasesLoading: boolean;
 }) {
   const done = steps.filter((step) => step.done).length;
   const current = steps.find((step) => !step.done)?.id;
   const operate = roleAllows(user, "operate"),
     edit = roleAllows(user, "edit");
-  const waiting = live.find((device) => !device.last_seen);
-  const checkedIn = live.filter((device) => !!device.last_seen).length;
+  const waiting = data.counts.waiting_device;
+  const checkedIn = data.counts.checked_in;
   const applied = data.devices_on_desired ?? 0;
   const copy: Record<ChecklistStep["id"], [string, string]> = {
     downloads: [
@@ -628,35 +590,21 @@ function Checklist({
 
 function KpiTiles({
   data,
-  live,
   stopped,
 }: {
   data: OverviewData;
-  live: Device[];
   /** Rollouts that stopped or were rolled back in the last day. */
   stopped: number;
 }) {
-  const total = live.length;
-  const online = live.filter(
-    (device) => connectionState(device) === "online",
-  ).length;
-  const offline = live.filter(
-    (device) => connectionState(device) === "offline",
-  ).length;
-  const never = live.filter(
-    (device) => connectionState(device) === "never",
-  ).length;
-  const managed =
-    data.devices_managed ??
-    live.filter((device) => !!device.desired_version_id).length;
-  const onDesired =
-    data.devices_on_desired ??
-    live.filter((device) => device.status === "verified").length;
+  const { total, connection } = data.counts;
+  const { online, offline, never } = connection;
+  const managed = data.devices_managed ?? 0;
+  const onDesired = data.devices_on_desired ?? data.counts.health.applied;
   const unmanaged = total - managed;
   // Devices whose newest version failed and which keep running an earlier one.
-  const held = healthCounts(live).counts.held;
+  const held = data.counts.health.held;
   // Applied devices without metrics: nothing says their events arrive.
-  const unmeasured = deliveryUnmeasured(live);
+  const unmeasured = data.devices_unmeasured ?? 0;
   const paused = (data.rollouts || []).filter(
     (r) => r.status === "paused",
   ).length;
@@ -791,8 +739,8 @@ const bucketCopy: Record<HealthBucket, string> = {
   paused: "Configuration sync is paused.",
   unmanaged: "No pipeline assigned. Local workloads keep running.",
 };
-function FleetHealth({ live }: { live: Device[] }) {
-  const { counts, total } = healthCounts(live);
+function FleetHealth({ counts: fleet }: { counts: OverviewCounts }) {
+  const { health: counts, total } = fleet;
   const shown = healthOrder.filter((bucket) => counts[bucket] > 0);
   const percent = (value: number) =>
     total ? Math.round((value / total) * 100) : 0;
@@ -884,12 +832,7 @@ function pipelineName(group: {
     ? `${group.configuration_name} v${group.version_number}`
     : group.configuration_name;
 }
-function attentionCopy(
-  group: AttentionGroup,
-  now: number,
-  /** What runs on devices without a pipeline (unmanagedDetail). */
-  unmanaged: string,
-) {
+function attentionCopy(group: AttentionGroup, now: number) {
   const devices = countLabel(group.count, "device");
   const pipeline = pipelineName(group);
   const since = group.since ? Date.parse(group.since) : NaN;
@@ -952,7 +895,7 @@ function attentionCopy(
     case "unmanaged":
       return {
         title: `${devices} without a pipeline`,
-        detail: unmanaged,
+        detail: unmanagedDetail(group.count, group.adopted ?? 0),
       };
   }
 }
@@ -968,13 +911,11 @@ const causeBucket: Partial<Record<AttentionGroup["cause"], HealthBucket>> = {
 };
 function NeedsYou({
   data,
-  live,
   user,
   now,
   stopped,
 }: {
   data: OverviewData;
-  live: Device[];
   user: User;
   now: number;
   stopped: StoppedRollouts;
@@ -1004,14 +945,14 @@ function NeedsYou({
   ]
     .filter(Boolean)
     .join(", ");
-  const unmanaged = unmanagedDetail(live);
+  const devices = data.counts.total;
   return (
     <Card
       title="Needs you"
       subtitle={
         summary ||
         (groups.length && !stopped.error
-          ? quietSummary(deliveryUnmeasured(live, now))
+          ? quietSummary(data.devices_unmeasured ?? 0)
           : undefined)
       }
       className="needs-you"
@@ -1047,7 +988,6 @@ function NeedsYou({
                 rollout={row.rollout}
                 user={user}
                 now={now}
-                unmanaged={unmanaged}
               />
             ),
           )}
@@ -1073,10 +1013,10 @@ function NeedsYou({
           <div>
             <strong>Nothing needs you right now</strong>
             <p>
-              {live.length === 1
+              {devices === 1
                 ? "The device is applied and checking in."
-                : live.length
-                  ? `All ${countLabel(live.length, "device")} are applied and checking in.`
+                : devices
+                  ? `All ${countLabel(devices, "device")} are applied and checking in.`
                   : "Failures, offline devices and stuck rollouts will show up here."}
             </p>
           </div>
@@ -1097,17 +1037,14 @@ function AttentionItem({
   rollout,
   user,
   now,
-  unmanaged,
 }: {
   group: AttentionGroup;
   rollout: StoppedRollout | null;
   user: User;
   now: number;
-  /** What runs on devices without a pipeline (unmanagedDetail). */
-  unmanaged: string;
 }) {
   const Icon = severityIcons[group.cause];
-  const { title, detail } = attentionCopy(group, now, unmanaged)!;
+  const { title, detail } = attentionCopy(group, now)!;
   const bucket = causeBucket[group.cause];
   const filter = new URLSearchParams();
   if (bucket) filter.set("status", bucket);
@@ -1212,46 +1149,6 @@ function AttentionItem({
 
 /* ---------- Rollouts ---------- */
 
-const progressParts: {
-  key: keyof Omit<RolloutProgress, "total">;
-  label: string;
-}[] = [
-  { key: "verified", label: "Applied" },
-  { key: "inFlight", label: "Applying" },
-  { key: "attention", label: "Needs a check" },
-  { key: "failed", label: "Failed" },
-  { key: "waiting", label: "Waiting" },
-];
-export function RolloutBar({ progress }: { progress: RolloutProgress }) {
-  const parts = progressParts.filter((part) => progress[part.key] > 0);
-  const label = parts
-    .map((part) => `${progress[part.key]} ${part.label.toLowerCase()}`)
-    .join(", ");
-  return (
-    <div
-      className="overview-rollout-bar"
-      role="img"
-      aria-label={
-        progress.total
-          ? `${progress.total} devices: ${label}`
-          : "No devices targeted"
-      }
-    >
-      {parts.map((part) => (
-        <Tooltip
-          key={part.key}
-          content={`${part.label} · ${countLabel(progress[part.key], "device")}`}
-        >
-          <span
-            className="overview-rollout-bar-segment"
-            data-part={part.key}
-            style={{ flexGrow: progress[part.key] }}
-          />
-        </Tooltip>
-      ))}
-    </div>
-  );
-}
 function rolloutName(rollout: RolloutSummary) {
   if (rollout.policy) return "Agent settings";
   if (rollout.configuration_name)
@@ -1283,7 +1180,11 @@ function Rollouts({
       {list.length ? (
         <ul className="overview-rollout-list">
           {list.map((rollout) => {
-            const progress = rolloutProgress(rollout.state_counts);
+            // The rollout page and the deployment list read these same numbers.
+            const progress = rolloutProgress(
+              rollout.state_counts,
+              rollout.degraded,
+            );
             const starts = rollout.scheduled_at
               ? Date.parse(rollout.scheduled_at)
               : NaN;
@@ -1321,15 +1222,16 @@ function Rollouts({
                     </span>
                   ) : (
                     <>
-                      <RolloutBar progress={progress} />
+                      <ProgressBar
+                        counts={progress.counts}
+                        stopped={!isLive(rollout.status)}
+                        variant="mini"
+                        label="Device progress"
+                      />
                       <span className="overview-rollout-meta">
                         {progress.total
-                          ? `${progress.verified.toLocaleString()} of ${countLabel(progress.total, "device")} applied`
+                          ? progressLine(progress)
                           : "No devices targeted yet"}
-                        {progress.failed ? ` · ${progress.failed} failed` : ""}
-                        {progress.attention
-                          ? ` · ${progress.attention} need a check`
-                          : ""}
                       </span>
                     </>
                   )}
@@ -1355,16 +1257,18 @@ function Rollouts({
 /* ---------- Throughput ---------- */
 
 function FleetThroughput({
-  live,
+  data,
   summary,
   now,
 }: {
-  live: Device[];
+  data: OverviewData;
   summary: TelemetrySummary | null;
   now: number;
 }) {
-  if (!live.length) return null;
-  const local = fleetTelemetry(live, now);
+  if (!data.counts.total) return null;
+  // What the server counted from each device's fresh sample; the fleet summary
+  // adds the history when it is there.
+  const local = telemetryFromCounts(data.counts.telemetry, data.busiest);
   const reporting = summary ? summary.devicesReporting : local.reporting;
   const eligible = summary ? summary.devicesTotal : local.eligible;
   const eventsIn = summary ? summary.eventsIn : local.eventsPerSecond;
@@ -1413,7 +1317,7 @@ function FleetThroughput({
           stale={local.stale}
           disabled={summary?.metricsDisabled ?? local.disabled}
           withoutEndpoint={summary?.withoutEndpoint ?? null}
-          target={monitoringTarget(live, now)}
+          target={monitoringTarget(data.running)}
         />
       ) : (
         <>

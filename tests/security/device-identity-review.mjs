@@ -11,6 +11,8 @@ const {chromium,expect:strictExpect}=require('@playwright/test');const AxeBuilde
 // Patience only: the dev server transforms modules on demand, so a slow runner can need more
 // than expect's 5 s default to paint a page. What each assertion checks is unchanged.
 const expect=strictExpect.configure({timeout:15000});
+// The deploy dialog reads devices a page at a time: its synthetic replies are the shared ones.
+const {fleetReplies}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_IDENTITY_OUTPUT||'.local/device-identity-after');
 await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-identity-review';
@@ -54,6 +56,7 @@ async function fixture({route=`devices/${A.id}`,initial=A,modes={},width=899,the
   const reply=async(json,status=200)=>{try{await route.fulfill({json,status});}catch{}};
   const execute=async fallback=>{const mode=state.modes[path]?.shift();if(mode?.hold)await new Promise(r=>state.holds.push(r));if(mode?.abort){try{await route.abort();}catch{}return;}return reply(mode?.error?{error:{code:'UNAVAILABLE',message:mode.error}}:mode&&Object.hasOwn(mode,'json')?mode.json:fallback,mode?.status||mode?.error&&503||200);};
   if(path==='/status')return reply({initialized:true,version:'synthetic'});if(path==='/session'){state.sessions++;return reply({user:state.actor,csrf_token:'synthetic-unused-csrf'});}if(path==='/settings')return reply({instance_name:'Synthetic identity review'});
+  if(method==='GET'&&/^\/devices\/inventory(\/ids)?$/.test(path)){const paged=(state.fleet??=fleetReplies({devices:()=>[state.initial,B,C],groups:()=>[]})).handle(method,url);if(paged)return reply(paged.json,paged.status);}
   if(/^\/devices\/[^/]+$/.test(path)&&method==='GET'){const source=decodeURIComponent(path.split('/')[2]);return execute(source===A.id?state.initial:[B,C].find(d=>d.id===source));}
   if(/^\/devices\/[^/]+\/revocation$/.test(path)&&method==='GET'){const source=path.split('/')[2];state.statusReads.push(source);return execute({device_id:source,revocation_status:true,revoked:false});}
   if(/^\/devices\/[^/]+\/telemetry$/.test(path)&&method==='GET')return execute({device_id:path.split('/')[2],samples:[]});

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Layers, Plus } from "lucide-react";
 import GroupEditor from "./GroupEditor";
 import { GroupRecovery } from "./GroupRecovery";
 import { useGroupOperations } from "./groupRequests";
 import { DataTable, TableCard, type TableColumn } from "./DataTable";
 import { sortTableRows } from "./dataTableModel";
-import { type Device, type Group, type User } from "./api";
+import { type Group, type GroupSummary, type User } from "./api";
 import { roleAllows } from "./roleAccess";
 import {
   Button,
@@ -13,17 +13,11 @@ import {
   PageHeader,
   PageToolbar,
   SearchBox,
-  Tooltip,
   useResource,
 } from "./ui";
 import { useHashQuery } from "./urlState";
 import { useCommand } from "./commands";
-import {
-  countLabel,
-  healthCounts,
-  healthLabels,
-  healthOrder,
-} from "./overviewModel";
+import { countLabel } from "./overviewModel";
 import DeviceList from "./DeviceList";
 import DeviceDetail from "./DeviceDetail";
 import "./fleet.css";
@@ -56,46 +50,6 @@ export function Devices({
   return <DeviceList user={user} notify={notify} navigate={navigate} />;
 }
 
-/** A compact health bar for a group's members, with a text summary. */
-function MemberHealth({ devices }: { devices: Device[] }) {
-  const { counts, total } = healthCounts(devices);
-  if (!total) return <span className="device-muted">No members</span>;
-  const shown = healthOrder.filter((bucket) => counts[bucket] > 0);
-  const summary = shown
-    .map((bucket) => `${counts[bucket]} ${healthLabels[bucket].toLowerCase()}`)
-    .join(", ");
-  return (
-    <span className="member-health">
-      <span className="member-health-bar" role="img" aria-label={summary}>
-        {shown.map((bucket) => (
-          <Tooltip
-            key={bucket}
-            content={`${healthLabels[bucket]} · ${countLabel(counts[bucket], "device")}`}
-          >
-            <span
-              className="health-bar-segment"
-              data-bucket={bucket}
-              style={{ flexGrow: counts[bucket] }}
-            />
-          </Tooltip>
-        ))}
-      </span>
-      <small>
-        {counts.applied === total
-          ? "All applied"
-          : shown
-              .filter((bucket) => bucket !== "applied")
-              .slice(0, 2)
-              .map(
-                (bucket) =>
-                  `${counts[bucket]} ${healthLabels[bucket].toLowerCase()}`,
-              )
-              .join(" · ")}
-      </small>
-    </span>
-  );
-}
-
 const groupDefaults = {
   q: "",
   members: "",
@@ -109,14 +63,15 @@ const groupDefaults = {
 const GROUP_PAGE_SIZES = [25, 50, 100];
 
 export function Groups({ user, notify }: { user: User; notify: Notify }) {
-  const groups = useResource<Group[]>("/groups", []),
-    devices = useResource<Device[]>("/devices", []);
+  // Rows carry a member count, never the members: a group's members are read
+  // when its editor opens.
+  const groups = useResource<GroupSummary[]>("/groups?slim=1", []);
   const groupRequests = useGroupOperations(user.id);
   const createBlocked =
     groupRequests.operations.length > 0 || groupRequests.errors.length > 0;
   const [query, update, reset] = useHashQuery(groupDefaults);
   const [open, setOpen] = useState(false),
-    [editing, setEditing] = useState<Group | null>(null),
+    [editing, setEditing] = useState<Group | GroupSummary | null>(null),
     [savedGroup, setSavedGroup] = useState<Group | null>(null);
   const allowed = roleAllows(user, "operate");
   const pageSize = GROUP_PAGE_SIZES.includes(query.size) ? query.size : 25;
@@ -124,20 +79,16 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
     column: query.sort || "group",
     direction: (query.dir === "desc" ? "desc" : "asc") as "asc" | "desc",
   };
-  const byId = useMemo(
-    () => new Map(devices.data.map((device) => [device.id, device])),
-    [devices.data],
-  );
-  const sortGroups = (rows: Group[]) =>
+  const sortGroups = (rows: GroupSummary[]) =>
     sortTableRows(
       rows,
       [
         { id: "group", value: (group) => group.name },
-        { id: "members", value: (group) => group.device_ids.length },
+        { id: "members", value: (group) => group.member_count },
       ],
       sort,
     );
-  const matches = (group: Group, text: string) =>
+  const matches = (group: GroupSummary, text: string) =>
     `${group.name} ${group.description}`
       .toLowerCase()
       .includes(text.trim().toLowerCase());
@@ -147,8 +98,8 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
         matches(group, query.q) &&
         (!query.members ||
           (query.members === "empty"
-            ? group.device_ids.length === 0
-            : group.device_ids.length > 0)),
+            ? group.member_count === 0
+            : group.member_count > 0)),
     ),
   );
   useEffect(() => {
@@ -160,8 +111,7 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
         group.id === savedGroup.id &&
         group.name === savedGroup.name &&
         group.description === savedGroup.description &&
-        JSON.stringify(group.device_ids) ===
-          JSON.stringify(savedGroup.device_ids),
+        group.member_count === savedGroup.device_ids.length,
     );
     if (!refreshed) return;
     const q = matches(refreshed, query.q) ? query.q : "";
@@ -178,7 +128,7 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
     });
     setSavedGroup(null);
   }, [groups.data, savedGroup]);
-  function edit(group?: Group) {
+  function edit(group?: Group | GroupSummary) {
     if (!group && createBlocked) return;
     setEditing(group || null);
     setOpen(true);
@@ -201,14 +151,7 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
   }, [query.group, groups.loading, groups.data]);
   useCommand("group.create", () => edit(), allowed && !createBlocked);
   const firstRun = !groups.loading && !groups.error && groups.data.length === 0;
-  const memberHealth = (group: Group) => (
-    <MemberHealth
-      devices={
-        group.device_ids.map((id) => byId.get(id)).filter(Boolean) as Device[]
-      }
-    />
-  );
-  const columns: TableColumn<Group>[] = [
+  const columns: TableColumn<GroupSummary>[] = [
     {
       id: "group",
       header: "Group",
@@ -229,8 +172,8 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
     {
       id: "members",
       header: "Members",
-      width: 260,
-      sortValue: (group) => group.device_ids.length,
+      width: 200,
+      sortValue: (group) => group.member_count,
       filter: {
         value: query.members,
         onChange: (value) => update({ members: value, page: 1 }),
@@ -239,43 +182,21 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
           {
             value: "empty",
             label: "No members",
-            count: groups.data.filter((group) => !group.device_ids.length)
+            count: groups.data.filter((group) => group.member_count === 0)
               .length,
           },
           {
             value: "populated",
             label: "Has members",
-            count: groups.data.filter((group) => group.device_ids.length)
-              .length,
+            count: groups.data.filter((group) => group.member_count > 0).length,
           },
         ],
       },
-      cell: (group) => {
-        const names = group.device_ids
-          .map((id) => byId.get(id)?.name)
-          .filter(Boolean) as string[];
-        return (
-          <span className="device-stack">
-            <span className="groups-member-count">
-              {countLabel(group.device_ids.length, "device")}
-            </span>
-            {names.length > 0 && (
-              <small>
-                {names.slice(0, 3).join(", ")}
-                {group.device_ids.length > 3
-                  ? ` +${group.device_ids.length - 3} more`
-                  : ""}
-              </small>
-            )}
-          </span>
-        );
-      },
-    },
-    {
-      id: "health",
-      header: "Member health",
-      width: 220,
-      cell: memberHealth,
+      cell: (group) => (
+        <span className="groups-member-count">
+          {countLabel(group.member_count, "device")}
+        </span>
+      ),
     },
     {
       id: "manage",
@@ -308,10 +229,7 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
           error: groups.error,
           loading: groups.loading,
           refreshing: groups.refreshing,
-          onRefresh: () => {
-            void groups.reload();
-            void devices.reload();
-          },
+          onRefresh: () => void groups.reload(),
         }}
       >
         {allowed && !firstRun && (
@@ -423,10 +341,9 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
                   </button>
                 ),
                 meta: [
-                  countLabel(group.device_ids.length, "device"),
+                  countLabel(group.member_count, "device"),
                   group.description || null,
                 ],
-                status: memberHealth(group),
               })}
               empty={
                 <EmptyState
@@ -450,9 +367,6 @@ export function Groups({ user, notify }: { user: User; notify: Notify }) {
           key={user.id + ":" + user.role + ":" + (editing?.id || "new")}
           group={editing}
           user={user}
-          devices={devices.data}
-          deviceLoading={devices.loading}
-          deviceError={devices.error}
           onClose={closeEditor}
           onRefresh={() => {
             void groups.reload();
