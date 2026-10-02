@@ -10,7 +10,7 @@ const {createServer}=await import(pathToFileURL(require.resolve('vite'))),{chrom
 // than expect's 5 s default to paint a page. What each assertion checks is unchanged.
 const expect=strictExpect.configure({timeout:15000});
 // Devices are read a page at a time: the synthetic replies to those reads are the shared ones.
-const {fleetReplies}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
+const {fleetReplies,nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT||'.local/device-recovery-request-after');await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-recovery-request-review';
 const server=await createServer({root:dashboard,configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port:0,strictPort:false,proxy:{},hmr:false},plugins:[{
@@ -59,6 +59,7 @@ async function fixture(options={}){
   if(path===`/devices/${device.id}/recover`&&method==='POST'){const body=req.postDataJSON();state.posts.push({path,body});const mode=state.next.create;state.next.create=null;await hold(mode);if(mode?.error)return error(mode.error,mode.status);let result=state.requests.get(body.request_id);if(!result){const o={id:body.request_id,device_id:device.id,request:body},r=record(o);state.requests.set(body.request_id,known(o,'created',r));result={request_id:body.request_id,request_correlation:true,device_id:device.id,record:r,token:secret};}if(mode?.abort)return route.abort('failed');return reply(mode?.transform?mode.transform(result):mode?.json||result);}
   if(cancel&&method==='POST'){state.posts.push({path,body:req.postDataJSON()});const mode=state.next.cancel;state.next.cancel=null;await hold(mode);const old=state.requests.get(cancel[1]),result={request_id:cancel[1],request_correlation:true,device_id:device.id,found:true,state:'cancelled',record:old?.record?{...old.record,revoked:true}:null};state.requests.set(cancel[1],result);if(mode?.abort)return route.abort('failed');return reply(mode?.transform?mode.transform(result):mode?.json||result);}
   if((path==='/issues/history'||path==='/audit/history')&&method==='GET')return reply({items:[],total:0,page:1,page_size:Number(url.searchParams.get('page_size')||5)});
+  if(path===`/devices/${device.id}/configuration`&&method==='GET')return reply(nothingOffered(device.id));
   if(path===`/devices/${device.id}/telemetry`&&method==='GET')return reply({device_id:device.id,samples:[]});
   report.unexpected.push({path,method});return error('UNEXPECTED',500);
  });
