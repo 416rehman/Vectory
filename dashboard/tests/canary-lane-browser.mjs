@@ -3,7 +3,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
-import { fleetReplies } from "./fleet-replies.mjs";
+import { fleetReplies, nothingOffered } from "./fleet-replies.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -370,6 +370,8 @@ async function launch(f, { width = 899, theme = "light" } = {}) {
     if (path === "/agent/releases") return reply([]);
     if (path.startsWith("/devices/") && path.endsWith("/telemetry"))
       return reply({ device_id: path.split("/")[2], samples: [] });
+    if (path.startsWith("/devices/") && path.endsWith("/configuration"))
+      return reply(nothingOffered(path.split("/")[2]));
     f.errors.push("Unexpected " + method + " " + path);
     return reply({ error: { code: "UNEXPECTED", message: path } }, 404);
   });

@@ -210,6 +210,14 @@ pub fn router(s: State) -> Router {
             get(crate::telemetry::configuration_telemetry),
         )
         .route(
+            "/api/v1/devices/{id}/configuration",
+            get(crate::effective_config::configuration),
+        )
+        .route(
+            "/api/v1/devices/{id}/configuration/diff",
+            get(crate::effective_config::diff),
+        )
+        .route(
             "/api/v1/devices/{id}/revoke",
             post(crate::device_revocation::post),
         )

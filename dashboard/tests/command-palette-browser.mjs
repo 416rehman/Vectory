@@ -10,6 +10,7 @@ import { configuredChannels } from "./notification-fixtures.mjs";
 import {
   fleetReplies,
   fulfillFleetRead,
+  nothingOffered,
   slimOverview,
 } from "./fleet-replies.mjs";
 
@@ -195,6 +196,8 @@ await context.route("**/*", async (route) => {
   if (path === `/devices/${ids.device}`) return reply(device);
   if (path === `/devices/${ids.device}/telemetry`)
     return reply({ device_id: ids.device, samples: [] });
+  if (path === `/devices/${ids.device}/configuration`)
+    return reply(nothingOffered(ids.device));
   if (path === "/groups")
     return reply([
       {

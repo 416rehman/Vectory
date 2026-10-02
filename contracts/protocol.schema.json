@@ -14003,6 +14003,851 @@
       "additionalProperties": false,
       "description": "Read-only simulation of a membership edit with the real resolver, rolled back afterwards. pending names a winning assignment that has not released the device yet."
     },
+    "OfferedGeneration": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "version": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "number": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "configuration_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 240
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "number",
+            "configuration_id",
+            "configuration_name"
+          ],
+          "additionalProperties": true
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "offered_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the artifact was stored for this generation; null for a generation assigned before artifacts were stored per generation, which is its version's own artifact."
+        }
+      },
+      "required": [
+        "generation",
+        "version",
+        "sha256",
+        "offered_at"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceConfigurationVariable": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "RFC 6901 pointer to the declared leaf."
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the offered artifact holds at the declared path. Null when the declared field is a credential field or the value is a secret or a reference to one: those are never shown."
+        },
+        "source": {
+          "anyOf": [
+            {
+              "enum": [
+                "device",
+                "group",
+                "default"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "device: a value set for this device. default: the deployment's default for every device it targets. group is reserved for group-level defaults and is not sent yet. Null when no deployment of this device explains the value, for example a rollback, which binds none."
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "type",
+        "value",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceConfigurationRunning": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of the managed file as the agent last reported it (its actual_sha256); null when it reports none."
+        },
+        "template_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of the offered artifact the agent applied, reported only for a version that reads device secrets; null otherwise."
+        },
+        "matches": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "true: the agent runs the artifact in this response. false: it reports another digest, a local edit or an activation not finished. null: nothing to compare (no digest reported, nothing offered, or a revoked device, which can no longer report). For a version that reads device secrets the file holds the host's own values and never has the offered digest, so true means the agent applied this template and its file is unchanged since the server verified it."
+        },
+        "matches_generation": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest generation this device was offered whose artifact the agent reports running, when that is not the one in this response: by its file digest, or for a version that reads device secrets by the template it applied. Also sent when nothing is offered at the current generation. Null when the report matches this response, when the digest was never offered to this device (the server never sees a local file), or when nothing was reported."
+        },
+        "reported_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The device's last check-in (last_seen); null until it has checked in."
+        }
+      },
+      "required": [
+        "sha256",
+        "template_sha256",
+        "matches",
+        "matches_generation",
+        "reported_at"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceConfiguration": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The device requested."
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The generation this response describes: the current desired generation, or the one requested."
+        },
+        "current": {
+          "type": "boolean",
+          "description": "Whether generation is the device's current desired generation."
+        },
+        "offered_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "number",
+                "configuration_id",
+                "configuration_name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The immutable template identity; null when nothing was offered at this generation."
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of content, the per-device rendered bytes the device downloads."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "anyOf": [
+            {
+              "enum": [
+                "yaml",
+                "json"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "json for what the server renders today, detected from the bytes."
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1048576
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exactly the bytes offered, at most 1 MiB. Device secrets are still vectory-secret:NAME references; the server never sees what a host resolves them to."
+        },
+        "uses_local_secrets": {
+          "type": "boolean"
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/DeviceConfigurationVariable"
+          },
+          "description": "The version's declared variables with the values this device was offered."
+        },
+        "running": {
+          "$ref": "#/$defs/DeviceConfigurationRunning"
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "version": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "number": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "configuration_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "configuration_name": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 240
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "configuration_id",
+                    "configuration_name"
+                  ],
+                  "additionalProperties": true
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "generation",
+                "version",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest generation offered before this one; null when there is none. Its bytes can be identical (a retry or a version that only moved nodes)."
+        },
+        "generations": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "$ref": "#/$defs/OfferedGeneration"
+              }
+            }
+          },
+          "required": [
+            "total",
+            "items"
+          ],
+          "additionalProperties": false,
+          "description": "Generations this device was offered, newest first, at most 50 of total."
+        }
+      },
+      "required": [
+        "device_id",
+        "generation",
+        "current",
+        "offered_at",
+        "version",
+        "sha256",
+        "size",
+        "format",
+        "content",
+        "uses_local_secrets",
+        "variables",
+        "running",
+        "previous",
+        "generations"
+      ],
+      "additionalProperties": false,
+      "description": "What a device was offered at its current (or an earlier) desired generation, read from the immutable content-addressed store, with the agent's report beside it. With nothing offered at the current generation (a device never assigned, or its assignment removed) version, sha256, size, format and content are null and previous names the last offer. Revoked devices stay readable as history."
+    },
+    "ConfigurationDiffLine": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "context",
+            "removed",
+            "added"
+          ]
+        },
+        "old_line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "new_line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "old_line",
+        "new_line",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationDiffHunk": {
+      "type": "object",
+      "properties": {
+        "old_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "old_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "new_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The components enclosing the first changed line, as dotted keys (sinks.out.buffer); null at the top level or when the text is not the rendered JSON."
+        },
+        "lines": {
+          "type": "array",
+          "maxItems": 1997,
+          "items": {
+            "$ref": "#/$defs/ConfigurationDiffLine"
+          }
+        }
+      },
+      "required": [
+        "old_start",
+        "old_lines",
+        "new_start",
+        "new_lines",
+        "section",
+        "lines"
+      ],
+      "additionalProperties": false
+    },
+    "DeviceConfigurationDiff": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "version": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "number": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "configuration_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "configuration_name": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 240
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "configuration_id",
+                    "configuration_name"
+                  ],
+                  "additionalProperties": true
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1048576
+                },
+                "offered_at": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "generation",
+                "version",
+                "sha256",
+                "size",
+                "offered_at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The older side; null when nothing was offered to this device before the newer side."
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "version": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "number": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "configuration_name": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 240
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "number",
+                "configuration_id",
+                "configuration_name"
+              ],
+              "additionalProperties": true
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "offered_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "generation",
+            "version",
+            "sha256",
+            "size",
+            "offered_at"
+          ],
+          "additionalProperties": false
+        },
+        "identical": {
+          "type": "boolean",
+          "description": "The two sides are the same bytes."
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "removed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "changed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "added",
+            "removed",
+            "changed"
+          ],
+          "additionalProperties": false,
+          "description": "Lines of the whole change, not only the part shown. A line a replaced line stands in for counts once, as changed."
+        },
+        "hunks": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/ConfigurationDiffHunk"
+          }
+        },
+        "unified": {
+          "type": "string",
+          "description": "The same hunks as a unified diff, at most 2,000 lines including its headers; when truncated, its last line is a marker."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The diff is longer than 2,000 lines; hunks and unified stop at the same line."
+        },
+        "total_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines the complete unified diff would have."
+        },
+        "approximate": {
+          "type": "boolean",
+          "description": "The change was too large to match line by line, so the region between the unchanged start and end is shown as replaced although some of its lines are the same on both sides."
+        }
+      },
+      "required": [
+        "device_id",
+        "from",
+        "to",
+        "identical",
+        "counts",
+        "hunks",
+        "unified",
+        "truncated",
+        "total_lines",
+        "approximate"
+      ],
+      "additionalProperties": false,
+      "description": "A bounded comparison of two generations this device was offered, by default the previous one with the current one."
+    },
     "GroupRef": {
       "type": "object",
       "properties": {

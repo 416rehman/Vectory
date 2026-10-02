@@ -16,6 +16,19 @@ Add `--json` to `status` or `doctor` for scripts. Both only read: they never cha
 
 The dashboard shows the same device from the server's side. A recent check-in proves the agent is connected. **Applied** proves which version Vector runs.
 
+### Compare the managed file with what was offered
+
+The device page's **Effective configuration** shows the text Vectory offered and the digest the agent last reported for its managed file. To check the file on the host yourself, print its digest two ways:
+
+```sh
+sudo vectory status --json     # "actual_sha256" is the digest of the managed file
+sha256sum /etc/vectory/managed/vector.json
+```
+
+Both print the same SHA-256. On macOS use `shasum -a 256`; on Windows, `Get-FileHash`. When the file is the offered text, the digest equals **Offered** under **Digests**. `"drift": true` in the status output means the file no longer matches the last configuration the agent verified.
+
+A pipeline that reads [device secrets](resources.md#keep-credentials-on-the-device) is written with the host's own values, so its digest never equals the offered one. [How Vectory compares them](deployments.md#how-vectory-compares-them) says what the device page checks instead.
+
 ## Change local settings
 
 Local settings belong to the host: allowances, mode, the metrics endpoint, secret bindings and wake-ups. The dashboard can't change them.

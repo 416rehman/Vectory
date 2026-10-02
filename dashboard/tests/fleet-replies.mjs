@@ -659,3 +659,33 @@ export async function fulfillFleetRead(replies, route) {
   }
   return true;
 }
+
+/**
+ * The reply to a read of a device's effective configuration when nothing was
+ * ever offered to it: no text, no digests and no generations. For harnesses
+ * that open the device page without exercising that section.
+ */
+export function nothingOffered(deviceId) {
+  return {
+    device_id: deviceId,
+    generation: 0,
+    current: true,
+    offered_at: null,
+    version: null,
+    sha256: null,
+    size: null,
+    format: null,
+    content: null,
+    uses_local_secrets: false,
+    variables: [],
+    running: {
+      sha256: null,
+      template_sha256: null,
+      matches: null,
+      matches_generation: null,
+      reported_at: null,
+    },
+    previous: null,
+    generations: { total: 0, items: [] },
+  };
+}

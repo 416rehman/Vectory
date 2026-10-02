@@ -1148,6 +1148,12 @@ jobs:
         run: node tests/health-held-browser.mjs
         env:
           VECTORY_HEALTH_HELD_OUTPUT: artifacts/browsers/health-held
+      - name: Check the effective configuration of a device, its changes and its drift line
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/effective-configuration-browser.mjs
+        env:
+          VECTORY_EFFECTIVE_CONFIGURATION_OUTPUT: artifacts/browsers/effective-configuration
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}
