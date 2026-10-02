@@ -637,6 +637,13 @@ func (r *setupRun) setup(ctx context.Context, ops serviceOps) (SetupResult, erro
 		if policy, err = ReadInstallPolicy(options.CapabilityPolicy); err != nil {
 			return r.failErr("mode", "Mode", err, "Check the allowance file's JSON: file roots, host:port destinations and listeners.")
 		}
+		var bound map[string]string
+		if installed {
+			bound = settings.SecretFiles
+		}
+		if err = checkFileRoots(policy.AllowedFileRoots, dir, managed, bound); err != nil {
+			return r.failErr("mode", "Mode", err, "Change the file roots in the allowance file, then run setup again.")
+		}
 	}
 	if installed {
 		current := settings.CapabilityPolicy.ConfigurationMode()
