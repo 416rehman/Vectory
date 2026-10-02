@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   root = resolve(dashboard, "..");
 const output = resolve(
@@ -92,6 +93,7 @@ const requests = [],
   groups = [],
   errors = [];
 let loseResponse = true;
+const fleet = fleetReplies({ devices: [], groups: () => groups });
 await context.addInitScript(() => {
   localStorage.setItem("vectory-theme", "light");
   localStorage.setItem("vectory-sidebar-collapsed", "true");
@@ -111,6 +113,8 @@ await context.route("**/*", async (route) => {
     method,
     body: method === "GET" ? null : request.postDataJSON(),
   });
+  // Pages of devices, one device, and the groups without their members.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (method === "GET" && path === "/status")
     return route.fulfill({ json: { initialized: true, version: "synthetic" } });
   if (method === "GET" && path === "/session")
