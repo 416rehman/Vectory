@@ -17,6 +17,7 @@ Engineering history and test evidence, kept for review and audit. These document
 | [CAPACITY.md](CAPACITY.md) | Protocol load and fleet-read measurements, and their limits. |
 | [DEPENDENCY-AUDIT.md](DEPENDENCY-AUDIT.md) | Dependency vulnerability scans. |
 | [TAP-IMPLEMENTATION-PLAN.md](TAP-IMPLEMENTATION-PLAN.md) | The plan for opt-in event sampling: work packages, tests, wire changes and what stays unbuilt until each is proven. The decision is [ADR 0011](../adr/0011-opt-in-event-sampling.md). |
+| [CAPABILITY-IMPLEMENTATION-PLAN.md](CAPABILITY-IMPLEMENTATION-PLAN.md) | The plan for graduated capability tiers, the service sandbox and managed assets: work packages, wire and storage changes, tests and what an independent reviewer must attack. The decisions are [ADR 0012](../adr/0012-graduated-capability-tiers.md) and [ADR 0013](../adr/0013-managed-assets.md). |
 | [TYPE-SYSTEM-REVIEW.md](TYPE-SYSTEM-REVIEW.md) | Historical review of the Vector reference and configuration types. |
 | [HELP-CENTER-EVIDENCE.md](HELP-CENTER-EVIDENCE.md) | Historical Help center verification of 2026-09-26. |
 | [WORKSTREAMS.md](WORKSTREAMS.md) | The original work breakdown. |
