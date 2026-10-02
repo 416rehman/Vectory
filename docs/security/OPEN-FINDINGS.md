@@ -24,6 +24,10 @@ Restricted mode accepts an `elasticsearch` sink with `auth.strategy: aws` and no
 
 A file root that covers `/run` would let a sink that connects to Unix sockets reach local service sockets. Not reachable with today's restricted component set; it becomes reachable as components are approved. **Fix:** Unix-socket destinations are named exactly (`--network unix:PATH`) and a file root never implies them ([ADR 0012](../adr/0012-graduated-capability-tiers.md)).
 
+### 5. Restricted mode accepts an AWS credentials file that can run a program
+
+The `http`, `loki`, `prometheus_exporter` and `elasticsearch` sinks take `credentials_file` under their `auth` block, and the agent treats it as an ordinary path that only has to lie under an allowed file root. Measured with Vector 0.58.0 (an `aws_s3` sink): a profile file with `credential_process` made Vector run that program during `vector validate`. Exploiting it needs a file under an allowed root that parses as an AWS profile, which is easy once any approved component can write under a root. **Fix:** refuse `credentials_file` in restricted mode (the capability table already refuses it everywhere). **Test:** a policy test per sink, and a native test with the real Vector that the program never runs.
+
 ## P3
 
 - Hypothesis, not demonstrated: a flood of a public endpoint delaying writers through the process-wide writer mutex. A control flood showed the same or higher write latency without the lock in the path.
