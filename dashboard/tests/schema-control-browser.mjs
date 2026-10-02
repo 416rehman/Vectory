@@ -100,8 +100,15 @@ async function test(name, run) {
     !name.includes(process.env.VECTORY_SCHEMA_TEST_FILTER)
   )
     return;
+  // With the filter, VECTORY_SCHEMA_TEST_REPEAT=N runs the matching test N
+  // times in one browser session, to reproduce a rare timing failure.
+  const repeat = Number(process.env.VECTORY_SCHEMA_TEST_REPEAT) || 1;
   try {
-    await run();
+    for (let round = 1; round <= repeat; round++) {
+      await run();
+      if (repeat > 1 && round % 25 === 0)
+        console.log(`  ${name}: ${round} of ${repeat} rounds passed`);
+    }
     results.push({ name, passed: true });
     console.log("PASS", name);
   } catch (error) {
