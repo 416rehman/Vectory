@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 const root = path.resolve(import.meta.dirname, ".."),
   require = createRequire(path.join(root, "dashboard/package.json"));
@@ -145,6 +146,34 @@ try {
   }
   for (const d of await get("/devices"))
     validate("TelemetryHistory", await get(`/devices/${d.id}/telemetry`));
+  // What each device was offered, read back: the text is the bytes its digest
+  // and size describe, earlier generations read the same way, and the
+  // comparison with the previous offer is bounded.
+  for (const d of await get("/devices")) {
+    const configuration = await get(`/devices/${d.id}/configuration`);
+    validate("DeviceConfiguration", configuration);
+    if (configuration.device_id !== d.id)
+      throw Error(`/devices/${d.id}/configuration answered another device`);
+    for (const offered of configuration.generations.items.slice(0, 3)) {
+      const read = await get(
+        `/devices/${d.id}/configuration?generation=${offered.generation}`,
+      );
+      validate("DeviceConfiguration", read);
+      if (read.sha256 !== offered.sha256)
+        throw Error(`${d.id} generation ${offered.generation}: digest differs`);
+    }
+    if (configuration.content === null) continue;
+    const bytes = Buffer.from(configuration.content, "utf8");
+    if (
+      bytes.length !== configuration.size ||
+      createHash("sha256").update(bytes).digest("hex") !== configuration.sha256
+    )
+      throw Error(`${d.id}: content is not the bytes its digest describes`);
+    const diff = await get(`/devices/${d.id}/configuration/diff`);
+    validate("DeviceConfigurationDiff", diff);
+    if (diff.unified.split("\n").length - 1 > 2000)
+      throw Error(`${d.id}: diff is longer than 2,000 lines`);
+  }
   // Fleet-scale reads.
   for (const query of ["", "?slim=1"]) {
     const overview = await get(`/overview${query}`);
