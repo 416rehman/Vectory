@@ -1330,7 +1330,10 @@ fn request_fault(error: &reqwest::Error) -> &'static str {
 
 /// POST to the isolated worker and read a bounded JSON reply.
 async fn worker_call(url: &str, path: &str, body: &Value, limit: usize) -> Option<Value> {
-    let client = worker_client().ok()?;
+    let Ok(client) = worker_client() else {
+        worker_fault(path, "the server's HTTP client could not be built");
+        return None;
+    };
     let mut response = match client
         .post(format!("{}/{path}", url.trim_end_matches('/')))
         .json(body)
