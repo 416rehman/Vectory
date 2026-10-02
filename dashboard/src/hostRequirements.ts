@@ -2,35 +2,6 @@
 export type AgentCatalog = typeof import("./generated/vector-catalog.json");
 
 /**
- * What a pipeline needs from the devices that run it, worked out the way the
- * agent decides it: Full Vector mode for anything outside the restricted
- * component set, and, in restricted mode, local approval for each destination,
- * listener and file root. Read by the deploy dialog, and by anything that wants
- * to say so before a pipeline is chosen (template cards, the pipeline library).
- */
-function isLoopbackSocketAddress(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/.exec(
-    value,
-  );
-  if (ipv4)
-    return (
-      Number(ipv4[1]) === 127 &&
-      ipv4.slice(2, 5).every((part) => Number(part) <= 255) &&
-      Number(ipv4[5]) <= 65535
-    );
-  if (!/^\[[0-9a-fA-F:]+\]:\d{1,5}$/.test(value)) return false;
-  try {
-    const address = new URL(`http://${value}`);
-    return (
-      address.hostname === "[::1]" &&
-      Number(value.slice(value.lastIndexOf(":") + 1)) <= 65535
-    );
-  } catch {
-    return false;
-  }
-}
-/**
  * VRL functions that reach outside the event: the environment, secrets,
  * enrichment tables, DNS, HTTP and files (a JSON schema or a protobuf
  * descriptor). A restricted device refuses them. The same names are in the
@@ -62,29 +33,44 @@ const deviceVrlCall = new RegExp(
 export function callsDeviceFunction(program: string): boolean {
   return deviceVrlCall.test(program);
 }
+/**
+ * Why a pipeline's `api` block needs a full-mode device, whatever its address
+ * and whether or not it is enabled: the one sentence the dashboard gives.
+ */
+export const localApiReason =
+  "Vector's local API has no authentication; any local user could read live events";
+/**
+ * What a pipeline needs from the devices that run it, worked out the way the
+ * server and the agent decide it: Full Vector mode for anything outside the
+ * restricted component set, and, in restricted mode, local approval for each
+ * destination, listener and file root. Read by the deploy dialog, and by
+ * anything that wants to say so before a pipeline is chosen (template cards,
+ * the pipeline library).
+ */
 export function fullModeRequirements(
   config: Record<string, any>,
   agentCatalog: AgentCatalog,
 ): string[] {
   const required = new Set<string>();
+  // `api` is not among them: Vector's local API has no authentication, so the
+  // host decides whether it exists, never a pipeline.
   const restrictedRoots = new Set([
     "sources",
     "transforms",
     "sinks",
     "data_dir",
-    "api",
     "acknowledgements",
     "healthchecks",
     "timezone",
     "tests",
   ]);
   for (const key of Object.keys(config))
-    if (!restrictedRoots.has(key)) required.add(`Global setting: ${key}`);
-  if (
-    config.api?.enabled === true &&
-    !isLoopbackSocketAddress(config.api.address)
-  )
-    required.add("API listener outside loopback");
+    if (!restrictedRoots.has(key))
+      required.add(
+        key === "api"
+          ? `Global setting: api (${localApiReason})`
+          : `Global setting: ${key}`,
+      );
   for (const kind of ["sources", "transforms", "sinks"]) {
     for (const component of Object.values(config[kind] || {}) as any[]) {
       if (

@@ -5,6 +5,7 @@ import {
   describeNeeds,
   fullModeRequirements,
   hostApprovals,
+  localApiReason,
   loopbackListener,
   monitoringExporter,
 } from "./hostRequirements";
@@ -167,6 +168,48 @@ describe("what a pipeline asks of its devices", () => {
       kind: "full",
       label: "Needs Full Vector",
     });
+  });
+  it("asks for Full Vector mode for any api block, whatever it says, and gives the reason once", () => {
+    const base = {
+      sources: { demo: { type: "demo_logs", format: "json" } },
+      sinks: { out: { type: "blackhole", inputs: ["demo"] } },
+    };
+    // The server and the agent refuse the block the same way: Vector's API has
+    // no authentication, so the address and the switch make no difference.
+    for (const api of [
+      { enabled: true, address: "127.0.0.1:8686" },
+      { enabled: true, address: "[::1]:8686" },
+      { enabled: true, address: "0.0.0.0:8686" },
+      { enabled: true, address: "localhost:8686" },
+      { enabled: true },
+      { enabled: false },
+      {},
+      null,
+    ])
+      expect(
+        fullModeRequirements({ ...base, api }, catalog),
+        JSON.stringify(api),
+      ).toEqual([
+        "Global setting: api (Vector's local API has no authentication; any local user could read live events)",
+      ]);
+    expect(localApiReason).toBe(
+      "Vector's local API has no authentication; any local user could read live events",
+    );
+    expect(
+      describeNeeds({ ...base, api: { enabled: false } }, catalog),
+    ).toEqual({
+      kind: "full",
+      label: "Needs Full Vector",
+      detail: `Uses Global setting: api (${localApiReason}). Runs only on devices in Full Vector mode.`,
+    });
+    // Without the block nothing is asked, and the other settings still are.
+    expect(fullModeRequirements(base, catalog)).toEqual([]);
+    expect(
+      fullModeRequirements({ ...base, api: {}, schema: {} }, catalog),
+    ).toEqual([
+      `Global setting: api (${localApiReason})`,
+      "Global setting: schema",
+    ]);
   });
   it("names what a restricted host has to approve, briefly", () => {
     expect(

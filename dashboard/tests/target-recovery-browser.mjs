@@ -117,6 +117,10 @@ const config = {
   sources: { seed: { type: "demo_logs", format: "json" } },
   sinks: { discard: { type: "blackhole", inputs: ["seed"] } },
 };
+// What the note says about a pipeline with an `api` block (the same sentence
+// the unit test pins as `localApiReason`).
+const apiReason =
+  "Global setting: api (Vector's local API has no authentication; any local user could read live events)";
 const pipeline = {
   id: id(10),
   name: "Synthetic deployment handoff",
@@ -1369,7 +1373,7 @@ try {
     },
   );
   await check(
-    "Full-mode capability note explains non-loopback API without asking already-full devices to change modes",
+    "Full-mode capability note gives the reason for an api block, even a loopback one, without asking already-full devices to change modes",
     async () => {
       await load({
         kind: "version",
@@ -1378,7 +1382,9 @@ try {
             ...version,
             config: {
               ...config,
-              api: { enabled: true, address: "0.0.0.0:8686" },
+              // A loopback address no longer makes it harmless: the API has
+              // no authentication, so any api block needs a full-mode device.
+              api: { enabled: true, address: "127.0.0.1:8686" },
             },
           },
         },
@@ -1389,9 +1395,7 @@ try {
           exact: true,
         }),
       ).toBeVisible();
-      await expect(
-        dialog().getByText(/API listener outside loopback/),
-      ).toBeVisible();
+      await expect(dialog().getByText(apiReason)).toBeVisible();
       await expect(dialog().getByText(/All selected devices/)).toHaveCount(0);
       await page
         .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
@@ -1401,9 +1405,7 @@ try {
           exact: true,
         }),
       ).toBeVisible();
-      await expect(
-        dialog().getByText(/API listener outside loopback/),
-      ).toBeVisible();
+      await expect(dialog().getByText(apiReason)).toBeVisible();
       await expect(
         dialog().getByText(
           /All selected devices currently report full Vector mode/,
@@ -1467,9 +1469,7 @@ try {
           { exact: true },
         ),
       ).toBeVisible();
-      await expect(
-        dialog().getByText(/API listener outside loopback/),
-      ).toBeVisible();
+      await expect(dialog().getByText(apiReason)).toBeVisible();
       await expect(
         dialog().getByText(/have the host operator enable it/),
       ).toBeVisible();
