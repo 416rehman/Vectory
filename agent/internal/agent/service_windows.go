@@ -122,7 +122,7 @@ func ServiceInstallFor(exe, dir, user string) (ServiceRegistration, error) {
 		if directory {
 			inherit = "OICI"
 		}
-		sd, err := windows.SecurityDescriptorFromString("D:P(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;" + u.User.Sid.String() + ")(A;" + inherit + ";FA;;;" + sid.String() + ")")
+		sd, err := windows.SecurityDescriptorFromString("D:P(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)(A;" + inherit + ";FA;;;" + u.User.Sid.String() + ")(A;" + inherit + ";FA;;;" + sid.String() + ")")
 		if err != nil {
 			return err
 		}

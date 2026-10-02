@@ -242,10 +242,19 @@ try {
           "-Path",
           secretFile,
         ],
-        { windowsHide: true, stdio: "ignore" },
+        { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
       );
+      let said = "";
+      p.stdout.on("data", (chunk) => (said += chunk));
+      p.stderr.on("data", (chunk) => (said += chunk));
       p.on("exit", (code) =>
-        code === 0 ? resolve() : reject(Error("Fixture secret ACL setup failed")),
+        code === 0
+          ? resolve()
+          : reject(
+              Error(
+                `Fixture secret ACL setup failed (${code}): ${said.trim().slice(0, 800)}`,
+              ),
+            ),
       );
       p.on("error", reject);
     });

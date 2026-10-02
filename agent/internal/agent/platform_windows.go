@@ -29,7 +29,10 @@ func protect(path string, dir bool) error {
 	if dir {
 		flags = "OICI"
 	}
-	sd, e := windows.SecurityDescriptorFromString("D:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;" + u.User.Sid.String() + ")")
+	// SYSTEM, the administrators of this machine and the writing account. The
+	// service writes its own files as its virtual account, so without the
+	// administrators an elevated `vectory status` could not read them.
+	sd, e := windows.SecurityDescriptorFromString("D:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)(A;" + flags + ";FA;;;" + u.User.Sid.String() + ")")
 	if e != nil {
 		return e
 	}
@@ -156,7 +159,8 @@ func checkPrivateFile(path string) error {
 }
 
 // keepOwner does nothing on Windows: the replacement carries its own protected
-// access list (protect), which names only SYSTEM and the writing account.
+// access list (protect), which names SYSTEM, the administrators and the writing
+// account.
 func keepOwner(tmp, path string) {}
 func rejectPlatformLink(path string) error {
 	p, e := windows.UTF16PtrFromString(path)
