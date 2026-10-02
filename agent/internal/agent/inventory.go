@@ -298,13 +298,33 @@ func directoryFiles(dir string) ([]string, error) {
 	}
 	for _, name := range componentDirectories {
 		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && info.IsDir() {
-			if err := collect(filepath.Join(dir, name)); err != nil {
+			if err := collect(filepath.Join(dir, onDiskName(dir, name, info))); err != nil {
 				return nil, err
 			}
 		}
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// onDiskName is the name a sub-directory really has. A case-insensitive file
+// system (macOS and Windows by default) finds "Sources" for "sources", Vector
+// reads what it finds there, and its files are listed under the name they have
+// on disk.
+func onDiskName(dir, name string, info os.FileInfo) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return name
+	}
+	for _, entry := range entries {
+		if !strings.EqualFold(entry.Name(), name) {
+			continue
+		}
+		if other, err := os.Stat(filepath.Join(dir, entry.Name())); err == nil && os.SameFile(info, other) {
+			return entry.Name()
+		}
+	}
+	return name
 }
 
 // fileScan is what a configuration file says about what else it depends on.

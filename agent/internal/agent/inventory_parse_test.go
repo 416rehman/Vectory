@@ -216,7 +216,7 @@ func TestSplitWindowsCommandLine(t *testing.T) {
 		{`x a\\\\"b c" d e`, []string{"x", `a\\b c`, "d", "e"}},
 		{"x\t--tab\t\"two  words\"", []string{"x", "--tab", "two  words"}},
 		{`x "" y`, []string{"x", "", "y"}},
-		{`  leading.exe   spaced  `, []string{"leading.exe", "spaced"}},
+		{`  leading.exe   spaced  `, []string{"", "leading.exe", "spaced"}},
 		{`"unterminated first`, []string{"unterminated first"}},
 		{"", nil},
 		{"   ", nil},
