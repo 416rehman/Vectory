@@ -1,0 +1,38 @@
+{
+  "description": "A template in a URL's path stays on the destination its literal part names.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.com/{{ host }}",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.com:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "description": "A templated path outside base_dir still needs base_dir alone: Vector drops every event it would write elsewhere.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "file",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        },
+        "base_dir": "/srv/vector/out",
+        "path": "/var/log/{{ host }}.log"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/srv/vector/out"
+    ],
+    "writes": [
+      "/srv/vector/out"
+    ],
+    "assets": []
+  }
+}

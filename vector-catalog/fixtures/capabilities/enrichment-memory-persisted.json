@@ -1,0 +1,59 @@
+{
+  "description": "A memory table's filter can persist to a file (measured: Vector wrote it), which is a file root Vector writes.",
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "seen": {
+        "type": "memory",
+        "ttl": 600,
+        "inputs": [
+          "kv"
+        ],
+        "filter": {
+          "type": "cuckoo",
+          "max_entries": 1000,
+          "persistence_path": "/var/lib/vector/seen.filter"
+        }
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "kv": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ". = {\"key\": to_string!(.host), \"value\": \"1\"}"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/lib/vector/seen.filter"
+    ],
+    "writes": [
+      "/var/lib/vector/seen.filter"
+    ],
+    "assets": []
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "description": "Paths must be absolute and free of .. segments; repeated and trailing slashes are cleaned.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "logs/*.log",
+          "/var/log/../../etc/*.conf",
+          "//var//log//app/./*.log"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sources/in/include/0"
+      },
+      {
+        "code": "FILE_ACCESS_DENIED",
+        "at": "/sources/in/include/1"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/log/app"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

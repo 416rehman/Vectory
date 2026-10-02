@@ -1,0 +1,59 @@
+{
+  "description": "Templates over event fields in a transform name nothing outside Vector.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "m": {
+        "type": "log_to_metric",
+        "inputs": [
+          "in"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines_{{ service }}",
+            "tags": {
+              "host": "{{ host }}"
+            }
+          }
+        ]
+      },
+      "s": {
+        "type": "sample",
+        "inputs": [
+          "in"
+        ],
+        "rate": 10,
+        "group_by": "{{ service }}"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "m",
+          "s"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

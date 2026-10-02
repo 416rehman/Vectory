@@ -35,6 +35,13 @@ DASHBOARD = names(
 FILES = names(
     "server/src/validation.rs", r"pub const FILE_VRL_FUNCTIONS: &\[&str\] = &\[(.*?)\];"
 )
+# The capability table splits the list: functions restricted mode refuses, and
+# functions only a device can evaluate. Enrichment lookups leave the first,
+# because Vector refuses a table the configuration doesn't declare.
+TABLE = json.loads((ROOT / "dashboard/src/generated/capability-table.json").read_text())[
+    "vrl_functions"
+]
+ENRICHMENT = ["find_enrichment_table_records", "get_enrichment_table_record"]
 
 
 class VrlFunctionLists(unittest.TestCase):
@@ -67,6 +74,14 @@ class VrlFunctionLists(unittest.TestCase):
 
     def test_the_lists_are_not_empty(self):
         self.assertGreaterEqual(len(SERVER), 12)
+
+    def test_capability_table_device_functions_match_the_server(self):
+        self.assertEqual(TABLE["device_only"], SERVER)
+
+    def test_capability_table_refuses_all_but_the_enrichment_lookups(self):
+        self.assertEqual(TABLE["refused"], sorted(set(SERVER) - set(ENRICHMENT)))
+        self.assertTrue(set(NETWORK) <= set(TABLE["refused"]))
+        self.assertTrue(set(FILES) <= set(TABLE["refused"]))
 
 
 if __name__ == "__main__":

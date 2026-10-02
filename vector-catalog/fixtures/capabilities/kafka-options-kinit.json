@@ -1,0 +1,47 @@
+{
+  "description": "sasl.kerberos.kinit.cmd runs a command (measured: vector validate ran it), so it needs full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9092",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ],
+        "librdkafka_options": {
+          "sasl.kerberos.kinit.cmd": "touch /tmp/vectory-fixture"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "PASSTHROUGH_OPTION_DENIED",
+        "at": "/sources/in/librdkafka_options/sasl.kerberos.kinit.cmd"
+      }
+    ],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9092"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

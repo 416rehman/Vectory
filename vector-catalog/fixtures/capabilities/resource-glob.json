@@ -1,0 +1,40 @@
+{
+  "description": "A file pattern needs the directory before its first wildcard; excluded patterns open nothing.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "file",
+        "include": [
+          "/var/log/app/*.log",
+          "/var/log/nginx/access.log"
+        ],
+        "exclude": [
+          "/srv/archive/*.gz"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/var/log/app",
+      "/var/log/nginx/access.log"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

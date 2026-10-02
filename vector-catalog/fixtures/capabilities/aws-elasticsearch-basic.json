@@ -1,0 +1,42 @@
+{
+  "description": "Elasticsearch with basic authentication reaches no ambient credential.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "elasticsearch",
+        "inputs": [
+          "in"
+        ],
+        "endpoints": [
+          "https://search.example.net"
+        ],
+        "auth": {
+          "strategy": "basic",
+          "user": "vectory-secret:user",
+          "password": "vectory-secret:password"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "search.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

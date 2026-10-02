@@ -1,0 +1,84 @@
+{
+  "description": "A reference without the version's digest, or with one the manifest doesn't list, is refused in every mode.",
+  "assets": [
+    {
+      "name": "users",
+      "sha256": "6c1f6c5e3c0b9a8f7e6d5c4b3a29180716f5e4d3c2b1a09f8e7d6c5b4a392817",
+      "kind": "csv"
+    },
+    {
+      "name": "geo-country",
+      "sha256": "1f3a9c0e2b7d4a65c8e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9",
+      "kind": "mmdb"
+    },
+    {
+      "name": "corp-ca",
+      "sha256": "9d8c7b6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877665544",
+      "kind": "pem_certificates"
+    }
+  ],
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "latest": {
+        "type": "file",
+        "file": {
+          "path": "vectory-asset:users",
+          "encoding": {
+            "type": "csv"
+          }
+        },
+        "schema": {
+          "id": "string"
+        }
+      },
+      "other": {
+        "type": "file",
+        "file": {
+          "path": "vectory-asset:users@sha256:1f3a9c0e2b7d4a65c8e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9",
+          "encoding": {
+            "type": "csv"
+          }
+        },
+        "schema": {
+          "id": "string"
+        }
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [
+      {
+        "code": "ASSET_REFERENCE_REFUSED",
+        "at": "/enrichment_tables/latest/file/path"
+      },
+      {
+        "code": "ASSET_REFERENCE_REFUSED",
+        "at": "/enrichment_tables/other/file/path"
+      }
+    ],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

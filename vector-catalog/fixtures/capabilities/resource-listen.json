@@ -1,0 +1,36 @@
+{
+  "description": "A listen address is a listener, compared as written.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "http_server",
+        "address": "0.0.0.0:8080",
+        "decoding": {
+          "codec": "json"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "0.0.0.0:8080"
+    ],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

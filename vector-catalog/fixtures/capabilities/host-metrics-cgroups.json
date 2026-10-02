@@ -1,0 +1,48 @@
+{
+  "description": "host_metrics needs approval; pointing its cgroup collector elsewhere needs full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "metrics": {
+        "type": "host_metrics",
+        "collectors": [
+          "cgroups"
+        ],
+        "cgroups": {
+          "base": "system.slice",
+          "base_dir": "/srv/fake-cgroup"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "metrics"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/metrics/cgroups/base"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sources/metrics/cgroups/base_dir"
+      }
+    ],
+    "components": [
+      "host_metrics"
+    ],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

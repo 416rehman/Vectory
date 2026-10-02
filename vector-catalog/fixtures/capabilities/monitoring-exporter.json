@@ -1,0 +1,68 @@
+{
+  "description": "The first exporter on a loopback address fed only by internal_metrics needs no listener; another one does.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "vector_metrics": {
+        "type": "internal_metrics"
+      },
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "m": {
+        "type": "log_to_metric",
+        "inputs": [
+          "in"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines"
+          }
+        ]
+      }
+    },
+    "sinks": {
+      "a_monitoring": {
+        "type": "prometheus_exporter",
+        "inputs": [
+          "vector_metrics"
+        ],
+        "address": "127.0.0.1:9598"
+      },
+      "b_second": {
+        "type": "prometheus_exporter",
+        "inputs": [
+          "vector_metrics"
+        ],
+        "address": "127.0.0.1:9599"
+      },
+      "c_events": {
+        "type": "prometheus_exporter",
+        "inputs": [
+          "m"
+        ],
+        "address": "0.0.0.0:9600"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "0.0.0.0:9600",
+      "127.0.0.1:9599"
+    ],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

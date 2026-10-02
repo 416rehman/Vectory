@@ -1,0 +1,40 @@
+{
+  "description": "An mmdb table reads one MaxMind database under an allowed root.",
+  "vector": "valid",
+  "config": {
+    "enrichment_tables": {
+      "asn": {
+        "type": "mmdb",
+        "path": "/usr/share/GeoIP/GeoLite2-ASN.mmdb"
+      }
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/usr/share/GeoIP/GeoLite2-ASN.mmdb"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}

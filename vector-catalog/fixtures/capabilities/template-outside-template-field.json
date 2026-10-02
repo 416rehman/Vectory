@@ -1,0 +1,44 @@
+{
+  "description": "A template in a field that isn't a reviewed template field stays refused: Loki's endpoint isn't a template.",
+  "vector": "invalid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "loki",
+        "inputs": [
+          "in"
+        ],
+        "endpoint": "https://{{ host }}.example.com",
+        "labels": {
+          "app": "vector"
+        },
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/sinks/out/endpoint"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "description": "A tcp:// Docker host needs an explicit port; an https one means 443.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "plain": {
+        "type": "docker_logs",
+        "docker_host": "tcp://docker.example.net"
+      },
+      "tls": {
+        "type": "docker_logs",
+        "docker_host": "https://docker.example.net",
+        "tls": {
+          "ca_file": "/etc/docker/ca.pem",
+          "crt_file": "/etc/docker/cert.pem",
+          "key_file": "/etc/docker/key.pem"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "plain",
+          "tls"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "NETWORK_DESTINATION_DENIED",
+        "at": "/sources/plain/docker_host"
+      }
+    ],
+    "components": [
+      "docker_logs"
+    ],
+    "capabilities": [],
+    "network": [
+      "docker.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [
+      "/etc/docker/ca.pem",
+      "/etc/docker/cert.pem",
+      "/etc/docker/key.pem"
+    ],
+    "writes": [],
+    "assets": []
+  }
+}
