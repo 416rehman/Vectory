@@ -2545,9 +2545,10 @@ pub async fn tick(s: &State) -> Result<()> {
     tx.commit().await?;
     Ok(())
 }
-/// Retention: drop telemetry older than the retention window and expired
-/// sessions. Runs about once a minute, apart from the rollout tick, so
-/// heartbeats never queue behind it every two seconds.
+/// Retention: drop telemetry older than the retention window, expired
+/// sessions, and device checks older than 24 hours (a pending one past its
+/// expiry is expired first). Runs about once a minute, apart from the rollout
+/// tick, so heartbeats never queue behind it every two seconds.
 pub async fn prune(s: &State) -> Result<()> {
     let (_guard, mut tx) = crate::db::write_tx(s).await?;
     let cutoff =
@@ -2560,6 +2561,7 @@ pub async fn prune(s: &State) -> Result<()> {
         .bind(db::now())
         .execute(&mut *tx)
         .await?;
+    crate::device_validations::prune(&mut tx).await?;
     tx.commit().await?;
     Ok(())
 }

@@ -83,10 +83,16 @@ fn text(value: &Value, min: usize, max: usize) -> bool {
 /// bytes, each field allowlisted and bounded. Unknown fields reject the
 /// heartbeat rather than being silently dropped.
 pub fn diagnostics(list: &Value) -> Result<Value> {
+    diagnostics_up_to(list, MAX_DIAGNOSTICS)
+}
+
+/// The same records and bounds with another limit on how many there are: a
+/// device check reports up to 20.
+pub fn diagnostics_up_to(list: &Value, most: usize) -> Result<Value> {
     let invalid = || ApiError::invalid("Invalid diagnostics");
     let items = list
         .as_array()
-        .filter(|a| a.len() <= MAX_DIAGNOSTICS)
+        .filter(|a| a.len() <= most)
         .ok_or_else(invalid)?;
     let mut out = Vec::with_capacity(items.len());
     for item in items {

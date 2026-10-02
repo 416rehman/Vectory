@@ -238,7 +238,7 @@ fn version_label(row: &Value) -> Option<String> {
 }
 /// Names in the order people expect: case-insensitive, with runs of digits
 /// compared by value, so edge-2 sorts before edge-10.
-fn natural(a: &str, b: &str) -> Ordering {
+pub(crate) fn natural(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
     loop {
         match (x.peek().copied(), y.peek().copied()) {
