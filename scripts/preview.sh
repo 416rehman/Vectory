@@ -97,7 +97,7 @@ fi
 # when agent sources change; VECTORY_PREVIEW_AGENT_TARGETS (for example
 # "linux/amd64 darwin/arm64") limits the platforms for a faster start.
 bundled="$preview/agent-releases"
-if [[ ! -f "$bundled/catalog.json" || -n "$(find "$root/agent" -name '*.go' -newer "$bundled/catalog.json" -print -quit)" ]]; then
+if [[ ! -f "$bundled/catalog.json" || -n "$(find "$root/agent" -name '*.go' -newer "$bundled/catalog.json" | head -n1)" ]]; then
   if command -v go >/dev/null && command -v python3 >/dev/null; then
     targets=()
     for target in ${VECTORY_PREVIEW_AGENT_TARGETS:-}; do targets+=(--target "$target"); done
