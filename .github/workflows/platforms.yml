@@ -315,6 +315,29 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs apply service
+      - name: Ask the validator what it answers to the pipelines the workflow publishes
+        if: ${{ !cancelled() && (steps.native.outcome == 'failure' || steps.apply.outcome == 'failure') }}
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $pidFile = Join-Path $PWD '.local/preview/validator.pid'
+          $validator = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile)) -ErrorAction SilentlyContinue
+          if ($validator) { Write-Host "The validator process (PID $($validator.Id)) is running." } else { Write-Host 'The validator process is no longer running.' }
+          Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | Format-Table State, LocalAddress, LocalPort, OwningProcess | Out-String | Write-Host
+          $cases = [ordered]@{
+            'the service pipeline' = '{"config":{"sources":{"demo":{"type":"demo_logs","format":"json","interval":1}},"transforms":{"enrich":{"type":"remap","inputs":["demo"],"source":".environment = \"local-verification\"\n.managed_by = \"vectory\""}},"sinks":{"output":{"type":"console","inputs":["enrich"],"encoding":{"codec":"json"},"target":"stderr"}}}}'
+            'the foreground pipeline' = '{"config":{"data_dir":"D:\\a\\Vectory\\Vectory\\.local\\native workflow x\\vector-data","sources":{"demo":{"type":"demo_logs","format":"json","interval":1},"metrics":{"type":"internal_metrics","scrape_interval_secs":1}},"transforms":{"enrich":{"type":"remap","inputs":["demo"],"source":".environment = \"local-verification\"\n.managed_by = \"vectory\""}},"sinks":{"output":{"type":"console","inputs":["enrich"],"encoding":{"codec":"json"},"target":"stderr"},"metrics_out":{"type":"prometheus_exporter","inputs":["metrics"],"address":"127.0.0.1:9999"}}}}'
+          }
+          foreach ($name in $cases.Keys) {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            try {
+              $response = Invoke-WebRequest -Uri 'http://127.0.0.1:8081/validate' -Method Post -ContentType 'application/json' -Body $cases[$name] -SkipHttpErrorCheck -TimeoutSec 60
+              Write-Host "${name}: HTTP $($response.StatusCode) after $($watch.ElapsedMilliseconds) ms: $($response.Content)"
+            } catch {
+              Write-Host "${name}: no answer after $($watch.ElapsedMilliseconds) ms: $($_.Exception.Message)"
+            }
+          }
+          exit 0
       - name: Restart the service, kill the agent and stop the service
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         timeout-minutes: 25
