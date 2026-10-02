@@ -249,8 +249,15 @@ jobs:
           $env:VECTORY_VECTOR_BINARY = $env:VECTORY_VECTOR_BIN
           $preview = Join-Path $PWD '.local/preview'
           New-Item -ItemType Directory -Force $preview | Out-Null
-          $process = Start-Process -FilePath (Join-Path $PWD 'server/target/debug/vector-validator.exe') -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $preview 'validator.log') -RedirectStandardError (Join-Path $preview 'validator-error.log')
-          [IO.File]::WriteAllText((Join-Path $preview 'validator.pid'), [string]$process.Id)
+          # The runner ends a step by ending every process below the step's shell, and
+          # a process the shell started itself goes with it. One that a second shell
+          # started, and that shell has left, does not (Start-LocalPreview.ps1 starts
+          # the server that way), so a second shell starts the validator and exits.
+          $validator = Join-Path $PWD 'server/target/debug/vector-validator.exe'
+          $outLog = Join-Path $preview 'validator.log'
+          $errLog = Join-Path $preview 'validator-error.log'
+          pwsh -NoProfile -Command "Start-Process -FilePath '$validator' -WindowStyle Hidden -RedirectStandardOutput '$outLog' -RedirectStandardError '$errLog'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $ready = $false
           foreach ($attempt in 1..60) {
             try {
@@ -265,6 +272,8 @@ jobs:
             Get-Content (Join-Path $preview 'validator.log'), (Join-Path $preview 'validator-error.log') -ErrorAction SilentlyContinue | Select-Object -Last 40
             throw 'The validator did not listen on 127.0.0.1:8081.'
           }
+          $listener = Get-NetTCPConnection -LocalPort 8081 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($listener) { [IO.File]::WriteAllText((Join-Path $preview 'validator.pid'), [string]$listener.OwningProcess) }
           'VECTORY_VALIDATION_URL=http://127.0.0.1:8081' | Out-File -FilePath $env:GITHUB_ENV -Append
           # What the validator answers to the smallest pipeline, printed: the server
           # only says "unavailable" when the answer is not what it expects.
