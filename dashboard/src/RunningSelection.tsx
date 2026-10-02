@@ -28,7 +28,10 @@ export default function RunningSelection({
           {summary}
         </span>
         <span className="target-running-actions">
-          <span aria-hidden="true"> · </span>
+          <span className="target-running-dot" aria-hidden="true">
+            {" "}
+            ·{" "}
+          </span>
           <button
             type="button"
             className="target-link-button"
@@ -38,7 +41,10 @@ export default function RunningSelection({
           >
             Change
           </button>
-          <span aria-hidden="true"> · </span>
+          <span className="target-running-dot" aria-hidden="true">
+            {" "}
+            ·{" "}
+          </span>
           <button
             type="button"
             className="target-link-button"

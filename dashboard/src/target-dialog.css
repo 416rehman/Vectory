@@ -48,6 +48,18 @@
 .target-running-actions {
   white-space: nowrap;
 }
+/* Where the line wraps, Change and Clear take a row of their own, with no
+   separator left dangling at the start of it. */
+@media (max-width: 560px) {
+  .target-running-actions {
+    display: flex;
+    gap: 18px;
+    margin-top: 2px;
+  }
+  .target-running-dot {
+    display: none;
+  }
+}
 .target-running small {
   color: var(--muted);
   font-size: 12.5px;
