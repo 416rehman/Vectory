@@ -257,6 +257,79 @@ async fn account_administration_authenticates_before_it_reads_the_body() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path} {body}");
     }
 }
+#[tokio::test]
+async fn own_account_routes_authenticate_before_they_read_the_body() {
+    let (_temp, _s, app, admin) = fixture().await;
+    let viewer = create(&app, &admin, "viewer", "viewer@example.test").await;
+    let without_csrf = Session {
+        user: viewer.user.clone(),
+        cookie: viewer.cookie.clone(),
+        csrf: String::new(),
+    };
+    for (path, well_formed) in [
+        (
+            "/api/v1/account/password",
+            r#"{"current_password":"anything","new_password":"a-long-enough-replacement"}"#,
+        ),
+        (
+            "/api/v1/account/revoke-sessions",
+            r#"{"current_password":"anything"}"#,
+        ),
+    ] {
+        // Nobody signed in learns anything from the body: a well-formed one,
+        // one the route would refuse, one that isn't JSON and one that isn't
+        // declared as JSON all answer 401.
+        for (content_type, raw) in [
+            ("application/json", well_formed),
+            ("application/json", "{}"),
+            ("application/json", r#"{"current_password":7}"#),
+            ("application/json", "{not json"),
+            ("application/json", ""),
+            ("text/plain", well_formed),
+            (
+                "application/x-www-form-urlencoded",
+                "current_password=anything",
+            ),
+        ] {
+            let (status, body) = send_raw(&app, "POST", path, content_type, raw, None).await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{path} {content_type} {raw:?}: {body}"
+            );
+            assert_eq!(body["error"]["code"], "UNAUTHENTICATED", "{path} {raw:?}");
+        }
+        // A session without the matching CSRF token is refused before the body
+        // is judged too.
+        for raw in [well_formed, "{not json", "{}"] {
+            let (status, body) = send_raw(
+                &app,
+                "POST",
+                path,
+                "application/json",
+                raw,
+                Some(&without_csrf),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{path} {raw:?}: {body}");
+        }
+        // Signed in with the token, a body the route cannot read is the
+        // caller's mistake: 400, whatever the role.
+        for session in [&viewer, &admin] {
+            for raw in ["{not json", "", "{}", r#"{"current_password":7}"#] {
+                let (status, body) =
+                    send_raw(&app, "POST", path, "application/json", raw, Some(session)).await;
+                assert_eq!(
+                    status,
+                    StatusCode::BAD_REQUEST,
+                    "{path} {raw:?} as {}: {body}",
+                    session.user["role"]
+                );
+                assert_eq!(body["error"]["code"], "INVALID_INPUT", "{path} {raw:?}");
+            }
+        }
+    }
+}
 async fn send_raw(
     app: &Router,
     method: &str,

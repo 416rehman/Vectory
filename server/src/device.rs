@@ -1287,17 +1287,31 @@ const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A run of failed accepts: how long to pause after the next one, and how
 /// often the log hears about it (a descriptor shortage can last as long as an
-/// attack does).
-#[derive(Default)]
-struct AcceptTrouble {
+/// attack does). Each listener keeps its own and names itself in the log.
+pub(crate) struct AcceptTrouble {
+    listener: &'static str,
     in_a_row: u32,
     unreported: u64,
     reported: Option<std::time::Instant>,
 }
 impl AcceptTrouble {
+    /// `listener` completes the log lines: "the agent listener could not accept
+    /// a connection".
+    pub(crate) fn new(listener: &'static str) -> Self {
+        Self {
+            listener,
+            in_a_row: 0,
+            unreported: 0,
+            reported: None,
+        }
+    }
     /// Note one more failure and say how long to wait before accepting again:
     /// 10 ms, doubling to 100 ms while it lasts.
-    fn failed(&mut self, error: &std::io::Error, now: std::time::Instant) -> std::time::Duration {
+    pub(crate) fn failed(
+        &mut self,
+        error: &std::io::Error,
+        now: std::time::Instant,
+    ) -> std::time::Duration {
         self.in_a_row = self.in_a_row.saturating_add(1);
         self.unreported += 1;
         if self
@@ -1307,18 +1321,19 @@ impl AcceptTrouble {
             tracing::warn!(
                 %error,
                 failures = self.unreported,
-                "the agent listener could not accept a connection; pausing briefly and trying again"
+                "{} could not accept a connection; pausing briefly and trying again",
+                self.listener
             );
             self.reported = Some(now);
             self.unreported = 0;
         }
         (PAUSE_SHORTEST * 2u32.saturating_pow(self.in_a_row - 1)).min(PAUSE_LONGEST)
     }
-    fn accepted(&mut self) {
+    pub(crate) fn accepted(&mut self) {
         if self.reported.is_some() {
-            tracing::info!("the agent listener accepts connections again");
+            tracing::info!("{} accepts connections again", self.listener);
         }
-        *self = Self::default();
+        *self = Self::new(self.listener);
     }
 }
 
@@ -1394,7 +1409,7 @@ pub async fn serve_tls_on<A: Accept>(
     let handshakes = std::sync::Arc::new(tokio::sync::Semaphore::new(handshake_slots(
         maximum_connections,
     )));
-    let mut trouble = AcceptTrouble::default();
+    let mut trouble = AcceptTrouble::new("the agent listener");
     loop {
         let (socket, address) = match listener.accept().await {
             Ok(accepted) => {
@@ -1514,7 +1529,7 @@ mod tests {
 
     #[test]
     fn pauses_start_short_grow_and_stop_at_a_tenth_of_a_second() {
-        let mut trouble = AcceptTrouble::default();
+        let mut trouble = AcceptTrouble::new("the agent listener");
         let error = Error::other("Too many open files");
         let now = std::time::Instant::now();
         let pauses: Vec<u64> = (0..8)

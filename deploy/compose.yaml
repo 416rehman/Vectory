@@ -26,6 +26,11 @@ services:
       # The HTTP listener is reachable only through the proxy below, which
       # sets X-Forwarded-For to the client address.
       VECTORY_TRUST_PROXY_HEADERS: "true"
+      # The listener enforces that itself: it closes a connection from anything
+      # but the proxy (and its own loopback, for the health check). The
+      # validator shares a network with the server and runs untrusted pipeline
+      # code, so it must not reach this port.
+      VECTORY_HTTP_ALLOWED_PEERS: proxy
       # Agents are bundled in the image (/app/agent-releases). An optional
       # operator mirror mounted at /app/releases replaces a platform's build.
       VECTORY_RELEASES_DIR: /app/releases
