@@ -1,5 +1,7 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use vectory_server::{Settings, api, device, initialize, install, notifier, rollout, wake};
+use vectory_server::{
+    Settings, api, device, http_listener, initialize, install, notifier, rollout, wake,
+};
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_owned())
@@ -100,6 +102,32 @@ fn check_http_bind_address(development: bool, address: &str) -> anyhow::Result<(
     Ok(())
 }
 
+/// What a production server says when its HTTP listener is bound beyond
+/// loopback: it speaks plain HTTP and is meant to be reached only through the
+/// TLS proxy. Nothing refuses the bind, because the container image binds
+/// `0.0.0.0` inside its private network by design. A listener that accepts only
+/// the peers it is told to (`VECTORY_HTTP_ALLOWED_PEERS`) has nothing to warn
+/// about.
+fn http_exposure_warning(
+    development: bool,
+    bound: SocketAddr,
+    trust_proxy_headers: bool,
+    peers_restricted: bool,
+) -> Option<String> {
+    if development || peers_restricted || bound.ip().to_canonical().is_loopback() {
+        return None;
+    }
+    let mut warning = format!(
+        "The HTTP listener is bound to {bound}, which is not a loopback address. It speaks plain HTTP. Reach it only through your TLS reverse proxy, for example over a private container network: anyone who can connect to it directly bypasses TLS."
+    );
+    if trust_proxy_headers {
+        warning.push_str(
+            " VECTORY_TRUST_PROXY_HEADERS is true, so a client that connects directly chooses its own sign-in and rate-limit key, and the address the audit log records, by sending an X-Forwarded-For header.",
+        );
+    }
+    Some(warning)
+}
+
 fn check_agent_bind_address(
     development: bool,
     validator_configured: bool,
@@ -166,6 +194,16 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let web_addr = env_or("VECTORY_HTTP_ADDR", "127.0.0.1:8080");
     check_http_bind_address(development, &web_addr)?;
+    let http_limits = http_listener::Limits::from_values(
+        env::var(http_listener::HEADER_TIMEOUT_VARIABLE).ok(),
+        env::var(http_listener::BODY_TIMEOUT_VARIABLE).ok(),
+        env::var(http_listener::CONNECTIONS_VARIABLE).ok(),
+    )?;
+    let allowed_peers = http_listener::AllowedPeers::parse(
+        env::var(http_listener::ALLOWED_PEERS_VARIABLE)
+            .ok()
+            .as_deref(),
+    )?;
     let agent_addr = if cert.is_some() && key.is_some() {
         let address = env_or("VECTORY_AGENT_ADDR", "0.0.0.0:8443");
         check_agent_bind_address(development, validation_url.is_some(), &address)?;
@@ -248,15 +286,32 @@ async fn main() -> anyhow::Result<()> {
     // the writer lock, a heartbeat, the scheduler or a request.
     tokio::spawn(notifier::run(state.clone()));
     let listener = tokio::net::TcpListener::bind(&web_addr).await?;
-    let app =
-        api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    // Host names are looked up before the first connection is accepted, so a
+    // proxy that is already up is allowed from the start.
+    let allowed_peers = match allowed_peers {
+        Some(peers) => Some(
+            peers
+                .start(http_listener::SystemResolver, Default::default())
+                .await,
+        ),
+        None => None,
+    };
+    if let Some(warning) = http_exposure_warning(
+        development,
+        listener.local_addr()?,
+        state.settings.trust_proxy_headers,
+        allowed_peers.is_some(),
+    ) {
+        tracing::warn!("{warning}");
+    }
+    let app = api::router(state.clone());
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
-        // `axum::serve` logs a failed accept and tries again; `serve_tls` does
-        // the same and returns only when its listener is unusable. Whichever
-        // way the server ends, the agents' parked waits are answered first.
+        // Both listeners log a failed accept and try again, and return only
+        // when their socket is unusable. Whichever way the server ends, the
+        // agents' parked waits are answered first.
         let outcome = tokio::select! {
-            result = axum::serve(listener, app) => result.map_err(anyhow::Error::from),
+            result = http_listener::serve_on(listener, app, http_limits, allowed_peers, std::future::pending()) => result,
             result = device::serve_tls(state.clone(), &agent_addr, &cert, &key) => result,
             _ = shutdown_signal() => Ok(()),
         };
@@ -266,11 +321,10 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(
             "Explicit development mode: agent listener disabled without TLS certificate and key"
         );
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await?;
+        http_listener::serve_on(listener, app, http_limits, allowed_peers, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     }
     Ok(())
 }
@@ -278,7 +332,8 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_agent_bind_address, check_http_bind_address, validation_url_for_mode, wake_options,
+        check_agent_bind_address, check_http_bind_address, http_exposure_warning,
+        validation_url_for_mode, wake_options,
     };
 
     #[test]
@@ -337,6 +392,46 @@ mod tests {
             );
         }
         check_http_bind_address(false, "0.0.0.0:8080").unwrap();
+    }
+
+    #[test]
+    fn production_warns_once_about_an_http_listener_beyond_loopback() {
+        let bound = |address: &str| address.parse().unwrap();
+        for address in ["127.0.0.1:8080", "127.8.2.1:8080", "[::1]:8080"] {
+            assert_eq!(
+                http_exposure_warning(false, bound(address), true, false),
+                None
+            );
+        }
+        // An IPv4 loopback address a dual-stack socket reports as IPv6 is still loopback.
+        assert_eq!(
+            http_exposure_warning(false, bound("[::ffff:127.0.0.1]:8080"), false, false),
+            None
+        );
+        // Development already refuses anything but loopback.
+        assert_eq!(
+            http_exposure_warning(true, bound("0.0.0.0:8080"), true, false),
+            None
+        );
+        // A listener that accepts only the peers it is told to has nothing to warn about.
+        assert_eq!(
+            http_exposure_warning(false, bound("0.0.0.0:8080"), true, true),
+            None
+        );
+        for address in ["0.0.0.0:8080", "[::]:8080", "192.0.2.1:8080"] {
+            let warning = http_exposure_warning(false, bound(address), false, false).unwrap();
+            assert!(warning.contains(address), "{warning}");
+            assert!(warning.contains("plain HTTP"), "{warning}");
+            assert!(warning.contains("TLS reverse proxy"), "{warning}");
+            assert!(!warning.contains("X-Forwarded-For"), "{warning}");
+            let trusting = http_exposure_warning(false, bound(address), true, false).unwrap();
+            assert!(trusting.starts_with(&warning), "{trusting}");
+            assert!(
+                trusting.contains("VECTORY_TRUST_PROXY_HEADERS is true")
+                    && trusting.contains("X-Forwarded-For"),
+                "{trusting}"
+            );
+        }
     }
 
     #[test]

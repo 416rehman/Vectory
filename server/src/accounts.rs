@@ -213,10 +213,23 @@ pub async fn edit(
     }))
 }
 
+/// A caller who is signed in and sent the session's CSRF token. A handler that
+/// takes it ahead of its body extractor refuses everyone else before any of the
+/// body is read or judged, so an anonymous caller learns nothing from it.
+pub struct SignedIn;
+impl axum::extract::FromRequestParts<State> for SignedIn {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, s: &State) -> Result<Self> {
+        auth::authorize(s, &parts.headers, &[], true).await?;
+        Ok(SignedIn)
+    }
+}
+
 pub async fn change_password(
     AppState(s): AppState<State>,
     h: HeaderMap,
     crate::ClientAddress(peer): crate::ClientAddress,
+    _: SignedIn,
     Json(v): Json<Value>,
 ) -> Result<(HeaderMap, Json<Value>)> {
     let password = auth::password_field(&v, "new_password")?;
@@ -284,6 +297,7 @@ async fn revoke_issued_codes(conn: &mut SqliteConnection, issuer_id: &str) -> Re
 pub async fn revoke_sessions(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    _: SignedIn,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
     let (_, hash) = reauthenticate(&s, &h, &[], db::string(&v, "current_password", 256)?).await?;

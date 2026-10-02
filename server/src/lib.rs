@@ -28,6 +28,7 @@ pub mod error;
 pub mod fleet;
 pub mod group_requests;
 pub mod groups;
+pub mod http_listener;
 pub mod install;
 pub mod issues;
 pub mod ledger;
