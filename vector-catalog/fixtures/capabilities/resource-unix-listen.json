@@ -1,0 +1,36 @@
+{
+  "description": "A Unix socket a source listens on lies under an allowed root, and Vector creates it.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "syslog",
+        "mode": "unix",
+        "path": "/run/vector/syslog.sock"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [
+      "/run/vector/syslog.sock"
+    ],
+    "writes": [
+      "/run/vector/syslog.sock"
+    ],
+    "assets": []
+  }
+}

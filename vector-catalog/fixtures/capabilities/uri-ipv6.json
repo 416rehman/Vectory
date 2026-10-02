@@ -1,0 +1,49 @@
+{
+  "description": "An IPv6 literal keeps its brackets in the destination, with the scheme's port when none is written.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "a": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://[2001:DB8::10]:8443/ingest",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "b": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "http://[::1]/ingest",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "[2001:db8::10]:8443",
+      "[::1]:80"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "description": "Console output must go to standard error; standard output, the default, carries Vector's startup log.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "implicit": {
+        "type": "console",
+        "inputs": [
+          "in"
+        ],
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "stdout": {
+        "type": "console",
+        "inputs": [
+          "in"
+        ],
+        "target": "stdout",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "stderr": {
+        "type": "console",
+        "inputs": [
+          "in"
+        ],
+        "target": "stderr",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "CONSOLE_TARGET_DENIED",
+        "at": "/sinks/implicit/target"
+      },
+      {
+        "code": "CONSOLE_TARGET_DENIED",
+        "at": "/sinks/stdout/target"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

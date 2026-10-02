@@ -1,0 +1,52 @@
+{
+  "description": "Options that move the broker list or turn TLS checks off aren't on the reviewed list.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "kafka",
+        "bootstrap_servers": "broker.example.net:9092",
+        "group_id": "g",
+        "topics": [
+          "logs"
+        ],
+        "librdkafka_options": {
+          "bootstrap.servers": "other.example.net:9092",
+          "enable.ssl.certificate.verification": "false"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "PASSTHROUGH_OPTION_DENIED",
+        "at": "/sources/in/librdkafka_options/bootstrap.servers"
+      },
+      {
+        "code": "PASSTHROUGH_OPTION_DENIED",
+        "at": "/sources/in/librdkafka_options/enable.ssl.certificate.verification"
+      }
+    ],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9092"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

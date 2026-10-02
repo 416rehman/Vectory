@@ -1,0 +1,65 @@
+{
+  "description": "Turning TLS verification off needs full mode; leaving it on or unset doesn't.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "off": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://a.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "tls": {
+          "verify_certificate": false,
+          "verify_hostname": false
+        }
+      },
+      "on": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://b.example.net/",
+        "encoding": {
+          "codec": "json"
+        },
+        "tls": {
+          "verify_certificate": true
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "TLS_VERIFICATION_REQUIRED",
+        "at": "/sinks/off/tls/verify_certificate"
+      },
+      {
+        "code": "TLS_VERIFICATION_REQUIRED",
+        "at": "/sinks/off/tls/verify_hostname"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "a.example.net:443",
+      "b.example.net:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

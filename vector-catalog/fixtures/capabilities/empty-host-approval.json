@@ -1,0 +1,36 @@
+{
+  "description": "An approval component needs its type approved even when it names no resource.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "host": {
+        "type": "host_metrics",
+        "collectors": [
+          "cpu",
+          "memory"
+        ]
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "host"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "host_metrics"
+    ],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "description": "Sinks that connect to Unix sockets aren't reviewed yet, so they need full mode; a file root never covers them.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "raw": {
+        "type": "socket",
+        "inputs": [
+          "in"
+        ],
+        "mode": "unix_stream",
+        "path": "/run/app/ingest.sock",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "stats": {
+        "type": "statsd",
+        "inputs": [
+          "m"
+        ],
+        "mode": "unix",
+        "path": "/run/statsd.sock"
+      }
+    },
+    "transforms": {
+      "m": {
+        "type": "log_to_metric",
+        "inputs": [
+          "in"
+        ],
+        "metrics": [
+          {
+            "type": "counter",
+            "field": "message",
+            "name": "lines"
+          }
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/raw"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/stats"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

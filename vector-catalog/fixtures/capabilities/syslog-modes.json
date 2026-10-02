@@ -1,0 +1,50 @@
+{
+  "description": "Syslog listens on its address in tcp and udp modes, and needs no address in unix mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "tcp": {
+        "type": "syslog",
+        "mode": "tcp",
+        "address": "0.0.0.0:514"
+      },
+      "udp": {
+        "type": "syslog",
+        "mode": "udp",
+        "address": "0.0.0.0:514"
+      },
+      "local": {
+        "type": "syslog",
+        "mode": "unix",
+        "path": "/run/vector/log.sock"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "tcp",
+          "udp",
+          "local"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "0.0.0.0:514"
+    ],
+    "file_roots": [
+      "/run/vector/log.sock"
+    ],
+    "writes": [
+      "/run/vector/log.sock"
+    ],
+    "assets": []
+  }
+}

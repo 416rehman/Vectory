@@ -1,0 +1,71 @@
+{
+  "description": "Unit tests are data, so substitutions in sample events pass, but their VRL is still checked.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "transforms": {
+      "r": {
+        "type": "remap",
+        "inputs": [
+          "in"
+        ],
+        "source": ".ok = true"
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "r"
+        ]
+      }
+    },
+    "tests": [
+      {
+        "name": "marks events",
+        "inputs": [
+          {
+            "insert_at": "r",
+            "type": "log",
+            "log_fields": {
+              "message": "price is $NAME or ${NAME}"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "extract_from": "r",
+            "conditions": [
+              {
+                "type": "vrl",
+                "source": "assert!(.ok)\nget_env_var(\"HOME\") != \"\""
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "DYNAMIC_CAPABILITY_DENIED",
+        "at": "/tests/0/outputs/0/conditions/0/source"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "description": "An api block needs full mode, enabled or not: Vector's API has no authentication.",
+  "vector": "valid",
+  "config": {
+    "api": {
+      "enabled": false,
+      "address": "127.0.0.1:8686"
+    },
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "LOCAL_API_DENIED",
+        "at": "/api"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

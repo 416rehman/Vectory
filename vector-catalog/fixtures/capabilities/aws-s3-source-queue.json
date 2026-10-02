@@ -1,0 +1,45 @@
+{
+  "description": "An S3 source's queue URL is a destination, and its deprecated top-level assume_role is ambient.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "aws_s3",
+        "region": "us-east-1",
+        "assume_role": "arn:aws:iam::123456789012:role/vector",
+        "auth": {
+          "access_key_id": "vectory-secret:aws-key-id",
+          "secret_access_key": "vectory-secret:aws-secret"
+        },
+        "sqs": {
+          "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789012/logs"
+        }
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "in"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "aws_s3"
+    ],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [
+      "sqs.us-east-1.amazonaws.com:443"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "description": "Credentials in a URL's authority can't be approved; device secrets are the way to send them.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://ingest@collector.example.net/x",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "NETWORK_DESTINATION_DENIED",
+        "at": "/sinks/out/uri"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

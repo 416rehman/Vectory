@@ -1,0 +1,40 @@
+{
+  "description": "Elasticsearch needs its endpoints written out; the deprecated endpoint alone doesn't count.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "elasticsearch",
+        "inputs": [
+          "in"
+        ],
+        "endpoint": "https://es.example.net:9200"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "NETWORK_DESTINATION_DENIED",
+        "at": "/sinks/out/endpoints"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "es.example.net:9200"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "description": "Hosts are lower-cased and ports written without leading zeros; http means 80.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "a": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "http://Collector.Example.NET/x",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "b": {
+        "type": "http",
+        "inputs": [
+          "in"
+        ],
+        "uri": "https://collector.example.net:0443/x",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [],
+    "capabilities": [],
+    "network": [
+      "collector.example.net:443",
+      "collector.example.net:80"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

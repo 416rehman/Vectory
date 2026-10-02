@@ -1,0 +1,41 @@
+{
+  "description": "An AWS component without explicit keys signs with the host's own identity, which needs instance-credentials.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "aws_s3",
+        "inputs": [
+          "in"
+        ],
+        "bucket": "logs",
+        "region": "us-east-1",
+        "encoding": {
+          "codec": "json"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "aws_s3"
+    ],
+    "capabilities": [
+      "instance-credentials"
+    ],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

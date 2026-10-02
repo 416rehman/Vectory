@@ -1,0 +1,53 @@
+{
+  "description": "Socket and vector sinks read {{ }} in an address literally; neither is reviewed yet, so both need full mode.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "raw": {
+        "type": "socket",
+        "inputs": [
+          "in"
+        ],
+        "mode": "tcp",
+        "address": "{{ host }}:9000",
+        "encoding": {
+          "codec": "json"
+        }
+      },
+      "next": {
+        "type": "vector",
+        "inputs": [
+          "in"
+        ],
+        "address": "{{ host }}:6000"
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/next"
+      },
+      {
+        "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+        "at": "/sinks/raw"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

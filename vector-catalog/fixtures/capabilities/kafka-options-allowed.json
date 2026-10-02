@@ -1,0 +1,46 @@
+{
+  "description": "Reviewed librdkafka tuning options pass.",
+  "vector": "valid",
+  "config": {
+    "sources": {
+      "in": {
+        "type": "demo_logs",
+        "format": "json",
+        "count": 1
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "kafka",
+        "inputs": [
+          "in"
+        ],
+        "bootstrap_servers": "broker.example.net:9092",
+        "topic": "logs",
+        "encoding": {
+          "codec": "json"
+        },
+        "librdkafka_options": {
+          "linger.ms": "5",
+          "queue.buffering.max.messages": "100000",
+          "client.id": "edge"
+        }
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [],
+    "components": [
+      "kafka"
+    ],
+    "capabilities": [],
+    "network": [
+      "broker.example.net:9092"
+    ],
+    "listeners": [],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}

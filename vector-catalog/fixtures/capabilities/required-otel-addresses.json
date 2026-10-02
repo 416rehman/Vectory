@@ -1,0 +1,42 @@
+{
+  "description": "OpenTelemetry needs both listen addresses written out; Vector refuses a missing one too.",
+  "vector": "invalid",
+  "vector_error": "missing field `address`",
+  "config": {
+    "sources": {
+      "otel": {
+        "type": "opentelemetry",
+        "grpc": {
+          "address": "0.0.0.0:4317"
+        },
+        "http": {}
+      }
+    },
+    "sinks": {
+      "out": {
+        "type": "blackhole",
+        "inputs": [
+          "otel.logs"
+        ]
+      }
+    }
+  },
+  "needs": {
+    "refused": [],
+    "full_mode": [
+      {
+        "code": "LISTENER_DENIED",
+        "at": "/sources/otel/http/address"
+      }
+    ],
+    "components": [],
+    "capabilities": [],
+    "network": [],
+    "listeners": [
+      "0.0.0.0:4317"
+    ],
+    "file_roots": [],
+    "writes": [],
+    "assets": []
+  }
+}
