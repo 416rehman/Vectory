@@ -119,6 +119,10 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
     implicitSource: data.implicitSource === true,
   };
   const title = componentTitle(type, kind, context);
+  // Two steps with the same catalog title lead with their IDs, so they can be
+  // told apart: "archive · Discard events".
+  const shared = data.sharedTitle === true && !context.enrichmentTable;
+  const heading = shared ? `${label} · ${title}` : title;
   const summary = componentSummary(component, kind, context);
   const ports = nodeOutputPorts(component, kind);
   const simpleOutput = ports.length === 1 && ports[0] === "output";
@@ -225,7 +229,9 @@ function PipelineNode({ id, data, selected, isConnectable }: NodeProps) {
                   : "Enrichment table"
                 : kindLabels[kind]}
             </span>
-            <strong title={title}>{title}</strong>
+            <strong title={heading} data-shared={shared || undefined}>
+              {heading}
+            </strong>
           </div>
           {openMenu && (
             <button
