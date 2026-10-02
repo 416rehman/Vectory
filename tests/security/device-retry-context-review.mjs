@@ -36,7 +36,7 @@ const wrongConfig={...config,id:id(31),name:'UNEXPECTED pipeline B'};
 const version={id:id(20),configuration_id:config.id,number:1,graph:{nodes:[],edges:[]},config:{},artifact:'{}',sha256:'a'.repeat(64),size:2,created_at:stamp,message:'Expected version',validation:{valid:true}};
 const wrongVersion={...version,id:id(21),configuration_id:wrongConfig.id,number:777,message:'UNEXPECTED version B'};
 const assigned={...A,desired_version_id:version.id,desired_generation:3,apply_state:'failed',retry_preconditions:true};
-const sample={sampled_at:new Date().toISOString(),events_per_second:123,errors:0};
+const sample={sampled_at:new Date(Date.now()-2*60_000).toISOString(),events_per_second:123,errors:0};
 const files=['dashboard/src/App.tsx','dashboard/src/Fleet.tsx','dashboard/src/RecoveryActions.tsx','dashboard/src/api.ts','dashboard/src/ui.tsx','dashboard/src/control.css','dashboard/src/styles.css','dashboard/src/DeviceRecoveryAuthorization.tsx','dashboard/src/TargetDialog.tsx','tests/security/device-retry-context-review.mjs'];
 const hashes=async()=>Object.fromEntries(await Promise.all(files.map(async p=>[p,createHash('sha256').update(await readFile(resolve(root,p))).digest('hex')])));
 const report={recorded_at:new Date().toISOString(),passed:false,classification:'isolated_actual_app_correctness',scope:'Actual App retry request ownership and local device control lifecycle, fully intercepted synthetic HTTP. Client abort does not prove server rollback. No real mutation, account, fleet, token, service or workload.',groups:[],screenshots:[],accessibility:[],geometry:[],requests:[],errors:[],unexpected:[]};
