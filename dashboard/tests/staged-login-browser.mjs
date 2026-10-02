@@ -93,6 +93,32 @@ async function fixture({
   });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
+  // On a slow or busy device the next frame can come after the person has
+  // already moved on. A test can hold the page's animation frames and let them
+  // run at the moment it chooses.
+  await context.addInitScript(() => {
+    const request = window.requestAnimationFrame.bind(window),
+      cancel = window.cancelAnimationFrame.bind(window),
+      held = new Map();
+    let holding = false,
+      next = 1e9;
+    window.requestAnimationFrame = (callback) => {
+      if (!holding) return request(callback);
+      held.set(++next, callback);
+      return next;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!held.delete(id)) cancel(id);
+    };
+    window.holdFrames = () => (holding = true);
+    window.releaseFrames = () => {
+      holding = false;
+      for (const [id, callback] of [...held]) {
+        held.delete(id);
+        callback(performance.now());
+      }
+    };
+  });
   const state = {
     mfa,
     authenticated: false,
@@ -243,6 +269,16 @@ async function fixture({
         enabled: state.mfa,
         recovery_codes_remaining: state.mfa ? 7 : null,
       });
+    if (path === "/password-reset" && method === "POST")
+      return reply(
+        {
+          error: {
+            code: "RESET_CODE_INVALID",
+            message: "This reset code is invalid, expired or already used.",
+          },
+        },
+        401,
+      );
     unexpected.push({ path, method });
     return reply(
       {
@@ -662,6 +698,56 @@ try {
             await f.close();
           }
         }
+    },
+  );
+  await check(
+    "typing after Back to sign in stays in the field the person chose when the next frame comes late",
+    async () => {
+      const f = await fixture({ route: `reset?code=${"a".repeat(64)}` });
+      try {
+        const chosen = "violet-harbor-lantern-2046";
+        await f.page.getByLabel("New password", { exact: true }).fill(chosen);
+        await f.page
+          .getByLabel("Confirm new password", { exact: true })
+          .fill(chosen);
+        await f.page
+          .getByRole("button", { name: "Save new password", exact: true })
+          .click();
+        await expect(f.page.getByRole("alert")).toContainText(
+          "invalid, expired or already used",
+        );
+        // The person is quicker than this device's next frame.
+        await f.page.evaluate(() => window.holdFrames());
+        await f.page
+          .getByRole("button", { name: "Back to sign in", exact: true })
+          .click();
+        const email = f.page.getByLabel("Email address", { exact: true }),
+          password = f.page.getByLabel("Password", { exact: true });
+        await email.fill(credentials.email);
+        await password.click();
+        await f.page.keyboard.type(credentials.password.slice(0, 8));
+        await f.page.evaluate(() => window.releaseFrames());
+        await f.page.keyboard.type(credentials.password.slice(8));
+        await expect(password).toBeFocused();
+        await expect(email).toHaveValue(credentials.email);
+        expect(
+          await password.evaluate(
+            (input, typed) => input.value === typed,
+            credentials.password,
+          ),
+        ).toBe(true);
+        await f.page
+          .getByRole("button", { name: "Sign in", exact: true })
+          .click();
+        await pending(f);
+        expect(
+          f.state.requests
+            .filter((request) => request.path === "/login")
+            .map((request) => request.body),
+        ).toEqual([credentials]);
+      } finally {
+        await f.close();
+      }
     },
   );
   await check(

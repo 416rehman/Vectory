@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -176,7 +182,8 @@ export default function AuthScreen({
   const passwordInput = useRef<HTMLInputElement>(null);
   const secretInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
-  // Focus after a failed request waits until the form is enabled again.
+  // A field to focus once the form is enabled again (after a failed request, a
+  // refused submit or a switched code field).
   const focusNext = useRef<(() => HTMLElement | null | undefined) | null>(null);
   const throttle = useCountdown(throttledUntil);
   const throttled = throttle !== null && throttle > 0;
@@ -228,12 +235,15 @@ export default function AuthScreen({
       welcome: `Welcome · ${instance}`,
     }[view.kind];
   }, [view.kind, instance]);
-  useEffect(() => {
+  // Focus moves in the commit that shows its target, never a frame later: by
+  // then the person may be typing in another field, and the move would send
+  // the rest of what they type there.
+  useLayoutEffect(() => {
     if (busy || checking || !focusNext.current) return;
     const target = focusNext.current;
     focusNext.current = null;
-    requestAnimationFrame(() => target()?.focus());
-  }, [busy, checking]);
+    target()?.focus();
+  });
   useEffect(() => {
     if (throttle === 0) {
       setThrottledUntil(null);
@@ -280,15 +290,13 @@ export default function AuthScreen({
       });
     return () => controller.abort();
   }, [view.kind === "invite" ? view.code : null]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Keep focus with the task after a view change.
-    requestAnimationFrame(() => {
-      if (view.kind === "mfa") codeInput.current?.focus();
-      else if (view.kind === "setup") secretInput.current?.focus();
-      else if (view.kind === "signin")
-        (email ? passwordInput : emailInput).current?.focus();
-      else heading.current?.focus();
-    });
+    if (view.kind === "mfa") codeInput.current?.focus();
+    else if (view.kind === "setup") secretInput.current?.focus();
+    else if (view.kind === "signin")
+      (email ? passwordInput : emailInput).current?.focus();
+    else heading.current?.focus();
   }, [view.kind]);
 
   function clearMessages() {
@@ -307,8 +315,7 @@ export default function AuthScreen({
     form.querySelector<HTMLElement>('[aria-invalid="true"]');
   /** After a refused submit, focus moves to the first field to fix. */
   function focusFirstInvalid(form: HTMLFormElement) {
-    const target = firstInvalid(form);
-    requestAnimationFrame(() => target()?.focus());
+    focusNext.current = firstInvalid(form);
   }
   /** After a recovery-code sign-in, say how many codes are left. */
   async function announceRecoveryCode() {
@@ -340,9 +347,6 @@ export default function AuthScreen({
     setNotice(next || null);
     if (linkRoute()) location.hash = destination.current.replace(/^#/, "");
     setView({ kind: "signin" });
-    requestAnimationFrame(() =>
-      (signInEmail || email ? passwordInput : emailInput).current?.focus(),
-    );
   }
   function adopt(session: z.infer<typeof SessionSchema>) {
     setCSRF(session.csrf_token);
@@ -1426,7 +1430,7 @@ export default function AuthScreen({
               setRecovery(!recovery);
               setCode("");
               clearMessages();
-              requestAnimationFrame(() => codeInput.current?.focus());
+              focusNext.current = () => codeInput.current;
             }}
           >
             {recovery ? "Use your authenticator app" : "Use a recovery code"}
