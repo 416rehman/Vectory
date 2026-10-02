@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{QueryBuilder, Row, Sqlite};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -360,6 +360,13 @@ pub async fn summary(
         result["canary_gate"] = crate::canary_gate::evaluate(&mut tx, &context, None)
             .await?
             .projection(&context);
+    }
+    // The devices the request chose as its canary (absent when it chose none).
+    if let Some(chosen) = context["rollout"]["canary_device_ids"]
+        .as_array()
+        .filter(|chosen| !chosen.is_empty())
+    {
+        result["rollout"]["canary_device_ids"] = json!(chosen);
     }
     Ok(Json(result))
 }
@@ -722,6 +729,18 @@ pub async fn rollout(
             target["_origin"] = origin;
         }
     }
+    let mut early: HashMap<String, Value> = HashMap::new();
+    for entry in context["early_releases"].as_array().into_iter().flatten() {
+        let (Some(at), Some(by)) = (entry["released_at"].as_str(), entry["by"].as_str()) else {
+            continue;
+        };
+        let name: Option<String> =
+            sqlx::query_scalar("SELECT substr(name,1,120) FROM users WHERE id=?")
+                .bind(by)
+                .fetch_optional(&mut *tx)
+                .await?;
+        early.insert(at.to_owned(), json!({"by_name":name,"at":at}));
+    }
     let status = context["status"].as_str().unwrap_or("");
     let canary = context["rollout"]["kind"] == "canary";
     // Only a rollout that can still release has a queue of future waves.
@@ -775,7 +794,7 @@ pub async fn rollout(
         } else {
             None
         };
-        json!({"kind":kind,"index":index,"state":state,"released_at":released_at,"verified_at":verified_at,"size":members.len(),"counts":counts,
+        json!({"kind":kind,"index":index,"state":state,"released_at":released_at,"released_early":released_at.and_then(|at| early.get(at)).cloned(),"verified_at":verified_at,"size":members.len(),"counts":counts,
             "devices":members.iter().take(60).map(|m| json!({"device_id":m["device_id"],"device_name":m["device_name"],"state":m["state"]})).collect::<Vec<_>>(),
             "more":members.len().saturating_sub(60)})
     };
@@ -796,7 +815,32 @@ pub async fn rollout(
         if !planning {
             stages.push(lane("not_released", 0, &unreleased, None));
         } else {
-            let mut queue = unreleased.as_slice();
+            // Nothing released yet: the queued canary is the devices the
+            // scheduler will choose, not the first by ID.
+            let chosen_first: Vec<&Value>;
+            let mut queue: &[&Value] = if canary && waves.is_empty() {
+                let ids: Vec<String> = unreleased
+                    .iter()
+                    .map(|t| t["device_id"].as_str().unwrap_or("").to_owned())
+                    .collect();
+                let order = crate::canary_choice::release_order(&mut tx, &context, &ids).await?;
+                let place: HashMap<&str, usize> = order
+                    .iter()
+                    .enumerate()
+                    .map(|(at, id)| (id.as_str(), at))
+                    .collect();
+                let mut sorted = unreleased.clone();
+                sorted.sort_by_key(|t| {
+                    place
+                        .get(t["device_id"].as_str().unwrap_or(""))
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+                chosen_first = sorted;
+                chosen_first.as_slice()
+            } else {
+                unreleased.as_slice()
+            };
             let mut first = waves.is_empty();
             while !queue.is_empty() {
                 let take = if !canary {
@@ -892,8 +936,15 @@ pub async fn rollout(
             }
         }
     }
+    // What the canary devices deliver now against just before their release.
+    let canary_watch = if crate::canary_gate::enabled(&context) && context["version_id"].is_string()
+    {
+        crate::canary_choice::watch(&mut tx, &context).await?
+    } else {
+        Value::Null
+    };
     Ok(Json(
-        json!({"deployment_id":id,"status":status,"evaluated_at":db::now(),"stages":stages,"failures":failures,"removed_count":removed,"check_in_seconds":check_in_seconds,"next_admission_at":next_admission_at}),
+        json!({"deployment_id":id,"status":status,"evaluated_at":db::now(),"stages":stages,"failures":failures,"removed_count":removed,"check_in_seconds":check_in_seconds,"next_admission_at":next_admission_at,"canary_watch":canary_watch}),
     ))
 }
 

@@ -839,7 +839,9 @@ pub async fn action(
     };
     auth::authorize(&s, &h, roles, true).await?;
     let v = body.map(|j| j.0).unwrap_or_else(|| json!({}));
-    if collection == "configurations" && action == "publish" {
+    let publishing = collection == "configurations" && action == "publish";
+    let acknowledged = publishing && crate::publish_tests::acknowledged(&v)?;
+    if publishing {
         if let Some(version) =
             crate::publication_requests::before_validation(&s, &h, &id, &v).await?
         {
@@ -847,6 +849,7 @@ pub async fn action(
         }
     }
     let mut checked = None;
+    let mut tests = None;
     if collection == "configurations" && (action == "validate" || action == "publish") {
         let mut conn = s.pool.acquire().await?;
         let configuration = db::record(&mut conn, "configuration", &id).await?;
@@ -862,7 +865,13 @@ pub async fn action(
                 "Draft changed; review before publishing",
             ));
         }
-        checked = Some(validation::validate_isolated(&s, &configuration["config"]).await?);
+        let accepted = validation::validate_isolated(&s, &configuration["config"]).await?;
+        // The tests of a draft Vector accepted. An invalid draft is refused
+        // below, with its problems, exactly as before.
+        if accepted["valid"] == true {
+            tests = crate::publish_tests::run(&s, &configuration["config"]).await?;
+        }
+        checked = Some(accepted);
     }
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let actor = auth::authorize_in(&mut tx, &h, roles, true).await?;
@@ -906,6 +915,11 @@ pub async fn action(
                             .join("; "),
                     ));
                 }
+                // Like the refusal above, this one is definitive: the replay of
+                // a committed request was looked for first.
+                if let Some(outcome) = &tests {
+                    outcome.check(acknowledged)?;
+                }
                 let artifact = validation::render(&c["config"])
                     .map_err(|_| ApiError::invalid("Cannot render artifact"))?;
                 if artifact.len() > 1024 * 1024 {
@@ -923,14 +937,27 @@ pub async fn action(
                 )?;
                 let mut version = json!({"id":db::id(),"configuration_id":id,"number":number,"graph":c["graph"],"config":c["config"],"variables":variables,"artifact":artifact,"sha256":db::hash(&artifact),"size":artifact.len(),"created_at":db::now(),"message":message,"author":text(&actor,"name"),"author_id":text(&actor,"id"),"source_revision":c["revision"],"validation":validation,"uses_local_secrets":validation::local_secret_references(&c["config"]).0});
                 db::insert(&mut tx, "version", &version).await?;
-                db::audit(
-                    &mut tx,
-                    text(&actor, "id"),
-                    "configuration.publish",
-                    text(&version, "id"),
-                    "success",
-                )
-                .await?;
+                // Published over failing tests: the row says so, with counts.
+                match tests.as_ref().and_then(|outcome| outcome.audit_details()) {
+                    Some(details) => {
+                        db::insert(
+                            &mut tx,
+                            "audit",
+                            &json!({"id":db::id(),"actor":text(&actor,"id"),"action":"configuration.publish","target":text(&version,"id"),"outcome":"success","created_at":db::now(),"details":details}),
+                        )
+                        .await?
+                    }
+                    None => {
+                        db::audit(
+                            &mut tx,
+                            text(&actor, "id"),
+                            "configuration.publish",
+                            text(&version, "id"),
+                            "success",
+                        )
+                        .await?
+                    }
+                }
                 crate::publication_requests::remember(
                     &mut tx,
                     text(&actor, "id"),

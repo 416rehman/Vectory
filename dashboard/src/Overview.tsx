@@ -14,6 +14,7 @@ import {
   Rocket,
   Server,
   ShieldCheck,
+  Undo2,
   Unplug,
   WifiOff,
   type LucideIcon,
@@ -87,6 +88,7 @@ export type AttentionGroup = {
   cause:
     | "failed"
     | "degraded"
+    | "held"
     | "check_required"
     | "stuck"
     | "offline"
@@ -651,6 +653,8 @@ function KpiTiles({
     data.devices_on_desired ??
     live.filter((device) => device.status === "verified").length;
   const unmanaged = total - managed;
+  // Devices whose newest version failed and which keep running an earlier one.
+  const held = healthCounts(live).counts.held;
   // Applied devices without metrics: nothing says their events arrive.
   const unmeasured = deliveryUnmeasured(live);
   const paused = (data.rollouts || []).filter(
@@ -711,7 +715,14 @@ function KpiTiles({
             ? "No device has a pipeline yet"
             : onDesired === managed
               ? "Verified running their assigned version"
-              : `${(managed - onDesired).toLocaleString()} not yet verified`}
+              : [
+                  held > 0 &&
+                    `${held.toLocaleString()} held on previous version`,
+                  managed - onDesired - held > 0 &&
+                    `${(managed - onDesired - held).toLocaleString()} not yet verified`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
           {managed > 0 && unmanaged > 0
             ? ` · ${unmanaged.toLocaleString()} without a pipeline`
             : ""}
@@ -761,6 +772,7 @@ function KpiTiles({
 const bucketIcons: Record<HealthBucket, LucideIcon> = {
   applied: CircleCheck,
   degraded: Unplug,
+  held: Undo2,
   updating: LoaderCircle,
   check: CircleHelp,
   failed: CircleX,
@@ -771,6 +783,7 @@ const bucketIcons: Record<HealthBucket, LucideIcon> = {
 const bucketCopy: Record<HealthBucket, string> = {
   applied: "Running their assigned version, verified by the agent.",
   degraded: "Applied, but not delivering events.",
+  held: "The newest version failed. Still running the previous one, and delivering.",
   updating: "Receiving or applying a new version.",
   check: "Applied, but Vector wasn't confirmed running.",
   failed: "The last apply failed or was rolled back.",
@@ -852,6 +865,7 @@ function FleetHealth({ live }: { live: Device[] }) {
 const severityIcons: Record<AttentionGroup["cause"], LucideIcon> = {
   failed: CircleX,
   degraded: Unplug,
+  held: Undo2,
   check_required: CircleHelp,
   stuck: LoaderCircle,
   offline: WifiOff,
@@ -897,6 +911,11 @@ function attentionCopy(
             : `${pipeline} isn't delivering on ${devices}`,
         detail: [group.title, group.reason].filter(Boolean).join(". ") || null,
       };
+    case "held":
+      return {
+        title: `${devices} held on previous version`,
+        detail: `${pipeline} couldn't be applied. ${group.count === 1 ? "It keeps" : "They keep"} running the previous version and delivering.`,
+      };
     case "check_required":
       return {
         title: `${pipeline} needs a check on ${devices}`,
@@ -940,6 +959,7 @@ function attentionCopy(
 const causeBucket: Partial<Record<AttentionGroup["cause"], HealthBucket>> = {
   failed: "failed",
   degraded: "degraded",
+  held: "held",
   check_required: "check",
   stuck: "updating",
   offline: "offline",
@@ -1156,7 +1176,7 @@ function AttentionItem({
             Deploy a pipeline
           </a>
         ) : rolloutHref &&
-          (group.cause === "degraded" || group.cause === "failed") ? (
+          ["degraded", "failed", "held"].includes(group.cause) ? (
           <a className="button secondary compact" href={rolloutHref}>
             Open rollout
           </a>
@@ -1166,7 +1186,9 @@ function AttentionItem({
           </a>
         )}
         {group.configuration_id &&
-          ["failed", "degraded", "check_required"].includes(group.cause) && (
+          ["failed", "degraded", "held", "check_required"].includes(
+            group.cause,
+          ) && (
             <a
               className="overview-inline-link"
               href={`#/configurations/${encodeURIComponent(group.configuration_id)}`}

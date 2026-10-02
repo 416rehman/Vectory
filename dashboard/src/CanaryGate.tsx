@@ -1,54 +1,40 @@
-import { useState } from "react";
 import { Clock3, Pause, ShieldCheck } from "lucide-react";
-import type { DeploymentSummary } from "./api";
+import type { CanaryWatch, DeploymentSummary } from "./api";
 import { HelpLink } from "./DocLink";
 import { exactTime } from "./deploymentStatus";
-import { NextAdmission } from "./DeploymentRollout";
-import { RefreshButton } from "./ui";
+import { gateHeadline } from "./canaryWatch";
 import {
   gateReasons,
   gateReasonLabels,
   gateReasonHelp,
   hasCanaryGate,
-  observationDuration,
   readCanaryGate,
 } from "./canaryGateModel";
 import "./canary-gate.css";
 
+/**
+ * What the canary gate is waiting for, in one sentence that names the devices.
+ * The stage lanes above own the countdown and the page header owns refreshing.
+ */
 export default function CanaryGate({
   deployment,
   readError,
-  onRefresh,
-  clockOffset = 0,
-  lastWave = false,
+  watch,
 }: {
   deployment: DeploymentSummary;
   readError: boolean;
-  onRefresh(): Promise<void>;
-  /** Server minus browser clock, from the latest read. */
-  clockOffset?: number;
-  lastWave?: boolean;
+  /** Names the devices the gate is waiting on, from the rollout lanes. */
+  watch?: CanaryWatch | null;
 }) {
-  const [refreshing, setRefreshing] = useState(false);
   if (!hasCanaryGate(deployment)) return null;
   const gate = readError ? null : readCanaryGate(deployment);
+  const headline = gate ? gateHeadline(gate, watch) : null;
   const Icon =
     gate?.state === "paused"
       ? Pause
       : gate?.state === "observing"
         ? ShieldCheck
         : Clock3;
-  const title = !gate
-    ? "Current gate details unavailable"
-    : gate.state === "paused"
-      ? "Rollout paused"
-      : gate.state === "observing"
-        ? "Observation in progress"
-        : gate.released_count === 0
-          ? "Waiting for the first release"
-          : gate.verified_count === gate.released_count
-            ? "Waiting for the next rollout check"
-            : "Waiting for current verification";
   return (
     <section className="canary-gate" aria-label="Canary gate">
       <header>
@@ -57,18 +43,6 @@ export default function CanaryGate({
           <h2>Canary gate</h2>
         </div>
         <div className="canary-gate-actions">
-          <RefreshButton
-            aria-label="Refresh canary gate"
-            busy={refreshing}
-            onClick={async () => {
-              setRefreshing(true);
-              try {
-                await onRefresh();
-              } finally {
-                setRefreshing(false);
-              }
-            }}
-          />
           <HelpLink
             topic="deployments"
             section="choose-a-rollout"
@@ -76,32 +50,22 @@ export default function CanaryGate({
           />
         </div>
       </header>
-      <strong className="canary-gate-state">{title}</strong>
-      {!gate ? (
+      <strong className="canary-gate-state">
+        {headline ? headline.title : "Current gate details unavailable"}
+      </strong>
+      {!gate || !headline ? (
         <p>
-          Refresh to check the gate. This server may not provide current gate
-          details. Recorded progress alone does not establish readiness.
+          Refresh this page to check the gate. This server may not provide
+          current gate details. Recorded progress alone does not establish
+          readiness.
         </p>
       ) : (
         <>
-          <p>
-            <strong>
-              {gate.verified_count} of {gate.released_count}
-            </strong>{" "}
-            released devices currently verified.
-            {gate.pending_count > 0 && (
-              <>
-                {" "}
-                {gate.pending_count}{" "}
-                {gate.pending_count === 1 ? "device is" : "devices are"} waiting
-                for release.
-              </>
-            )}
-          </p>
-          {gateReasons.some((reason) => gate.reasons[reason] > 0) && (
+          {headline.detail && <p>{headline.detail}</p>}
+          {headline.listed.length > 0 && (
             <ul className="canary-gate-reasons">
               {gateReasons
-                .filter((reason) => gate.reasons[reason] > 0)
+                .filter((reason) => headline.listed.includes(reason))
                 .map((reason) => (
                   <li key={reason}>
                     <span className="canary-gate-reason-count">
@@ -115,52 +79,14 @@ export default function CanaryGate({
                 ))}
             </ul>
           )}
-          {gate.state === "paused" ? (
-            <p>
-              Resume the rollout to begin a new observation period once the
-              released devices are currently verified.
-            </p>
-          ) : gate.state === "observing" ? (
-            <p>
-              The server continues checking these devices before releasing the
-              next batch or completing this rollout.
-            </p>
-          ) : gate.released_count > 0 &&
-            gate.verified_count < gate.released_count ? (
-            <p>
-              The observation period restarts when all released devices are
-              currently verified. Review their gate messages below.
-            </p>
-          ) : null}
-          <div className="canary-gate-footer">
-            {gate.state === "observing" && gate.observation_started_at && (
-              <NextAdmission
-                due={new Date(
-                  Date.parse(gate.observation_started_at) +
-                    gate.observation_seconds * 1000,
-                ).toISOString()}
-                totalSeconds={gate.observation_seconds}
-                clockOffset={clockOffset}
-                last={lastWave}
-              />
-            )}
+          {gate.observation_started_at && (
             <dl className="canary-gate-timing">
               <div>
-                <dt>Observation period</dt>
-                <dd>{observationDuration(gate.observation_seconds)}</dd>
-              </div>
-              {gate.observation_started_at && (
-                <div>
-                  <dt>Started</dt>
-                  <dd>{exactTime(gate.observation_started_at)}</dd>
-                </div>
-              )}
-              <div>
-                <dt>Checked</dt>
-                <dd>{exactTime(gate.evaluated_at)}</dd>
+                <dt>Observation started</dt>
+                <dd>{exactTime(gate.observation_started_at)}</dd>
               </div>
             </dl>
-          </div>
+          )}
         </>
       )}
     </section>

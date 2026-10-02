@@ -304,6 +304,22 @@ pub async fn list_devices(db: &mut SqliteConnection) -> Result<Vec<Value>> {
         .map(|listed| listed.row)
         .collect())
 }
+/// Whether a device whose newest version failed keeps running an earlier one:
+/// the version it verifiably runs (its file still matches the digest the agent
+/// verified) is not the desired one, its Vector is not reported stopped, and no
+/// open delivery issue is measured on the version it runs.
+fn held_on_previous(device: &Value, running: Option<&str>, desired: Option<&str>) -> bool {
+    let (Some(running), Some(desired)) = (running, desired) else {
+        return false;
+    };
+    let summary = &device["data_plane"];
+    let failing = summary["version_id"].as_str() == Some(running)
+        && summary["issues"]
+            .as_array()
+            .is_some_and(|issues| !issues.is_empty());
+    running != desired && device["vector_running"] != false && !failing
+}
+
 /// One stored device projected for the API, and the version it verifiably
 /// runs right now.
 fn project(
@@ -415,6 +431,14 @@ fn project(
                 _ => "applying",
             }
         });
+        // A device that could not take its newest version but verifiably keeps
+        // running an earlier one, and delivers on it, is held on that version
+        // rather than failed: its status stays what the agent reported.
+        if matches!(text(&d, "status"), "failed" | "rolled_back")
+            && held_on_previous(&d, running_now.as_deref(), desired_version_id.as_deref())
+        {
+            d["held_on_previous_version"] = json!(true);
+        }
         // Assignment metadata comes from the control plane, never device-reported data.
         for (field, column) in [
             ("assignment", assignment_id),
@@ -1082,6 +1106,38 @@ fn validate_request_inner(v: &Value, trusted_rollback: bool) -> Result<()> {
             return Err(ApiError::invalid(format!("Invalid rollout {key}")));
         }
     }
+    if let Some(chosen) = r
+        .get("canary_device_ids")
+        .filter(|chosen| !chosen.is_null())
+    {
+        let list = chosen
+            .as_array()
+            .filter(|list| list.len() <= crate::canary_choice::MAX_CHOSEN)
+            .ok_or_else(|| ApiError::invalid("canary_device_ids must list at most 100 devices"))?;
+        let mut seen = BTreeSet::new();
+        for id in list {
+            let id = id
+                .as_str()
+                .ok_or_else(|| ApiError::invalid("canary_device_ids must contain device IDs"))?;
+            let parsed = uuid::Uuid::parse_str(id)
+                .map_err(|_| ApiError::invalid("canary_device_ids must contain device IDs"))?;
+            if parsed.hyphenated().to_string() != id || !seen.insert(id) {
+                return Err(ApiError::invalid(
+                    "canary_device_ids must contain distinct lowercase device IDs",
+                ));
+            }
+        }
+        if !list.is_empty() && text(r, "kind") != "canary" {
+            return Err(ApiError::invalid(
+                "canary_device_ids apply to canary rollouts only",
+            ));
+        }
+        if list.len() as u64 > r["canary_size"].as_u64().unwrap_or(1) {
+            return Err(ApiError::invalid(
+                "canary_device_ids lists more devices than canary_size",
+            ));
+        }
+    }
     if !v["scheduled_at"].is_null() {
         let dt = DateTime::parse_from_rfc3339(db::string(v, "scheduled_at", 64)?)
             .map_err(|_| ApiError::invalid("Invalid scheduled_at"))?;
@@ -1130,6 +1186,7 @@ async fn preview_inner(
 ) -> Result<Value> {
     validate_request_inner(v, trusted_rollback)?;
     let selected = select(db, &v["selector"]).await?;
+    crate::canary_choice::check_members(&v["rollout"], &selected)?;
     // The pipeline's current name, so a review never shows a bare "Version 1".
     let mut configuration_name = Value::Null;
     let artifact_previews = if let Some(version_id) = v["version_id"].as_str() {
@@ -1416,6 +1473,8 @@ async fn preview_inner(
         Vec::new()
     };
     let mut warnings = Vec::new();
+    let (canary, canary_warnings) =
+        crate::canary_choice::describe(db, &v["rollout"], &selected).await?;
     if fleet.is_empty() {
         warnings.push("No devices selected.".to_owned())
     }
@@ -1453,9 +1512,10 @@ async fn preview_inner(
     if v["scheduled_at"].is_string() {
         warnings.push("Priorities are checked again when the schedule starts.".into());
     }
+    warnings.extend(canary_warnings);
     Ok(
         json!({"devices":fleet,"conflicts":conflicts_described,"warnings":warnings,"outcomes":outcomes,"artifact_previews":artifact_previews,"create_idempotency":true,"request_correlation":true,"blockers":blockers,
-            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"replacements_needed":replacements_needed,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused,"configuration_name":configuration_name}),
+            "replacements":replacements,"suggested_replaces":suggested_replaces,"suggested_priority":suggested_priority,"replacements_needed":replacements_needed,"winning_priority":winning_priority.filter(|p| *p <= 1_000_000),"paused_device_ids":paused,"configuration_name":configuration_name,"canary":canary}),
     )
 }
 /// Display metadata for an assignment: names and numbers, never selectors,
@@ -2116,6 +2176,12 @@ pub async fn resolve(db: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
+    advance_with(db, d, None).await
+}
+/// One step of a rollout. `early` names the person who asked for the next
+/// stage now: the observation period and the delivery measurements are not
+/// waited for, and the release is recorded on the rollout.
+async fn advance_with(db: &mut SqliteConnection, d: &mut Value, early: Option<&str>) -> Result<()> {
     if d["status"] != "active" {
         return Ok(());
     }
@@ -2218,7 +2284,7 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         }
         released_ids.iter().all(|device| fresh.contains(*device))
     };
-    if is_canary && !released.is_empty() {
+    if is_canary && !released.is_empty() && early.is_none() {
         let proof = proof.as_ref().unwrap();
         if !all_verified {
             if !d["observation_started_at"].is_null() {
@@ -2261,9 +2327,20 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
     };
     let configuration = kind(d) == "configuration";
     let mut wave = Vec::new();
-    for target in pending.into_iter().take(take) {
+    // The first canary wave is the devices chosen for it; every other wave
+    // takes the pending devices in ID order.
+    let pending_ids: Vec<String> = pending
+        .iter()
+        .map(|target| text(target, "device_id").to_owned())
+        .collect();
+    let order = if released.is_empty() {
+        crate::canary_choice::release_order(db, d, &pending_ids).await?
+    } else {
+        pending_ids
+    };
+    for device_id in order.iter().take(take) {
         let row = sqlx::query("SELECT data,revoked FROM devices WHERE id=?")
-            .bind(text(target, "device_id"))
+            .bind(device_id)
             .fetch_optional(&mut *db)
             .await?;
         let problem = match row {
@@ -2272,8 +2349,7 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
             Some(row) => {
                 let device = db::parse(row.get("data"))?;
                 if configuration {
-                    let rendered =
-                        crate::variables::target_artifact(db, d, text(target, "device_id")).await?;
+                    let rendered = crate::variables::target_artifact(db, d, device_id).await?;
                     let config: Value = serde_json::from_str(&rendered.bytes)
                         .map_err(|_| ApiError::invalid("Rendered device artifact is invalid"))?;
                     compatibility_problem(&device, requires_full_mode(&config))
@@ -2283,7 +2359,7 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
                 }
             }
         };
-        wave.push((text(target, "device_id").to_owned(), problem));
+        wave.push((device_id.clone(), problem));
     }
     if wave.iter().any(|(_, problem)| problem.is_some()) {
         // A changed device mode/version cannot admit a partial wave. Previous
@@ -2309,10 +2385,13 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         )
         .await?;
     } else {
+        // One release time for the whole wave, so the rollout page can tell
+        // its stages apart.
+        let at = db::now();
         for (device, _) in &wave {
             // Positive sentinel marks admission. resolve immediately replaces it with actual generation in the same transaction.
             sqlx::query("UPDATE deployment_targets SET state='desired',generation=1,released_at=? WHERE deployment_id=? AND device_id=? AND generation=0")
-                .bind(db::now())
+                .bind(&at)
                 .bind(text(d, "id"))
                 .bind(device)
                 .execute(&mut *db)
@@ -2328,6 +2407,14 @@ async fn advance(db: &mut SqliteConnection, d: &mut Value) -> Result<()> {
         }
         let released: Vec<String> = wave.iter().map(|(device, _)| device.clone()).collect();
         retire_replaced(db, d, &released).await?;
+        if let Some(actor) = early {
+            let mut list = d["early_releases"].as_array().cloned().unwrap_or_default();
+            list.push(json!({"released_at":at,"by":actor}));
+            if list.len() > 20 {
+                list.remove(0);
+            }
+            d["early_releases"] = json!(list);
+        }
     }
     d["observation_started_at"] = Value::Null;
     if *d != unchanged {
@@ -2549,6 +2636,7 @@ pub async fn action(
             }
             crate::canary_gate::clear(&mut d);
         }
+        "release-next-stage" => return release_next_stage(db, d, actor).await,
         "unassign" => {
             if !candidate_status(&d) {
                 return Err(ApiError::conflict(
@@ -2608,6 +2696,137 @@ pub async fn action(
         resolve(db).await?;
     }
     deployment(db, id).await
+}
+
+/// `POST /deployments/{id}/release-next-stage`: release the next stage of a
+/// canary rollout now, without waiting for its observation period or for the
+/// delivery measurements of the canary. Only a canary that has applied on
+/// every released device qualifies, and never silently: the audit row and the
+/// rollout say who released it and what the gate showed at that moment.
+async fn release_next_stage(db: &mut SqliteConnection, mut d: Value, actor: &str) -> Result<Value> {
+    let id = text(&d, "id").to_owned();
+    if d["rollout"]["kind"] != "canary" {
+        return Err(ApiError::conflict(
+            "Only a canary rollout has a next stage to release",
+        ));
+    }
+    match text(&d, "status") {
+        "active" => {}
+        "paused" => {
+            return Err(ApiError::conflict(
+                "The rollout is paused. Resume it to release its next stage.",
+            ));
+        }
+        "failed" => {
+            return Err(ApiError::conflict(
+                "The rollout failed, so it releases nothing more.",
+            ));
+        }
+        _ => {
+            return Err(ApiError::conflict("This rollout isn't waiting on a stage."));
+        }
+    }
+    let members = candidate_targets(db, &d).await?;
+    let all = targets(db, &id).await?;
+    let relevant: Vec<&Value> = all
+        .iter()
+        .filter(|t| members.contains(text(t, "device_id")))
+        .collect();
+    let released = relevant
+        .iter()
+        .filter(|t| t["generation"].as_i64().unwrap_or(0) > 0)
+        .count();
+    let pending = relevant
+        .iter()
+        .filter(|t| t["generation"] == 0 && t["state"] == "pending")
+        .count();
+    if released == 0 {
+        return Err(ApiError::conflict("The canary hasn't been released yet."));
+    }
+    if pending == 0 {
+        return Err(ApiError::conflict(
+            "Every device has been released. There is no next stage.",
+        ));
+    }
+    let proof = crate::canary_gate::evaluate(db, &d, None).await?;
+    // Measuring delivery may be skipped; a canary that has not applied, has
+    // gone quiet or is not delivering may not.
+    let holding = |reason: &str| proof.reasons.get(reason).copied().unwrap_or(0) > 0;
+    let refusal = if holding("degraded") {
+        Some(
+            "A canary device applied the change but isn't delivering events. Fix the pipeline or roll back before releasing more.",
+        )
+    } else if holding("unavailable") {
+        Some(
+            "A canary device was revoked or replaced. Cancel the rollout, or wait for its replacement.",
+        )
+    } else if holding("superseded") {
+        Some("Another assignment is effective on a canary device, so this one can't be checked.")
+    } else if holding("paused") {
+        Some("Sync is paused on a canary device. Resume it, or cancel the rollout.")
+    } else if holding("stale") {
+        Some("A canary device hasn't checked in recently. Wait for it, or cancel the rollout.")
+    } else if holding("unverified") {
+        Some("The canary hasn't applied on every released device yet. Wait until it has.")
+    } else {
+        None
+    };
+    if let Some(refusal) = refusal {
+        return Err(ApiError::conflict(refusal));
+    }
+    let measuring = proof.reasons.get("measuring").copied().unwrap_or(0);
+    let gate = if measuring > 0 {
+        "measuring"
+    } else {
+        "observing"
+    };
+    // The stage being skipped past: the canary, or the batch released last.
+    let waves: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT released_at) FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed' AND released_at IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_one(&mut *db)
+    .await?;
+    let stage = if waves <= 1 {
+        "canary".to_owned()
+    } else {
+        format!("batch {}", waves - 1)
+    };
+    advance_with(db, &mut d, Some(actor)).await?;
+    let now_released: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM deployment_targets WHERE deployment_id=? AND generation>0 AND state<>'removed'",
+    )
+    .bind(&id)
+    .fetch_one(&mut *db)
+    .await?;
+    let newly = now_released - released as i64;
+    if newly <= 0 {
+        return Err(ApiError::conflict(
+            "No devices were released. The rollout can't release its next stage right now.",
+        ));
+    }
+    resolve(db).await?;
+    let waiting_on = if gate == "measuring" {
+        format!("delivery on the {stage} was still being measured")
+    } else {
+        format!("the {stage} was still being observed")
+    };
+    db::insert(
+        db,
+        "audit",
+        &json!({
+            "id":db::id(),"actor":actor,"action":"deployment.stage_released_early","target":id,
+            "outcome":"success","created_at":db::now(),
+            "details":{
+                "summary":format!("Released the next stage early while {waiting_on}. {newly} more {} released.", if newly == 1 { "device" } else { "devices" }),
+                "stage":stage,"gate_state":gate,
+                "released_count":released,"verified_count":proof.verified,
+                "measuring_count":measuring,"next_released_count":newly
+            }
+        }),
+    )
+    .await?;
+    deployment(db, &id).await
 }
 
 /// Internal reviewed plan execution; caller holds the writer transaction and

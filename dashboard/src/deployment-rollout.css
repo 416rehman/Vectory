@@ -281,6 +281,9 @@
   line-height: 14px;
 }
 .rollout-lane footer {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -289,6 +292,87 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+/* The canary lane that shows what its devices deliver is two lanes wide. */
+.rollout-lane[data-watch] {
+  grid-column: span 2;
+  grid-template-rows: auto auto auto 1fr auto;
+}
+@media (max-width: 639px) {
+  .rollout-lane[data-watch] {
+    grid-column: auto;
+  }
+}
+.rollout-watch {
+  min-width: 0;
+  align-self: start;
+}
+.rollout-watch table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.rollout-watch caption {
+  padding-bottom: 6px;
+  text-align: left;
+}
+.rollout-watch caption strong,
+.rollout-watch caption span {
+  display: block;
+}
+.rollout-watch caption strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+.rollout-watch caption span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-watch th,
+.rollout-watch td {
+  padding: 6px 8px 6px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: transparent;
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+}
+.rollout-watch thead th {
+  border-top: 0;
+  padding-block: 2px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.rollout-watch tbody th {
+  min-width: 84px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.rollout-watch tbody th a {
+  color: inherit;
+}
+.rollout-watch small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.rollout-watch td strong {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rollout-watch-missing {
+  color: var(--muted);
+}
+.rollout-watch-more {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.rollout-lane-early {
+  color: var(--ink);
 }
 
 .rollout-countdown {
@@ -391,7 +475,7 @@
   font-size: 12.5px;
   line-height: 1.5;
 }
-/* A device still runs the version and isn't delivering (P1-6). */
+/* A device still runs the version and isn't delivering. */
 .rollout-delivery-banner {
   display: flex;
   align-items: flex-start;

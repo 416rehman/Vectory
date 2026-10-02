@@ -105,6 +105,8 @@ function render(node: React.ReactNode) {
         verdict="Vector 0.58 accepted this pipeline. Each device checks secrets before applying it."
         problems={[]}
         rejection={null}
+        tests={{ state: "none" }}
+        onRunTests={() => {}}
         onGoToProblem={() => {}}
       />
     </div>,

@@ -253,8 +253,8 @@ describe("conflict rows", () => {
     expect(rows[1]).toMatchObject({ kind: "higher_priority", priority: 200 });
     expect(rows[1].assignments[0].id).toBe(id(8));
   });
-  // Round-2 operator review P1-3: after a rollback, the device follows the
-  // rollback one priority up; the cancelled rollout is only still bound.
+  // After a rollback, the device follows the rollback one priority up; the
+  // cancelled rollout is only still bound.
   it("names the rollback the device follows, what else is bound, and one replace for every tier", () => {
     const rollback = described({
       id: id(20),
@@ -396,5 +396,22 @@ describe("release settings", () => {
       }).kind,
     ).toBe("canary");
     expect(scheduledAt(defaultRelease)).toBeNull();
+  });
+  it("names the canary devices only for a canary, and only when some are chosen", () => {
+    const canary = { ...defaultRelease, strategy: "canary" as const };
+    const chosen = ["00000000-0000-4000-8000-000000000001"];
+    expect(rolloutFor(canary, chosen).canary_device_ids).toEqual(chosen);
+    expect(rolloutFor(canary, []).canary_device_ids).toBeUndefined();
+    expect(rolloutFor(canary)).not.toHaveProperty("canary_device_ids");
+    // An all-at-once release has no canary to name; a scheduled canary does.
+    expect(rolloutFor(defaultRelease, chosen)).not.toHaveProperty(
+      "canary_device_ids",
+    );
+    expect(
+      rolloutFor(
+        { ...defaultRelease, strategy: "scheduled", scheduledKind: "canary" },
+        chosen,
+      ).canary_device_ids,
+    ).toEqual(chosen);
   });
 });

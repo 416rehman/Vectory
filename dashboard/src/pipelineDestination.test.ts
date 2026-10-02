@@ -39,4 +39,27 @@ describe("documentation destinations", () => {
       "configurations?panel=settings&section=tests",
     );
   });
+  it("can select one test in the tests section, and nowhere else", () => {
+    const destination = readPipelineDestination(
+      "panel=settings&section=tests&test=2",
+    )!;
+    expect(destination).toEqual({
+      panel: "settings",
+      section: "tests",
+      test: 2,
+    });
+    expect(pipelineRoute("pipeline", undefined, destination)).toBe(
+      "configurations/pipeline?panel=settings&section=tests&test=2",
+    );
+    for (const test of ["0", "-1", "1.5", "two", "1000", "01", ""])
+      expect(
+        readPipelineDestination(`panel=settings&section=tests&test=${test}`),
+      ).toEqual({ panel: "settings", section: "tests" });
+    expect(
+      readPipelineDestination("panel=settings&section=secret&test=2"),
+    ).toEqual({ panel: "settings", section: "secret" });
+    expect(readPipelineDestination("panel=history&test=2")).toEqual({
+      panel: "history",
+    });
+  });
 });

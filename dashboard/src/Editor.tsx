@@ -129,6 +129,7 @@ import {
 } from "./publishRequests";
 import PipelineActions, { type PipelineAction } from "./PipelineActions";
 import PublishReview from "./PublishReview";
+import { stopsPublishing, usePublishTests } from "./publishTests";
 import { deviceReach, reachLabel } from "./publishReview";
 import { pipelineConnectivity } from "./pipelineConnectivity";
 import SelectedDevice, { pipelineRoute } from "./SelectedDevice";
@@ -560,6 +561,8 @@ export default function Editor({
     [publishOpen, setPublishOpen] = useState(false),
     [globalsOpen, setGlobalsOpen] = useState(false),
     [globalsSection, setGlobalsSection] = useState<PipelineSection>("general"),
+    // The test (1-based) Pipeline settings opens on, from a failing review.
+    [globalsTest, setGlobalsTest] = useState<number | undefined>(),
     [detailsOpen, setDetailsOpen] = useState(false),
     [discardOpen, setDiscardOpen] = useState(false),
     [message, setMessage] = useState(""),
@@ -599,6 +602,10 @@ export default function Editor({
     importGeneration = useRef(0),
     dragDepth = useRef(0),
     importContext = useRef({ config, code, pending: false, allowed: false });
+  // The draft's own tests, run each time the publish review opens.
+  const publishTests = usePublishTests(config, publishOpen && !publishedResult);
+  const publishTestsRef = useRef(publishTests);
+  publishTestsRef.current = publishTests;
   // Stable per-node and per-edge callbacks that read the latest handlers, so
   // cached canvas objects never hold stale closures.
   type MenuHandler = (
@@ -1123,7 +1130,7 @@ export default function Editor({
   const handledDestination = useRef("");
   const blockedDestination = useRef("");
   const destinationKey = destination
-    ? `${destination.panel}:${destination.section || ""}`
+    ? `${destination.panel}:${destination.section || ""}:${destination.test || ""}`
     : "";
   useEffect(() => {
     if (!destination) {
@@ -1165,6 +1172,7 @@ export default function Editor({
           setDetailsOpen(true);
         } else {
           setGlobalsSection(destination.section || "general");
+          setGlobalsTest(destination.test);
           setGlobalsOpen(true);
         }
       });
@@ -2503,6 +2511,17 @@ export default function Editor({
     setPublishedResult(null);
     setPublishOpen(false);
   }
+  // Leave the review for Pipeline settings, on the first test that isn't passing.
+  function openFailingTests() {
+    if (publishActive.current || busy) return;
+    const view = publishTestsRef.current.view;
+    setPublishOpen(false);
+    tool(() => {
+      setGlobalsSection("tests");
+      setGlobalsTest(view.state === "failing" ? view.first : undefined);
+      setGlobalsOpen(true);
+    });
+  }
   async function publish() {
     if (
       publishActive.current ||
@@ -2552,9 +2571,14 @@ export default function Editor({
             ? "The draft save result is unknown. Retry Save draft and review its result before publishing."
             : "Save your draft before publishing.",
         );
+      // Over failing tests, only "Publish anyway" gets here. The server runs
+      // the tests again and refuses unless the request says so.
       operation = beginPublishOperation(user.id, id, {
         revision: saved.revision,
         message,
+        ...(stopsPublishing(publishTestsRef.current.view)
+          ? { acknowledge_test_failures: true as const }
+          : {}),
       });
       let lookup;
       try {
@@ -2632,6 +2656,7 @@ export default function Editor({
         if (!current()) return;
         setPublishRejection({ code: failure.code, message: failure.message });
         if (failure.code === "VALIDATION_FAILED") void validate();
+        if (failure.code === "TESTS_FAILED") void publishTestsRef.current.run();
         return;
       }
       if (!current()) return;
@@ -5695,6 +5720,8 @@ export default function Editor({
             verdict={checking ? "Checking the pipeline with Vector…" : verdict}
             problems={problems}
             rejection={publishRejection}
+            tests={publishTests.view}
+            onRunTests={() => void publishTests.run()}
             onCheck={checkable ? () => void validate() : undefined}
             onGoToProblem={(problem) => {
               if (publishActive.current || busy) return;
@@ -5730,7 +5757,17 @@ export default function Editor({
           >
             {publishNotice ? "Close and review request" : "Back to draft"}
           </Button>
+          {stopsPublishing(publishTests.view) && !publishNotice && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={openFailingTests}
+            >
+              Open tests
+            </Button>
+          )}
           <Button
+            variant={stopsPublishing(publishTests.view) ? "danger" : ""}
             busy={busy}
             disabled={
               errors.length > 0 ||
@@ -5739,12 +5776,16 @@ export default function Editor({
               importedCodeDirty.current ||
               unresolvedPublish ||
               !!publishNotice ||
+              // Publishing waits for the tests it would otherwise skip past.
+              publishTests.view.state === "running" ||
               // The server refuses a draft its checker cannot verify.
               status === "unavailable"
             }
             onClick={publish}
           >
-            Publish version
+            {stopsPublishing(publishTests.view)
+              ? "Publish anyway"
+              : "Publish version"}
           </Button>
         </div>
       </Modal>{" "}
@@ -5813,11 +5854,15 @@ export default function Editor({
       {globalsOpen && (
         <PipelineGlobals
           initialSection={globalsSection}
+          initialTest={globalsSection === "tests" ? globalsTest : undefined}
           config={config}
           variables={variables}
           onChange={(next) => replace(next)}
           onVariablesChange={(next) => replace(config, undefined, true, next)}
-          onClose={() => setGlobalsOpen(false)}
+          onClose={() => {
+            setGlobalsOpen(false);
+            setGlobalsTest(undefined);
+          }}
           editable={editable}
         />
       )}

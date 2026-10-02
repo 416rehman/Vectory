@@ -41,6 +41,18 @@ describe("device name lists", () => {
 });
 
 describe("activity sentences", () => {
+  it("says who released the next stage early, and of what", () => {
+    const early = item({
+      action: "deployment.stage_released_early",
+      target_kind: "deployment",
+      target_name: "Edge syslog",
+    });
+    expect(sentence(describeActivity(early))).toContain(
+      "released the next stage of",
+    );
+    expect(sentence(describeActivity(early))).toMatch(/ early$/);
+    expect(activityGlyph(early)).toBe("deploy");
+  });
   it("never reads a refused enrollment as an item that enrolled", () => {
     const refused = item({
       action: "device.enroll",

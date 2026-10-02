@@ -142,6 +142,12 @@ export const deviceStatuses = {
     "alert",
     "Applied, but not delivering. An open delivery issue says why.",
   ),
+  held: entry(
+    "Held on previous version",
+    "warning",
+    "undo",
+    "Its newest version failed. It still runs the previous version and is delivering.",
+  ),
   applying: entry(
     "Updating",
     "info",
@@ -516,6 +522,11 @@ export type DeviceStatusInput = {
   last_seen?: string | null;
   desired_version_id?: string | null;
   data_plane?: DataPlaneSummary | null;
+  /**
+   * Set by the server on a device whose newest version failed but which
+   * verifiably keeps running an earlier one, and delivers on it.
+   */
+  held_on_previous_version?: boolean;
 };
 
 /**
@@ -539,10 +550,17 @@ export function dataPlaneIssues(device: DeviceStatusInput): DataPlaneIssue[] {
 /**
  * The state to show for a device. A dashboard pause reads "Pause requested"
  * until the agent acknowledges it; a host-local pause is always in effect. An
- * applied device that isn't delivering reads "Not delivering".
+ * applied device that isn't delivering reads "Not delivering", and one whose
+ * newest version failed while it keeps delivering on an earlier one reads
+ * "Held on previous version" rather than "Failed".
  */
 export function deviceDisplayStatus(device: DeviceStatusInput): string {
   if (dataPlaneIssues(device).length) return "degraded";
+  if (
+    device.held_on_previous_version === true &&
+    (device.status === "failed" || device.status === "rolled_back")
+  )
+    return "held";
   if (
     device.status === "paused" &&
     !device.local_paused &&

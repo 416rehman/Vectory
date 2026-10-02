@@ -83,6 +83,7 @@ fn iso(ms: i64) -> Option<String> {
 enum Bucket {
     Applied,
     Degraded,
+    Held,
     Updating,
     Check,
     Failed,
@@ -90,9 +91,10 @@ enum Bucket {
     Paused,
     Unmanaged,
 }
-const BUCKETS: [(Bucket, &str); 8] = [
+const BUCKETS: [(Bucket, &str); 9] = [
     (Bucket::Applied, "applied"),
     (Bucket::Degraded, "degraded"),
+    (Bucket::Held, "held"),
     (Bucket::Updating, "updating"),
     (Bucket::Check, "check"),
     (Bucket::Failed, "failed"),
@@ -113,11 +115,12 @@ impl Bucket {
             Bucket::Failed => 0,
             Bucket::Degraded => 1,
             Bucket::Check => 2,
-            Bucket::Offline => 3,
-            Bucket::Updating => 4,
-            Bucket::Paused => 5,
-            Bucket::Unmanaged => 6,
-            Bucket::Applied => 7,
+            Bucket::Held => 3,
+            Bucket::Offline => 4,
+            Bucket::Updating => 5,
+            Bucket::Paused => 6,
+            Bucket::Unmanaged => 7,
+            Bucket::Applied => 8,
         }
     }
 }
@@ -128,6 +131,7 @@ fn bucket(display: &str) -> Option<Bucket> {
         "revoked" => return None,
         "verified" => Bucket::Applied,
         "degraded" => Bucket::Degraded,
+        "held" => Bucket::Held,
         "verification_unknown" => Bucket::Check,
         "failed" | "rolled_back" | "conflict" => Bucket::Failed,
         "offline" | "awaiting_first_check_in" => Bucket::Offline,
@@ -170,10 +174,16 @@ fn delivery_issue(row: &Value) -> Option<&Value> {
         .find(|issue| issue["title"].is_string())
 }
 /// The state a device's badge shows: Degraded while applied but not
-/// delivering, and Pause requested until the agent acknowledges a pause.
+/// delivering, Held while its newest version failed and it keeps running an
+/// earlier one, and Pause requested until the agent acknowledges a pause.
 fn display_status(row: &Value) -> &str {
     if delivery_issue(row).is_some() {
         return "degraded";
+    }
+    if truthy(&row["held_on_previous_version"])
+        && matches!(text(row, "status"), "failed" | "rolled_back")
+    {
+        return "held";
     }
     if row["status"] == "paused"
         && !truthy(&row["local_paused"])
@@ -610,7 +620,7 @@ async fn overview_fields(
 /// What the Overview used to derive from every device in the browser: fleet
 /// health by bucket, connection, and throughput from fresh samples.
 fn counts(listed: &[rollout::Listed], entries: &[Entry], now: i64) -> Value {
-    let (mut total, mut health) = (0u64, [0u64; 8]);
+    let (mut total, mut health) = (0u64, [0u64; BUCKETS.len()]);
     let (mut online, mut offline, mut never, mut checked_in) = (0u64, 0u64, 0u64, 0u64);
     let mut waiting = Value::Null;
     let (mut eligible, mut reporting, mut stale, mut disabled) = (0u64, 0u64, 0u64, 0u64);
@@ -714,8 +724,8 @@ fn busiest(listed: &[rollout::Listed], entries: &[Entry], now: i64) -> Vec<Value
 }
 
 /// Devices that need a person, most urgent first: not delivering, failed or
-/// rolled back, a check required, offline. At most `ATTENTION_DEVICES`, and
-/// how many there are.
+/// rolled back, a check required, held on a previous version, offline. At most
+/// `ATTENTION_DEVICES`, and how many there are.
 fn attention_devices(listed: &[rollout::Listed], entries: &[Entry]) -> (Vec<Value>, usize) {
     let mut found: Vec<(u8, &'static str, usize)> = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
@@ -724,12 +734,14 @@ fn attention_devices(listed: &[rollout::Listed], entries: &[Entry]) -> (Vec<Valu
         }
         let cause = if entry.bucket == Some(Bucket::Degraded) {
             (0, "degraded")
+        } else if entry.bucket == Some(Bucket::Held) {
+            (4, "held")
         } else {
             match text(&listed[index].row, "status") {
                 "failed" => (1, "failed"),
                 "rolled_back" => (2, "rolled_back"),
                 "verification_unknown" => (3, "check_required"),
-                "offline" => (4, "offline"),
+                "offline" => (5, "offline"),
                 _ => continue,
             }
         };
@@ -762,7 +774,7 @@ fn attention_devices(listed: &[rollout::Listed], entries: &[Entry]) -> (Vec<Valu
                         item["since"] = issue["since"].clone();
                     }
                 }
-                "failed" | "rolled_back" => {
+                "failed" | "rolled_back" | "held" => {
                     item["reason"] = json!(crate::overview::failure_summary(row));
                     item["code"] = row["configuration_attempt"]["error"]["code"].clone();
                 }
@@ -1210,7 +1222,7 @@ impl Filter {
                     .map(|(bucket, _)| *bucket)
                     .ok_or_else(|| {
                         ApiError::invalid(
-                            "status must be applied, degraded, updating, check, failed, offline, paused, unmanaged or revoked",
+                            "status must be applied, degraded, held, updating, check, failed, offline, paused, unmanaged or revoked",
                         )
                     })?,
             )),
@@ -1315,7 +1327,7 @@ impl Filter {
                 (None, None) => Ordering::Equal,
             }
         }
-        let rank = |entry: &Entry| entry.bucket.map_or(8, Bucket::rank);
+        let rank = |entry: &Entry| entry.bucket.map_or(BUCKETS.len() as u8, Bucket::rank);
         let d = self.descending;
         match self.sort {
             Sort::Name => present(Some(&a.name), Some(&b.name), d, |a, b| natural(a, b)),
@@ -1339,7 +1351,7 @@ impl Filter {
     }
     /// The matching devices in order, and the counts for the chips.
     fn select(&self, snapshot: &Snapshot) -> (Vec<usize>, Value) {
-        let (mut health, mut revoked, mut views) = ([0u64; 8], 0u64, [0u64; 5]);
+        let (mut health, mut revoked, mut views) = ([0u64; BUCKETS.len()], 0u64, [0u64; 5]);
         let mut matching = Vec::new();
         for (index, entry) in snapshot.entries.iter().enumerate() {
             if !self.scope(snapshot, entry) {
@@ -1553,6 +1565,24 @@ mod tests {
         let failed = entry(json!({"status":"failed"}));
         assert_eq!(failed.bucket, Some(Bucket::Failed));
         assert_ne!(failed.views & (FAILING | NOT_ON_DESIRED), 0);
+        // Failed to take its newest version but verifiably running an earlier
+        // one and delivering: held there, amber, still off its desired version
+        // and still among the devices that need a look.
+        for status in ["failed", "rolled_back"] {
+            let held = entry(json!({"status":status,"held_on_previous_version":true}));
+            assert_eq!(held.display, "held", "{status}");
+            assert_eq!(held.bucket, Some(Bucket::Held));
+            assert_ne!(held.views & (FAILING | NOT_ON_DESIRED), 0);
+        }
+        // The flag only softens a failure; nothing else turns into held.
+        for status in ["verified", "offline", "paused", "unmanaged"] {
+            let row = entry(json!({"status":status,"held_on_previous_version":true}));
+            assert_ne!(row.display, "held", "{status}");
+        }
+        assert_eq!(
+            entry(json!({"status":"failed","held_on_previous_version":false})).bucket,
+            Some(Bucket::Failed)
+        );
         // A state added later reads as in progress.
         assert_eq!(
             entry(json!({"status":"future_state"})).bucket,

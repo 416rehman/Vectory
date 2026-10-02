@@ -29,6 +29,7 @@ const counts = {
   status: {
     applied: 1,
     degraded: 0,
+    held: 0,
     updating: 0,
     check: 0,
     failed: 0,
@@ -144,6 +145,7 @@ describe("fleet-scale responses", () => {
         health: {
           applied: 1,
           degraded: 1,
+          held: 0,
           updating: 0,
           check: 0,
           failed: 0,

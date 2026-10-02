@@ -178,6 +178,13 @@ export function describeActivity(item: ActivityItem): Part[] {
         { text: " cancelled the rollout of " },
         targetPart(item, pipelineLabel(item)),
       ];
+    case "deployment.stage_released_early":
+      return [
+        actor,
+        { text: " released the next stage of " },
+        targetPart(item, pipelineLabel(item)),
+        { text: " early" },
+      ];
     case "deployment.rollback": {
       // The event names the rolled-back deployment; its rollback restored
       // the earlier version, usually of another pipeline.
