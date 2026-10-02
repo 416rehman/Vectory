@@ -84,14 +84,14 @@ func serviceDetail(result SetupResult) string {
 }
 
 func TestSetupRestartsARunningServiceOnAnOlderBuild(t *testing.T) {
-	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
+	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
 	manager := &fakeServiceManager{running: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: Version, SHA256: digest}}
 	r := &setupRun{options: SetupOptions{CheckIn: 5 * time.Second}}
 	result, err := r.startService(context.Background(), manager.ops(), "systemd", agentPath, dir, "vectory", 60)
 	if err != nil || !result.OK || strings.Join(manager.actions, ",") != "restart" {
 		t.Fatalf("actions %v, err %v\n%s", manager.actions, err, serviceDetail(result))
 	}
-	if detail := serviceDetail(result); !strings.Contains(detail, "ok vectory.service upgraded 0.1.0 → "+Version+" · first check-in") {
+	if detail := serviceDetail(result); !strings.Contains(detail, "ok vectory.service upgraded 0.0.9 → "+Version+" · first check-in") {
 		t.Fatalf("upgrade not reported:\n%s", detail)
 	}
 }
@@ -121,7 +121,7 @@ func TestSetupLeavesACurrentServiceAlone(t *testing.T) {
 }
 
 func TestSetupStartsAStoppedService(t *testing.T) {
-	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now().Add(-time.Hour))
+	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now().Add(-time.Hour))
 	manager := &fakeServiceManager{registration: ServiceCreated, dir: dir, build: &AgentBuild{Version: Version, SHA256: digest}}
 	r := &setupRun{options: SetupOptions{CheckIn: 5 * time.Second}}
 	result, err := r.startService(context.Background(), manager.ops(), "systemd", agentPath, dir, "vectory", 60)
@@ -132,8 +132,8 @@ func TestSetupStartsAStoppedService(t *testing.T) {
 
 // A check-in from the old build (or from nothing) never counts.
 func TestSetupWaitsForTheNewBuildToCheckIn(t *testing.T) {
-	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
-	manager := &fakeServiceManager{running: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: "0.1.0", SHA256: "old"}}
+	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
+	manager := &fakeServiceManager{running: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: "0.0.9", SHA256: "old"}}
 	r := &setupRun{options: SetupOptions{CheckIn: 500 * time.Millisecond}}
 	result, err := r.startService(context.Background(), manager.ops(), "systemd", agentPath, dir, "vectory", 0)
 	if err != nil || !strings.Contains(serviceDetail(result), "warn vectory.service restarted on "+Version+", but hasn't checked in") {
@@ -145,7 +145,7 @@ func TestSetupWaitsForTheNewBuildToCheckIn(t *testing.T) {
 // read-only check that registration would accept this agent. A refusal
 // leaves the service running.
 func TestSetupChecksTheRegistrationBeforeStoppingTheService(t *testing.T) {
-	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
+	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
 	refused := errors.New("the Vectory service is registered for another executable, state directory or account")
 	manager := &fakeServiceManager{running: true, stopToReplace: true, dir: dir, fail: map[string]error{"check": refused}}
 	r := &setupRun{}
@@ -159,7 +159,7 @@ func TestSetupChecksTheRegistrationBeforeStoppingTheService(t *testing.T) {
 // Once setup stopped the service, a failure starts it again: on the previous
 // build when the agent couldn't be replaced.
 func TestSetupRestartsTheServiceOnThePreviousBuildWhenTheAgentCantBeReplaced(t *testing.T) {
-	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
+	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
 	busy := errors.New("the process cannot access the file because it is being used by another process")
 	manager := &fakeServiceManager{running: true, stopToReplace: true, dir: dir, fail: map[string]error{"replace": busy}}
 	r := &setupRun{}
@@ -176,7 +176,7 @@ func TestSetupRestartsTheServiceOnThePreviousBuildWhenTheAgentCantBeReplaced(t *
 
 // A failure after the new agent is in place starts the service on it.
 func TestSetupRestartsTheServiceWhenALaterStepFails(t *testing.T) {
-	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
+	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
 	manager := &fakeServiceManager{running: true, stopToReplace: true, dir: dir, fail: map[string]error{"install": errors.New("another agent lifecycle operation is running")}}
 	r := &setupRun{options: SetupOptions{CheckIn: time.Second}}
 	ops := manager.ops()
@@ -192,7 +192,7 @@ func TestSetupRestartsTheServiceWhenALaterStepFails(t *testing.T) {
 
 // The service step starts the service setup stopped, and reports the upgrade.
 func TestSetupStartsTheStoppedServiceOnTheNewBuild(t *testing.T) {
-	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
+	dir, agentPath, digest := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
 	manager := &fakeServiceManager{running: true, stopToReplace: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: Version, SHA256: digest}}
 	r := &setupRun{options: SetupOptions{CheckIn: 5 * time.Second}}
 	ops := manager.ops()
@@ -201,7 +201,7 @@ func TestSetupStartsTheStoppedServiceOnTheNewBuild(t *testing.T) {
 	}
 	result, err := r.startService(context.Background(), ops, "windows", agentPath, dir, `NT SERVICE\Vectory`, 60)
 	result, err = r.restartIfStopped(ops, result, err)
-	if err != nil || strings.Join(manager.actions, ",") != "check,stop,replace,start" || !strings.Contains(serviceDetail(result), "ok Vectory service upgraded 0.1.0 → "+Version+" · first check-in") {
+	if err != nil || strings.Join(manager.actions, ",") != "check,stop,replace,start" || !strings.Contains(serviceDetail(result), "ok Vectory service upgraded 0.0.9 → "+Version+" · first check-in") {
 		t.Fatalf("actions %v, err %v\n%s", manager.actions, err, serviceDetail(result))
 	}
 }
@@ -242,8 +242,8 @@ func TestSetupDoesNotClaimItStartedARunningService(t *testing.T) {
 
 // Ctrl-C while setup waits for the check-in leaves the service running.
 func TestSetupInterruptedWhileWaitingKeepsTheServiceRunning(t *testing.T) {
-	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.1.0", SHA256: "old"}, time.Now())
-	manager := &fakeServiceManager{running: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: "0.1.0", SHA256: "old"}}
+	dir, agentPath, _ := serviceFixture(t, &AgentBuild{Version: "0.0.9", SHA256: "old"}, time.Now())
+	manager := &fakeServiceManager{running: true, registration: ServiceUnchanged, dir: dir, build: &AgentBuild{Version: "0.0.9", SHA256: "old"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := &setupRun{options: SetupOptions{CheckIn: 5 * time.Second}}
