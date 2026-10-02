@@ -1876,3 +1876,136 @@ async fn a_vrl_call_that_passes_a_file_never_opens_it_in_the_worker() {
     }
     child.kill().await.ok();
 }
+
+/// The two commands the worker uses open only the paths the worker keeps out of
+/// them (an enrichment table's file, a `remap` file, a `file` secret backend, the
+/// files a VRL call passes). A TLS file, a codec descriptor, a credentials file,
+/// a kubeconfig, a source's files, a sink's file and `data_dir` are all read or
+/// written only when Vector builds or runs a component, so a device does it and
+/// the server never does. A Vector upgrade that changes this fails here.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn validate_and_test_open_none_of_the_paths_a_component_names() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; path guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline = |extra: serde_json::Value,
+                    source: serde_json::Value,
+                    sink: serde_json::Value| {
+        let mut config = json!({
+            "sources": {"s": source},
+            "transforms": {"t": {"type": "remap", "inputs": ["s"], "source": "."}},
+            "sinks": {"k": sink},
+            "tests": [{"name": "t",
+                "inputs": [{"insert_at": "t", "type": "log", "log_fields": {"message": "x"}}],
+                "outputs": [{"extract_from": "t", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            config[key] = value.clone();
+        }
+        config
+    };
+    let demo = json!({"type": "demo_logs", "format": "json"});
+    let blackhole = json!({"type": "blackhole", "inputs": ["t"]});
+    let commands: [&[&str]; 2] = [
+        &["validate", "--no-environment"],
+        &["test", "--config-json"],
+    ];
+
+    // Control: a file enrichment table's path is opened under a test, so a pipe
+    // that stays closed below means Vector did not reach for it.
+    let control = Tripwire::new(dir.path().join("control"));
+    let config = pipeline(
+        json!({"enrichment_tables": {"lk": {"type": "file",
+            "file": {"path": control.path, "encoding": {"type": "csv"}}}}}),
+        demo.clone(),
+        blackhole.clone(),
+    );
+    let path = dir.path().join("control.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    vector_briefly(&vector, commands[1], &path).await;
+    assert!(
+        control.opened().await,
+        "Vector did not open the path under a test, so this test proves nothing"
+    );
+
+    type Build = fn(&std::path::Path) -> serde_json::Value;
+    let cases: Vec<(&str, Build)> = vec![
+        (
+            "source file include",
+            |p| json!({"source": {"type": "file", "include": [p]}}),
+        ),
+        ("source http_server tls files", |p| {
+            json!({"source": {"type": "http_server", "address": "127.0.0.1:1",
+                "tls": {"enabled": true, "ca_file": p, "crt_file": p, "key_file": p}}})
+        }),
+        ("sink http tls ca_file", |p| {
+            json!({"sink": {"type": "http", "inputs": ["t"], "uri": "http://127.0.0.1:1",
+                "encoding": {"codec": "json"}, "tls": {"ca_file": p}}})
+        }),
+        ("source socket protobuf descriptor", |p| {
+            json!({"source": {"type": "socket", "mode": "tcp", "address": "127.0.0.1:1",
+                "decoding": {"codec": "protobuf", "protobuf": {"desc_file": p, "message_type": "x.Y"}}}})
+        }),
+        ("sink console protobuf descriptor", |p| {
+            json!({"sink": {"type": "console", "inputs": ["t"],
+                "encoding": {"codec": "protobuf", "protobuf": {"desc_file": p, "message_type": "x.Y"}}}})
+        }),
+        ("sink aws_s3 credentials file", |p| {
+            json!({"sink": {"type": "aws_s3", "inputs": ["t"], "bucket": "b", "region": "us-east-1",
+                "encoding": {"codec": "json"}, "auth": {"credentials_file": p}}})
+        }),
+        ("sink gcp_cloud_storage credentials", |p| {
+            json!({"sink": {"type": "gcp_cloud_storage", "inputs": ["t"], "bucket": "b",
+                "encoding": {"codec": "json"}, "credentials_path": p}})
+        }),
+        (
+            "source kubernetes_logs kubeconfig",
+            |p| json!({"source": {"type": "kubernetes_logs", "kube_config_file": p}}),
+        ),
+    ];
+    for (index, (name, build)) in cases.into_iter().enumerate() {
+        let pipe = Tripwire::new(dir.path().join(format!("pipe-{index}")));
+        let parts = build(&pipe.path);
+        let config = pipeline(
+            json!({}),
+            parts.get("source").cloned().unwrap_or_else(|| demo.clone()),
+            parts
+                .get("sink")
+                .cloned()
+                .unwrap_or_else(|| blackhole.clone()),
+        );
+        let path = dir.path().join("case.json");
+        std::fs::write(&path, config.to_string()).unwrap();
+        for args in commands {
+            let (code, text) = vector_ends(&vector, args, &path, None).await;
+            assert_eq!(code, Some(0), "{name}: {args:?} did not accept it: {text}");
+        }
+        assert!(
+            !pipe.opened().await,
+            "{name}: validate or test opened the path it names"
+        );
+    }
+
+    // A sink's file is only created when it receives an event, and `data_dir`
+    // only when a component needs it: neither command makes either.
+    let made = dir.path().join("made-by-vector");
+    let config = pipeline(
+        json!({"data_dir": made.join("data")}),
+        demo.clone(),
+        json!({"type": "file", "inputs": ["t"], "path": made.join("events.json"),
+            "encoding": {"codec": "json"}}),
+    );
+    let path = dir.path().join("made.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    for args in commands {
+        let (code, text) = vector_ends(&vector, args, &path, None).await;
+        assert_eq!(code, Some(0), "{args:?}: {text}");
+    }
+    assert!(
+        !made.exists(),
+        "validate or test created a path a draft names"
+    );
+}
