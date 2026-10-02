@@ -120,6 +120,12 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 	if err = CheckManagedDirectory(s.ManagedConfig, dir); err != nil {
 		return "", err
 	}
+	// The account owns both folders; every directory above them must let it in.
+	for _, path := range []string{dir, filepath.Dir(s.ManagedConfig)} {
+		if err = checkServiceCanReach(path, account, uid, gid); err != nil {
+			return "", err
+		}
+	}
 	if _, err = exec.LookPath("systemctl"); err != nil {
 		return "", errors.New("systemd isn't available here; run `vectory run` under your existing supervisor")
 	}
