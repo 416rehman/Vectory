@@ -121,6 +121,10 @@ const config = {
 // the unit test pins as `localApiReason`).
 const apiReason =
   "Global setting: api (Vector's local API has no authentication; any local user could read live events)";
+// What it says about an AWS sink with a credentials file and no keys (the
+// sentences the unit test pins).
+const awsReasons =
+  "Native capability: credentials_file, AWS credentials from the host (without both keys, or with assume_role, imds or profile)";
 const pipeline = {
   id: id(10),
   name: "Synthetic deployment handoff",
@@ -1419,6 +1423,50 @@ try {
         dialog().getByRole("button", { name: "Deploy to devices" }),
       ).toBeEnabled();
       expect(state.creates).toHaveLength(0);
+    },
+  );
+  await check(
+    "Full-mode capability note names an AWS credentials file and the host's own AWS identity for a restricted device",
+    async () => {
+      await load({
+        kind: "version",
+        width: 390,
+        extra: {
+          version: {
+            ...version,
+            config: {
+              ...config,
+              sinks: {
+                ...config.sinks,
+                ship: {
+                  type: "http",
+                  inputs: ["seed"],
+                  uri: "https://ingest.example.net/events",
+                  encoding: { codec: "json" },
+                  auth: {
+                    strategy: "aws",
+                    auth: { credentials_file: "/srv/aws/credentials" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        devices: [device(1, { configuration_mode: "restricted" }), device(2)],
+      });
+      await page
+        .getByRole("checkbox", { name: "Select Synthetic alpha", exact: true })
+        .check();
+      await expect(
+        dialog().getByText(
+          "Synthetic alpha runs in restricted mode and will refuse this version",
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(dialog().getByText(awsReasons)).toBeVisible();
+      await expect(
+        dialog().getByText(/have the host operator enable it/),
+      ).toBeVisible();
     },
   );
   await check(
