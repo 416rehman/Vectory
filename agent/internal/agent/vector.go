@@ -23,9 +23,30 @@ import (
 // existing Vector process or a healthy HTTP endpoint can never satisfy Alive.
 type Driver interface {
 	Validate(context.Context, string) error
+	// CheckCandidate checks a staged candidate the way Validate does, on request
+	// and without applying it (see validation.go). It never starts, reloads or
+	// signals Vector.
+	CheckCandidate(ctx context.Context, path string, runTests bool) (candidateRun, error)
 	Activate(context.Context, string) error
 	Alive() bool
 	Stop() error
+}
+
+// candidateRun is what checking a candidate learned beyond pass or fail: what
+// `vector test` printed, which names each test and whether it passed.
+type candidateRun struct {
+	// TestsRan says `vector test` ran.
+	TestsRan   bool
+	TestOutput []byte
+}
+
+// checkMode says how a configuration is checked. An apply runs the
+// configuration's tests whenever it has some; a check on request does only when
+// it was asked to, writes nothing to the local Vector log, and leaves the host
+// as it found it: a data directory it had to create is removed again.
+type checkMode struct {
+	tests  bool
+	dryRun bool
 }
 
 // Activation methods reported on the heartbeat.
@@ -154,28 +175,96 @@ func dataDirFailure(path string) *VectorFailure {
 
 // stageOverlay writes a temporary host runtime overlay for validating a
 // candidate, so the running process's overlay is never touched by a
-// candidate that may be rejected.
-func (d *VectorDriver) stageOverlay(data []byte) (string, func(), error) {
+// candidate that may be rejected. The overlay goes into the directory into.
+// For a check on request the returned cleanup also removes the data directory
+// that preparing the overlay had to create, so the host is left as it was.
+func (d *VectorDriver) stageOverlay(data []byte, into string, dryRun bool) (string, func(), error) {
 	if d.Dir == "" {
 		return "", func() {}, nil
 	}
+	var created []string
+	if dryRun {
+		created = dataDirsToCreate(hostRuntimeFor(d.Settings, d.Dir, data))
+	}
+	// Directories go deepest first, and only while they are empty: Remove never
+	// takes anything that holds a file.
+	removeCreated := func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = os.Remove(created[i])
+		}
+	}
 	overlay, _, err := runtimeOverlay(d.Settings, d.Dir, data)
 	if err != nil {
-		return "", func() {}, err
+		return "", removeCreated, err
 	}
-	path := filepath.Join(d.Dir, "host-runtime-stage-"+RandomID()[:16]+".json")
+	path := filepath.Join(into, "host-runtime-stage-"+RandomID()[:16]+".json")
 	if err = AtomicWrite(path, overlay); err != nil {
-		return "", func() {}, err
+		return "", removeCreated, err
 	}
-	return path, func() { _ = os.Remove(path) }, nil
+	return path, func() { _ = os.Remove(path); removeCreated() }, nil
 }
 
+// dataDirsToCreate lists the directories that preparing the host's data
+// directory would create, shallowest first: the ones that don't exist yet. The
+// agent creates only the directories it chooses itself; a pipeline's own
+// data_dir and Vector's default are left to Vector and the host.
+func dataDirsToCreate(h HostRuntime) []string {
+	if h.DataDirSource == dataDirPipeline || h.DataDirSource == dataDirVectorDefault || !filepath.IsAbs(h.DataDir) {
+		return nil
+	}
+	var missing []string
+	for p := filepath.Clean(h.DataDir); ; p = filepath.Dir(p) {
+		if _, err := os.Lstat(p); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return nil
+		}
+		missing = append([]string{p}, missing...)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	return missing
+}
+
+// Validate is the check an apply makes: Vector validates the staged
+// configuration and, when it has tests, runs them.
 func (d *VectorDriver) Validate(ctx context.Context, path string) error {
+	_, err := d.check(ctx, path, checkMode{tests: true})
+	return err
+}
+
+// CheckCandidate is the same check on request: the tests run only when asked.
+// Whatever goes wrong comes back as a *VectorFailure or a full disk, so the
+// result can always say what; the agent's own error texts, which can name the
+// Vector binary or a staged file, are replaced by fixed words here.
+func (d *VectorDriver) CheckCandidate(ctx context.Context, path string, runTests bool) (candidateRun, error) {
+	return d.check(ctx, path, checkMode{tests: runTests, dryRun: true})
+}
+
+// prepareFailure is a check that couldn't start, in fixed words.
+func prepareFailure(code, message, hint string) *VectorFailure {
+	return &VectorFailure{Phase: "prepare", Summary: message, Diagnostics: []Diagnostic{{Code: code, Message: message, Hint: hint}}}
+}
+
+func (d *VectorDriver) check(ctx context.Context, path string, mode checkMode) (candidateRun, error) {
+	var run candidateRun
+	// A check on request reports its own words for what can't run; an apply keeps
+	// the errors as they are.
+	unready := func(err error, code, message, hint string) (candidateRun, error) {
+		if !mode.dryRun {
+			return run, err
+		}
+		if _, full := diskFullFrom(err); full {
+			return run, err
+		}
+		return run, prepareFailure(code, message, hint)
+	}
 	if e := d.checkBinary(); e != nil {
-		return e
+		return unready(e, "VECTOR_BINARY_UNAVAILABLE", "The Vector binary this agent approved is missing, unreadable or changed.", "Run vectory doctor on the host. Restore the binary, or stop the agent and approve a new one with vectory re-adopt.")
 	}
 	if e := SafePath(path); e != nil {
-		return e
+		return unready(e, "CHECK_UNAVAILABLE", "The agent couldn't prepare this check.", "Run it again. If it keeps failing, run vectory doctor on the host.")
 	}
 	seconds := d.Settings.ValidationSeconds
 	if seconds < 1 || seconds > 120 {
@@ -185,28 +274,39 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 	defer cancel()
 	data, e := readArtifact(path)
 	if e != nil {
-		return errors.New("cannot securely read staged configuration")
+		return unready(errors.New("cannot securely read staged configuration"), "CHECK_UNAVAILABLE", "The agent couldn't read its staged copy of this version.", "Run it again. If it keeps failing, run vectory doctor on the host.")
 	}
 	var document struct {
 		Tests []json.RawMessage `json:"tests"`
 	}
 	if json.Unmarshal(data, &document) != nil {
-		return errors.New("configuration or tests must use the expected JSON structure")
+		return unready(errors.New("configuration or tests must use the expected JSON structure"), "VALIDATION_ERROR", "The configuration or its tests don't have the structure Vector expects.", "Open the pipeline's Tests and check them.")
 	}
-	overlay, cleanup, e := d.stageOverlay(data)
+	into := d.Dir
+	if mode.dryRun {
+		into = filepath.Dir(path)
+	}
+	overlay, cleanup, e := d.stageOverlay(data, into, mode.dryRun)
 	defer cleanup()
 	if e != nil {
 		if _, full := diskFullFrom(e); full {
-			return fmt.Errorf("cannot stage the host runtime settings: %w", e)
+			return run, fmt.Errorf("cannot stage the host runtime settings: %w", e)
 		}
-		return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
+		return run, dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
+	}
+	// note keeps a failure in the private local log, for apply only: a check on
+	// request leaves nothing behind but its result.
+	note := func(title string, output []byte) {
+		if !mode.dryRun {
+			d.Log.note(title, output)
+		}
 	}
 	paths := []string{path, overlay}
 	timeout := &VectorFailure{Phase: "timeout", Summary: fmt.Sprintf("Vector did not finish validating this version within %d s.", seconds)}
 	out, err := d.run(ctx, "validate", paths)
 	if err != nil {
 		if ctx.Err() != nil {
-			return timeout
+			return run, timeout
 		}
 		// Healthchecks are not a safety control: they only probe whether a
 		// destination answers right now. Refusing a configuration because a
@@ -218,24 +318,25 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 		checked, recheck := d.run(ctx, "validate", paths, "--skip-healthchecks")
 		if recheck != nil {
 			if ctx.Err() != nil {
-				return timeout
+				return run, timeout
 			}
-			d.Log.note("vector validate rejected the configuration", checked)
-			return &VectorFailure{Phase: "validate", Summary: "Vector rejected the configuration", Output: checked}
+			note("vector validate rejected the configuration", checked)
+			return run, &VectorFailure{Phase: "validate", Summary: "Vector rejected the configuration", Output: checked}
 		}
-		d.Log.note("vector validate: configuration valid; some health checks failed", out)
+		note("vector validate: configuration valid; some health checks failed", out)
 	}
-	if len(document.Tests) > 0 {
+	if mode.tests && len(document.Tests) > 0 {
 		out, err = d.run(ctx, "test", paths)
+		run = candidateRun{TestsRan: true, TestOutput: out}
 		if err != nil {
 			if ctx.Err() != nil {
-				return timeout
+				return run, timeout
 			}
-			d.Log.note("vector test reported failing configuration tests", out)
-			return &VectorFailure{Phase: "test", Summary: "Vector configuration tests failed", Output: out}
+			note("vector test reported failing configuration tests", out)
+			return run, &VectorFailure{Phase: "test", Summary: "Vector configuration tests failed", Output: out}
 		}
 	}
-	return nil
+	return run, nil
 }
 func (d *VectorDriver) Alive() bool {
 	d.mu.Lock()

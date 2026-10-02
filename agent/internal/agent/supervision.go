@@ -103,7 +103,14 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 	if wake {
 		current = s.listen(ctx, e)
 	}
-	defer func() { current.stop() }()
+	defer func() {
+		// A wait the server was still holding when the interval ended works, however
+		// short the interval: an earlier failure is over.
+		if current != nil && time.Since(current.started) >= wakeSpacing {
+			e.noteWake("")
+		}
+		current.stop()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,11 +132,14 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 			current = nil
 			switch {
 			case answer.err != nil:
-				// The ordinary schedule covers this interval; nothing to report.
+				// The ordinary schedule covers this interval; nothing to report,
+				// but `vectory status` says the waits aren't getting through.
+				e.noteWake(wakeFailed)
 				if answer.retryAfter > 0 {
 					s.wakeResume = time.Now().Add(answer.retryAfter)
 				}
 			case answer.changed:
+				e.noteWake("")
 				soonest := wakeSpacing - time.Since(began)
 				if soonest <= 0 {
 					return true
@@ -139,6 +149,7 @@ func (s *workloadSupervisor) wait(ctx context.Context, e *Engine, delay time.Dur
 				}
 			case held >= wakeSpacing:
 				// The server's hold ended: wait again.
+				e.noteWake("")
 				current = s.listen(ctx, e)
 			}
 			// A wait that ends at once without a change (another process

@@ -58,6 +58,22 @@ type setupServer struct {
 	// wake_test.go), or they get 404 as from a server without the route.
 	waits atomic.Int32
 	wait  http.HandlerFunc
+	// validation is the request to check a candidate that every manifest
+	// carries, and artifacts what the agent downloads by path (see carry).
+	validation json.RawMessage
+	artifacts  map[string][]byte
+}
+
+// carry makes every manifest carry a request to check artifact, and serves it.
+func (s *setupServer) carry(req ValidationRequest, artifact []byte) {
+	raw, _ := json.Marshal(req)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.validation = raw
+	if s.artifacts == nil {
+		s.artifacts = map[string][]byte{}
+	}
+	s.artifacts[req.ArtifactPath] = artifact
 }
 
 func (s *setupServer) sent() []map[string]any {
@@ -117,7 +133,10 @@ func newSetupServerFor(t *testing.T, names []string) *setupServer {
 			s.mu.Unlock()
 			nonce, _ := raw["nonce"].(string)
 			now := time.Now().UTC().Truncate(time.Second)
-			_ = json.NewEncoder(w).Encode(signed(t, Manifest{ProtocolVersion: 1, DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", Nonce: nonce, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute), Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}, Features: s.features}, signingKey))
+			s.mu.Lock()
+			validation := s.validation
+			s.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(signed(t, Manifest{ProtocolVersion: 1, DeviceID: "5e7a9c2d-0000-4000-8000-000000000001", Nonce: nonce, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute), Policy: Policy{HeartbeatSeconds: 60, TelemetryEnabled: true}, Features: s.features, Validation: validation}, signingKey))
 		case "/agent/v1/enroll":
 			s.enrolls.Add(1)
 			body, _ := io.ReadAll(r.Body)
@@ -148,6 +167,15 @@ func newSetupServerFor(t *testing.T, names []string) *setupServer {
 				wait(w, r)
 			}
 		default:
+			if strings.HasPrefix(r.URL.Path, "/agent/v1/artifacts/") && r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				s.mu.Lock()
+				artifact, ok := s.artifacts[r.URL.Path]
+				s.mu.Unlock()
+				if ok {
+					_, _ = w.Write(artifact)
+					return
+				}
+			}
 			http.NotFound(w, r)
 		}
 	}))

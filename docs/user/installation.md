@@ -286,7 +286,7 @@ sudo vectory status
 sudo vectory doctor
 ```
 
-`status` shows the device's identity, server, last check-in and pipeline. `doctor` checks the local setup and the connection to your server, and prints a fix for each problem. If the device stays offline, see [A device is offline](troubleshooting.md#a-device-is-offline-or-never-connects).
+`status` shows the device's identity, server, last check-in, the pipeline and version it runs, and when its next check-in is due. `doctor` checks the local setup and the connection to your server, and prints a fix for each problem. If the device stays offline, see [A device is offline](troubleshooting.md#a-device-is-offline-or-never-connects).
 
 ## Next steps
 

@@ -1,0 +1,8 @@
+{
+  "check_in": {
+    "due_in_seconds": 48,
+    "interval_seconds": 60,
+    "last_at": "2026-10-02T14:29:48Z",
+    "next_due_at": "2026-10-02T14:30:48Z"
+  }
+}

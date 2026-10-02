@@ -7,7 +7,7 @@ Commands that change local settings need the agent stopped. Stopping the agent a
 ## Check an agent
 
 ```sh
-sudo vectory status           # identity, server, last check-in, pipeline and next step
+sudo vectory status           # identity, server, pipeline and version, check-in schedule, next step
 sudo vectory doctor           # local setup and server connection, with a fix for each problem
 sudo vectory logs --follow    # Vector's own log (never your events)
 ```
@@ -15,6 +15,19 @@ sudo vectory logs --follow    # Vector's own log (never your events)
 Add `--json` to `status` or `doctor` for scripts. Both only read: they never change settings, retry state or counters.
 
 The dashboard shows the same device from the server's side. A recent check-in proves the agent is connected. **Applied** proves which version Vector runs.
+
+`status` names the pipeline and version number the device runs, when its next check-in is due (`overdue by 2 min` means the agent isn't getting through), and whether it waits for wake-ups. [`vectory status`](cli.md#status) lists every row.
+
+### What Check on devices does on the host
+
+**Check on devices** in a deploy review asks each target device to check the version on its own host. The agent downloads it, fills in the device's [secrets](resources.md#keep-credentials-on-the-device), applies this host's restricted-mode allowances and lets Vector validate it. It runs the version's tests only when you ask. Nothing is applied.
+
+- **Where it works.** In `validation-staging`, a private folder (mode `0700`) inside the state directory, never the managed directory. The agent deletes its copy when the check ends, and at its next start if it was stopped in the middle.
+- **What it never touches.** The managed file, the recovery journal, the last good configuration, the generations and the desired version stay as they were. It doesn't start, reload or signal Vector. A data directory it has to create so that Vector can validate is removed again.
+- **When it waits.** An apply that is under way goes first, and the check follows at the next check-in. A paused or drifted agent still checks. A check expires ten minutes after it was asked for, and an expired one is ignored.
+- **What leaves the host.** The result: whether the version passes, up to 20 findings in the words a failed apply uses, each test's name and whether it passed, and the names of device secrets this host hasn't bound. Never a secret's value or file, Vector's raw output or your events.
+
+A check is advisory. It doesn't change what the dashboard lets you deploy.
 
 ### Compare the managed file with what was offered
 

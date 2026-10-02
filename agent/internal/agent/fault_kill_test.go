@@ -24,11 +24,20 @@ type killControlPlane struct {
 	*httptest.Server
 	mu    sync.Mutex
 	beats []map[string]any
+	// manifest is what the heartbeats are answered with; setManifest changes it.
+	manifest Manifest
+}
+
+// setManifest changes the manifest the next heartbeats are answered with.
+func (p *killControlPlane) setManifest(m Manifest) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.manifest = m
 }
 
 func newKillControlPlane(t *testing.T, m Manifest, key ed25519.PrivateKey, artifact []byte) *killControlPlane {
 	t.Helper()
-	plane := &killControlPlane{}
+	plane := &killControlPlane{manifest: m}
 	plane.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/agent/v1/heartbeat":
@@ -39,8 +48,8 @@ func newKillControlPlane(t *testing.T, m Manifest, key ed25519.PrivateKey, artif
 			}
 			plane.mu.Lock()
 			plane.beats = append(plane.beats, beat)
+			signedManifest := plane.manifest
 			plane.mu.Unlock()
-			signedManifest := m
 			signedManifest.Nonce, _ = beat["nonce"].(string)
 			signedManifest.IssuedAt = time.Now().UTC()
 			signedManifest.ExpiresAt = signedManifest.IssuedAt.Add(5 * time.Minute)
