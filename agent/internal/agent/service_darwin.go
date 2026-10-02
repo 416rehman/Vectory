@@ -115,6 +115,12 @@ func ServiceInstallFor(exe, dir, account string) (ServiceRegistration, error) {
 	if err = CheckManagedDirectory(s.ManagedConfig, dir); err != nil {
 		return "", err
 	}
+	// The account owns both folders; every directory above them must let it in.
+	for _, path := range []string{dir, filepath.Dir(s.ManagedConfig)} {
+		if err = checkServiceCanReach(path, account, uid, gid); err != nil {
+			return "", err
+		}
+	}
 	plist := launchdPlist(exe, dir, account)
 	registration := ServiceCreated
 	if old, err := os.ReadFile(serviceDefinition); err == nil {

@@ -63,10 +63,35 @@ func PrivateDir(path string) error {
 	if e := SafePath(path); e != nil {
 		return e
 	}
+	if e := makeTraversable(filepath.Dir(path)); e != nil {
+		return e
+	}
 	if e := os.MkdirAll(path, 0700); e != nil {
 		return e
 	}
 	return protect(path, true)
+}
+
+// makeTraversable creates the directories above a private one that don't exist
+// yet, each readable and searchable by everyone whatever the umask. The service
+// account that owns the private directory has to reach it through them, and they
+// hold nothing private: MkdirAll with 0700 would have made them root's alone.
+// A directory that exists is left as it is.
+func makeTraversable(dir string) error {
+	if _, err := os.Lstat(dir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if parent := filepath.Dir(dir); parent != dir {
+		if err := makeTraversable(parent); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(dir, 0755)
 }
 
 // atomicTempPrefix names AtomicWrite's temporary files, so a leftover from a
