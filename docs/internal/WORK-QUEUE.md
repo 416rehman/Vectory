@@ -115,7 +115,7 @@ Rehearse: deploy a pipeline with a variable to two devices with different values
 
 [AUTHORING-GAPS.md](AUTHORING-GAPS.md) lists the findings and the acceptance for each. In order of how visible they are:
 
-1. Secrets in headers and URLs, and a wider plaintext detector (finding 4).
+1. Secrets in headers and URLs, and a wider plaintext detector (finding 4). Designed in [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md) and planned in [SECRETS-IMPLEMENTATION-PLAN.md](SECRETS-IMPLEMENTATION-PLAN.md); the detector and the import dialog can ship first.
 2. "Save as test" that does not assert volatile values (finding 3).
 3. A refused import stays in the dialog and names the field (finding 5).
 4. Merge-aware conflict resolution instead of a destructive reload (finding 1).

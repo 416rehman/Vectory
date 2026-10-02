@@ -128,6 +128,30 @@ Decisions for device checks:
 - Resource bounds are constants: six requests a minute per user, 240 reads a minute per account, 50 devices and 10 MiB of candidates per request, 128 MiB of candidates in all (`429 CAPACITY_BUSY`), ten minutes to answer, 24 hours of answers.
 - A committed check answers the parked wait of each device that is `pending` in it with the existing unsigned `{"changed":true}` hint, so the device checks in within seconds. The hint names no check and carries nothing, the device acts only on its signed manifest, and the existing pacing (100 at once, then 50 a second) and the six-requests-a-minute limit bound the early check-ins a forged or repeated one can cause.
 
+## Device secrets in headers and URLs
+
+Proposed in [ADR 0014](../adr/0014-device-secrets-in-headers-and-urls.md); nothing is built. It widens decision 7 below: a device secret may also fill a header value, a URL query value, a URL path or a whole URL, but only for a use the host bound with `vectory configure-secrets` (destination and placement), checked by the agent in both modes. The [implementation plan](../internal/SECRETS-IMPLEMENTATION-PLAN.md) assigns the tests named below.
+
+Assets added: each binding's uses (`secret_uses` in `settings.json`); the private record of where substituted values sit in each retained effective file; the bindings report each heartbeat carries and the server's stored copy.
+
+| Attacker | Control | Residual risk | Acceptance probe |
+| --- | --- | --- | --- |
+| Compromised server or signing key | The agent fills a header or URL only for a use in its own settings, compares the effective destination (scheme, host, port, path prefix) and placement (header or parameter name, path position, whole URL) after substitution, refuses a proxy for an `http` destination and disabled TLS verification, and never lets a name with uses fill a credential field. No manifest or response field reaches the uses | It can send a bound secret to its bound use whenever it likes, with event data of its choosing, and can still point a plain binding's credential field at another destination (decision 7). In full mode it can read the secret file with `exec`; the binding stops mistakes there, not a malicious publisher | Every hostile template of the compromised-server suite refuses and leaves settings and the managed file unchanged (WP3, WP7) |
+| Malicious pipeline author | The same check, on the configuration after every substitution; references only at generated sites, one per value, never in a URL's authority or in names | Within a bound use the author chooses the data sent with the secret | Site and shape fixtures (WP1, WP2, WP3) |
+| Multi-tenant destination | Placement is bound, so a secret can't be moved into a query tag, dataset name, index or another header that the attacker's own account at the same service would read back | A bound destination that redirects, forwards headers or is compromised receives the secret, as an approved destination does today | Query, path and header moves at the bound host refuse (WP3); redirect behavior measured by the native probe (WP0) |
+| Restricted pipeline reading files | A file root may not cover a bound secret file, in either order, and the agent re-checks at resolution | None known beyond the table's judgement | `allow`, `install`, `configure-secrets` and resolution refuse an overlap (WP3) |
+| Someone reading diagnostics, logs or the server | The server holds references only. The agent redacts every substituted value and its encoded forms in diagnostics, log summaries, device validation answers and the local Vector log, and learns them from what it substituted, not from field positions | Encodings it doesn't know (base64 of a pair, a value split across lines) and Vector's raw metrics on the loopback exporter, which local users can read | The canary suite before and after a restart and a failed rotation (WP4) |
+| Compromised device | The server validates the bindings report (keys, bounds, origins without paths) and uses it only to explain | A device can lie about its bindings; that only misleads its own review | Report validation (WP2) |
+| Operator who pastes a credential | A shared detector (header and parameter names, webhook paths, token shapes) refuses plain text at import, Apply, save and publish, naming the field and the fix | A credential under an innocent name and shape passes | Shared fixtures in Rust and TypeScript (WP1, WP2, WP5) |
+
+Decisions for device secrets in headers and URLs:
+
+- The host decides where each secret goes and in what position. Uses live only in local settings, written by `configure-secrets`; a server never sends one, and a report is never a grant.
+- A name with uses is exhaustive: no credential field, no other header, parameter, path or destination.
+- The same check runs in restricted and full mode; only restricted mode makes it a boundary, and the docs say so.
+- A secret file never lies under a restricted file root.
+- Redaction follows values, not positions.
+
 ## Consequential decisions
 
 1. Browser TLS terminates at a private reverse proxy. The HTTP API must not be host-exposed. Agent TLS terminates in Rust; no forwarded-header authentication is trusted. Enrollment is the only agent operation without a device certificate.
