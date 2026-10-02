@@ -25,19 +25,46 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Statements {
         if event.metadata().target() != "sqlx::query" {
             return;
         }
-        struct Rows(u64);
+        struct Rows {
+            returned: u64,
+            connection_setup: bool,
+        }
+        impl Rows {
+            // A pool that opens a new connection during a measured read runs
+            // its PRAGMA batch first; that is the pool's work, not the read's.
+            fn note_statement(&mut self, text: &str) {
+                if text.trim_start().to_ascii_uppercase().starts_with("PRAGMA") {
+                    self.connection_setup = true;
+                }
+            }
+        }
         impl tracing::field::Visit for Rows {
             fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
                 if field.name() == "rows_returned" {
-                    self.0 = value;
+                    self.returned = value;
                 }
             }
-            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if matches!(field.name(), "summary" | "db.statement") {
+                    self.note_statement(value);
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if matches!(field.name(), "summary" | "db.statement") {
+                    self.note_statement(&format!("{value:?}").trim_matches('"').to_owned());
+                }
+            }
         }
-        let mut rows = Rows(0);
+        let mut rows = Rows {
+            returned: 0,
+            connection_setup: false,
+        };
         event.record(&mut rows);
+        if rows.connection_setup {
+            return;
+        }
         STATEMENTS.fetch_add(1, Ordering::SeqCst);
-        ROWS.fetch_add(rows.0, Ordering::SeqCst);
+        ROWS.fetch_add(rows.returned, Ordering::SeqCst);
     }
 }
 
