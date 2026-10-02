@@ -455,3 +455,33 @@ func TestStopAdviceNamesThePlatformsServiceManager(t *testing.T) {
 		t.Errorf("a service name with a space is quoted: %q", got)
 	}
 }
+
+// A case-insensitive file system finds "Sources" for "sources", and Vector
+// reads what is in it; the files are listed under the name they have on disk.
+// Another directory whose name only differs in case is not the one found.
+func TestOnDiskNameIsTheNameTheDirectoryHas(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "Sources"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upper, err := os.Stat(filepath.Join(dir, "Sources"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := onDiskName(dir, "sources", upper); got != "Sources" {
+		t.Errorf("the directory found for sources is %q, want the name it has on disk", got)
+	}
+	if got := onDiskName(filepath.Join(dir, "missing"), "sources", upper); got != "sources" {
+		t.Errorf("a directory that can't be read keeps the name asked for: %q", got)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sources"), 0o755); err != nil {
+		t.Skip("this file system treats sources and Sources as one directory")
+	}
+	lower, err := os.Stat(filepath.Join(dir, "sources"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := onDiskName(dir, "sources", lower); got != "sources" {
+		t.Errorf("with both directories on disk, sources is %q", got)
+	}
+}

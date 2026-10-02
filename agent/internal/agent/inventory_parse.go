@@ -355,17 +355,15 @@ func plistValue(decoder *xml.Decoder, start xml.StartElement) (any, error) {
 
 // splitWindowsCommandLine splits a Windows command line into arguments by the
 // rules CommandLineToArgvW documents: the first argument ends at the first
-// space, or at the closing quote when it starts with one; then 2n backslashes
+// space, or at the closing quote when it starts with one (a line that starts
+// with a space therefore has an empty first argument); then 2n backslashes
 // before a quote make n backslashes and toggle quoting, and 2n+1 make n
 // backslashes and a literal quote.
 func splitWindowsCommandLine(line string) []string {
 	blank := func(c byte) bool { return c == ' ' || c == '\t' }
 	var args []string
 	i, n := 0, len(line)
-	for i < n && blank(line[i]) {
-		i++
-	}
-	if i >= n {
+	if strings.Trim(line, " \t") == "" {
 		return nil
 	}
 	if line[i] == '"' {
