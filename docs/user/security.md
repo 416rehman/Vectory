@@ -78,6 +78,19 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 8. **Applied safely.** The agent records each step, starts Vector with the new configuration and watches it stay up. If it fails, the agent restores the last working configuration.
 9. **Pinned Vector.** The agent records the SHA-256 of the Vector binary it adopted and refuses to run a changed binary until someone on the host [approves the new one](agents.md#replace-the-vector-binary).
 
+## Checking a version on devices
+
+<!-- verify-after-merge: this section describes the agent's staged validation and the deploy review's Check on devices button; check that both exist and behave as written -->
+**Check on devices** in the deploy review asks the devices you're about to target to validate the version on their own hosts first. Each one downloads that candidate, runs Vector's validation against its own local policy and secrets, and answers in a check-in. A device that keeps a request open for changes (see [Turn off wake-ups](agents.md#turn-off-wake-ups)) hears of the request within seconds, any other at its next check-in. A check never applies anything.
+
+- **A check can't change a device.** It never touches the managed file, the recovery journal, the last working configuration, a generation or Vector's process. Vectory records only the answer.
+- **It's advisory.** Deploy never waits for a check. **Passes here** is the device's own report that validation found no error, not evidence that the version is applied or healthy.
+- **It uses the trust a deployment uses.** The request is part of the manifest signed for that one device, and it expires after ten minutes. A device can download only its own candidate, over its own mutual-TLS connection. The server serves it to no other device, and not after the device answered or the check expired.
+- **What Vectory keeps.** The candidate, with that device's variable values and secret references, is held only while the device hasn't answered. The answer holds the diagnostics the agent redacted on the device, test results and the names of unbound device secrets, in fixed fields with fixed limits, and nothing else. Answers are kept for 24 hours.
+- **Who can ask and read.** Operators and administrators can ask. Only the person who asked, or an administrator, can read the answers. Each request is audited with counts and the pipeline version, never the configuration.
+
+A device that is offline, or runs an agent that can't be checked, is named and not waited for.
+
 ## Credentials and data
 
 - **Device secrets.** A reference such as `vectory-secret:API_TOKEN` is resolved by the agent from a private local file, in any credential field. Plain text in a credential field is refused at save and publish. The agent substitutes only at the credential fields of its own built-in table, never where the server asks, so a pipeline can't move a secret into a URL, header or program. It reports bound names at check-in, never values or paths. The value is written only into the device's managed configuration, which the agent keeps private. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
