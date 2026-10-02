@@ -454,11 +454,29 @@ fn code_invalid(invite: bool) -> ApiError {
         )
     }
 }
-/// Public code checks: same-site only, bounded globally and per code.
-fn public_code(s: &State, h: &HeaderMap, v: &Value, invite: bool) -> Result<String> {
+/// Public code checks: same-site only, bounded per client, globally and per
+/// code. The client's own budget is charged first (30 tries a minute, far
+/// more than anyone redeeming a code needs), and the budget every client
+/// shares only for what that lets through, so one address can't use up
+/// everyone's chance to reset a password or accept an invitation.
+fn public_code(
+    s: &State,
+    h: &HeaderMap,
+    peer: Option<std::net::IpAddr>,
+    v: &Value,
+    invite: bool,
+) -> Result<String> {
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
+    s.limit(
+        format!(
+            "password-reset-client:{}",
+            crate::throttle_group(&s.client_key(h, peer))
+        ),
+        30,
+        std::time::Duration::from_secs(60),
+    )?;
     s.limit(
         "password-reset-global".into(),
         300,
@@ -482,9 +500,10 @@ fn public_code(s: &State, h: &HeaderMap, v: &Value, invite: bool) -> Result<Stri
 pub async fn redeem_reset(
     AppState(s): AppState<State>,
     h: HeaderMap,
+    crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    let verifier = public_code(&s, &h, &v, false)?;
+    let verifier = public_code(&s, &h, peer, &v, false)?;
     let password = auth::password_field(&v, "new_password")?;
     // Reject unknown/expired codes before starting expensive password work, then
     // check again transactionally.
@@ -558,13 +577,9 @@ pub async fn preview_invite(
     crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    // Every client shares one budget a minute ahead of its own, like
-    // enrollment, so a flood from many addresses can't grow the limiter.
-    s.limit(
-        "invite-preview".into(),
-        600,
-        std::time::Duration::from_secs(60),
-    )?;
+    // The client's own budget first, then the budget every client shares for
+    // what it lets through, like enrollment, so a flood from one address
+    // can't use up everyone's.
     s.limit(
         format!(
             "invite-preview:{}",
@@ -573,7 +588,12 @@ pub async fn preview_invite(
         30,
         std::time::Duration::from_secs(60),
     )?;
-    let verifier = public_code(&s, &h, &v, true)?;
+    s.limit(
+        "invite-preview".into(),
+        600,
+        std::time::Duration::from_secs(60),
+    )?;
+    let verifier = public_code(&s, &h, peer, &v, true)?;
     let mut conn = s.pool.acquire().await?;
     let target = invite_target(&mut conn, &verifier).await?;
     Ok(Json(json!({
@@ -592,7 +612,7 @@ pub async fn accept_invite(
     crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<(HeaderMap, Json<Value>)> {
-    let verifier = public_code(&s, &h, &v, true)?;
+    let verifier = public_code(&s, &h, peer, &v, true)?;
     let password = auth::password_field(&v, "new_password")?;
     let mut conn = s.pool.acquire().await?;
     let target = invite_target(&mut conn, &verifier).await?;

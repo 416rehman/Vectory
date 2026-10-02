@@ -484,15 +484,17 @@ pub async fn download_platform(
     // the address is busy retries shortly without spending its rate limit.
     let address = peer_key(peer);
     let slot = AddressSlot::take(address.clone())?;
-    s.limit(
-        "agent-download".into(),
-        PUBLIC_REQUESTS_PER_MINUTE,
-        Duration::from_secs(60),
-    )?;
+    // The address's own budget first; the one every address shares only for
+    // what that lets through.
     s.limit(
         format!("agent-download:{address}"),
         120,
         Duration::from_secs(600),
+    )?;
+    s.limit(
+        "agent-download".into(),
+        PUBLIC_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
     )?;
     let catalog = catalog(&s).await;
     let release = catalog.for_platform(&os, &arch).ok_or_else(|| {
@@ -1047,15 +1049,17 @@ pub async fn install_sh(
     if s.settings.disable_public_agent_downloads {
         return Err(downloads_disabled());
     }
-    s.limit(
-        "agent-installer".into(),
-        PUBLIC_REQUESTS_PER_MINUTE,
-        Duration::from_secs(60),
-    )?;
+    // The address's own budget first; the one every address shares only for
+    // what that lets through.
     s.limit(
         format!("agent-installer:{}", peer_key(peer)),
         300,
         Duration::from_secs(600),
+    )?;
+    s.limit(
+        "agent-installer".into(),
+        PUBLIC_REQUESTS_PER_MINUTE,
+        Duration::from_secs(60),
     )?;
     let agent_url = device_agent_url(&s.settings, &h, &uri)
         .ok_or_else(|| ApiError::invalid("Request the installer with the server's host name"))?;

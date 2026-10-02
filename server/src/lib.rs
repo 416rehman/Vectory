@@ -136,9 +136,11 @@ pub const DEVICE_LIMIT_KEYS: usize = 40000;
 pub const SIGN_IN_FAILURE_KEYS: usize = 65536;
 /// Key prefixes of unauthenticated requests outside sign-in: the agent
 /// listener's installer, agent downloads and enrollment, and invitation
-/// previews. Each namespace has a global per-minute cap ahead of its
-/// per-address key, so this partition can't fill with live keys, and
-/// traffic here never evicts a sign-in key.
+/// previews. Each namespace has a global per-minute cap behind its
+/// per-address key, charged only for what the address's own budget lets
+/// through. A flood from very many addresses can fill this partition with
+/// its own keys; it evicts only keys of this partition, so traffic here
+/// never evicts a sign-in key.
 const PUBLIC_LIMIT_PREFIXES: [&str; 4] = [
     "agent-installer",
     "agent-download",
@@ -251,19 +253,22 @@ impl App {
             )
         })
     }
-    /// Count an attempt against a fixed window and refuse once `maximum` is
-    /// exceeded. Each partition is bounded: when full it evicts the key whose
-    /// window ends soonest, so a new key is always counted, never refused.
+    /// Count an attempt against a fixed window and refuse once `maximum` have
+    /// been admitted. A refused attempt is not counted: an endpoint charges
+    /// the client's own budget first and a budget every client shares second,
+    /// so a client that has spent its own never spends the shared one. Each
+    /// partition is bounded: when full it evicts the key whose window ends
+    /// soonest, so a new key is always counted, never refused.
     pub fn limit(&self, key: String, maximum: u32, window: Duration) -> error::Result<()> {
-        let (count, remaining) = self.limit_partition(&key)?.hit(&key, window);
-        if count > maximum {
-            return Err(error::ApiError::throttled(
-                "RATE_LIMITED",
-                format!("Too many requests. Try again in {}.", wait_text(remaining)),
-                remaining,
-            ));
-        }
-        Ok(())
+        self.limit_partition(&key)?
+            .admit(&key, maximum, window)
+            .map_err(|remaining| {
+                error::ApiError::throttled(
+                    "RATE_LIMITED",
+                    format!("Too many requests. Try again in {}.", wait_text(remaining)),
+                    remaining,
+                )
+            })
     }
     /// The sign-in failure ledger. A poisoned lock still yields the ledger:
     /// failure accounting must never fail open.

@@ -30,6 +30,21 @@ fn too_many_attempts() -> ApiError {
     )
 }
 
+/// One attempt at an account's second factor, from either sign-in form:
+/// ten in five minutes, whoever makes them. Both forms charge this one
+/// budget, so neither gives an address, or a way of asking, a second one.
+pub(crate) fn charge_factor_attempt(s: &State, user: &str) -> Result<()> {
+    s.limit(
+        format!("login-mfa:{user}"),
+        10,
+        std::time::Duration::from_secs(300),
+    )
+    .map_err(|error| match error.retry_after {
+        Some(wait) => auth::signin_throttled(wait),
+        None => error,
+    })
+}
+
 pub(crate) async fn clear(conn: &mut SqliteConnection, user: &str) -> Result<()> {
     sqlx::query("DELETE FROM login_challenges WHERE user_id=?")
         .bind(user)
@@ -83,9 +98,14 @@ pub async fn complete(
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
+    // The client's own budget first, then the shared one for what it lets
+    // through (see `auth::login`). A request that is not even shaped like a
+    // completion costs the client's budget only.
+    let client = s.client_key(&h, peer);
+    let group = crate::throttle_group(&client);
     s.limit(
-        "login-mfa-global".into(),
-        600,
+        format!("login-mfa-client:{group}"),
+        auth::CLIENT_ATTEMPTS,
         std::time::Duration::from_secs(60),
     )?;
     let Json(v) = body.map_err(|_| {
@@ -106,6 +126,7 @@ pub async fn complete(
     {
         return Err(expired());
     }
+    auth::charge_shared_attempt(&s, "login-mfa-global", &group)?;
     let verifier = db::hash(&v.challenge_token);
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
     let challenge = sqlx::query("SELECT * FROM login_challenges WHERE verifier=?")
@@ -138,15 +159,7 @@ pub async fn complete(
         tx.commit().await?;
         return Err(expired());
     }
-    s.limit(
-        format!("login-mfa:{id}"),
-        10,
-        std::time::Duration::from_secs(300),
-    )
-    .map_err(|error| match error.retry_after {
-        Some(wait) => auth::signin_throttled(wait),
-        None => error,
-    })?;
+    charge_factor_attempt(&s, &id)?;
     if let Err(error) = crate::mfa::verify_login(
         &s,
         &mut tx,
@@ -183,9 +196,11 @@ pub async fn complete(
             )
         });
     }
-    let client = s.client_key(&h, peer);
-    let response =
-        auth::finish_login(&s, &mut tx, &h, &client, auth::public_user(&user.unwrap())).await?;
+    // The factor verified: only now is this a completed sign-in, and the
+    // client a client of the account.
+    let user = user.unwrap();
+    let response = auth::finish_login(&s, &mut tx, &h, &client, auth::public_user(&user)).await?;
     tx.commit().await?;
+    auth::signed_in(&s, &user.get::<String, _>("email"), &client);
     Ok(response)
 }

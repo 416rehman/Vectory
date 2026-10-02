@@ -77,15 +77,20 @@ impl Ledger {
         self.entries
             .insert(key.to_owned(), Entry { count: 1, expiry });
     }
-    /// Count one against `key` like `add`, and return its count in the
-    /// current window and the seconds until that window ends.
-    pub fn hit(&mut self, key: &str, window: Duration) -> (u32, u64) {
+    /// Count one against `key` unless it already holds `ceiling` in its
+    /// current window; `Err` is the seconds until that window ends. A refused
+    /// call is not counted, so a caller that checks a narrower budget first
+    /// and this one second charges this one only for what the first let
+    /// through.
+    pub fn admit(&mut self, key: &str, ceiling: u32, window: Duration) -> Result<(), u64> {
+        if ceiling == 0 {
+            return Err(window.as_secs() + 1);
+        }
+        if let Some(wait) = self.blocked(key, ceiling) {
+            return Err(wait);
+        }
         self.add(key, window);
-        self.entries
-            .get(key)
-            .map_or((1, window.as_secs() + 1), |entry| {
-                (entry.count, remaining(entry))
-            })
+        Ok(())
     }
     /// Give back one count reserved against `key`.
     pub fn refund(&mut self, key: &str) {
@@ -169,15 +174,48 @@ mod tests {
     }
 
     #[test]
-    fn hits_count_within_a_window_and_start_over_after_it() {
+    fn calls_are_admitted_up_to_the_ceiling_and_start_over_after_the_window() {
         let mut ledger = Ledger::with_capacity(8);
-        for expected in 1..=3 {
-            let (count, wait) = ledger.hit("key", Duration::from_secs(60));
-            assert_eq!(count, expected);
-            assert!((59..=60).contains(&wait), "{wait}");
+        for _ in 0..3 {
+            assert_eq!(ledger.admit("key", 3, Duration::from_secs(60)), Ok(()));
         }
-        assert_eq!(ledger.hit("brief", Duration::ZERO).0, 1);
-        assert_eq!(ledger.hit("brief", Duration::ZERO).0, 1, "a new window");
+        let wait = ledger.admit("key", 3, Duration::from_secs(60)).unwrap_err();
+        assert!((59..=60).contains(&wait), "{wait}");
+        // A window that has ended opens a new one.
+        assert_eq!(ledger.admit("brief", 1, Duration::ZERO), Ok(()));
+        assert_eq!(ledger.admit("brief", 1, Duration::ZERO), Ok(()));
+        // A ceiling of nothing admits nothing, and leaves no entry behind.
+        assert!(ledger.admit("closed", 0, Duration::from_secs(60)).is_err());
+        assert!(!ledger.seen("closed"));
+    }
+
+    #[test]
+    fn a_refused_call_does_not_advance_the_count() {
+        // Two budgets, charged narrowest first: an address that has spent its
+        // own budget never touches the shared one.
+        let mut ledger = Ledger::with_capacity(16);
+        let minute = Duration::from_secs(60);
+        let mut shared_calls = 0;
+        for _ in 0..700 {
+            if ledger.admit("client", 60, minute).is_ok() {
+                ledger.admit("shared", 600, minute).unwrap();
+                shared_calls += 1;
+            }
+        }
+        assert_eq!(shared_calls, 60);
+        assert!(ledger.blocked("shared", 60).is_some());
+        assert!(
+            ledger.blocked("shared", 61).is_none(),
+            "the shared budget was charged for refused calls"
+        );
+        // A call refused by a ceiling doesn't raise the count past it, so a
+        // caller with a higher ceiling (a reserved share) keeps its room.
+        let admitted = (0..50)
+            .filter(|_| ledger.admit("shared", 100, minute).is_ok())
+            .count();
+        assert_eq!(admitted, 40);
+        assert!(ledger.blocked("shared", 101).is_none());
+        assert!(ledger.admit("shared", 150, minute).is_ok());
     }
 
     #[test]

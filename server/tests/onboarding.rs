@@ -1176,6 +1176,71 @@ async fn one_noisy_client_cannot_block_enrollment_for_the_fleet() {
 }
 
 #[tokio::test]
+async fn repeated_refusals_for_a_real_token_are_recorded_once_per_reason_and_minute() {
+    let f = fixture(|_, _| {}).await;
+    let (revoked, revoked_id) = f
+        .token(json!({"name":"Revoked","expires_hours":1,"max_uses":5}))
+        .await;
+    let (status, _) = f
+        .post(&format!("/api/v1/tokens/{revoked_id}/revoke"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (single, single_id) = f
+        .token(json!({"name":"Single","expires_hours":1,"max_uses":1}))
+        .await;
+    let (status, _) = f
+        .enroll(&enrollment(&single, "request-first", "edge-01", &csr()))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A host that keeps retrying, or someone holding a dead token, is refused
+    // every time and recorded once for each reason.
+    for n in 0..40 {
+        let body = enrollment(&revoked, &format!("revoked-{n}"), "edge-02", &csr());
+        assert_eq!(
+            f.enroll(&body).await,
+            (StatusCode::UNAUTHORIZED, generic_refusal())
+        );
+    }
+    for n in 0..15 {
+        let body = enrollment(&single, &format!("exhausted-{n}"), "edge-03", &csr());
+        assert_eq!(
+            f.enroll(&body).await,
+            (StatusCode::UNAUTHORIZED, generic_refusal())
+        );
+    }
+    let failures: Vec<Value> = f
+        .activity()
+        .await
+        .into_iter()
+        .filter(|event| event["outcome"] == "failure")
+        .collect();
+    let mut recorded: Vec<(String, String)> = failures
+        .iter()
+        .map(|event| {
+            (
+                event["token_id"].as_str().unwrap().to_owned(),
+                event["reason_code"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    recorded.sort();
+    let mut expected = vec![
+        (revoked_id, "TOKEN_REVOKED".to_owned()),
+        (single_id, "TOKEN_EXHAUSTED".to_owned()),
+    ];
+    expected.sort();
+    assert_eq!(recorded, expected);
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM records WHERE kind='audit' AND json_extract(data,'$.action')='device.enroll'",
+    )
+    .fetch_one(&f.s.pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 3, "the enrollment and one refusal for each reason");
+}
+
+#[tokio::test]
 async fn installer_and_download_floods_from_many_addresses_share_one_budget() {
     let f = fixture(|_, _| {}).await;
     let device = device::router(f.s.clone());
