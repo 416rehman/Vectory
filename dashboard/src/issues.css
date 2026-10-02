@@ -186,6 +186,22 @@
   color: var(--muted);
   line-height: 1.6;
 }
+/* The card's own next step sits opposite the way to open its devices. */
+.issue-group-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+.issue-group-footer .issue-group-toggle {
+  margin-top: 0;
+}
+.issue-primary-action {
+  gap: 6px;
+  white-space: nowrap;
+}
 .issue-group-toggle {
   display: inline-flex;
   align-items: center;
