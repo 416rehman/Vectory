@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import net from "node:net";
 import { createHash } from "node:crypto";
-import { fleetReplies, fulfillFleetRead } from "./fleet-replies.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  nothingOffered,
+} from "./fleet-replies.mjs";
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboard, "..");
 const output = resolve(
@@ -376,6 +380,8 @@ async function load({
     if (method === "GET") {
       const telemetry = path.match(/^\/devices\/([^/]+)\/telemetry$/);
       if (telemetry) return reply({ device_id: telemetry[1], samples: [] });
+      const configuration = path.match(/^\/devices\/([^/]+)\/configuration$/);
+      if (configuration) return reply(nothingOffered(configuration[1]));
       if (path === "/issues/history" || path === "/audit/history")
         return reply({
           items: [],

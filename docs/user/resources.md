@@ -77,6 +77,8 @@ The device page's **Device secrets** card lists the names its version reads and,
 
 A device with a name **Not bound** can't apply that version, and keeps running what it runs now. Bind the name and start the agent: its next check-in applies the version. An agent too old to report names shows **Not reported**, and its apply status says whether each secret resolved.
 
+The page's **Effective configuration** shows the text the device was offered, with `vectory-secret:NAME` where the value goes. The server never has the value, so no page can show it. [How Vectory compares them](deployments.md#how-vectory-compares-them) says how a file with a resolved value is checked.
+
 ### What restricted and full mode allow
 
 | Reference | Restricted mode | Full mode |

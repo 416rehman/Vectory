@@ -56,6 +56,19 @@ curl -fsS -b cookies.txt \
   | jq '.total, (.items[] | {name, status, last_seen})'
 ```
 
+## Read what a device was offered
+
+`GET /api/v1/devices/{id}/configuration` returns the exact text a device was offered, the values of its variables, and whether the file its agent reports is that text. Add `?generation=11` to read an earlier offer. `GET /api/v1/devices/{id}/configuration/diff?from=11&to=12` returns what changed between two offers, as hunks and as a unified diff cut at 2,000 lines. Every signed-in role can read both. They change nothing, and they refuse an unknown or repeated parameter with `400`. Reads are limited per account, to 240 a minute for the text and 60 for the comparison.
+
+```sh
+id=$(curl -fsS -b cookies.txt \
+  'https://vectory.example.com/api/v1/devices/inventory?q=edge-nyc-01' | jq -r '.items[0].id')
+curl -fsS -b cookies.txt "https://vectory.example.com/api/v1/devices/$id/configuration" \
+  | jq -r '.running.matches, .content'
+```
+
+`running.matches` is `true` when the digest the agent last reported is the digest of `content`, `false` when it's another one and `null` when Vectory can't say. [How Vectory compares them](deployments.md#how-vectory-compares-them) has the rest.
+
 ## Use the interactive reference
 
 [Open the interactive API reference](/api-reference.html). It lists every operation by area, with request and response schemas.

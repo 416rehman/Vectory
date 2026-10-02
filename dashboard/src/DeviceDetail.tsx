@@ -31,6 +31,7 @@ import TargetDialog from "./LazyTargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
 import DeviceSecrets from "./DeviceSecrets";
+import EffectiveConfiguration from "./EffectiveConfiguration";
 import DeviceRevocation from "./DeviceAccessRevocation";
 import { DeviceIdentityRecovery, DeviceRetryAction } from "./RecoveryActions";
 import {
@@ -1211,6 +1212,7 @@ export default function DeviceDetail({
             loading={version.loading}
             failed={!!version.error}
           />
+          <EffectiveConfiguration key={device.id} device={device} />
           {/* Vector's warnings and errors have their own card below. */}
           <TelemetryPanel device={device} logs={false} />
           <VectorLogs device={device} />

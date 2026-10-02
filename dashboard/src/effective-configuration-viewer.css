@@ -1,0 +1,126 @@
+/* The read-only code viewer of an offered configuration. Colors are the
+   design tokens, so it follows the theme; one accent marks keys. */
+.effective-config-viewer {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.effective-config-viewer:focus-within {
+  border-color: var(--focus);
+  box-shadow: var(--focus-ring);
+}
+.effective-config-viewer-host {
+  min-width: 0;
+}
+.effective-config-viewer .cm-editor {
+  min-height: 120px;
+  max-height: min(480px, 70vh);
+  color: var(--text);
+  background: transparent;
+}
+.effective-config-viewer .cm-editor.cm-focused {
+  outline: none;
+}
+.effective-config-viewer .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  font-variant-ligatures: none;
+}
+.effective-config-viewer .cm-content {
+  padding: var(--space-2) 0;
+}
+.effective-config-viewer .cm-line {
+  padding: 0 var(--space-3) 0 var(--space-2);
+}
+.effective-config-viewer .cm-gutters {
+  border-right: 1px solid var(--border);
+  background: var(--surface-sunken);
+  color: var(--text-subtle);
+}
+.effective-config-viewer .cm-lineNumbers .cm-gutterElement {
+  min-width: 3ch;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+.effective-config-viewer .cm-foldGutter .cm-gutterElement {
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+.effective-config-viewer .cm-foldGutter .cm-gutterElement:hover {
+  color: var(--text);
+}
+.effective-config-viewer .cm-selectionBackground,
+.effective-config-viewer .cm-focused .cm-selectionBackground {
+  background: var(--accent-soft);
+}
+.effective-config-viewer .cm-content ::selection {
+  background: var(--accent-soft);
+}
+.effective-config-viewer .cm-selectionMatch,
+.effective-config-viewer .cm-searchMatch {
+  background: var(--warning-bg);
+  outline: 1px solid var(--warning-border);
+}
+.effective-config-viewer .cm-searchMatch-selected {
+  outline: 2px solid var(--accent);
+}
+.effective-config-viewer .cm-foldPlaceholder {
+  border-color: var(--border);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+}
+.effective-config-viewer .cm-panels {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+.effective-config-viewer .cm-panel.cm-search {
+  padding: var(--space-2) var(--space-3);
+}
+.effective-config-viewer .cm-textfield {
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 3px 6px;
+}
+.effective-config-viewer .cm-button {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--text);
+  padding: 2px 8px;
+}
+.ecv-key {
+  color: var(--accent-text);
+}
+.ecv-string {
+  color: var(--text);
+}
+.ecv-literal {
+  color: var(--warning-text);
+}
+.ecv-comment {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.ecv-punctuation {
+  color: var(--text-subtle);
+}
+@media (max-width: 639px) {
+  .effective-config-viewer .cm-scroller {
+    font-size: 12px;
+  }
+  .effective-config-viewer .cm-line {
+    padding: 0 var(--space-2) 0 var(--space-1);
+  }
+  .effective-config-viewer .cm-lineNumbers .cm-gutterElement {
+    padding: 0 var(--space-1) 0 var(--space-2);
+  }
+}

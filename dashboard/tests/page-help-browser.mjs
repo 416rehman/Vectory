@@ -11,6 +11,7 @@ import { configuredChannels } from "./notification-fixtures.mjs";
 import {
   fleetReplies,
   fulfillFleetRead,
+  nothingOffered,
   slimOverview,
 } from "./fleet-replies.mjs";
 
@@ -174,6 +175,8 @@ await context.route("**/*", async (route) => {
   if (path === "/devices") return reply([device]);
   if (path === `/devices/${deviceId}/telemetry`)
     return reply({ device_id: deviceId, samples: [] });
+  if (path === `/devices/${deviceId}/configuration`)
+    return reply(nothingOffered(deviceId));
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))
     return reply([]);
   if (path === "/agent-install")
