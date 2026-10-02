@@ -326,7 +326,7 @@ try {
             exact: true,
           }),
         });
-        await expect(row).toContainText("1 device no longer targeted");
+        await expect(row).toContainText("No devices follow this now");
         await expect(row).toContainText("Complete");
         await open(page);
         await expect(dialog(page)).toContainText("No devices follow this now");
