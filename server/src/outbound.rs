@@ -104,8 +104,13 @@ pub fn classify(ip: IpAddr) -> Reach {
 }
 fn classify_v4(ip: Ipv4Addr) -> Reach {
     let [a, b, c, _] = ip.octets();
-    if ip == Ipv4Addr::new(100, 100, 100, 200) || ip == Ipv4Addr::new(192, 0, 0, 192) {
-        // Alibaba Cloud and Oracle Cloud instance metadata.
+    if ip == Ipv4Addr::new(100, 100, 100, 200)
+        || ip == Ipv4Addr::new(192, 0, 0, 192)
+        || ip == Ipv4Addr::new(168, 63, 129, 16)
+    {
+        // Alibaba Cloud and Oracle Cloud instance metadata, and Azure's
+        // platform address (the WireServer), which every Azure VM reaches and
+        // which is not link-local.
         return Reach::Forbidden(METADATA);
     }
     match (a, b, c) {
@@ -943,6 +948,12 @@ mod tests {
             ("169.254.169.254", Reach::Forbidden(METADATA)),
             ("169.254.170.2", Reach::Forbidden(METADATA)),
             ("100.100.100.200", Reach::Forbidden(METADATA)),
+            ("168.63.129.16", Reach::Forbidden(METADATA)),
+            ("::ffff:168.63.129.16", Reach::Forbidden(METADATA)),
+            ("64:ff9b::a83f:8110", Reach::Forbidden(METADATA)),
+            ("2002:a83f:8110::1", Reach::Forbidden(METADATA)),
+            ("168.63.129.15", Reach::Public),
+            ("168.63.129.17", Reach::Public),
             ("fd00:ec2::254", Reach::Forbidden(METADATA)),
             ("::ffff:169.254.169.254", Reach::Forbidden(METADATA)),
             ("64:ff9b::a9fe:a9fe", Reach::Forbidden(METADATA)),
@@ -967,6 +978,8 @@ mod tests {
             "169.254.169.254",
             "fd00:ec2::254",
             "100.100.100.200",
+            "168.63.129.16",
+            "::ffff:168.63.129.16",
             "fe80::1",
         ] {
             assert!(permitted(ip(address), true).is_err(), "{address}");
@@ -991,6 +1004,16 @@ mod tests {
                 .contains("user name and password")
         );
         assert!(webhook_destination("https://169.254.169.254/latest", true).is_err());
+        // Azure's platform address is reachable from every Azure VM, and is
+        // refused like every other cloud metadata address.
+        for allow_private in [false, true] {
+            let reason = webhook_destination(
+                "https://168.63.129.16/machine?comp=goalstate",
+                allow_private,
+            )
+            .unwrap_err();
+            assert!(reason.contains("cloud metadata address"), "{reason}");
+        }
         assert!(webhook_destination("https://127.0.0.1/hook", false).is_err());
         assert!(webhook_destination("https://localhost/hook", false).is_err());
         assert!(webhook_destination("https://[::1]:9000/hook", true).is_ok());
