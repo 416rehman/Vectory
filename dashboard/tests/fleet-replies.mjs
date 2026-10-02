@@ -9,6 +9,7 @@
 const BUCKETS = [
   "applied",
   "degraded",
+  "held",
   "updating",
   "check",
   "failed",
@@ -27,11 +28,12 @@ const RANK = {
   failed: 0,
   degraded: 1,
   check: 2,
-  offline: 3,
-  updating: 4,
-  paused: 5,
-  unmanaged: 6,
-  applied: 7,
+  held: 3,
+  offline: 4,
+  updating: 5,
+  paused: 6,
+  unmanaged: 7,
+  applied: 8,
 };
 const FRESH_MS = 180_000;
 const MAX_IDS = 10_000;
@@ -104,6 +106,12 @@ const deliveryIssue = (row) => {
 /** The state a device's badge shows. */
 export function displayStatus(row) {
   if (deliveryIssue(row)) return "degraded";
+  // A failed newest version on a device that keeps running an earlier one.
+  if (
+    row.held_on_previous_version &&
+    ["failed", "rolled_back"].includes(row.status)
+  )
+    return "held";
   if (
     row.status === "paused" &&
     !row.local_paused &&
@@ -121,6 +129,8 @@ export function bucketOf(display) {
       return "applied";
     case "degraded":
       return "degraded";
+    case "held":
+      return "held";
     case "verification_unknown":
       return "check";
     case "failed":
@@ -259,7 +269,7 @@ export function fleetReplies({
     if (status && status !== "revoked" && !BUCKETS.includes(status))
       return {
         error: refuse(
-          "status must be applied, degraded, updating, check, failed, offline, paused, unmanaged or revoked",
+          "status must be applied, degraded, held, updating, check, failed, offline, paused, unmanaged or revoked",
         ),
       };
     const view = given("view");
@@ -353,8 +363,8 @@ export function fleetReplies({
         ? present(a.row.name, b.row.name, natural)
         : f.sort === "status"
           ? present(
-              a.bucket === null ? 8 : RANK[a.bucket],
-              b.bucket === null ? 8 : RANK[b.bucket],
+              a.bucket === null ? 9 : RANK[a.bucket],
+              b.bucket === null ? 9 : RANK[b.bucket],
               (x, y) => x - y,
             )
           : f.sort === "last_seen"
