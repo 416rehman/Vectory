@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +94,9 @@ type server struct {
 	dir, binary, admin, certPath, keyPath, secret string
 	cmd                                           *exec.Cmd
 	log                                           *os.File
+	// descriptors, when set, limits the server's open files (POSIX only), as a
+	// service manager's LimitNOFILE does.
+	descriptors int
 }
 
 func setup(t *testing.T) *harness {
@@ -177,6 +181,9 @@ func (s *server) start() {
 	httpAddr, tlsAddr := freePort(t), freePort(t)
 	h.http, h.https = "http://"+httpAddr, "https://"+tlsAddr
 	cmd := exec.Command(s.binary)
+	if s.descriptors > 0 {
+		cmd = exec.Command("sh", "-c", fmt.Sprintf(`ulimit -n %d && exec "$0"`, s.descriptors), s.binary)
+	}
 	cmd.Env = append(os.Environ(), "VECTORY_DATA_DIR="+filepath.Join(s.dir, "state"), "VECTORY_HTTP_ADDR="+httpAddr, "VECTORY_AGENT_ADDR="+tlsAddr, "VECTORY_TLS_CERT="+s.certPath, "VECTORY_TLS_KEY="+s.keyPath, "VECTORY_BOOTSTRAP_SECRET_FILE="+s.secret, "VECTORY_COOKIE_SECURE=false", "VECTORY_DEVELOPMENT=true", "VECTORY_DASHBOARD_DIR="+s.dir, "VECTORY_RELEASES_DIR="+filepath.Join(s.dir, "releases"))
 	cmd.Stdout = s.log
 	cmd.Stderr = s.log
@@ -304,6 +311,38 @@ func (h *harness) client(v map[string]any, key []byte) *http.Client {
 		h.t.Fatal(e)
 	}
 	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: h.roots, MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair}}}}
+}
+
+// from is a client for the agent listener whose connections come from another
+// loopback address, so a test can play two hosts. It skips the test where the
+// machine has no such address.
+func (h *harness) from(t *testing.T, local string) *http.Client {
+	t.Helper()
+	ip := net.ParseIP(local)
+	probe, err := net.ListenTCP("tcp", &net.TCPAddr{IP: ip})
+	if err != nil {
+		t.Skipf("this machine has no loopback address %s: %v", local, err)
+	}
+	probe.Close()
+	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Timeout: 5 * time.Second}
+	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext, ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{RootCAs: h.roots, MinVersion: tls.VersionTLS13}}}
+}
+
+// status sends one request and returns its HTTP status, draining the body.
+func status(t *testing.T, client *http.Client, method, target string, body []byte) int {
+	t.Helper()
+	r, err := http.NewRequest(method, target, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	return res.StatusCode
 }
 
 func TestIndependentSecurityBoundaries(t *testing.T) {
@@ -786,6 +825,102 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatalf("manifest after the wake-up: %#v", next)
 		}
 	})
+	t.Run("silent-connections-do-not-delay-a-mutually-authenticated-request", func(t *testing.T) {
+		address := strings.TrimPrefix(h.https, "https://")
+		var idle []net.Conn
+		defer func() {
+			for _, c := range idle {
+				c.Close()
+			}
+		}()
+		for i := 0; i < 200; i++ {
+			c, err := net.DialTimeout("tcp", address, 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			idle = append(idle, c)
+		}
+		time.Sleep(300 * time.Millisecond)
+		// A new connection: the device's pooled ones finished their handshakes long ago.
+		fresh := h.client(device, key)
+		fresh.Timeout = 2 * time.Second
+		defer fresh.CloseIdleConnections()
+		started := time.Now()
+		body, _ := json.Marshal(beat)
+		res, err := fresh.Post(h.https+"/agent/v1/heartbeat", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("a mutually authenticated request failed after %v behind %d silent connections: %v", time.Since(started), len(idle), err)
+		}
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		expect(t, res.StatusCode, 200, nil)
+		// A connection that sends nothing is closed long before the ten seconds a handshake may take.
+		idle[0].SetReadDeadline(time.Now().Add(6 * time.Second))
+		if _, err := idle[0].Read(make([]byte, 1)); err == nil {
+			t.Fatal("the server sent bytes to a connection that never spoke")
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatal("a silent connection was still open after six seconds")
+		}
+	})
+	t.Run("one-address-cannot-lock-enrollment-or-the-installer-for-others", func(t *testing.T) {
+		noisy := h.from(t, "127.0.0.2")
+		defer noisy.CloseIdleConnections()
+		junk, _ := json.Marshal(map[string]any{"protocol_version": 1, "token": strings.Repeat("0", 64)})
+		limited := 0
+		for i := 0; i < 700; i++ {
+			if status(t, noisy, "POST", h.https+"/agent/v1/enroll", junk) == 429 {
+				limited++
+			}
+		}
+		if limited == 0 {
+			t.Fatal("the enrollment flood was never limited")
+		}
+		limited = 0
+		for i := 0; i < 1250; i++ {
+			if status(t, noisy, "GET", h.https+"/agent/v1/install.sh", nil) == 429 {
+				limited++
+			}
+		}
+		if limited == 0 {
+			t.Fatal("the installer flood was never limited")
+		}
+		// Another host still enrolls and installs.
+		after := h.token(map[string]any{"name": "after-a-flood", "expires_hours": 1, "max_uses": 1})
+		_, afterCSR := keyCSR(t)
+		n, v := h.enroll(after, "after-a-flood-host", fmt.Sprintf("%x", serial()), afterCSR)
+		okay(t, n, v)
+		if code := status(t, h.tls, "GET", h.https+"/agent/v1/install.sh", nil); code != 200 {
+			t.Fatalf("install.sh answered %d for another address after one address flooded it", code)
+		}
+	})
+	t.Run("refused-enrollments-with-a-real-token-are-recorded-once-per-reason", func(t *testing.T) {
+		host := h.from(t, "127.0.0.3")
+		defer host.CloseIdleConnections()
+		n, created, _ := h.api("POST", "/tokens", map[string]any{"name": "audit-dedupe", "expires_hours": 1, "max_uses": 5})
+		okay(t, n, created)
+		secret, id := created["token"].(string), created["record"].(map[string]any)["id"].(string)
+		n, v, _ := h.api("POST", "/tokens/"+id+"/revoke", map[string]any{})
+		okay(t, n, v)
+		_, csr := keyCSR(t)
+		for i := 0; i < 50; i++ {
+			body, _ := json.Marshal(map[string]any{"protocol_version": 1, "request_id": fmt.Sprintf("%x", serial()), "token": secret, "name": "audit-host", "csr_pem": csr, "os": "linux", "arch": "amd64", "agent_version": "security-test", "vector_version": "0.58.0"})
+			if code := status(t, host, "POST", h.https+"/agent/v1/enroll", body); code != 401 {
+				t.Fatalf("attempt %d: HTTP %d", i, code)
+			}
+		}
+		n, activity, _ := h.api("GET", "/agent-install/activity?since="+url.QueryEscape(time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)), nil)
+		okay(t, n, activity)
+		rows := 0
+		for _, raw := range activity["events"].([]any) {
+			event := raw.(map[string]any)
+			if event["token_id"] == id && event["outcome"] == "failure" {
+				rows++
+			}
+		}
+		if rows == 0 || rows > 3 {
+			t.Fatalf("50 refused attempts left %d audit rows for the token", rows)
+		}
+	})
 	t.Run("revoked-pooled-connection-rejected", func(t *testing.T) {
 		n, v, _ := h.api("POST", "/devices/"+device["device_id"].(string)+"/revoke", map[string]any{})
 		okay(t, n, v)
@@ -901,6 +1036,52 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 		n, denied, _ = h.req(h.plain, h.http, "GET", "/api/v1/session", nil, recoveryCookie, "")
 		expect(t, n, 401, denied)
 	})
+}
+
+// Running out of file descriptors makes accept fail. The server keeps running,
+// says so in its log, and answers again once descriptors are free.
+func TestDescriptorExhaustionDoesNotEndTheServer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a descriptor limit is a POSIX setting")
+	}
+	s := newServer(t)
+	s.descriptors = 80
+	s.start()
+	h := s.h
+	address := strings.TrimPrefix(h.https, "https://")
+	// Once the accept queue is full a connect waits, so stop at a few refusals.
+	var held []net.Conn
+	refused := 0
+	for i := 0; i < 300 && refused < 5; i++ {
+		if c, err := net.DialTimeout("tcp", address, 300*time.Millisecond); err == nil {
+			held = append(held, c)
+			refused = 0
+		} else {
+			refused++
+		}
+	}
+	time.Sleep(2 * time.Second)
+	for _, c := range held {
+		c.Close()
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		res, err := h.plain.Get(h.http + "/api/v1/status")
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode == 200 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the server stopped answering after it ran out of descriptors")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log, _ := os.ReadFile(filepath.Join(s.dir, "server.log"))
+	if !strings.Contains(string(log), "os error 24") || !strings.Contains(string(log), "could not accept a connection") {
+		t.Fatalf("the test never ran the server out of descriptors, or the listener said nothing: %s", log)
+	}
 }
 
 // Device CA rotation with the real vectory-admin tool: refused while the
