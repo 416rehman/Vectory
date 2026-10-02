@@ -231,6 +231,42 @@ describe("install commands", () => {
     expect(installerCommand(noPem, choices())).toBeNull();
   });
 
+  it("carries what the server sends only when it cannot end a quoted string", () => {
+    // A quote, a control character or a space in the server's own values must
+    // never end the string they sit in: the command is refused instead.
+    for (const ca_pem of [
+      caPem.replace("MIIB", "MI'IB"),
+      caPem.replace("MIIB", "MI\rIB"),
+      caPem.replace("MIIB", "MI;IB"),
+      `${caPem}$(touch x)`,
+    ])
+      expect(
+        installerCommand(
+          { ...install, certificate: { ...install.certificate!, ca_pem } },
+          choices(),
+        ),
+      ).toBeNull();
+    for (const sha256 of ["short", `${installerSha}' ; touch x ; '`])
+      expect(
+        installerCommand(
+          { ...install, installer: { ...install.installer!, sha256 } },
+          choices(),
+        ),
+      ).toBeNull();
+    // An address with a space or a quote is quoted as one word, not split.
+    const odd = installerCommand(
+      { ...install, agent_url: "https://vectory.example.test:8443/a b'c" },
+      choices(),
+    )!;
+    expect(odd).toContain(
+      "  'https://vectory.example.test:8443/a b'\"'\"'c/agent/v1/install.sh'\n",
+    );
+    // The usual address stays bare.
+    expect(installerCommand(install, choices())).toContain(
+      "  https://vectory.example.test:8443/agent/v1/install.sh\n",
+    );
+  });
+
   it("puts the agent where Advanced says and starts it from there", () => {
     const command = installerCommand(
       install,

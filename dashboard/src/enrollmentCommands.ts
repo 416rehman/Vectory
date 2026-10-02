@@ -115,6 +115,14 @@ const plainWord = {
   windows: /^[A-Za-z0-9_./:=+][A-Za-z0-9_./:=+-]*$/,
 };
 
+// What a PEM certificate holds: base64, its dashed header lines and newlines.
+const pemText = /^[A-Za-z0-9+/=\n -]+$/;
+/** A SHA-256 digest as the server gives it, or a refusal to put it in a command. */
+function sha256Text(value: string) {
+  if (!/^[0-9a-f]{64}$/i.test(value)) throw new CommandValueError("control");
+  return value;
+}
+
 /** What makes a value unfit for any command on `os`, or null. */
 function unfit(value: string, os: HostOS): CommandValueError["reason"] | null {
   if (invisibleControl.test(value)) return "control";
@@ -311,6 +319,9 @@ export function installerRun(
     if (trust === "pinned") {
       const pem = install.certificate?.ca_pem?.trimEnd();
       if (!pem) return null;
+      // The server's own certificate, but a quote or a control character in it
+      // would end the string it sits in: refuse what no PEM contains.
+      if (!pemText.test(pem)) throw new CommandValueError("control");
       steps.push(`printf '%s\\n' '${pem}' > "$dir/${pinnedCAFile}"`);
       cacert.push(`  --cacert "$dir/${pinnedCAFile}" \\`);
     } else if (trust === "file") {
@@ -329,9 +340,9 @@ export function installerRun(
       `curl -fsSL --proto '=https' --proto-redir '=https' \\`,
       ...cacert,
       `  -o "$dir/${installerFile}" \\`,
-      `  ${origin}/agent/v1/install.sh`,
+      `  ${quote(`${origin}/agent/v1/install.sh`, choices.os)}`,
       // Split at the pipe, so no line hides under the Copy button.
-      `echo '${installer.sha256}  ${installerFile}' \\`,
+      `echo '${sha256Text(installer.sha256)}  ${installerFile}' \\`,
       `  | (cd "$dir" && ${check})`,
       continued(
         `sudo sh "$dir/${installerFile}"`,
