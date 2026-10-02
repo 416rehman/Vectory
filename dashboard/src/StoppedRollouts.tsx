@@ -1,7 +1,7 @@
 import { CircleX, TriangleAlert } from "lucide-react";
 import type { DeploymentPage } from "./api";
 import { Button, useResource } from "./ui";
-import { stoppedRollouts, type StoppedRollout } from "./stoppedRollouts";
+import { stoppedRollouts, type StoppedRollout } from "./stoppedRolloutsModel";
 
 const empty: DeploymentPage = { items: [], total: 0, page: 1, page_size: 5 };
 

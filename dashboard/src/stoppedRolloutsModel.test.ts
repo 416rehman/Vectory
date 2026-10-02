@@ -4,7 +4,7 @@ import {
   dismissStoppedRollout,
   readDismissed,
   stoppedRollouts,
-} from "./stoppedRollouts";
+} from "./stoppedRolloutsModel";
 import { needsYouRows } from "./overviewModel";
 
 const now = Date.parse("2026-09-29T09:00:00Z");

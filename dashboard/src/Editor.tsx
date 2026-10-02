@@ -130,7 +130,7 @@ import {
 import PipelineActions, { type PipelineAction } from "./PipelineActions";
 import PublishReview from "./PublishReview";
 import { stopsPublishing, usePublishTests } from "./publishTests";
-import { deviceReach, reachLabel } from "./publishReview";
+import { deviceReach, reachLabel } from "./publishReviewModel";
 import { pipelineConnectivity } from "./pipelineConnectivity";
 import SelectedDevice, { pipelineRoute } from "./SelectedDevice";
 import type {

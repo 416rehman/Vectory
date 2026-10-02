@@ -24,7 +24,7 @@ import {
   sectionCount,
   shortValue,
   type ComponentChange,
-} from "./publishReview";
+} from "./publishReviewModel";
 import "./publish-review.css";
 
 const statusIcons: Record<CheckStatus, typeof CircleCheck> = {

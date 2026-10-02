@@ -10,7 +10,7 @@ import {
   outCell,
   readingSpeech,
   readingText,
-} from "./componentMetrics";
+} from "./componentMetricsModel";
 import type { ComponentTelemetry } from "./runtimeModel";
 import { formatNumber, formatPercent, present } from "./telemetryChart";
 import { TimeAgo } from "./ui";
