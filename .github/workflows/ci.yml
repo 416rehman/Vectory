@@ -78,6 +78,18 @@ jobs:
           node scripts/generate-vrl-functions.mjs --check
           node scripts/generate-secret-fields.mjs --check
         working-directory: .
+      # The capability table's copies are current; every component has a tier
+      # and every resource-like field of a reviewed one a rule, against the
+      # pinned schema; the golden fixtures follow from the table. The agent
+      # job validates the fixtures' configurations with the pinned Vector.
+      - name: Check the capability table, its completeness and its golden fixtures
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/generate-capability-table.test.mjs scripts/check-capability-fixtures.test.mjs
+          node scripts/generate-capability-table.mjs --check
+          node scripts/check-capability-fixtures.mjs
+        working-directory: .
       - name: Check help Markdown, links, writing rules and reference drift
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -544,6 +556,10 @@ jobs:
         if: ${{ !cancelled() && hashFiles('artifacts/agent-go-test.json') != '' }}
         timeout-minutes: 10
         run: node scripts/check-native-tests.mjs artifacts/agent-go-test.json --require-native
+      - name: Validate the capability fixtures with the pinned Vector
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        timeout-minutes: 10
+        run: node scripts/check-capability-fixtures.mjs --require-vector
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !cancelled() && hashFiles('artifacts/agent-go-test.json') != '' }}
         timeout-minutes: 10
