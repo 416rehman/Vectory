@@ -84,8 +84,13 @@ type redactor struct {
 	limit int
 }
 
+// terminalSequence is an escape sequence a terminal acts on: a control sequence
+// (ESC [, parameters, intermediates, a final byte) or an operating-system
+// command such as a window title or a link (ESC ], text, then BEL or ESC \).
+// Vector colors its console output with the first.
+var terminalSequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
 var (
-	ansiEscape      = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 	quotedText      = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|`[^`\n]*`|'[^'\n]*'")
 	wordPattern     = regexp.MustCompile(`\S+`)
 	ipAddress       = regexp.MustCompile(`^\[?[0-9a-fA-F:.]*\d[0-9a-fA-F:.]*\]?(?::\d+)?$`)
@@ -333,13 +338,17 @@ func sensitive(core string) bool {
 // labels; quoted content must be template-derived; unquoted sensitive tokens
 // must be template-derived.
 func (r *redactor) text(s string) string {
-	s = strings.ToValidUTF8(ansiEscape.ReplaceAllString(s, ""), "")
+	s = strings.ToValidUTF8(terminalSequence.ReplaceAllString(s, ""), "")
 	for _, secret := range r.secrets {
 		s = strings.ReplaceAll(s, secret, redactedToken)
 	}
 	for _, secret := range r.shortSecrets {
 		s = replaceWord(s, secret, redactedToken)
 	}
+	// Secrets are matched on the text as Vector wrote it. From here a control
+	// character separates words, as a space does: a path or a token behind one
+	// is still judged on its own.
+	s = strings.Map(spaceHostile, s)
 	for _, label := range r.labels {
 		s = strings.ReplaceAll(s, label[0], label[1])
 	}
@@ -379,8 +388,11 @@ func (r *redactor) identifier(value string) string {
 	return value
 }
 
+// truncateText is value as one line of at most max characters: the text that
+// leaves the host holds no control character, line separator or text-direction
+// control (singleLine).
 func truncateText(value string, max int) string {
-	value = strings.TrimSpace(strings.Join(strings.Fields(value), " "))
+	value = singleLine(value)
 	if utf8.RuneCountInString(value) <= max {
 		return value
 	}
@@ -429,7 +441,7 @@ func (r *redactor) finalize(d Diagnostic) Diagnostic {
 	}
 	d.Field = truncateText(r.text(d.Field), 128)
 	if d.Message == "" {
-		d.Message = "Vector reported an error."
+		d.Message = noPrintableDiagnostic
 	}
 	for {
 		encoded, _ := json.Marshal(d)
@@ -836,7 +848,7 @@ func eventTypes(list string) string {
 
 // parseValidateOutput turns `vector validate` text output into diagnostics.
 func (r *redactor) parseValidateOutput(output []byte) []Diagnostic {
-	lines := strings.Split(strings.ToValidUTF8(ansiEscape.ReplaceAllString(string(output), ""), ""), "\n")
+	lines := strings.Split(strings.ToValidUTF8(terminalSequence.ReplaceAllString(string(output), ""), ""), "\n")
 	set := diagnosticSet{limit: r.limit}
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], " \r")
@@ -894,7 +906,7 @@ type testFinding struct {
 // testFindings lists the failing `vector test` cases, in the order Vector
 // reports them, each with the diagnostic parseTestOutput returns for it.
 func (r *redactor) testFindings(output []byte) []testFinding {
-	lines := strings.Split(strings.ToValidUTF8(ansiEscape.ReplaceAllString(string(output), ""), ""), "\n")
+	lines := strings.Split(strings.ToValidUTF8(terminalSequence.ReplaceAllString(string(output), ""), ""), "\n")
 	var findings []testFinding
 	failing := map[string]bool{}
 	for _, line := range lines {

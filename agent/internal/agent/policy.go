@@ -406,8 +406,9 @@ func componentIDProblem(id string) string {
 }
 
 // shortText is how a message shows text that came from a pipeline: control
-// characters as escapes, and nothing past max characters, so a hostile value
-// can't break the line or push the explanation out of it.
+// characters, line separators and text-direction controls as escapes
+// (escapeRune), and nothing past max characters, so a hostile value can't break
+// the line, reorder it or push the explanation out of it.
 func shortText(text string, max int) string {
 	var out strings.Builder
 	shown := 0
@@ -416,8 +417,8 @@ func shortText(text string, max int) string {
 			out.WriteString("…")
 			break
 		}
-		if unicode.IsControl(r) {
-			fmt.Fprintf(&out, `\x%02x`, r)
+		if hostileRune(r) {
+			out.WriteString(escapeRune(r))
 		} else {
 			out.WriteRune(r)
 		}

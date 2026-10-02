@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,6 +33,10 @@ const (
 	logSummaryWindow     = time.Hour
 	activationRecordsMax = 200
 )
+
+// noPrintableText stands for a summary message that has nothing left once its
+// control characters are gone.
+const noPrintableText = "Vector logged a message with no printable text."
 
 // vectorLogMaxBytes rotates vector.log to vector.log.1 (one rotated file).
 var vectorLogMaxBytes int64 = 10 << 20
@@ -395,6 +400,10 @@ func (l *vectorLog) summaries(r *redactor) []LogSummary {
 			s.ComponentKind = ""
 		}
 		s.Message = truncateText(r.text(entry.message), maxDiagnosticMessage)
+		if s.Message == "" {
+			// A line of only control characters: the server needs a message.
+			s.Message = noPrintableText
+		}
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -432,11 +441,16 @@ var agentNote = regexp.MustCompile(`^\[vectory (\S+)\] (.*)$`)
 // logJSON renders the log file as JSON lines. Vector's records stay as they
 // are; the agent's notes ("[vectory <time>] title", then indented output)
 // and anything else become objects with the same keys, so every line parses.
+// A control character in an event reaches a reader as a \u escape, never as a
+// byte: the encoders escape the ones below U+0020 and escapeJSONText the rest.
 func logJSON() func(string) string {
 	var noted string
 	return func(line string) string {
 		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
-			return trimmed
+			var compact bytes.Buffer
+			if json.Compact(&compact, []byte(trimmed)) == nil {
+				return escapeJSONText(compact.String())
+			}
 		}
 		record := struct {
 			Timestamp string `json:"timestamp,omitempty"`
@@ -451,7 +465,7 @@ func logJSON() func(string) string {
 			record.Timestamp, record.Target, record.Message = noted, "vectory", strings.TrimPrefix(line, "  ")
 		}
 		encoded, _ := json.Marshal(record)
-		return string(encoded)
+		return escapeJSONText(string(encoded))
 	}
 }
 
@@ -549,10 +563,21 @@ func tailLines(path string, previous []string, limit int) []string {
 	return lines
 }
 
-// formatLogLine renders one JSON log line for people:
-// "02:44:21  WARN  sink web  HTTP error. error=…".
+// formatLogLine renders one log line for people:
+// "02:44:21  WARN  sink web  HTTP error. error=…". Unless raw, the line shows
+// every control character, line separator and text-direction control as an
+// escape (visibleText): an event can't draw on the terminal or pass itself off
+// as another line.
 func formatLogLine(line string, raw bool) string {
-	if raw || !strings.HasPrefix(line, "{") {
+	if raw {
+		return line
+	}
+	return visibleText(formatRecord(line))
+}
+
+// formatRecord is a JSON record laid out for people, and any other line as it is.
+func formatRecord(line string) string {
+	if !strings.HasPrefix(line, "{") {
 		return line
 	}
 	var fields map[string]any
