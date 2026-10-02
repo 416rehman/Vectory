@@ -564,6 +564,9 @@ jobs:
         with: { python-version: "3.13" }
       - run: python -m unittest discover -s tests/security -p 'test_*.py' -v
       - run: python packaging/test_verify_release.py
+      - name: Check that the packaged systemd unit keeps its sandbox
+        timeout-minutes: 10
+        run: python packaging/test_systemd_unit.py
       - run: docker compose -f deploy/compose.yaml config --quiet
         env:
           VECTORY_HOSTNAME: localhost

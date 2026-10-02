@@ -20,9 +20,16 @@ KillMode=mixed
 TimeoutStopSec=330s
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ProtectHome=read-only
-ReadWritePaths=-/var/lib/vectory-agent -/etc/vectory/managed
+# The agent and the Vector it runs see the whole file system read-only, and no
+# home directory, except the paths below. A pipeline that writes anywhere else
+# (a file sink, a data_dir of its own) needs that directory added: run
+# `sudo systemctl edit vectory.service` and put ReadWritePaths=/srv/logs under [Service].
+ProtectSystem=strict
+ProtectHome=true
+# The agent's state (identity, settings, Vector's log and default data
+# directory), the managed configuration, and Vector's own default data
+# directory. A leading "-" skips a path that doesn't exist.
+ReadWritePaths=-/var/lib/vectory-agent -/etc/vectory/managed -/var/lib/vector
 UMask=0077
 
 [Install]
