@@ -85,7 +85,6 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 
 ## Checking a version on devices
 
-<!-- verify-after-merge: this section describes the agent's staged validation and the deploy review's Check on devices button; check that both exist and behave as written -->
 **Check on devices** in the deploy review asks the devices you're about to target to validate the version on their own hosts first. Each one downloads that candidate, runs Vector's validation against its own local policy and secrets, and answers in a check-in. A device that keeps a request open for changes (see [Turn off wake-ups](agents.md#turn-off-wake-ups)) hears of the request within seconds, any other at its next check-in. A check never applies anything.
 
 - **A check can't change a device.** It never touches the managed file, the recovery journal, the last working configuration, a generation or Vector's process. Vectory records only the answer.
