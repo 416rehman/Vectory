@@ -77,6 +77,38 @@ var supported = map[string]map[string]bool{
 }
 var environmentVariable = regexp.MustCompile(`\$[A-Za-z_]`)
 
+// How restricted mode reads an AWS credential. The capability table
+// (vector-catalog/capabilities.json, credential shape "aws") says the same, and
+// a test keeps the two equal.
+//
+// A credentials file can name a program: Vector runs the profile's
+// credential_process while it validates. A pipeline's own file sink can write
+// such a file under a file root the host allowed, so the field is refused
+// wherever it stands below an auth block, and no allowance permits it.
+//
+// With auth.strategy aws and no explicit keys, the AWS credential chain reaches
+// this host's environment, shared profiles, the ECS task role and the instance
+// metadata service, none of which any allowance names. A role to assume, the
+// metadata client's settings and a profile all start from that chain, so they
+// count as ambient even beside keys.
+const credentialsFileKey = "credentials_file"
+
+var (
+	awsExplicitKeys = []string{"access_key_id", "secret_access_key"}
+	awsAmbientKeys  = []string{"assume_role", "imds", "profile"}
+	// awsCredentialPath says where each restricted-mode sink that takes an AWS
+	// credential reads it once auth.strategy is aws. Elasticsearch flattens the
+	// credential into auth; the shared HTTP authentication of http, loki and
+	// prometheus_exporter nests it as auth.auth. Only that object counts: keys
+	// anywhere else make nothing explicit.
+	awsCredentialPath = map[string][]string{
+		"elasticsearch":       {"auth"},
+		"http":                {"auth", "auth"},
+		"loki":                {"auth", "auth"},
+		"prometheus_exporter": {"auth", "auth"},
+	}
+)
+
 // externalVRL lists VRL functions that reach outside the event: the
 // environment, secrets, enrichment tables, DNS, HTTP and files (a JSON schema
 // or a protobuf descriptor). Restricted mode denies them because they bypass
@@ -169,6 +201,12 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 	case e.Code == "LOCAL_API_DENIED":
 		d.Message = `The pipeline has an "api" block. Vector's local API has no authentication, so any user on this host could read live events from it, and restricted mode never allows it.`
 		d.Hint = "Remove the api block, or deploy to a full-mode device. No host allowance can permit it."
+	case e.Code == "CREDENTIALS_FILE_DENIED":
+		d.Message = subject + " sets " + e.Field + ". A credentials file can name a program that Vector runs, so restricted mode refuses it."
+		d.Hint = "Use device secrets for access keys, or deploy to a full-mode device."
+	case e.Code == "AMBIENT_CREDENTIALS_DENIED":
+		d.Message = subject + " can sign with this host's own AWS credentials, which restricted mode refuses. In " + e.Field + ", set access_key_id and secret_access_key, and no assume_role, imds or profile."
+		d.Hint = "Give the sink explicit credentials as device secrets, or deploy to a full-mode device."
 	case e.Code == "INVALID_COMPONENT_ID":
 		// The ID is not a plain token, which is what component_id carries: the
 		// message names it, escaped and bounded.
@@ -500,10 +538,111 @@ func (p CapabilityPolicy) component(section, typ string, c map[string]any) *Poli
 		r.Field = "file"
 		return r
 	}
+	// No host allowance permits an AWS credentials file or the host's own AWS
+	// identity, so these come before the checks that an allowance can satisfy.
+	if e := credentialRefusal(typ, c); e != nil {
+		return e
+	}
 	// A `path` names a file only for a Unix socket. For http_server and loki it
 	// is the URL path, which needs no file allowance.
 	mode, _ := c["mode"].(string)
 	return p.walkIn(c, "", typ == "syslog" && mode == "unix")
+}
+
+// credentialRefusal refuses what no host allowance can permit in an AWS
+// credential: a credentials file, and the host's own identity.
+func credentialRefusal(typ string, c map[string]any) *PolicyRefusal {
+	if field := credentialsFileField(c, nil, false); field != "" {
+		r := refusal("CREDENTIALS_FILE_DENIED", "capability denied: an AWS credentials file can run a program")
+		r.Field = field
+		return r
+	}
+	return ambientAWSRefusal(typ, c)
+}
+
+// credentialsFileField is the path of the first credentials_file key below an
+// auth block, in a stable order, or "". The rule is on the key name, so any
+// component that has the field is covered, however deep it stands below auth.
+func credentialsFileField(value any, path []string, belowAuth bool) string {
+	switch x := value.(type) {
+	case map[string]any:
+		for _, k := range sortedKeys(x) {
+			here := append(slices.Clone(path), k)
+			lower := strings.ToLower(k)
+			if belowAuth && lower == credentialsFileKey {
+				return boundedFieldPath(strings.Join(here, "."))
+			}
+			if found := credentialsFileField(x[k], here, belowAuth || lower == "auth"); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, item := range x {
+			if found := credentialsFileField(item, path, belowAuth); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
+}
+
+// ambientAWSRefusal refuses a sink that signs with the AWS strategy and
+// doesn't carry explicit keys, in the object where the sink reads them.
+func ambientAWSRefusal(typ string, c map[string]any) *PolicyRefusal {
+	path, signs := awsCredentialPath[typ]
+	if !signs {
+		return nil
+	}
+	auth, _ := c["auth"].(map[string]any)
+	if strategy, _ := auth["strategy"].(string); !strings.EqualFold(strategy, "aws") {
+		return nil
+	}
+	credential := c
+	for _, key := range path {
+		credential, _ = credential[key].(map[string]any) // a missing or non-object block reads as empty
+	}
+	if explicitAWSCredential(credential) {
+		return nil
+	}
+	r := refusal("AMBIENT_CREDENTIALS_DENIED", "capability denied: ambient AWS credentials")
+	r.Field = strings.Join(path, ".")
+	return r
+}
+
+// explicitAWSCredential says whether an AWS credential object names its own
+// keys and borrows nothing from the host: both keys are non-empty strings, and
+// no role to assume, metadata client setting or profile starts from the host's
+// chain. A value is present unless it is null or false, as the capability
+// table reads it.
+func explicitAWSCredential(credential map[string]any) bool {
+	for _, key := range awsExplicitKeys {
+		if value, _ := credential[key].(string); strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	for key, value := range credential {
+		if slices.Contains(awsAmbientKeys, strings.ToLower(key)) && value != nil && value != false {
+			return false
+		}
+	}
+	return true
+}
+
+// boundedFieldPath is how a refusal names a field of the pipeline: control characters
+// replaced and the length bounded, so a hostile key can't break the report.
+func boundedFieldPath(path string) string {
+	var out []rune
+	for _, r := range path {
+		if len(out) == 100 {
+			out = append(out, '…')
+			break
+		}
+		if unicode.IsControl(r) {
+			r = '?'
+		}
+		out = append(out, r)
+	}
+	return string(out)
 }
 
 // checkTests accepts Vector unit tests in restricted mode. Tests run only in
