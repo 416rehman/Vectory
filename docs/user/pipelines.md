@@ -8,6 +8,8 @@ Editors and Administrators can change drafts. Operators and Administrators can p
 
 Open [**Pipelines**](/#/configurations) to search by name or description, sort by name or last update, and filter active or archived pipelines. Your search and page are kept while you work.
 
+A row's **Status** says where the pipeline runs: its latest published version and when it was published, the versions devices verified running and on how many of the devices it is assigned to (**Running v2 on 1, v1 on 2 of 3 · v4 not running**), and **Unpublished changes** when the draft differs. An assignment alone isn't evidence that Vector runs it: **Assigned to 2 devices · not verified running yet**. When no device runs the latest version, the row also says how its newest rollout ended, linked to that rollout: **v4 failed on 1 device · 12m ago** or **v4 rolled back on 1 device · 12m ago**. The row reads the 20 newest failed and the 20 newest rolled-back rollouts, so an older ending isn't shown, and it says nothing about a rollout that went well.
+
 A pipeline's **Actions** menu offers:
 
 | Action | Result |

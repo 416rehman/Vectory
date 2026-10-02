@@ -15,6 +15,7 @@ import {
   evidenceKey,
   fieldLabel,
   generationOptions,
+  generationsNote,
   hunkTitle,
   shortDigest,
   sizeText,
@@ -367,6 +368,26 @@ describe("the generation picker", () => {
       generation: 3,
       label: "v3 · generation 3",
     });
+  });
+
+  it("says how many of the offered generations the picker holds, only when it holds fewer", () => {
+    const items = Array.from({ length: 50 }, (_, index) =>
+      generation(212 - index, SHA("a")),
+    );
+    expect(generationsNote(read({ generations: { total: 212, items } }))).toBe(
+      "Showing the newest 50 of 212",
+    );
+    expect(
+      generationsNote(read({ generations: { total: 1_284, items } })),
+    ).toBe("Showing the newest 50 of 1,284");
+    expect(
+      generationsNote(read({ generations: { total: 50, items } })),
+    ).toBeNull();
+    expect(
+      generationsNote(
+        read({ generations: { total: 1, items: [generation(12, SHA("a"))] } }),
+      ),
+    ).toBeNull();
   });
 });
 

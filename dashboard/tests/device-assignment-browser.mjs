@@ -114,6 +114,10 @@ const baseDevice = () => ({
     id: policyAssignmentId,
     priority: 250,
     reason: "Current independent policy winner",
+    created_by_name: "Ada",
+    created_at: new Date().toISOString(),
+    policy_id: null,
+    policy_name: null,
   },
   effective_policy: {
     heartbeat_seconds: 120,
@@ -136,6 +140,7 @@ async function load({
   theme = "light",
   path = `devices/${id(1)}`,
   library = [],
+  collapsed = true,
 } = {}) {
   if (context) await context.close();
   state = { device, reads: 0, holdNext: false, failNext: false, holds: [] };
@@ -145,10 +150,13 @@ async function load({
     colorScheme: theme,
     reducedMotion: "reduce",
   });
-  await context.addInitScript((theme) => {
-    localStorage.setItem("vectory-theme", theme);
-    localStorage.setItem("vectory-sidebar-collapsed", "true");
-  }, theme);
+  await context.addInitScript(
+    ({ theme, collapsed }) => {
+      localStorage.setItem("vectory-theme", theme);
+      localStorage.setItem("vectory-sidebar-collapsed", String(collapsed));
+    },
+    { theme, collapsed },
+  );
   await context.route("**/*", async (route) => {
     const req = route.request(),
       url = new URL(req.url()),
@@ -600,8 +608,9 @@ try {
         "href",
         `#/deployments/${policyAssignmentId}?page=1`,
       );
-      await expect(settings()).toContainText("priority 250");
-      await expect(settings()).toContainText("120 seconds");
+      await expect(settings()).toContainText(
+        /Check-in 2 min · applied by Ada on .+ \(not saved\)/,
+      );
       await expect(
         settings()
           .locator(".control-summary-list > div")
@@ -687,11 +696,12 @@ try {
         await expect(pipelineLink()).toHaveCount(0);
         await expect(settingsLink()).toHaveCount(0);
         await expect(settings()).toContainText(
-          "No settings assignment reported.",
+          effective
+            ? "Check-in 1 min · no settings assignment reported"
+            : "No settings assignment reported",
         );
         await expect(settings()).not.toContainText("default");
-        if (effective) await expect(settings()).toContainText("60 seconds");
-        else
+        if (!effective)
           await expect(settings()).toContainText(
             "Current agent settings have not been reported.",
           );
@@ -914,6 +924,10 @@ try {
           id: id(83),
           priority: 300,
           reason: "Newer policy winner",
+          created_by_name: "Grace",
+          created_at: new Date().toISOString(),
+          policy_id: null,
+          policy_name: null,
         },
       };
       await page
@@ -925,7 +939,7 @@ try {
       );
       await expect(page.getByRole("alert")).toHaveCount(0);
       state.holds.shift()();
-      await expect(settings()).toContainText("priority 300");
+      await expect(settings()).toContainText("applied by Grace");
       await expect(settingsLink()).toHaveAttribute(
         "href",
         `#/deployments/${id(83)}?page=1`,
@@ -985,6 +999,111 @@ try {
           });
           screenshots.push(relative(repository, resolve(output, filename)));
         }
+    },
+  );
+  await check(
+    "the Components table spans the page below the cards from 1100 px, fits without scrolling from 1280 px with five numeric columns, and is cards on a phone",
+    async () => {
+      const component = (id, kind, type, over) => ({
+        id,
+        kind,
+        type,
+        received_events_per_second: 12.5,
+        events_per_second: 12.5,
+        errors_per_minute: 0,
+        dropped_per_minute: 0,
+        filtered_per_minute: 0,
+        buffer_utilization: 0.12,
+        utilization: 0.03,
+        ...over,
+      });
+      const components = [
+        component("demo", "source", "demo_logs", {
+          received_events_per_second: undefined,
+        }),
+        component("sample_rest", "transform", "sample", {
+          filtered_per_minute: 247,
+          events_per_second: 4.1,
+        }),
+        component("by_severity", "transform", "route", { utilization: 0.86 }),
+        component("archive", "sink", "file", {
+          errors_per_minute: 2,
+          dropped_per_minute: 3,
+          buffer_utilization: 0.93,
+        }),
+      ];
+      const reporting = {
+        ...baseDevice(),
+        telemetry: {
+          sampled_at: new Date().toISOString(),
+          events_per_second: 12.5,
+          events_out_per_second: 4.1,
+          errors_per_minute: 2,
+          uptime_seconds: 3600,
+          components,
+        },
+      };
+      for (const width of [1280, 1440]) {
+        await load({ device: reporting, width, collapsed: false });
+        await deviceVisible();
+        const card = page.locator(".device-components");
+        await expect(card).toBeVisible();
+        // Below the two columns, across the page.
+        const [layout, table] = await Promise.all([
+          page.locator(".device-layout").boundingBox(),
+          card.boundingBox(),
+        ]);
+        expect(table.y).toBeGreaterThanOrEqual(layout.y + layout.height - 1);
+        expect(table.width).toBeGreaterThanOrEqual(layout.width - 1);
+        // The component's name and no more than five numeric columns.
+        const headers = await card.locator("thead th").allInnerTexts();
+        expect(headers.length - 1, headers.join(" | ")).toBeLessThanOrEqual(5);
+        // It fits: nothing scrolls sideways, so no cue is needed.
+        const scrolls = await card
+          .locator(".component-scroll")
+          .evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+        expect(scrolls, `${width}px`).toBe(false);
+        await expect(card.locator(".component-scroll-cue")).toBeHidden();
+        // What a filter or sample removed sits under Out / s.
+        await expect(card).toContainText("247/min filtered");
+        await expect(card).toContainText("3/min dropped");
+        // A buffer past 90% writes its fill; a calm one leaves it to the bar.
+        await expect(
+          card.locator(".component-meter-value", { hasText: "93%" }),
+        ).toBeVisible();
+        await expect(
+          card
+            .locator("tr", { hasText: "demo" })
+            .locator(".component-meter-value"),
+        ).toHaveCount(0);
+      }
+      // Narrower than 1100 px it is part of Operational metrics.
+      await load({ device: reporting, width: 1000, collapsed: false });
+      await deviceVisible();
+      await expect(page.locator(".device-components")).toHaveCount(0);
+      await expect(page.locator(".telemetry-components")).toContainText(
+        "247/min filtered",
+      );
+      // Where it has to scroll sideways it says so; where it fits it doesn't.
+      const narrow = page.locator(".telemetry-components");
+      const needsScroll = await narrow
+        .locator(".component-scroll")
+        .evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+      if (needsScroll)
+        await expect(narrow.locator(".component-scroll-cue")).toBeVisible();
+      else await expect(narrow.locator(".component-scroll-cue")).toBeHidden();
+      // A phone reads each component as a card with every fact it reported.
+      await load({ device: reporting, width: 390, collapsed: false });
+      await deviceVisible();
+      const list = page.getByRole("list", {
+        name: "Component metrics",
+        exact: true,
+      });
+      await expect(list.getByRole("listitem")).toHaveCount(components.length);
+      const archive = list.getByRole("listitem").filter({ hasText: "archive" });
+      await expect(archive).toContainText("2 / min");
+      await expect(archive).toContainText("3 / min");
+      await expect(archive).toContainText("93%");
     },
   );
   expect(errors).toEqual([]);

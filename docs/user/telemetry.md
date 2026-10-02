@@ -38,10 +38,11 @@ Open [**Devices**](/#/devices) and select a device.
 | --- | --- |
 | Header | Status (for example **Applied** or **Updating**), connection, last check-in, **Open rollout** and **Deploy a pipeline**. |
 | **Running vs desired** | The version the device should run, what it runs now, and each apply step. **View pipeline assignment** opens the deployment that decided it. |
-| **Operational metrics** | Throughput, errors, discarded events and buffers, when the pipeline exports metrics. |
+| **Operational metrics** | Throughput, errors, discarded events and buffers, when the pipeline exports metrics. See [Read history and gaps](#read-history-and-gaps). |
+| **Components** | Each component's events in and out, errors and buffers in the latest sample. At 1100 pixels wide or more it spans the page below the cards; on a narrower screen it is part of **Operational metrics**. |
 | **Recent Vector warnings and errors** | Vector's own warnings and errors from the last hour, redacted on the device. |
 | **Activity** | This device's open issues and recent changes. |
-| **About this device** | Platform, Vector and agent versions, mode, groups and the agent settings in force. **Upgrade agent** is here. |
+| **About this device** | Platform, Vector and agent versions, mode, groups and the agent settings in force: **Check-in 15 s · applied by Ada on Sep 29 (not saved)**. The line names who applied the settings and when only when the server reports it, and says **(not saved)** for settings never saved under a name. **Upgrade agent** is here. |
 | **Sync, recovery and access** | Pause sync, device recovery and **Revoke device identity…**. |
 
 A pipeline and agent settings can come from different deployments with different priorities. When something is unknown, the page says so; it never guesses an assignment.
@@ -109,10 +110,12 @@ Clearing the URL doesn't remove the exporter from the pipeline, and old samples 
 | **Dropped due to errors** | Events components discarded because of errors. | Filtering. |
 | **Filtered out (expected)** | Events a filter, route or sample removed on purpose. | A fault. |
 | **Buffer fill** | How full the fullest buffer is, with the bytes buffered. | Empty, when missing. |
-| Components table: **In / s**, **Out / s**, **Errors / min**, **Dropped / min**, **Filtered / min** | The same numbers per component. | Unique events: one event passes several components. |
+| **Components**: **In / s**, **Out / s**, **Errors / min**, **Buffer fill**, **Busy** | The same numbers per component. **Out / s** carries what a filter or sample removed on purpose (**247/min filtered**), and **Errors / min** carries what was lost to errors (**3/min dropped**). **Buffer fill** and **Busy** are small bars: hover one, or read the cell, for its percentage. A buffer over 70% full turns amber and over 90% red, and then writes its percentage; **Busy** turns amber from 80%. | Unique events: one event passes several components. |
 | **Vector uptime**, **Memory**, **CPU time** | The Vector process. | The agent's check-in. |
 
 A rate needs two samples, so the first sample shows no rate. A Vector restart resets counters; Vectory never shows negative throughput. A dash means the value wasn't reported: it isn't zero. Some exporters, such as Vector's on Windows, don't report CPU or memory.
+
+The **Components** table fits without sideways scrolling from 1280 pixels wide; on a narrower screen it scrolls and says so, and on a phone each component is a card with every number it reported.
 
 ## Delivery health
 
@@ -131,7 +134,13 @@ A problem opens an issue after two checks in a row (three for a stall) and close
 
 ## Read history and gaps
 
-Hover over the throughput chart, or focus it and use the arrow keys, to read a sample. Expand the sample history for exact values.
+The charts open on the smallest range that holds everything the device has recorded: **15 min** for a device that started reporting a few minutes ago, **1 hour** otherwise. Choose **6 hours**, **24 hours** or **7 days** to look further back. A chart draws only whole minutes, never the minute still collecting samples, and one that covers less than its range says what it covers (**Last 4 minutes**) instead of stretching a few points across an hour. Its scale fits the numbers, in whole numbers when every value is whole.
+
+Hover over a chart, or focus it and use the arrow keys, to read a sample. Expand the sample history for exact values.
+
+**Version changes.** A marker on the charts shows each time the device reported what happened to a version it was given: **Applied**, **Rolled back**, **Failed** or **Check required**. Hover a marker for the version and the time. **Changes in this range** lists them under the charts, newest first, each linked to its audit entry, and the sample history lists them too, so every marker is reachable from the keyboard and by screen reader. Markers that would overlap merge into one that takes the most serious status. A device that reports **Applied** again after a pause, without a new version, gets no marker. Markers come from the device's 50 newest audit events; when a range reaches back past them, the list says **Changes before Sep 30, 10:04 AM aren't marked**, so a missing marker there never reads as "nothing changed".
+
+**Counters after a switch.** Vector keeps its own counters when a pipeline changes, so its totals still hold the previous pipeline's events. After a version change the **Errors**, **Dropped due to errors** and **Filtered out (expected)** tiles count from the change: **215 since v2 applied**, or **since the rollback**. Vector's total since it started stays in the tile's tooltip. When the version was applied before Vector's current process started, the total already belongs to it and reads **since Vector started**; when no earlier sample says where the counter stood, the tile says **since Vector started, including earlier versions** instead of guessing. A count since a change can leave out what Vector counted before the first sample after it, about one check-in.
 
 History is kept for 7 days by default and bucketed by minute. A gap means no sample arrived. Old samples stay after a device goes offline, so check the timestamp before treating a number as current.
 

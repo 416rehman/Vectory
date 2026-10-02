@@ -47,6 +47,7 @@ import {
   driftLine,
   evidenceKey,
   generationOptions,
+  generationsNote,
   shortDigest,
   sizeText,
   variableRows,
@@ -205,11 +206,13 @@ export default function EffectiveConfiguration({ device }: { device: Device }) {
           ? String(device.desired_generation)
           : "current"
         : String(chosen);
+    const note = generationsNote(known);
     return (
       <div className="effective-config-picker">
         <label htmlFor={`${titleId}-generation`}>Generation</label>
         <Select
           id={`${titleId}-generation`}
+          aria-describedby={note ? `${titleId}-generation-note` : undefined}
           value={value}
           onChange={(event) => {
             const next = event.target.value;
@@ -234,6 +237,14 @@ export default function EffectiveConfiguration({ device }: { device: Device }) {
           <Button variant="ghost compact" onClick={() => setChosen(null)}>
             Show current
           </Button>
+        )}
+        {note && (
+          <p
+            id={`${titleId}-generation-note`}
+            className="effective-config-picker-note"
+          >
+            {note}
+          </p>
         )}
       </div>
     );

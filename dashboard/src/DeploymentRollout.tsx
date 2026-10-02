@@ -511,7 +511,11 @@ export function FailureGroups({
                 navigate={navigate}
               />
             );
-          const text = failureText(failure.diagnostic, failure.message);
+          const text = failureText(
+            failure.diagnostic,
+            failure.message,
+            failure.code,
+          );
           // The link opens the step the agent named, and its field.
           const fix =
             fixHref && pipelineFixable(failure.code)

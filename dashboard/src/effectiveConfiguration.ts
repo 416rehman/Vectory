@@ -252,6 +252,17 @@ export function generationOptions(
   return options;
 }
 
+/**
+ * "Showing the newest 50 of 212" when the picker holds only some of the
+ * generations the device was offered; null when it holds all of them.
+ */
+export function generationsNote(config: DeviceConfiguration): string | null {
+  const { total, items } = config.generations;
+  return total > items.length
+    ? `Showing the newest ${items.length.toLocaleString()} of ${total.toLocaleString()}`
+    : null;
+}
+
 /** `3 added · 1 removed · 2 changed`, or that nothing differs. */
 export function countsSentence(counts: DeviceConfigurationDiff["counts"]) {
   const parts = [

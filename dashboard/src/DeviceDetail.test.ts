@@ -3,6 +3,7 @@ import type { Device } from "./api";
 import {
   deliveryMeasurement,
   failedRunningText,
+  failurePhrase,
   pickupExplanation,
   unmanagedRunningText,
 } from "./DeviceDetail";
@@ -226,5 +227,61 @@ describe("delivery health without metrics", () => {
         now,
       ),
     ).toBeNull();
+  });
+});
+
+describe("what a failed apply says it failed because of", () => {
+  const refused = (
+    mode: "restricted" | "full",
+    diagnostics?: { code: string; message: string }[],
+  ) => {
+    const snapshot = failed("CAPABILITY_DENIED", { configuration_mode: mode });
+    snapshot.configuration_attempt!.error!.diagnostics = diagnostics?.map(
+      (finding) => ({ severity: "error" as const, ...finding }),
+    );
+    return failurePhrase(snapshot, snapshot.configuration_attempt!);
+  };
+  it("names an api block as restricted mode's refusal, which no allowance lifts", () => {
+    expect(
+      refused("restricted", [
+        {
+          code: "LOCAL_API_DENIED",
+          message: 'The pipeline has an "api" block.',
+        },
+      ]),
+    ).toBe("because restricted mode refuses an api block");
+  });
+  it("names a component ID that is a path in either mode, never blaming restricted mode", () => {
+    for (const mode of ["restricted", "full"] as const)
+      expect(
+        refused(mode, [
+          {
+            code: "INVALID_COMPONENT_ID",
+            message: 'Sink "/tmp/x" (http) has a slash in its ID.',
+          },
+        ]),
+      ).toBe("because a component ID names a path");
+  });
+  it("blames the host's policy by its mode when the finding names no cause", () => {
+    expect(refused("restricted")).toBe(
+      "because this host's restricted mode doesn't allow it",
+    );
+    expect(
+      refused("restricted", [
+        {
+          code: "NETWORK_DESTINATION_DENIED",
+          message: 'Sink "out" (http) sends to 127.0.0.1:9.',
+        },
+      ]),
+    ).toBe("because this host's restricted mode doesn't allow it");
+    expect(refused("full")).toBe(
+      "because this host's local policy doesn't allow it",
+    );
+  });
+  it("names the apply step for any other failure", () => {
+    const snapshot = failed("ACTIVATION_FAILED");
+    expect(failurePhrase(snapshot, snapshot.configuration_attempt!)).toBe(
+      "while restarting Vector",
+    );
   });
 });

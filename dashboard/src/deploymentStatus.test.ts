@@ -3,6 +3,7 @@ import {
   applyStepTable,
   countdown,
   degradedInLanes,
+  deploymentCounts,
   describeDeployment,
   explainError,
   failedApplyStep,
@@ -11,8 +12,6 @@ import {
   lineageLabel,
   pipelineFixable,
   pickupText,
-  progressLine,
-  progressParts,
   progressSegments,
   releasePlan,
   requestRollbackReview,
@@ -21,7 +20,6 @@ import {
   targetLabel,
   timelineSteps,
   withDegraded,
-  appliedText,
 } from "./deploymentStatus";
 
 const base = {
@@ -228,23 +226,27 @@ describe("one rollout reads the same on every surface", () => {
       failed: 0,
       needsCheck: 0,
     });
-    expect(progressLine(overview)).toBe(
-      "2 of 3 devices applied · 1 not delivering",
-    );
-    expect(progressParts(page)).toEqual({
-      figure: "2 of 3",
-      noun: "devices",
-      notes: ["1 not delivering"],
+    const sentence = "2 of 3 devices applied · 1 not delivering";
+    // The list row and the Overview have the server's count; the page has its
+    // stages'. One helper reads each of them into the same sentence.
+    const list = deploymentCounts({
+      target_count: 3,
+      state_counts: stateCounts,
+      degraded: 1,
     });
-    expect(
-      appliedText({
-        target_count: 3,
-        verified_count: 3,
-        state_counts: stateCounts,
-        rolled_back_by: null,
-        degraded: 1,
-      }),
-    ).toBe("2 of 3 applied · 1 not delivering");
+    const pageCounts = deploymentCounts(
+      { target_count: 3, state_counts: stateCounts },
+      { degraded: lanesDegraded },
+    );
+    expect(list.sentence).toBe(sentence);
+    expect(pageCounts).toEqual(list);
+    expect(list).toMatchObject({
+      following: 3,
+      applied: 2,
+      figure: "2 of 3",
+      base: "devices applied",
+      notes: [{ key: "not_delivering", text: "1 not delivering" }],
+    });
   });
 
   it("draws the bar from the same numbers", () => {
@@ -269,17 +271,29 @@ describe("one rollout reads the same on every surface", () => {
       failed: 1,
       needsCheck: 2,
     });
-    expect(progressLine(progress)).toBe(
+    expect(
+      deploymentCounts({
+        state_counts: {
+          verified_applied: 2,
+          failed: 1,
+          verification_unknown: 2,
+          pending: 1,
+        },
+        degraded: 1,
+      }).sentence,
+    ).toBe(
       "1 of 6 devices applied · 1 not delivering · 1 failed · 2 need a check",
     );
   });
 
   it("reads a rollout with nothing wrong plainly, in the singular for one device", () => {
-    expect(progressLine(rolloutProgress({ verified_applied: 1 }))).toBe(
-      "1 of 1 device applied",
-    );
     expect(
-      progressLine(rolloutProgress({ verification_unknown: 1, pending: 1 })),
+      deploymentCounts({ state_counts: { verified_applied: 1 } }).sentence,
+    ).toBe("1 of 1 device applied");
+    expect(
+      deploymentCounts({
+        state_counts: { verification_unknown: 1, pending: 1 },
+      }).sentence,
     ).toBe("0 of 2 devices applied · 1 needs a check");
     expect(rolloutProgress({}, 3)).toMatchObject({
       total: 0,
@@ -525,27 +539,94 @@ describe("device timeline", () => {
 });
 
 describe("device counts on rollouts", () => {
-  const counts = (
-    target_count: number,
-    verified_count: number,
-    removed = 0,
-    rolled_back_by: string | null = null,
-  ) => ({
-    target_count,
-    verified_count,
-    state_counts: (removed ? { removed } : {}) as Record<string, number>,
-    rolled_back_by,
-  });
   it("counts only the devices a rollout still follows", () => {
-    expect(appliedText(counts(3, 2))).toBe("2 of 3 applied");
-    expect(appliedText(counts(4, 2, 1))).toBe("2 of 3 applied");
+    expect(
+      deploymentCounts({
+        target_count: 3,
+        state_counts: { verified_applied: 2, pending: 1 },
+      }).sentence,
+    ).toBe("2 of 3 devices applied");
+    expect(
+      deploymentCounts({
+        target_count: 4,
+        state_counts: { verified_applied: 2, pending: 1, removed: 1 },
+      }).sentence,
+    ).toBe("2 of 3 devices applied");
   });
-  it("says so when nothing follows it, or it was rolled back", () => {
-    expect(appliedText(counts(2, 0, 2))).toBe("No devices follow this now");
-    expect(appliedText(counts(0, 0))).toBe("No devices");
-    expect(appliedText(counts(3, 3, 0, "id"))).toBe(
-      "3 of 3 applied, then rolled back",
-    );
+
+  it("says where the devices went when nothing follows the rollout", () => {
+    // Every device moved to a newer deployment.
+    expect(
+      deploymentCounts({
+        target_count: 2,
+        state_counts: { removed: 2 },
+        configuration_name: "Edge syslog",
+        replaced_by: [
+          {
+            deployment_id: "d2",
+            device_count: 2,
+            at: "2026-10-02T10:00:00Z",
+            version_number: 3,
+            configuration_name: "Edge syslog",
+          },
+        ],
+      }).sentence,
+    ).toBe("2 devices moved to v3");
+    // Moved to another pipeline: the name comes with the version.
+    expect(
+      deploymentCounts({
+        target_count: 1,
+        state_counts: { removed: 1 },
+        configuration_name: "Edge syslog",
+        replaced_by: [
+          {
+            deployment_id: "d2",
+            device_count: 1,
+            at: "2026-10-02T10:00:00Z",
+            version_number: 1,
+            configuration_name: "Web access logs",
+          },
+        ],
+      }).sentence,
+    ).toBe("1 device moved to Web access logs v1");
+    expect(
+      deploymentCounts({ target_count: 2, state_counts: { removed: 2 } })
+        .sentence,
+    ).toBe("No devices follow this now");
+    expect(
+      deploymentCounts({ target_count: 0, state_counts: {} }),
+    ).toMatchObject({ sentence: "No devices", following: 0, figure: null });
+  });
+
+  it("says a rolled-back rollout's devices applied before the rollback", () => {
+    expect(
+      deploymentCounts({
+        target_count: 3,
+        state_counts: { verified_applied: 1, failed: 1, pending: 1 },
+        rolled_back_by: "00000000-0000-4000-8000-000000000001",
+      }).sentence,
+    ).toBe("1 of 3 devices applied before the rollback · 1 failed");
+  });
+
+  it("reads one deployment the same whichever surface asks", () => {
+    // The Overview holds a smaller summary than the list: no target_count, no
+    // lineage. The counts come from the recorded states alone, so they agree.
+    const states = { verified_applied: 2, written: 1, pending: 1 };
+    const sentence = "2 of 4 devices applied";
+    expect(deploymentCounts({ state_counts: states }).sentence).toBe(sentence);
+    expect(
+      deploymentCounts({ state_counts: states, target_count: 4, degraded: 0 })
+        .sentence,
+    ).toBe(sentence);
+    // A server that reports a different verified_count can't make a surface
+    // disagree: the count is the recorded states'.
+    expect(
+      deploymentCounts({
+        state_counts: states,
+        target_count: 4,
+        verified_count: 3,
+      } as never).sentence,
+    ).toBe(sentence);
   });
 });
 
@@ -594,6 +675,42 @@ describe("failure reasons", () => {
       effect: null,
       code: null,
     });
+  });
+  it("says what the agent's own refusals mean instead of the generic policy sentence", () => {
+    const api =
+      'The pipeline has an "api" block. Vector\'s local API has no authentication, so any user on this host could read live events from it, and restricted mode never allows it.';
+    expect(failureText(api, "CAPABILITY_DENIED", "LOCAL_API_DENIED")).toEqual({
+      reason: api,
+      effect:
+        "Restricted mode refuses any top-level api block, and no allowance can permit it. Remove the api block, or deploy to a full-mode device.",
+      code: "CAPABILITY_DENIED",
+    });
+    const id = 'Sink "out" (http) has a slash in its ID.';
+    const text = failureText(id, "CAPABILITY_DENIED", "INVALID_COMPONENT_ID");
+    expect(text.reason).toBe(id);
+    expect(text.effect).toBe(
+      "A component ID can't name a path, and devices in both modes refuse one. Rename the component and the inputs that name it.",
+    );
+    expect(text.effect).not.toContain("local policy");
+    // Without the agent's text, the refusal itself is the reason.
+    expect(
+      failureText(null, "CAPABILITY_DENIED", "INVALID_COMPONENT_ID"),
+    ).toEqual({
+      reason:
+        "A component ID can't name a path, and devices in both modes refuse one.",
+      effect: "Rename the component and the inputs that name it.",
+      code: "CAPABILITY_DENIED",
+    });
+    // Any other capability refusal keeps the general sentence.
+    expect(
+      failureText(
+        'Sink "out" (http) sends to 127.0.0.1:9, which this host hasn\'t approved.',
+        "CAPABILITY_DENIED",
+        "NETWORK_DESTINATION_DENIED",
+      ).effect,
+    ).toBe(
+      "This device's local policy doesn't allow something this pipeline uses.",
+    );
   });
 });
 
@@ -675,6 +792,8 @@ describe("failures only a pipeline change can clear", () => {
       "ADDRESS_IN_USE",
       "VRL_E100",
       "INVALID_ADDRESS",
+      "INVALID_COMPONENT_ID",
+      "LOCAL_API_DENIED",
       "UNKNOWN_FIELD",
       "INPUT_NOT_FOUND",
     ])

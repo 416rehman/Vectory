@@ -682,6 +682,33 @@ try {
   );
 
   await check(
+    "Says when the generation picker holds only the newest 50 of the generations offered",
+    async () => {
+      const many = Array.from({ length: 212 }, (_, n) =>
+        offer(n + 1, 3, pretty(pipeline(700, 5)), "2026-09-29T10:00:00Z"),
+      );
+      await load({
+        offers: many,
+        device: baseDevice({
+          desired_generation: 212,
+          reported_generation: 212,
+        }),
+      });
+      await shown();
+      const note = section().locator(".effective-config-picker-note");
+      await expect(note).toHaveText("Showing the newest 50 of 212");
+      await expect(
+        section().getByLabel("Generation", { exact: true }),
+      ).toHaveAccessibleDescription("Showing the newest 50 of 212");
+      await load();
+      await shown();
+      await expect(
+        section().locator(".effective-config-picker-note"),
+      ).toHaveCount(0);
+    },
+  );
+
+  await check(
     "Says the running configuration matches, only when the server verified it",
     async () => {
       await load();
