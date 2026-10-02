@@ -30,20 +30,19 @@ Ask these first; each has a one-line answer in the ADR and a test in the plan.
 
 Release gates, all required: WP0 shipped; the native probe green on Linux CI; the independent review finished with its findings resolved; documentation matches behavior. macOS is separate: `configure-sampling` and the session engine stay disabled on `darwin` (a build constant listing the enabled platforms, initially `linux`) until N-01 passes on a native macOS runner.
 
-## WP0: make `api` host-owned (prerequisite)
+## WP0: make `api` host-owned (prerequisite) — done
 
-Today restricted mode accepts a loopback `api` block, so any publisher can open Vector's unauthenticated API for local users. Remove that, in the three places that mirror each other.
+Restricted mode used to accept a loopback `api` block, so any publisher could open Vector's unauthenticated API for local users. It no longer does, in the three places that mirror each other:
 
-| Where | Change |
+| Where | What shipped |
 | --- | --- |
-| `agent/internal/agent/policy.go` | Delete `case "api"` in `CapabilityPolicy.Check`; an `api` key then falls to the existing `default:` refusal (`UNSUPPORTED_LOCAL_CAPABILITY`, resource `api`). Remove the `api.address` case in `PolicyRefusal.Diagnostic`. Full mode returns before the switch and is unchanged. |
-| `server/src/rollout.rs` | In `requires_full_mode`, take `"api"` out of `restricted_roots` and delete the loopback branch, so a pipeline with `api` needs a full-mode device at deployment review (`FULL_VECTOR_MODE_REQUIRED`). |
-| `dashboard/src/hostRequirements.ts` | The same two edits (the root list at `"api"` and the loopback check). |
-| Drift test | Extend the pattern of `tests/security/test_vrl_function_lists.py` to compare the restricted top-level setting lists in the agent, server and dashboard. |
-| Tests | `agent/internal/agent/policy_refusal_test.go` (restricted refuses `api`, enabled or not; full accepts), a server test beside the existing mode tests in `server/tests/`, `dashboard/src/hostRequirements.test.ts`. The `api` sample in `agent/internal/agent/telemetry_rich_test.go` only exercises component-type parsing and stays. |
-| Docs | `docs/user/security.md` (drop "a loopback-only `api`" from restricted-mode global settings), the allowlist sentence in [ADR 0005](../adr/0005-restricted-mode-by-default.md), `CHANGELOG.md`: "A pipeline that sets `api` now needs a full-mode device." |
+| `agent/internal/agent/policy.go` | `CapabilityPolicy.Check` refuses any top-level `api` key in restricted mode, whatever its value, with the diagnostic code `LOCAL_API_DENIED` (inside `CAPABILITY_DENIED`): "Remove the api block, or deploy to a full-mode device. No host allowance can permit it." Full mode returns before the switch and is unchanged. `vectory allow` has no flag for it. |
+| `server/src/rollout.rs` | `requires_full_mode` treats any top-level `api` block as needing full mode, so the deploy review reports `FULL_VECTOR_MODE_REQUIRED`. |
+| `dashboard/src/hostRequirements.ts` | The same: `api` needs full mode, with no loopback special case. |
+| Tests | `agent/internal/agent/policy_containment_test.go`, `agent/cmd/vectory/operator_commands_test.go` (allow cannot permit it), `server/tests/deployment_compatibility.rs`, `dashboard/src/hostRequirements.test.ts`. |
+| Still to do | A drift test in the pattern of `tests/security/test_vrl_function_lists.py` comparing the restricted top-level setting lists in the agent, server and dashboard (the three lists agree today, by review). |
 
-Effect on running fleets: a version already deployed with an `api` block keeps running on restricted devices until the next apply, which then refuses it, keeps last-known-good and shows the refusal. The release note says so. No starter, template or fixture sets `api`.
+Effect on running fleets: a restricted device that already runs a version with an `api` block keeps running it, but will not start that configuration again after a restart or reboot until a version without the block applies or the host moves to full mode. The sampling work's own refusal for a pipeline that defines `api` (`PIPELINE_DEFINES_API`) is unchanged and still applies to full-mode devices.
 
 ## WP1: contract (lead)
 

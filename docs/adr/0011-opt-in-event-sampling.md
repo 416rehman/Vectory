@@ -10,7 +10,7 @@ Proposed 2026-09-30. Nothing described here is built. The design was measured on
 2. **Vector 0.58.0 imposes three hard constraints, all measured.** A reload can only enable the API on `127.0.0.1:8686`, whatever address is configured. A failed bind stops Vector. Streams already attached survive the API's removal until Vector exits. So a random port is impossible, a busy port is an outage, and "the window closed" needs proof and, when another client is attached, a restart.
 3. **The API has no authentication.** Any local user can read every component's raw events while it is open, and can keep a stream open after it closes. Consent is per host and says so. The window is short, watched and force-closed, which is why hosts with untrusted local users must not allow it.
 4. **Redaction cannot make value sampling safe for production hosts.** Free text carries secrets no rule can find. The default mode is `shape` (field names, types and sizes only). `values` (redacted values) is an explicit host choice meant for sandbox and staging hosts.
-5. **The host does not own the API today.** Restricted mode accepts a loopback `api` block set by the pipeline (`CapabilityPolicy.Check` in `agent/internal/agent/policy.go`, `requires_full_mode` in `server/src/rollout.rs`, [security model](../user/security.md)). Any publisher can turn on the tap surface for local users now. Close that first.
+5. **The host owns the API.** Restricted mode used to accept a loopback `api` block set by the pipeline, so any publisher could turn on the tap surface for local users. It now refuses any top-level `api` block (`LOCAL_API_DENIED`; `CapabilityPolicy.Check` in `agent/internal/agent/policy.go`), and `requires_full_mode` in `server/src/rollout.rs` and the dashboard's compatibility check agree: only a full-mode device runs a pipeline that sets its own `api` block, and no host allowance can change that.
 
 ## Context
 
@@ -32,7 +32,7 @@ Proposed 2026-09-30. Nothing described here is built. The design was measured on
 
 **What Vectory does today that matters:**
 
-- Restricted mode allows a loopback `api` block, and full mode allows any. The [security model](../user/security.md) lists "a loopback-only `api`" among restricted-mode global settings, and [ADR 0005](0005-restricted-mode-by-default.md) describes the allowlist.
+- Restricted mode refuses any top-level `api` block (`LOCAL_API_DENIED`), and full mode allows any. The [security model](../user/security.md) lists it among the settings that need full mode, and [ADR 0005](0005-restricted-mode-by-default.md) describes the allowlist.
 - The agent already loads a second config file next to the managed one, the runtime overlay (`runtimeOverlay`, `writeRuntimeOverlay` and `vectorConfigArgs` in `hostruntime.go` and `vector.go`; `host-runtime.json` in the state directory). It exists so the managed file stays byte-identical to its verified digest. `VectorDriver.Activate` regenerates it from scratch on every apply and restart.
 - Unix reloads Vector with SIGHUP (`reloadChild` in `process_linux.go`, `process_darwin.go`). Windows never reloads: `VectorDriver.canReload` returns false and `reloadChild` is empty in `process_windows.go`.
 - `settings.json` is written only by local commands: locked maintenance (`lockSettingsMaintenance`, `loadSettingsDocument`, `settingsDocument.save` in `settings_update.go`) and, for a fresh installation, `InstallWithOptions`.
@@ -398,7 +398,7 @@ Each behavior above has a test in one of five layers. The IDs are used in the [i
 
 ## Consequences
 
-- **Prerequisite.** Restricted mode must stop accepting a pipeline `api` block before sampling ships: `CapabilityPolicy.Check` in `policy.go`, `requires_full_mode` in `rollout.rs`, the dashboard's device compatibility check, and the lists in [security.md](../user/security.md) and [ADR 0005](0005-restricted-mode-by-default.md). A pipeline that sets `api` will then need a full-mode device; the release note says so. No starter pipeline or fixture uses an `api` block (only editor tests do).
+- **Prerequisite (done).** Restricted mode no longer accepts a pipeline `api` block: `CapabilityPolicy.Check` in `policy.go`, `requires_full_mode` in `rollout.rs`, the dashboard's device compatibility check and the lists in [security.md](../user/security.md) agree. A pipeline that sets `api` needs a full-mode device; the changelog says so. A restricted device that already runs such a version keeps running it, and will not start that configuration again after a restart until a version without the block applies.
 - **The "events never pass through Vectory" statements need one qualification:** "unless the host operator turns on event sampling", with the redaction limits stated. That covers [security.md](../user/security.md) and the specification's sections 9 and 11, which should record that host-approved, bounded sampling is allowed by them.
 - **Copies are durable once promoted.** Draft revisions, versions and backups keep events written into unit tests. The promotion dialog and audit event exist for that reason.
 - **Vector upgrades need a re-measurement.** Sampling depends on 0.58's address, bind and stream behavior. The agent supports the 0.58 series; any bump reruns experiments A to G (they are scripted in the plan).
