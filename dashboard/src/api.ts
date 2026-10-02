@@ -27,6 +27,7 @@ import {
 } from "./notificationsModel";
 import {
   ConfigurationTelemetrySchema,
+  DiagnosticSchema,
   DiagnosticsSchema,
   HostRuntimeSchema,
   TelemetryHistorySchema,
@@ -94,6 +95,10 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
     ) {
       match = route.match(/^\/configurations\/([^/]+)$/);
       resource = "pipeline details";
+    }
+    if (!match) {
+      match = route.match(/^\/device-validations\/([^/]+)$/);
+      resource = "device check";
     }
   } else if (method === "POST") {
     match = route.match(/^\/devices\/([^/]+)\/retry$/);
@@ -639,6 +644,10 @@ export type DeploymentPreview = {
       | "VECTOR_VERSION_INCOMPATIBLE";
     reason: string;
   }[];
+  /** A preview that asked for a check on devices, when one device was asked. */
+  validation_id?: string;
+  /** More devices were reviewed than the check addressed. */
+  validation_truncated?: boolean;
 };
 export type Device = {
   retry_preconditions?: boolean;
@@ -1932,6 +1941,107 @@ export const DeviceConfigurationDiffSchema = z
     approximate: z.boolean(),
   })
   .passthrough();
+/**
+ * One device's answer to "Check on devices": its state and, once it answered,
+ * the redacted findings, its test results and the names (never values) of the
+ * device secrets it hasn't bound. Without an answer the arrays are empty.
+ */
+const DeviceValidationDeviceSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    state: z.enum([
+      "pending",
+      "passed",
+      "failed",
+      "offline",
+      "expired",
+      "unsupported",
+    ]),
+    valid: z.boolean().optional(),
+    diagnostics: z.array(DiagnosticSchema).max(20),
+    tests: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(200),
+            passed: z.boolean(),
+            not_run: z.boolean().optional(),
+            message: z.string().max(512).optional(),
+          })
+          .passthrough(),
+      )
+      .max(100),
+    secrets_missing: z.array(z.string().min(1).max(64)).max(64),
+    duration_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+/** `GET /device-validations/{id}`: every addressed device, in name order. */
+export const DeviceValidationSchema = z
+  .object({
+    id: z.string(),
+    state: z.enum(["running", "complete"]),
+    created_at: z.string(),
+    expires_at: z.string(),
+    truncated: z.boolean(),
+    run_tests: z.boolean(),
+    devices: z.array(DeviceValidationDeviceSchema).max(50),
+  })
+  .passthrough();
+export type DeviceValidation = z.infer<typeof DeviceValidationSchema>;
+export type DeviceValidationDevice = DeviceValidation["devices"][number];
+export type DeviceValidationTest = DeviceValidationDevice["tests"][number];
+/** The check a preview started: null when no device could be asked. */
+export type DeviceValidationStart = { id: string | null; truncated: boolean };
+/**
+ * Asks the devices a preview reviews to check the version on their own hosts.
+ * `body` is a deployment preview request plus `device_validation` and
+ * `run_tests`; the preview itself changes nothing. The deadline stops waiting,
+ * it doesn't say whether the check was created.
+ */
+export function requestDeviceValidation(
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<DeviceValidationStart> {
+  return withRequestDeadline(
+    async (deadline) => {
+      const preview = await api<DeploymentPreview>("/deployments/preview", {
+        method: "POST",
+        body: stringifyExactJSON(body),
+        signal: deadline,
+      });
+      const id = preview?.validation_id;
+      if (id === undefined || id === null)
+        return { id: null, truncated: false };
+      if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))
+        throw new APIError(
+          "CONTRACT_MISMATCH",
+          "The server response does not match this dashboard version.",
+          502,
+        );
+      return { id, truncated: preview.validation_truncated === true };
+    },
+    30000,
+    signal,
+  );
+}
+/** One read of a check; the answers arrive over time. */
+export function readDeviceValidation(id: string, signal?: AbortSignal) {
+  return withRequestDeadline(
+    (deadline) =>
+      api<DeviceValidation>(`/device-validations/${encodeURIComponent(id)}`, {
+        signal: deadline,
+      }),
+    15000,
+    signal,
+  );
+}
 export const ConfigurationSchema = z
   .object({
     id: z.string(),
@@ -2363,6 +2473,7 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return DeviceConfigurationSchema;
   if (/^\/devices\/[^/]+\/configuration\/diff$/.test(path))
     return DeviceConfigurationDiffSchema;
+  if (/^\/device-validations\/[^/]+$/.test(path)) return DeviceValidationSchema;
   if (path === "/telemetry/summary") return TelemetrySummarySchema;
   if (/^\/versions\/[^/]+\/telemetry$/.test(path))
     return VersionTelemetrySchema;
