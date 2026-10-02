@@ -116,6 +116,34 @@ func privateFileProblem(path string, openErr error) (problem, fix string) {
 	}
 	return strings.Join(problems, " and "), "Fix it: " + strings.Join(fixes, " && ")
 }
+
+// keepOwner gives the temporary file that is about to replace path the owner
+// and group of the file it replaces, when this process is root. Files the
+// service account owns then stay the service account's when root replaces
+// them (a foreground run, pause or retry as root), instead of turning into
+// files the service can no longer read. Only the owner and group carry over:
+// the replacement stays private (0600), whatever the old file allowed. An
+// owner other than the one the directory itself belongs to is never kept.
+// Failing to keep an owner leaves root's ownership, which is safe.
+func keepOwner(tmp, path string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	old, err := os.Lstat(path)
+	if err != nil || !old.Mode().IsRegular() {
+		return
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	oldStat, oldOK := old.Sys().(*syscall.Stat_t)
+	parentStat, parentOK := parent.Sys().(*syscall.Stat_t)
+	if !oldOK || !parentOK || oldStat.Uid != parentStat.Uid {
+		return
+	}
+	_ = os.Lchown(tmp, int(oldStat.Uid), int(oldStat.Gid))
+}
 func rejectPlatformLink(path string) error { return nil }
 func replaceFile(from, to string) error    { return os.Rename(from, to) }
 func syncDir(path string) error {

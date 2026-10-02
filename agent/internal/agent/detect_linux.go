@@ -36,10 +36,14 @@ func SystemdAvailable() bool {
 	return err == nil
 }
 
+// procRoot is where the process table is mounted. Tests point it at a tree of
+// their own; nothing else changes it.
+var procRoot = "/proc"
+
 // DetectRunningVector lists running Vector processes that no Vectory agent
 // supervises. The second result is false when processes couldn't be listed.
 func DetectRunningVector(ctx context.Context) ([]RunningVector, bool) {
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, false
 	}
@@ -49,7 +53,7 @@ func DetectRunningVector(ctx context.Context) ([]RunningVector, bool) {
 		if err != nil {
 			continue
 		}
-		proc := filepath.Join("/proc", entry.Name())
+		proc := filepath.Join(procRoot, entry.Name())
 		comm, err := os.ReadFile(filepath.Join(proc, "comm"))
 		if err != nil || strings.TrimSpace(string(comm)) != "vector" || supervisedByAgent(proc) {
 			continue
@@ -83,7 +87,7 @@ func supervisedByAgent(proc string) bool {
 	if len(fields) < 2 {
 		return false
 	}
-	cmdline, err := os.ReadFile(filepath.Join("/proc", fields[1], "cmdline"))
+	cmdline, err := os.ReadFile(filepath.Join(procRoot, fields[1], "cmdline"))
 	return err == nil && bytes.Contains(cmdline, []byte("__vector-host"))
 }
 

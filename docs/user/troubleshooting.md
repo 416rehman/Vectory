@@ -51,21 +51,80 @@ For security, the server never tells a device why it refused. Administrators see
 
 A device that enrolled but "checked in once, but nothing keeps its agent running" has no service manager: start the agent with the command setup printed, as in [A device is offline](#a-device-is-offline-or-never-connects).
 
+## Setup stops because Vector is already running
+
+Setup never takes over a running Vector. It records how that Vector was started, copies the configuration files it loads and stops. The only thing it has written is the copies, in `adoption-inventory` in the state directory. For a Vector that loads one plain file, it says:
+
+```text
+[i]  Inventory    Vector started with: /usr/bin/vector --config /etc/vector/vector.yaml; configuration files:
+                  /etc/vector/vector.yaml (sha256 2f69f4e8c932…), backed up to
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z.
+[!!] Existing     Vector is already running here: vector.service (pid 812). Setup won't take it over.
+                  To hand its workload to Vectory, save its configuration as JSON at
+                  /etc/vectory/managed/vector.json, stop it (for example: sudo systemctl disable --now
+                  vector.service), then run this command again. To leave it running untouched beside
+                  Vectory, add --keep-existing-vector. Its configuration is backed up in
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z.
+```
+
+When the Vector loads more than that one file, the second message names what it found and the two ways forward:
+
+```text
+[!!] Existing     Vector is already running here: vector.service (pid 812). Setup won't take it over, and
+                  the agent manages exactly one JSON file, so adopting it would drop what these load:
+                  Vector loads 2 configuration files: /etc/vector/conf.d/10-sources.yaml,
+                  /etc/vector/conf.d/20-sinks.yaml.
+                  Merge what it loads into one JSON file at /etc/vectory/managed/vector.json (the Help
+                  center's Connect a device page, under Keep an existing workload, shows how), or adopt it
+                  as it is: the agent then manages only /etc/vectory/managed/vector.json; what it loads
+                  stays where it is (backed up in
+                  /var/lib/vectory-agent/adoption-inventory/20260930T101500Z) and no Vector started by
+                  Vectory reads it. Either way, stop it (for example: sudo systemctl disable --now
+                  vector.service), then run this command again with --adopt-existing.
+```
+
+| Message | Fix |
+| --- | --- |
+| `Setup won't take it over.` with `To hand its workload to Vectory…` | Save its configuration as JSON at the managed path, stop it and run the command again. Add `--keep-existing-vector` only to leave it running beside the agent. |
+| `…so adopting it would drop what these load:` and the files or findings | Merge what it loads into one JSON file, or adopt it as it is. Either way, stop it and run the command again with `--adopt-existing`. Every finding is explained in [When setup stops for a running Vector](agents.md#when-setup-stops-for-a-running-vector). |
+| `You chose to adopt it as it is (--adopt-existing): stop it…` | The flag is noted, and setup still won't take over a Vector that runs. Stop it and run the same command again. |
+| `A Vector that ran here (recorded 2026-09-30 10:15 UTC) loaded configuration the agent doesn't manage:` | The old Vector has stopped, and setup remembers what it loaded. Run the command again with `--adopt-existing`. Merging the files first doesn't replace this: setup can't see what a merge left out. |
+| `The record of an earlier inventory (…) can't be read` | Keep the folder and check the copies in it. Run the command again with `--adopt-existing` once you're sure nothing is lost. |
+| `Nothing was copied: State directory contains unrelated files…` | Setup won't write copies into a folder that isn't a Vectory state directory. Choose an empty `--state-dir`, or copy the files yourself before you change them. |
+| `Nothing was copied:` with `permission denied` | Run setup with `sudo` (an elevated shell on Windows), or copy the files yourself. |
+| `--adopt-existing hands the workload of a running Vector to Vectory, and --keep-existing-vector…` | Pass only one of them. |
+
+[Adopt a Vector that already runs](agents.md#adopt-a-vector-that-already-runs) has the whole procedure.
+
+## A proxy is in the way
+
+The agent honors `HTTPS_PROXY` and `NO_PROXY`, and tunnels through an HTTP proxy with `CONNECT`, so TLS and the device's certificate stay end to end and the server pin still applies. See [ports](ports.md). When the proxy is the problem, the message names it:
+
+| Message | Fix |
+| --- | --- |
+| `Can't reach the proxy at proxy.example.net:3128.` | Check `HTTPS_PROXY`, or add the server to `NO_PROXY` if it should be reached directly. |
+| `The proxy at proxy.example.net:3128 couldn't connect to vectory.example.com:8443.` or `…refused to connect… (Forbidden)` | Allow this server in the proxy, or add it to `NO_PROXY`. |
+| `The proxy at proxy.example.net:3128 requires a user name and password.` | Set `HTTPS_PROXY` to `http://USER:PASSWORD@proxy.example.net:3128` where the agent runs, or ask the proxy's administrator to allow this server without a sign-in. The password is never printed. |
+| `The proxy at proxy.example.net:3128 did not accept the user name and password in HTTPS_PROXY.` | Check them, and percent-encode characters such as `@` and `:` in the password. |
+| A TLS error that adds `This connection goes through the proxy at … (HTTPS_PROXY). A proxy that inspects TLS presents a certificate of its own, and the agent doesn't accept it` | Ask the proxy's administrator to let this server through uninspected, or add it to `NO_PROXY`. Never trust the proxy's certificate in place of the server's. |
+
+Where the agent runs as a systemd service, set the variable with `sudo systemctl edit vectory.service`, adding `Environment=HTTPS_PROXY=…` under `[Service]`, then restart it.
+
 ## A pipeline is rejected or rolled back
 
 Open the device and read its issue: it names the stage and the reason.
 
 | Issue code | What happened | Fix |
 | --- | --- | --- |
-| `VALIDATION_FAILED` | Vector rejected the configuration on the device, or its tests failed. | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
+| `VALIDATION_FAILED` | Vector rejected the configuration on the device, its tests failed, or `vector validate` didn't finish in time (the finding `VECTOR_TIMEOUT`: the version is never treated as valid). | Read the reason, fix the pipeline, publish and deploy again. Check host dependencies: files, credentials, environment. |
 | `CAPABILITY_DENIED` | The pipeline needs something the device's mode or allowances don't permit. The device page reads **Apply failed because this host's restricted mode doesn't allow it**, and the reason names the component and the exact destination, listener or path, for example `Sink "out" (http) sends to 127.0.0.1:9`. | Have the host operator run the command the fix names, with the agent stopped, such as `vectory allow --network 127.0.0.1:9`, or switch the device to full mode. The dashboard can't grant it. `vectory status` on the device shows the same problem and fix, and the deploy review writes the commands for each host. |
 | `SECRET_RESOLUTION_FAILED` | A `vectory-secret:` reference has no binding, its file can't be read or its value was refused, or it sits in a field that can't hold a secret. The diagnostic names the step, the field and the secret. | Bind the name, or fix the secret file's permissions, then start the agent: its next check-in applies the version. The device page's **Device secrets** card shows which names are bound. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
 | `APPLY_ROLLED_BACK` | Vector didn't start or stay up with the new version, so the agent restored the last working configuration. | Check host resources, ports and destinations, then retry or deploy a fix. |
 | `ACTIVATION_FAILED`, `PROCESS_EXITED`, `PROCESS_STOPPED` | Vector didn't start, or stopped. | Check the service and host resources, then restart the agent. |
-| `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. | Check disk space, ownership and permissions, and remove symlinks from the paths. |
+| `WRITE_FAILED`, `PATH_UNSAFE` | The agent couldn't write its files safely. A full disk is named (the finding `DISK_FULL`): nothing was half written, and the running configuration is untouched. | Check disk space, ownership and permissions, and remove symlinks from the paths. After a full disk, free space and wait: the next check-in applies the same version. |
 | `INCOMPATIBLE` | The version was built for a different Vector minor version than the device runs. Patch releases of the same minor (0.58.0, 0.58.1) are interchangeable, so a patch difference never causes this. `vectory status` names both versions. | Install Vector 0.58.x and [approve it](agents.md#replace-the-vector-binary). |
 | `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary yet. | Run `vectory install ... --adopt` on the device. |
-| `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, or the bytes didn't match. | Check connectivity; the agent retries on its own. |
+| `DOWNLOAD_FAILED`, `DIGEST_MISMATCH` | The device couldn't fetch the version, the download was cut off or too large, or the bytes didn't match the signed size and digest. Nothing was applied and the partial file was removed. | Check connectivity; the agent retries on its own at its next check-in. The finding says which case it was. |
 | `ROLLBACK_UNAVAILABLE` | The device's first version didn't start, so there was nothing earlier to go back to. Vector is stopped and nothing runs; the device page reads **Nothing running: Vector stopped after v1 failed to start.** | Fix the problem the issue names, such as a listener on port 514, then deploy a corrected version or choose **Retry application**. Nothing on the host needs recovering. |
 | `ROLLBACK_FAILED`, `RECOVERY_INVALID` | The new version failed and the last working configuration couldn't be restored. | Needs someone on the host. Keep the state directory intact and deploy a version that works. |
 | `MANIFEST_EXPIRED` | The approval expired before the switch. | Nothing: the agent waits for its next check-in. |
@@ -81,6 +140,11 @@ The issue, the device page and `sudo vectory status --json` (under `configuratio
 | `PERMISSION_DENIED` | Give the Vector service account access to the path, or change the path. |
 | `FILE_NOT_FOUND` | Check that the path exists on the device. |
 | `ENV_VAR_MISSING` | Set it in the Vector service's environment on the device, or remove the reference from the pipeline. |
+| `DISK_FULL` | Free some space on that disk. The agent applies this version at its next check-in; there is nothing else to do. |
+| `DOWNLOAD_INTERRUPTED` | Nothing was applied. The agent tries again at its next check-in. If it keeps happening, look for a proxy or firewall that cuts long responses. |
+| `DOWNLOAD_TOO_LARGE` | Nothing was applied. Publish a smaller version. |
+| `ARTIFACT_MISMATCH` | Nothing was applied. The agent tries again at its next check-in. If it keeps failing, something between the server and this device may be altering downloads. |
+| `VECTOR_TIMEOUT` | Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application. |
 
 The device page's **Recent Vector errors** shows what Vector logged since it last started or reloaded a configuration, so errors of a version it no longer runs don't appear there.
 

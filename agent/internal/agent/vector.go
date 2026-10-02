@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -195,10 +196,13 @@ func (d *VectorDriver) Validate(ctx context.Context, path string) error {
 	overlay, cleanup, e := d.stageOverlay(data)
 	defer cleanup()
 	if e != nil {
+		if _, full := diskFullFrom(e); full {
+			return fmt.Errorf("cannot stage the host runtime settings: %w", e)
+		}
 		return dataDirFailure(hostRuntimeFor(d.Settings, d.Dir, data).DataDir)
 	}
 	paths := []string{path, overlay}
-	timeout := &VectorFailure{Phase: "timeout", Summary: "Vector validation or configuration tests exceeded the time limit"}
+	timeout := &VectorFailure{Phase: "timeout", Summary: fmt.Sprintf("Vector did not finish validating this version within %d s.", seconds)}
 	out, err := d.run(ctx, "validate", paths)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -320,10 +324,10 @@ func (d *VectorDriver) Activate(ctx context.Context, path string) error {
 		}
 		overlay = hostRuntimePath(d.Dir)
 		if err = writeRuntimeOverlay(overlay, content); err != nil {
-			return errors.New("cannot write the host runtime settings")
+			return fmt.Errorf("cannot write the host runtime settings: %w", err)
 		}
 		if err = rememberHostDataDir(d.Dir, host); err != nil {
-			return errors.New("cannot record the device's Vector data directory")
+			return fmt.Errorf("cannot record the device's Vector data directory: %w", err)
 		}
 	}
 	if d.canReload() {

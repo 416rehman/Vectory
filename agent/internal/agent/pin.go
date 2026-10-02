@@ -87,13 +87,16 @@ func ProbePinnedCA(ctx context.Context, server string, pin []byte) (*x509.Certif
 		response.Body.Close()
 		return nil, errors.New("the pinned-certificate check did not run")
 	}
+	proxy, _ := http.ProxyFromEnvironment(request)
 	switch {
 	case judged && refusal != nil:
+		if ce, ok := AsConnectionError(refusal); ok {
+			return nil, withProxyNote(ce, proxy)
+		}
 		return nil, refusal
 	case judged && pinned != nil:
 		return pinned, nil
 	}
-	proxy, _ := http.ProxyFromEnvironment(request)
 	return nil, classifyTransport(target, proxy, false, err)
 }
 

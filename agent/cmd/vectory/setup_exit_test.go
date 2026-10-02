@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vectory/vectory/agent/internal/agent"
@@ -31,5 +32,21 @@ func TestSetupExitCodes(t *testing.T) {
 	}
 	if exitAttention != 3 {
 		t.Fatal("exit 3 is documented for setup that needs attention")
+	}
+}
+
+// Adopting a running Vector as it is and leaving it running beside the agent
+// are opposite choices: asking for both is a usage error, refused before
+// anything is checked.
+func TestSetupRefusesToAdoptAndKeepAtOnce(t *testing.T) {
+	code, stdout, stderr := invoke("setup", "--adopt-existing", "--keep-existing-vector", "--server", "https://127.0.0.1:9", "--dry-run")
+	if code != exitUsage || !strings.Contains(stderr, "choose one of --adopt-existing or --keep-existing-vector") || strings.Contains(stdout, "Vectory agent setup") {
+		t.Fatalf("exit %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	_, help, _ := invoke("help", "setup")
+	for _, want := range []string{"--adopt-existing", "--keep-existing-vector", "adoption-inventory"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("setup help doesn't mention %q:\n%s", want, help)
+		}
 	}
 }
