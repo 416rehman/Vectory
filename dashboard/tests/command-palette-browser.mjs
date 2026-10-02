@@ -889,17 +889,17 @@ try {
         ["pipelines?q=syslog", "configurations?q=syslog"],
         [`rollouts/${ids.deployment}`, `deployments/${ids.deployment}`],
       ]) {
-        await view(old);
-        await expect(page, `${old} from a link`).toHaveURL(
-          new RegExp(`#/${current.replace(/[?/]/g, "\\$&")}$`),
+        // A deployments address may come back with its canonical page.
+        const expected = new RegExp(
+          `#/${current.replace(/[?/]/g, "\\$&")}${current.includes("?") ? "" : "(\\?page=\\d+)?"}$`,
         );
+        await view(old);
+        await expect(page, `${old} from a link`).toHaveURL(expected);
         await view();
         await page.evaluate((old) => {
           location.hash = `#/${old}`;
         }, old);
-        await expect(page, `${old} inside`).toHaveURL(
-          new RegExp(`#/${current.replace(/[?/]/g, "\\$&")}$`),
-        );
+        await expect(page, `${old} inside`).toHaveURL(expected);
       }
     },
   );
