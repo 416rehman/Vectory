@@ -26,7 +26,7 @@ Runs only when dispatched; [packaging/README.md](../../packaging/README.md#relea
 | `packages` | The `.deb` and `.rpm` install, run and remove on Debian 12 and AlmaLinux 9 without creating an account or state | Service start under systemd, upgrades, running the arm64 build |
 | `msi` | The MSI installs silently, the agent runs, no service is registered, removal cleans up | Signing, upgrades, service registration |
 | `images` | Both images build, run as UID 10001 and 10002, and refuse to start without their safety settings; SPDX SBOMs of both | A vulnerability verdict: the SBOMs are its input |
-| `sbom` | CycloneDX SBOMs of the Rust, Go and npm dependencies and a license inventory | License clearance |
+| `sbom` | CycloneDX SBOMs of the Rust, Go and npm dependencies and a license inventory; `npm audit` finds no high or critical advisory in the dashboard's or the help center's shipped dependencies | License clearance; an advisory published after the run |
 | `assemble` | One verified folder with `SHA256SUMS` and `CANDIDATE.json`, including whether the image's agents are byte-identical to the release agents | Signatures or provenance |
 | `attest` | GitHub build provenance for `SHA256SUMS`, only with `attest` and a configured `release` environment | Anything about the candidate's contents |
 
