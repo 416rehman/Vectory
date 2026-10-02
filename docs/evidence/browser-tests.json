@@ -2,17 +2,17 @@
   "config": {
     "argv": [
       "C:\\Program Files\\nodejs\\node.exe",
-      "C:\\Users\\ahmad\\Documents\\ChatGPT\\Vectory\\dashboard\\node_modules\\@playwright\\test\\cli.js",
+      "dashboard\\node_modules\\@playwright\\test\\cli.js",
       "test",
       "e2e/account-lifecycle.spec.ts",
       "--workers=1"
     ],
-    "configFile": "C:\\Users\\ahmad\\Documents\\ChatGPT\\Vectory\\dashboard\\playwright.config.ts",
-    "rootDir": "C:/Users/ahmad/Documents/ChatGPT/Vectory/dashboard/e2e",
+    "configFile": "dashboard\\playwright.config.ts",
+    "rootDir": "C:dashboard/e2e",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
-    "globalSetup": "C:\\Users\\ahmad\\Documents\\ChatGPT\\Vectory\\dashboard\\e2e\\setup.ts",
+    "globalSetup": "dashboard\\e2e\\setup.ts",
     "globalTeardown": null,
     "globalTimeout": 0,
     "grep": {},
@@ -24,7 +24,7 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "C:/Users/ahmad/Documents/ChatGPT/Vectory/dashboard/test-results",
+        "outputDir": "C:dashboard/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {
@@ -32,7 +32,7 @@
         },
         "id": "",
         "name": "",
-        "testDir": "C:/Users/ahmad/Documents/ChatGPT/Vectory/dashboard/e2e",
+        "testDir": "C:dashboard/e2e",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"

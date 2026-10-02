@@ -4,7 +4,7 @@ How to write and change the Help center (`docs/user/`) and the repository's Mark
 
 ## Voice
 
-Short, confident, precise and friendly. Think Linear, Stripe or Vercel.
+Short, confident, precise and friendly.
 
 - One idea per sentence. Most sentences are under 20 words; paragraphs are one to four sentences.
 - Lead with what the reader can do, then why it's safe. "Choose **Check status**. It never sends the change again." Not "Checking status does not resend the change, which does not..."

@@ -27,3 +27,9 @@ agent/dist/
 # Browser tests write captures here; only the curated product screenshots are tracked.
 docs/screenshots/*
 !docs/screenshots/product-*.png
+
+# Key material never belongs in the repository.
+*.pem
+*.key
+*.p12
+*.pfx
