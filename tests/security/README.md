@@ -58,7 +58,7 @@ Rerun them after any change to `DeviceDetail.tsx`, `TargetDialog.tsx` or the rec
 | Script | What it proves |
 | --- | --- |
 | `test_backup.py` | `deploy/backup.py`: a live WAL backup restores the database and keys with the generation intact, and a tampered backup is rejected. |
-| `test_vrl_function_lists.py` | The server, the agent and the dashboard agree on which VRL functions reach outside an event (the server requires a full-mode device for them, the agent's restricted mode refuses them, the dashboard names the requirement), that the file-reading functions are among them, and that every name is a real function of the pinned Vector. |
+| `test_vrl_function_lists.py` | The server, the agent and the dashboard agree on which VRL functions reach outside an event (the server requires a full-mode device for them, the agent's restricted mode refuses them, the dashboard names the requirement), that the file-reading functions are among them, and that every name is a real function of the pinned Vector. It also pins the table of the two functions that read a file only when a call passes one (`parse_groks` `alias_sources`, `parse_etld` `psl`: function, argument name, position and scan bounds) to be the same in all three, equal to the fixture of programs each reader's tests run and to the pinned Vector's signatures. |
 
 ## Helper
 
