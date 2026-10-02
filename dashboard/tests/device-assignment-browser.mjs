@@ -2,6 +2,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import { nothingOffered } from "./fleet-replies.mjs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -258,6 +259,8 @@ async function load({
       // The device page also shows telemetry, open issues and recent activity.
       if (path === `/devices/${id(1)}/telemetry`)
         return reply({ device_id: id(1), samples: [] });
+      if (path === `/devices/${id(1)}/configuration`)
+        return reply(nothingOffered(id(1)));
       if (path === "/issues/history" || path === "/audit/history")
         return reply({
           items: [],
