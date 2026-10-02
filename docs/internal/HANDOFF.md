@@ -2,6 +2,8 @@
 
 This report describes commit `a469266` (2026-09-29), version **0.1.0-dev**. Vectory is a developer preview: it is not production qualified and has no public release. The CI workflow `checks` passed all six jobs on that commit ([run #45](https://github.com/416rehman/Vectory/actions/runs/36617131583)). The requirement-by-requirement status, with the test behind each claim, is in [REQUIREMENTS.md](REQUIREMENTS.md). The earlier narrative handoff is kept as a historical record in [HANDOFF-2026-09-27.md](HANDOFF-2026-09-27.md); most of the evidence it names was never committed.
 
+> **Newer state.** Work has landed since `a469266`. [CONTINUATION.md](CONTINUATION.md) lists what changed, how to verify the current head, what is unstable, and what to do next; the tables below are as of `a469266` and several of their rows are closed (the install command's certificate checks, rollback of a live canary, device CA rotation, enrollment token scope, adoption inventory, apply fault injection, paged fleet reads and the publish gate among them). What is open now is in [WORK-QUEUE.md](WORK-QUEUE.md), [the security findings](../security/OPEN-FINDINGS.md) and [AUTHORING-GAPS.md](AUTHORING-GAPS.md).
+
 ## What works, and what proves it
 
 | Area | Evidence (what runs on every push unless stated) | Kind |
@@ -28,7 +30,7 @@ Not tested by any workflow: the installers under systemd, launchd or the Windows
 
 Measured on 2026-09-29 and 30 with a release build on a shared 4-vCPU Linux VM that also ran the load generator, with simulated devices. 10,000 devices checking in every minute without assignments reached about 170 check-ins a second, with the single database writer half busy and a median per-second p99 latency of 34 ms. With all 10,000 devices in an all-at-once deployment the writer saturates at 140 to 160 check-ins a second: p99 1.5 to 3 seconds, and the excess is refused with HTTP 503 and retried. The deployment request held the writer for about 20 seconds, and 90% of the targets had verified after about ten minutes. The run found and fixed a memory blow-up (a deployment to 10,000 listed devices needed more than 11 GiB); it did not run native agents or Vector, and 100 and 1,000 devices were not measured again. About 80 check-ins a second with assignments is a planning figure derived from those runs, not a measurement. **No fleet size is supported yet.** Details and the raw files: [CAPACITY.md](CAPACITY.md).
 
-## Open defects
+## Open defects at `a469266`
 
 From the specification audit and the round-2 reviews. Each was re-checked against `a469266`; defects fixed on the branch since then are removed (the install command's `curl -k`, the missing trust choice, rollback during a canary, an unautomated clean install and `go test` without `-json`). Severity follows the reviews: P0 breaks a hard requirement or a status claim, P1 misses a required capability or test.
 
