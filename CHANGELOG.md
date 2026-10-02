@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to Vectory. The project is a developer preview and has no public release yet.
+All notable changes to Vectory. Version 0.1.0 is an unsigned developer preview.
 
-## 0.1.0-dev (unreleased)
+## 0.1.0 (developer preview)
 
 The first self-hosted Vectory: a Rust and SQLite control plane, a React dashboard, an outbound-only Go agent, and a bundled Help center. See [What's new](docs/user/whats-new.md) for a tour.
 
