@@ -347,3 +347,399 @@ describe("what a pipeline asks of its devices", () => {
     ).toEqual({ kind: "none", label: null, detail: null });
   });
 });
+
+// A restricted device refuses two AWS credential shapes whatever the host
+// allows: a credentials file (it can make Vector run a program) and the AWS
+// strategy without explicit keys (it signs with the host's own identity).
+describe("AWS credentials a restricted device refuses outright", () => {
+  const credentialsFile = "Native capability: credentials_file";
+  const hostIdentity =
+    "AWS credentials from the host (without both keys, or with assume_role, imds or profile)";
+  // Elasticsearch flattens the credential into auth; the shared HTTP
+  // authentication of the others nests it one level down, in auth.auth.
+  const sinks: Record<
+    string,
+    {
+      sink: (auth: Record<string, unknown>) => Record<string, unknown>;
+      nested: boolean;
+    }
+  > = {
+    elasticsearch: {
+      nested: false,
+      sink: (auth) => ({
+        type: "elasticsearch",
+        inputs: ["in"],
+        endpoints: ["https://search.example.net"],
+        aws: { region: "us-east-1" },
+        auth,
+      }),
+    },
+    http: {
+      nested: true,
+      sink: (auth) => ({
+        type: "http",
+        inputs: ["in"],
+        uri: "https://ingest.example.net/events",
+        encoding: { codec: "json" },
+        auth,
+      }),
+    },
+    loki: {
+      nested: true,
+      sink: (auth) => ({
+        type: "loki",
+        inputs: ["in"],
+        endpoint: "https://loki.example.net",
+        labels: { job: "vector" },
+        encoding: { codec: "json" },
+        auth,
+      }),
+    },
+    prometheus_exporter: {
+      nested: true,
+      sink: (auth) => ({
+        type: "prometheus_exporter",
+        inputs: ["in"],
+        address: "0.0.0.0:9598",
+        auth,
+      }),
+    },
+  };
+  const pipeline = (sink: Record<string, unknown>) => ({
+    sources: { in: { type: "demo_logs", format: "json" } },
+    sinks: { out: sink },
+  });
+  /** The `auth` block with the credential where this sink reads it. */
+  const auth = (
+    typ: string,
+    credential: Record<string, unknown>,
+    strategy = "aws",
+  ) =>
+    sinks[typ].nested
+      ? { strategy, service: "es", auth: credential }
+      : { strategy, ...credential };
+  const needs = (typ: string, credential: Record<string, unknown>) =>
+    fullModeRequirements(
+      pipeline(sinks[typ].sink(auth(typ, credential))),
+      catalog,
+    );
+  const keys = {
+    access_key_id: "AKIAIOSFODNN7EXAMPLE",
+    secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+  };
+  const role = "arn:aws:iam::123456789012:role/vector";
+
+  it("names the host's identity for each shape that borrows it, in each sink", () => {
+    const ambient: Record<string, Record<string, unknown>> = {
+      "no keys": {},
+      "only a region": { region: "us-east-1" },
+      "only the access key ID": { access_key_id: keys.access_key_id },
+      "only the secret access key": {
+        secret_access_key: keys.secret_access_key,
+      },
+      "empty keys": { access_key_id: "", secret_access_key: "" },
+      "an empty secret access key": { ...keys, secret_access_key: "" },
+      "blank keys": { ...keys, secret_access_key: " \t\n\u{a0}\u{85}\u{3000}" },
+      "keys that are not strings": {
+        access_key_id: 1,
+        secret_access_key: true,
+      },
+      "null keys": { access_key_id: null, secret_access_key: null },
+      "only a role to assume": { assume_role: role },
+      "a role beside the keys": { ...keys, assume_role: role },
+      "only the metadata client": { imds: { max_attempts: 2 } },
+      "the metadata client beside keys": {
+        ...keys,
+        imds: { max_attempts: 2 },
+      },
+      "only a profile": { profile: "default" },
+      "a profile beside the keys": { ...keys, profile: "vector" },
+      "a role spelled in capitals": { ...keys, ASSUME_ROLE: role },
+      "an empty profile": { ...keys, profile: "" },
+      "an empty metadata client": { ...keys, imds: {} },
+      "only a session token": { session_token: "token" },
+      "keys under a spelling Vector refuses": {
+        Access_Key_Id: "AKIA",
+        Secret_Access_Key: "x",
+      },
+    };
+    for (const typ of Object.keys(sinks))
+      for (const [name, credential] of Object.entries(ambient))
+        expect(needs(typ, credential), `${typ}, ${name}`).toEqual([
+          hostIdentity,
+        ]);
+  });
+
+  it("accepts both explicit keys, whatever else is set that borrows nothing", () => {
+    for (const typ of Object.keys(sinks))
+      for (const credential of [
+        keys,
+        { ...keys, session_token: "AQoDYXdz" },
+        { ...keys, region: "eu-west-1" },
+        { ...keys, assume_role: null },
+        { ...keys, imds: false, profile: null },
+        // A device secret is a plain string to the server, as to the agent.
+        {
+          access_key_id: "vectory-secret:AWS_KEY_ID",
+          secret_access_key: "vectory-secret:AWS_SECRET_KEY",
+        },
+        // Space that String.trim removes and the agent's check doesn't.
+        { ...keys, secret_access_key: "\u{feff}" },
+      ])
+        expect(needs(typ, credential), typ).toEqual([]);
+  });
+
+  it("reads the strategy the way the agent does", () => {
+    for (const typ of Object.keys(sinks)) {
+      const check = (strategy: string, credential: Record<string, unknown>) =>
+        fullModeRequirements(
+          pipeline(sinks[typ].sink(auth(typ, credential, strategy))),
+          catalog,
+        );
+      // In any case: the agent compares the strategy ignoring case.
+      for (const strategy of ["AWS", "Aws", "aWs"]) {
+        expect(check(strategy, {}), `${typ} ${strategy}`).toEqual([
+          hostIdentity,
+        ]);
+        expect(check(strategy, keys), `${typ} ${strategy}`).toEqual([]);
+      }
+      // Any other strategy is not AWS, with or without keys.
+      for (const strategy of ["basic", "bearer", "custom", "", "aws "])
+        expect(check(strategy, {}), `${typ} ${strategy}`).toEqual([]);
+    }
+  });
+
+  it("judges the keys where the sink reads them", () => {
+    // Elasticsearch reads the keys in auth: keys in auth.auth are decoys.
+    expect(
+      fullModeRequirements(
+        pipeline(
+          sinks.elasticsearch.sink({ strategy: "aws", auth: { ...keys } }),
+        ),
+        catalog,
+      ),
+    ).toEqual([hostIdentity]);
+    for (const typ of ["http", "loki", "prometheus_exporter"]) {
+      // The others read them in auth.auth: keys in auth are decoys.
+      expect(
+        fullModeRequirements(
+          pipeline(
+            sinks[typ].sink({ strategy: "aws", service: "es", ...keys }),
+          ),
+          catalog,
+        ),
+        typ,
+      ).toEqual([hostIdentity]);
+      // A missing block, and one that isn't an object, read as empty.
+      for (const block of [undefined, null, "aws", [keys], 7])
+        expect(
+          fullModeRequirements(
+            pipeline(
+              sinks[typ].sink({ strategy: "aws", service: "es", auth: block }),
+            ),
+            catalog,
+          ),
+          `${typ} ${JSON.stringify(block)}`,
+        ).toEqual([hostIdentity]);
+    }
+    // An auth that isn't a block names no strategy.
+    for (const value of ["aws", ["aws"], null, 1])
+      for (const typ of Object.keys(sinks))
+        expect(
+          fullModeRequirements(
+            pipeline(sinks[typ].sink(value as never)),
+            catalog,
+          ),
+          `${typ} ${JSON.stringify(value)}`,
+        ).toEqual([]);
+    // `auth` and `strategy` are read as written, as Vector reads them.
+    for (const typ of Object.keys(sinks)) {
+      const { auth: block, ...rest } = sinks[typ].sink(auth(typ, {}));
+      expect(
+        fullModeRequirements(pipeline({ ...rest, Auth: block }), catalog),
+        `${typ}, Auth`,
+      ).toEqual([]);
+      const { strategy, ...others } = block as Record<string, unknown>;
+      expect(
+        fullModeRequirements(
+          pipeline({ ...rest, auth: { ...others, STRATEGY: strategy } }),
+          catalog,
+        ),
+        `${typ}, STRATEGY`,
+      ).toEqual([]);
+    }
+    // Only the four sinks that take the credential are judged by it.
+    expect(
+      fullModeRequirements(
+        pipeline({
+          type: "blackhole",
+          inputs: ["in"],
+          auth: { strategy: "aws" },
+        }),
+        catalog,
+      ),
+    ).toEqual([]);
+    expect(
+      fullModeRequirements(
+        pipeline({
+          type: "console",
+          inputs: ["in"],
+          target: "stderr",
+          encoding: { codec: "json" },
+          auth: { strategy: "aws" },
+        }),
+        catalog,
+      ),
+    ).toEqual([]);
+  });
+
+  it("names a credentials file wherever it stands below auth, beside keys or not", () => {
+    for (const typ of Object.keys(sinks)) {
+      const file = { credentials_file: "/srv/aws/credentials" };
+      for (const [name, credential] of Object.entries({
+        "beside both keys": { ...keys, ...file },
+        "an empty value": { ...keys, credentials_file: "" },
+        "a null value": { ...keys, credentials_file: null },
+        "not a path": { ...keys, credentials_file: 7 },
+        "spelled in capitals": { ...keys, CREDENTIALS_FILE: "/srv/aws" },
+        "mixed case": { ...keys, Credentials_File: "/srv/aws" },
+        deeper: { ...keys, a: { b: { c: file } } },
+        "in a list": { ...keys, a: [{ b: file }] },
+        "in a list in a list": { ...keys, a: [[file]] },
+      }))
+        expect(needs(typ, credential), `${typ}, ${name}`).toEqual([
+          credentialsFile,
+        ]);
+      // Both reasons, the file first.
+      expect(needs(typ, { ...file, profile: "vector" })).toEqual([
+        credentialsFile,
+        hostIdentity,
+      ]);
+    }
+    // Whatever the strategy, and whatever the sink: below auth, it is a file.
+    for (const strategy of ["basic", "aws", ""])
+      expect(
+        fullModeRequirements(
+          pipeline({
+            type: "blackhole",
+            inputs: ["in"],
+            auth: { strategy, credentials_file: "/srv/aws" },
+          }),
+          catalog,
+        ),
+        strategy,
+      ).toEqual([credentialsFile]);
+    // An auth that is a list holds what is below it.
+    expect(
+      fullModeRequirements(
+        pipeline({
+          type: "blackhole",
+          inputs: ["in"],
+          auth: [{ credentials_file: "/srv/aws" }],
+        }),
+        catalog,
+      ),
+    ).toEqual([credentialsFile]);
+    // The key and the block, in any case, at the root of the sink.
+    expect(
+      fullModeRequirements(
+        pipeline({
+          type: "blackhole",
+          inputs: ["in"],
+          Auth: { Credentials_File: "/srv/aws" },
+        }),
+        catalog,
+      ),
+    ).toEqual([credentialsFile]);
+    // Sources and transforms are components too.
+    expect(
+      fullModeRequirements(
+        {
+          sources: {
+            in: {
+              type: "demo_logs",
+              format: "json",
+              auth: { credentials_file: "/x" },
+            },
+          },
+          sinks: { out: { type: "blackhole", inputs: ["in"] } },
+        },
+        catalog,
+      ),
+    ).toEqual([credentialsFile]);
+  });
+
+  it("leaves a key of that name alone where it isn't below auth", () => {
+    for (const component of [
+      {
+        type: "loki",
+        endpoint: "https://loki.example.net",
+        labels: { credentials_file: "app" },
+        encoding: { codec: "json" },
+      },
+      { type: "blackhole", tags: { credentials_file: "app" } },
+      { type: "blackhole", encoding: { credentials_file: "app" } },
+      // Only keys at or below an auth block count. One above it is a path like
+      // any other, which a host's file roots allow or refuse.
+      { type: "blackhole", credentials_file: "/srv/aws/credentials" },
+      { type: "blackhole", credentials_file: { auth: {} } },
+    ])
+      expect(
+        fullModeRequirements(
+          pipeline({ inputs: ["in"], ...component }),
+          catalog,
+        ),
+        JSON.stringify(component),
+      ).toEqual([]);
+    // In a program, a field of that name is data.
+    expect(
+      fullModeRequirements(
+        {
+          sources: { in: { type: "demo_logs", format: "json" } },
+          transforms: {
+            r: {
+              type: "remap",
+              inputs: ["in"],
+              source: '.credentials_file = "x"',
+            },
+          },
+          sinks: { out: { type: "blackhole", inputs: ["r"] } },
+        },
+        catalog,
+      ),
+    ).toEqual([]);
+    // Unit tests are data as well.
+    expect(
+      fullModeRequirements(
+        {
+          sources: { in: { type: "demo_logs", format: "json" } },
+          sinks: { out: { type: "blackhole", inputs: ["in"] } },
+          tests: [
+            {
+              name: "t",
+              inputs: [{ insert_at: "out", auth: { credentials_file: "/x" } }],
+            },
+          ],
+        },
+        catalog,
+      ),
+    ).toEqual([]);
+  });
+
+  it("says so in one line for a template card or a pipeline row", () => {
+    expect(
+      describeNeeds(
+        pipeline(
+          sinks.http.sink(
+            auth("http", { credentials_file: "/srv/aws", profile: "v" }),
+          ),
+        ),
+        catalog,
+      ),
+    ).toEqual({
+      kind: "full",
+      label: "Needs Full Vector",
+      detail: `Uses ${credentialsFile}, ${hostIdentity}. Runs only on devices in Full Vector mode.`,
+    });
+  });
+});

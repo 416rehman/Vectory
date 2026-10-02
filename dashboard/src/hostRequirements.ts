@@ -40,6 +40,87 @@ export function callsDeviceFunction(program: string): boolean {
 export const localApiReason =
   "Vector's local API has no authentication; any local user could read live events";
 /**
+ * The two AWS credential shapes no host allowance can permit. A credentials
+ * file can make Vector run a program, and an AWS-signing sink without explicit
+ * keys signs with the host's own identity. The agent (`policy.go`) and the
+ * server (`rollout.rs`) hold the same rules, with the same names and paths;
+ * `tests/security/test_capability_lists.py` fails when the copies drift.
+ */
+const credentialsFileKey = "credentials_file";
+const awsExplicitKeys = ["access_key_id", "secret_access_key"];
+const awsAmbientKeys = ["assume_role", "imds", "profile"];
+/**
+ * Where each restricted-mode sink that takes an AWS credential reads it once
+ * `auth.strategy` is `aws`: Elasticsearch flattens the credential into `auth`,
+ * the shared HTTP authentication of the others nests it as `auth.auth`.
+ */
+const awsCredentialPaths = new Map([
+  ["elasticsearch", ["auth"]],
+  ["http", ["auth", "auth"]],
+  ["loki", ["auth", "auth"]],
+  ["prometheus_exporter", ["auth", "auth"]],
+]);
+/**
+ * Space as Go's `strings.TrimSpace` and Rust's `trim` read it, which the agent
+ * and the server use to tell a blank key from a real one. `String.trim` also
+ * trims U+FEFF and leaves U+0085.
+ */
+const blank =
+  /^[\t-\r \u{85}\u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}]*$/u;
+function asObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+/**
+ * Whether a `credentials_file` key stands anywhere below an `auth` key, however
+ * deep, in an object or a list, with either name in any case.
+ */
+function credentialsFileBelowAuth(value: unknown, belowAuth = false): boolean {
+  if (Array.isArray(value))
+    return value.some((item) => credentialsFileBelowAuth(item, belowAuth));
+  return Object.entries(asObject(value) ?? {}).some(([key, child]) => {
+    const lower = key.toLowerCase();
+    return (
+      (belowAuth && lower === credentialsFileKey) ||
+      credentialsFileBelowAuth(child, belowAuth || lower === "auth")
+    );
+  });
+}
+/**
+ * Whether an AWS credential object names its own keys and borrows nothing from
+ * the host: both keys are non-blank strings, and no role to assume, metadata
+ * client setting or profile is set (null and false mean not set).
+ */
+function explicitAwsCredential(credential: Record<string, unknown> = {}) {
+  return (
+    awsExplicitKeys.every((key) => {
+      const value = credential[key];
+      return typeof value === "string" && !blank.test(value);
+    }) &&
+    Object.entries(credential).every(
+      ([key, value]) =>
+        !awsAmbientKeys.includes(key.toLowerCase()) ||
+        value == null ||
+        value === false,
+    )
+  );
+}
+/**
+ * Whether a sink signs with the AWS strategy and its credential, in the object
+ * where that sink reads it, is not explicit. Only that object counts: keys
+ * anywhere else make nothing explicit.
+ */
+function signsWithHostIdentity(component: any) {
+  const path = awsCredentialPaths.get(component?.type);
+  const strategy = asObject(component?.auth)?.strategy;
+  if (!path || typeof strategy !== "string" || strategy.toLowerCase() !== "aws")
+    return false;
+  let credential = asObject(component);
+  for (const key of path) credential = asObject(credential?.[key]);
+  return !explicitAwsCredential(credential);
+}
+/**
  * What a pipeline needs from the devices that run it, worked out the way the
  * server and the agent decide it: Full Vector mode for anything outside the
  * restricted component set, and, in restricted mode, local approval for each
@@ -91,6 +172,14 @@ export function fullModeRequirements(
         component.file != null
       )
         required.add("Native capability: file");
+      // No host allowance permits an AWS credentials file or the host's own
+      // AWS identity.
+      if (credentialsFileBelowAuth(component))
+        required.add(`Native capability: ${credentialsFileKey}`);
+      if (signsWithHostIdentity(component))
+        required.add(
+          "AWS credentials from the host (without both keys, or with assume_role, imds or profile)",
+        );
     }
   }
   /**

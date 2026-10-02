@@ -745,3 +745,235 @@ async fn later_canary_wave_rechecks_version_before_releasing_pending_target() {
             .unwrap();
     assert_eq!(pending_generation, 0);
 }
+
+/// The object an AWS sink reads its keys from. Elasticsearch flattens them into
+/// `auth`; the shared HTTP authentication of the other sinks nests them one
+/// level down, in `auth.auth`.
+fn aws_auth(typ: &str, strategy: &str, credential: &Value) -> Value {
+    if typ == "elasticsearch" {
+        let mut auth = credential.clone();
+        auth["strategy"] = json!(strategy);
+        auth
+    } else {
+        json!({"strategy": strategy, "service": "es", "auth": credential})
+    }
+}
+
+/// A pipeline of one sink of the given type, with `auth` unless it is null.
+fn aws_pipeline(typ: &str, auth: Value) -> Value {
+    let mut sink = match typ {
+        "elasticsearch" => {
+            json!({"type": typ, "inputs": ["in"], "endpoints": ["https://search.example.net"], "aws": {"region": "us-east-1"}})
+        }
+        "http" => {
+            json!({"type": typ, "inputs": ["in"], "uri": "https://ingest.example.net/events", "encoding": {"codec": "json"}})
+        }
+        "loki" => {
+            json!({"type": typ, "inputs": ["in"], "endpoint": "https://loki.example.net", "labels": {"job": "vector"}, "encoding": {"codec": "json"}})
+        }
+        _ => json!({"type": typ, "inputs": ["in"], "address": "127.0.0.1:9598"}),
+    };
+    if !auth.is_null() {
+        sink["auth"] = auth;
+    }
+    let source = if typ == "prometheus_exporter" {
+        json!({"type": "internal_metrics"})
+    } else {
+        json!({"type": "demo_logs", "format": "json"})
+    };
+    json!({"sources": {"in": source}, "sinks": {"out": sink}})
+}
+
+/// Pipelines of one sink type, each with whether a restricted device can run it.
+/// A restricted device refuses two things no allowance can permit: an AWS
+/// credentials file, and the AWS strategy without explicit keys, which signs
+/// with the host's own identity.
+fn aws_cases(typ: &str) -> Vec<(&'static str, Value, bool)> {
+    let keys = json!({"access_key_id": "vectory-secret:AWS_KEY_ID", "secret_access_key": "vectory-secret:AWS_SECRET_KEY"});
+    let with = |extra: Value| {
+        let mut credential = keys.clone();
+        credential
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        credential
+    };
+    let aws = |credential: Value| aws_pipeline(typ, aws_auth(typ, "aws", &credential));
+    let mut cases = vec![
+        ("both keys", aws(keys.clone()), false),
+        (
+            "both keys, a region and a session token",
+            aws(with(
+                json!({"region": "eu-west-1", "session_token": "vectory-secret:AWS_SESSION_TOKEN"}),
+            )),
+            false,
+        ),
+        (
+            "both keys and a role that is not set",
+            aws(with(json!({"assume_role": null}))),
+            false,
+        ),
+        (
+            "both keys, the strategy in capitals",
+            aws_pipeline(typ, aws_auth(typ, "AWS", &keys)),
+            false,
+        ),
+        (
+            "basic authentication",
+            aws_pipeline(
+                typ,
+                json!({"strategy": "basic", "user": "vectory-secret:USER", "password": "vectory-secret:PASSWORD"}),
+            ),
+            false,
+        ),
+        ("no authentication", aws_pipeline(typ, Value::Null), false),
+        ("no keys", aws(json!({})), true),
+        (
+            "no keys, the strategy in capitals",
+            aws_pipeline(typ, aws_auth(typ, "AWS", &json!({}))),
+            true,
+        ),
+        (
+            "only the access key ID",
+            aws(json!({"access_key_id": "vectory-secret:AWS_KEY_ID"})),
+            true,
+        ),
+        (
+            "only the secret access key",
+            aws(json!({"secret_access_key": "vectory-secret:AWS_SECRET_KEY"})),
+            true,
+        ),
+        (
+            "an empty secret access key",
+            aws(json!({"access_key_id": "vectory-secret:AWS_KEY_ID", "secret_access_key": ""})),
+            true,
+        ),
+        (
+            "both keys and a role to assume",
+            aws(with(
+                json!({"assume_role": "arn:aws:iam::123456789012:role/vector"}),
+            )),
+            true,
+        ),
+        (
+            "both keys and the metadata client",
+            aws(with(json!({"imds": {"max_attempts": 2}}))),
+            true,
+        ),
+        (
+            "both keys and a profile",
+            aws(with(json!({"profile": "vector"}))),
+            true,
+        ),
+        (
+            "a credentials file",
+            aws(json!({"credentials_file": "/srv/aws/credentials", "profile": "vector"})),
+            true,
+        ),
+        (
+            "a credentials file beside both keys",
+            aws(with(json!({"credentials_file": "/srv/aws/credentials"}))),
+            true,
+        ),
+        (
+            "a credentials file deeper below auth",
+            aws(with(
+                json!({"more": {"still": {"credentials_file": "/srv/aws/credentials"}}}),
+            )),
+            true,
+        ),
+        (
+            "a credentials file in a list below auth",
+            aws(with(
+                json!({"more": [{"credentials_file": "/srv/aws/credentials"}]}),
+            )),
+            true,
+        ),
+    ];
+    if typ != "elasticsearch" {
+        cases.push((
+            "bearer authentication",
+            aws_pipeline(
+                typ,
+                json!({"strategy": "bearer", "token": "vectory-secret:TOKEN"}),
+            ),
+            false,
+        ));
+    }
+    cases
+}
+
+async fn add_version(state: &State, config: &Value) -> String {
+    assert_eq!(validation::validate(config)["valid"], true, "{config}");
+    let id = db::id();
+    let artifact = validation::render(config).unwrap();
+    let mut conn = state.pool.acquire().await.unwrap();
+    db::insert(
+        &mut conn,
+        "version",
+        &json!({"id":id,"configuration_id":"00000000-0000-4000-8000-000000000800",
+            "number":1,"config":config,"artifact":artifact,"sha256":db::hash(&artifact),
+            "size":artifact.len(),"created_at":db::now()}),
+    )
+    .await
+    .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn a_credentials_file_or_the_hosts_own_aws_identity_needs_full_mode() {
+    let (_temp, state, app, ids, cookie, csrf) = fixture().await;
+    let (full, restricted) = (&ids[0], &ids[1]);
+    let mut priority = 100;
+    let mut created = 0;
+    for typ in ["http", "loki", "prometheus_exporter", "elasticsearch"] {
+        for (name, config, needs_full) in aws_cases(typ) {
+            let label = format!("{typ}, {name}");
+            let version = add_version(&state, &config).await;
+            priority += 1;
+            // The preview blocks a restricted device for the two shapes, and
+            // never a device in full mode.
+            let mut both = request(&version, &[restricted.clone(), full.clone()], "snapshot");
+            both["priority"] = json!(priority);
+            let (status, preview) =
+                call(&app, "/api/v1/deployments/preview", both, &cookie, &csrf).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {preview}");
+            let blockers = &preview["blockers"];
+            if needs_full {
+                assert_eq!(
+                    blockers.as_array().map(Vec::len),
+                    Some(1),
+                    "{label}: {blockers}"
+                );
+                assert_eq!(blockers[0]["code"], "FULL_VECTOR_MODE_REQUIRED", "{label}");
+                assert_eq!(blockers[0]["device_ids"], json!([restricted]), "{label}");
+            } else {
+                assert_eq!(*blockers, json!([]), "{label}");
+            }
+            // Starting it for the restricted device is refused, with nothing
+            // written, or accepted, as the preview showed.
+            let mut body = request(&version, &[restricted.clone()], "snapshot");
+            body["priority"] = json!(priority);
+            let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+            if needs_full {
+                assert_eq!(status, StatusCode::CONFLICT, "{label}: {reply}");
+                assert!(
+                    reply["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("requires full Vector mode")),
+                    "{label}: {reply}"
+                );
+            } else {
+                assert_eq!(status, StatusCode::OK, "{label}: {reply}");
+                created += 1;
+            }
+            assert_eq!(deployment_count(&state).await, created, "{label}");
+            // A device in full mode runs it either way.
+            let mut body = request(&version, &[full.clone()], "snapshot");
+            body["priority"] = json!(priority);
+            let (status, reply) = call(&app, "/api/v1/deployments", body, &cookie, &csrf).await;
+            assert_eq!(status, StatusCode::OK, "{label}: {reply}");
+            created += 1;
+        }
+    }
+}
