@@ -1129,7 +1129,9 @@ func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
 		return nil
 	}
 	r := e.redactorFor(effective)
-	for _, token := range []string{refusal.Resource, refusal.Suggested, shortID(refusal.ComponentID)} {
+	// The field is a path of keys from the pipeline's own text, such as
+	// auth.auth.credentials_file, and is as safe to echo as the resource.
+	for _, token := range []string{refusal.Resource, refusal.Suggested, shortID(refusal.ComponentID), refusal.Field} {
 		if token != "" && !r.containsSecret(token) {
 			r.safe[token] = true
 		}
