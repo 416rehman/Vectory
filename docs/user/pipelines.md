@@ -39,7 +39,7 @@ A **source** receives or generates events, a **transform** changes, filters or r
 | Select several components | **Ctrl**-click (**⌘**-click) or **Shift**-drag; **Ctrl A** selects all. Then move, duplicate (**Ctrl D**) or delete them together. |
 | Copy components | Select them, then **Ctrl C**, **Ctrl V** (**⌘ C**, **⌘ V**). They are copied as Vector YAML and pasted with new IDs and their connections rewired. You can also paste components from any Vector configuration. |
 | See live rates | Turn on **Live**. Each connection shows events per second, with error, drop and buffer badges, summed across the devices verified running a version of this pipeline. It shows rates only, never event contents, and needs devices with [telemetry](telemetry.md) on. **Add monitoring** adds Vector's internal metrics if the pipeline doesn't export them. |
-| Rename a component | The pencil beside its name. Connections and test targets follow; wildcard inputs and VRL text don't, so review those. An ID can't contain `.`, `/`, `\` or control characters: Vector uses it as a folder name for its checkpoints and disk buffers. |
+| Rename a component | The pencil beside its name. Connections and test targets follow; wildcard inputs and VRL text don't, so review those. An ID can't contain `.`, `/`, `\` or control characters, or start with a drive letter and a colon (like `C:`): Vector uses it as a folder name for its checkpoints and disk buffers. |
 | Undo | **Ctrl Z** (**⌘ Z**); add Shift to redo. |
 | Work from the keyboard | Arrow keys move a focused card, **Enter** opens it, **Delete** removes it, **Shift F10** opens its menu. **Canvas shortcuts** lists the rest. |
 

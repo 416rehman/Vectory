@@ -2394,13 +2394,19 @@ fn output_exists(kind: &str, item: &Value, port: Option<&str>) -> Option<bool> {
 }
 /// Whether a component ID could name a place on disk. Vector joins an ID onto
 /// its data directory for checkpoints and disk buffers, so an absolute path
-/// replaces that directory and separators climb out of it. Vector itself
-/// refuses only a dot (measured with 0.58), so this adds exactly the path
-/// separators and the control characters that let an ID forge a log line or a
-/// file name.
+/// replaces that directory and separators climb out of it. On Windows a drive
+/// prefix (`C:x`) replaces the directory too, so an ID may not start with a
+/// drive letter and a colon. Vector itself refuses only a dot (measured with
+/// 0.58), so this adds exactly the path separators, the drive prefix and the
+/// control characters that let an ID forge a log line or a file name.
 fn names_a_path(id: &str) -> bool {
-    id.chars()
-        .any(|c| matches!(c, '/' | '\\') || c.is_control())
+    let mut chars = id.chars();
+    let drive_prefix =
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.next() == Some(':');
+    drive_prefix
+        || id
+            .chars()
+            .any(|c| matches!(c, '/' | '\\') || c.is_control())
 }
 /// The refusal for such an ID: it names the component and the rule, and shows
 /// a control character as an escape instead of carrying it into a message.
@@ -2416,7 +2422,7 @@ fn path_like_id(id: &str) -> String {
         })
         .collect();
     format!(
-        "{shown}: component IDs can't contain / or \\ or control characters. Rename this component."
+        "{shown}: component IDs can't contain / or \\ or control characters, or start with a drive letter and a colon (like C:). Rename this component."
     )
 }
 pub fn validate(config: &Value) -> Value {
@@ -3799,6 +3805,8 @@ mod tests {
             "/",
             "a\\b",
             "C:\\x",
+            "C:x",
+            "d:",
             "a\nb",
             "a\tb",
             "a\u{0}b",
@@ -3818,7 +3826,7 @@ mod tests {
             // control character into a message.
             assert_eq!(errors.len(), 1, "{id:?}: {errors:?}");
             assert!(
-                errors[0].ends_with(": component IDs can't contain / or \\ or control characters. Rename this component."),
+                errors[0].ends_with(": component IDs can't contain / or \\ or control characters, or start with a drive letter and a colon (like C:). Rename this component."),
                 "{id:?}: {}",
                 errors[0]
             );
@@ -3861,6 +3869,8 @@ mod tests {
             "star*",
             "bracket[0]",
             "colon:name",
+            "cc:x",
+            "1:x",
             "a,b",
             "caf\u{e9}",
             "a$b",
