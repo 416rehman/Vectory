@@ -212,27 +212,42 @@ func lockAgentFile(dir string) (func(), error) {
 	return func() { clearLockOwner(f); unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
 }
 
+// closedAbove is the first directory above path, up to but not including stop
+// (empty: all the way to the root), that the account with this uid and gid can't
+// search: it neither belongs to the account nor lets everyone in.
+func closedAbove(path, stop string, uid, gid int) (dir string, mode os.FileMode, err error) {
+	for p := filepath.Dir(filepath.Clean(path)); p != stop; p = filepath.Dir(p) {
+		info, err := os.Stat(p)
+		if err == nil {
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			mode = info.Mode().Perm()
+			open := mode&0001 != 0 ||
+				ok && int(stat.Uid) == uid && mode&0100 != 0 ||
+				ok && int(stat.Gid) == gid && mode&0010 != 0
+			if !open {
+				return p, mode, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return "", 0, err
+		}
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	return "", 0, nil
+}
+
 // checkServiceCanReach refuses a layout the service account can't get through:
 // a directory above path that neither belongs to the account nor lets everyone
 // search it. Registering the service anyway would leave an agent that can
 // never write its managed configuration or its state.
 func checkServiceCanReach(path, account string, uid, gid int) error {
-	for p := filepath.Dir(filepath.Clean(path)); ; p = filepath.Dir(p) {
-		info, err := os.Stat(p)
-		if err == nil {
-			stat, ok := info.Sys().(*syscall.Stat_t)
-			mode := info.Mode().Perm()
-			open := mode&0001 != 0 ||
-				ok && int(stat.Uid) == uid && mode&0100 != 0 ||
-				ok && int(stat.Gid) == gid && mode&0010 != 0
-			if !open {
-				return fmt.Errorf("%s (mode %04o) is closed to the service account %s, so it could not reach %s. Run `chmod o+x %s`, then run this command again", p, mode, account, path, quoteArg(p))
-			}
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		if filepath.Dir(p) == p {
-			return nil
-		}
+	closed, mode, err := closedAbove(path, "", uid, gid)
+	if err != nil {
+		return err
 	}
+	if closed != "" {
+		return fmt.Errorf("%s (mode %04o) is closed to the service account %s, so it could not reach %s. Run `chmod o+x %s`, then run this command again", closed, mode, account, path, quoteArg(closed))
+	}
+	return nil
 }
