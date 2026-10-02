@@ -2,6 +2,34 @@
 
 See which devices are healthy, what they run and how much data flows through them. Three signals answer different questions: a recent check-in means the agent is connected, **Applied** means Vector runs the version, and throughput means events are moving.
 
+## Find devices
+
+[**Devices**](/#/devices) lists your fleet a page at a time, so it opens as quickly with thousands of devices as with ten. The server searches, filters, sorts and counts; the page only holds the rows you're looking at.
+
+- **Search** matches a device's name, platform, pipeline, Vector and agent versions, and the names of its groups. Type a few letters; the list follows a moment after you stop. Labels aren't searched.
+- **Quick filters** (**Failing**, **Not on desired version**, **Offline**, **Paused**, **No telemetry**) and the **Status** column filter show how many devices each holds. The counts follow your search, and a device counts in every filter that fits it.
+- **Group** shows one group's devices. A group name in a row does the same.
+- **Sort** by name, status, pipeline, Vector version, events per second or last seen. Names sort the way people read them, so `edge-2` comes before `edge-10`, and a device with no value sorts last in both directions.
+- Devices you have revoked are hidden. Choose **Status → Revoked** to list them.
+
+The page number, rows per page, search, filters and sort are all in the page's address, so a reload, **Back** and a copied link return to the same view.
+
+### Select devices across pages
+
+Tick devices on any page. The selection stays while you page, search and sort, and **12 selected** counts all of it. **Select all 1,204 matching** adds every device the current search and filters find, not only the ones on screen. It reads at most 10,000 devices; when more match, the page says how many it selected ("Selected the first 10,000 of 12,431 matching devices. Narrow the search to select the rest.") so nothing is chosen silently. **Clear selection** starts over.
+
+With devices selected you can **Pause sync…** or **Resume sync…** for all of them. Revoked devices can't be selected.
+
+## Read the Overview
+
+The [**Overview**](/#/overview) reads counts from the server, never a row per device, so it opens at the same speed at any fleet size.
+
+- **Fleet health** splits your devices by state; each count links to those devices.
+- **Needs you** lists what needs a person, most urgent first.
+- **Running now** answers what runs where. Each row is a pipeline version that devices report running: its name and version, how many devices run it (a link to those devices), the groups they're in (each a link to that group's devices that run it), and events in and out per second, summed over the devices that report. A note says what it is doing now: **1 not delivering** when a device applied it but isn't delivering, or **canary on edge-nyc-02 · measuring delivery** while a canary of it runs. A version no device reports metrics for reads **No metrics yet**, never a zero. Until a device verifies a version, the card reads **Nothing is running yet. Deploy a pipeline to a device.**
+- **Rollouts** shows each rollout's progress with the same words as its own page: **2 of 3 devices applied · 1 not delivering**.
+- **Fleet throughput** and **Recent changes** follow.
+
 ## Read a device
 
 Open [**Devices**](/#/devices) and select a device.

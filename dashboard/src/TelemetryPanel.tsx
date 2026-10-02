@@ -31,6 +31,7 @@ import {
   present,
   readableSlot,
   seriesPath,
+  telemetryPollMs,
   timeline,
   type TimelinePoint,
 } from "./telemetryChart";
@@ -125,6 +126,8 @@ export default function TelemetryPanel({
   const resource = useResource<TelemetryHistory>(
     `/devices/${encodeURIComponent(device.id)}/telemetry?range=${range}`,
     { device_id: device.id, samples: [] },
+    0,
+    { interval: telemetryPollMs[range] },
   );
   // Keep the previous render while a new range loads: no flash, no jump.
   const [shown, setShown] = useState<TelemetryHistory | null>(null);

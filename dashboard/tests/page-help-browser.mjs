@@ -8,6 +8,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import net from "node:net";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import {
+  fleetReplies,
+  fulfillFleetRead,
+  slimOverview,
+} from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -108,6 +113,7 @@ const pipeline = {
   },
   graph: { nodes: [], edges: [] },
 };
+const fleet = fleetReplies({ devices: [device], groups: [] });
 const results = [],
   requests = [],
   unexpected = [],
@@ -162,17 +168,10 @@ await context.route("**/*", async (route) => {
       json: { error: { code: "NOT_FOUND", message: "Not found" } },
     });
   if (path === "/overview")
-    return reply({
-      devices_total: 1,
-      devices_online: 0,
-      configurations_total: 1,
-      deployments_active: 0,
-      issues_open: 0,
-      devices: [device],
-      recent_activity: [],
-    });
+    return reply(slimOverview([device], { configurations_total: 1 }));
+  // Pages of devices, one device, and the groups without their members.
+  if (await fulfillFleetRead(fleet, route)) return;
   if (path === "/devices") return reply([device]);
-  if (path === `/devices/${deviceId}`) return reply(device);
   if (path === `/devices/${deviceId}/telemetry`)
     return reply({ device_id: deviceId, samples: [] });
   if (["/groups", "/policies", "/tokens", "/releases"].includes(path))

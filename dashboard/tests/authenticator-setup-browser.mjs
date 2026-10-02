@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import net from "node:net";
+import { slimOverview } from "./fleet-replies.mjs";
 import jsQR from "jsqr";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -208,16 +209,7 @@ async function load({
             },
           ],
         });
-      if (path === "/overview")
-        return reply({
-          devices_total: 0,
-          devices_online: 0,
-          configurations_total: 0,
-          deployments_active: 0,
-          issues_open: 0,
-          devices: [],
-          recent_activity: [],
-        });
+      if (path === "/overview") return reply(slimOverview([]));
     }
     if (request.headers()["x-csrf-token"] !== "synthetic-setup-csrf") {
       unexpected.push(`Missing CSRF ${method} ${path}`);

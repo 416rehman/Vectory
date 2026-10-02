@@ -15,11 +15,14 @@ const bundle = await build({
       import React,{useState} from 'react';
       import {createRoot} from 'react-dom/client';
       import {useResource} from './src/ui';
+      import {post} from './src/api';
       const pending=[],intervals=new Map();let nextTimer=0;
       window.setInterval=(callback,ms)=>{const id=++nextTimer;intervals.set(id,{callback,ms});return id;};
       window.clearInterval=(id)=>intervals.delete(id);
       window.fetch=(url,options)=>new Promise((resolve,reject)=>pending.push({url,signal:options?.signal,resolve,reject}));
       const fixture=window.fixture={pending,poll:()=>{for(const timer of intervals.values())timer.callback();},
+        pollNth:(n)=>[...intervals.values()][n].callback(),
+        mutate:()=>{void post('/test/change',{});},
         timers:()=>[...intervals.values()].map(timer=>timer.ms),
         respond:(index,value,status=200)=>pending[index].resolve(new Response(JSON.stringify(value),{status})),
         offline:(index)=>pending[index].reject(new TypeError('Failed to fetch'))};
@@ -29,8 +32,18 @@ const bundle = await build({
         fixture.setPath=setResource;fixture.reload=result.reload;fixture.refresh=()=>setRefresh(n=>n+1);fixture.setInterval=setPollInterval;
         return React.createElement('output',{},JSON.stringify({data:result.data,error:result.error,loading:result.loading}));
       }
+      // Two components reading one path, as a page and the dialog it opens do.
+      function Reader({name}){
+        const result=useResource('/test/shared','empty',0);
+        return React.createElement('output',{'data-reader':name},JSON.stringify({data:result.data,error:result.error,loading:result.loading}));
+      }
+      function Shared(){
+        const [page,setPage]=useState(true),[dialog,setDialog]=useState(false);
+        fixture.showPage=setPage;fixture.showDialog=setDialog;
+        return React.createElement('div',{},page&&React.createElement(Reader,{name:'page'}),dialog&&React.createElement(Reader,{name:'dialog'}));
+      }
       const app=createRoot(document.getElementById('app'));fixture.unmount=()=>app.unmount();
-      app.render(React.createElement(App));
+      app.render(React.createElement(location.search.includes('shared')?Shared:App));
     `,
     resolveDir: path.join(root, 'dashboard'),
     sourcefile: 'isolated-resource-race.tsx',
@@ -162,8 +175,62 @@ try {
   assert.equal(offline.data?.name, 'again', 'a failed poll keeps the last good record');
   await slow.close();
 
+  // Two components reading one path, as a page and the dialog it opens do,
+  // share one request, one answer and one poll.
+  const shared = await browser.newPage();
+  shared.on('pageerror', error => errors.push(error.message));
+  await shared.goto(`http://127.0.0.1:${server.address().port}/?shared`);
+  const sharedCount = () => shared.evaluate(() => window.fixture.pending.length);
+  const everyReader = value => shared.waitForFunction(expected => {
+    const outputs = [...document.querySelectorAll('output')];
+    return outputs.length > 0 && outputs.every(node => JSON.parse(node.textContent).data === expected);
+  }, value);
+  await shared.waitForFunction(() => window.fixture.pending.length === 1);
+  await shared.evaluate(() => window.fixture.showDialog(true));
+  await shared.waitForTimeout(30);
+  assert.equal(await sharedCount(), 1, 'a component that mounts while a read is in flight takes that read');
+  await shared.evaluate(() => window.fixture.respond(0, 'first'));
+  await everyReader('first');
+  assert.deepEqual(await shared.evaluate(() => window.fixture.timers()), [15000, 15000]);
+  await shared.evaluate(() => window.fixture.poll());
+  assert.equal(await sharedCount(), 2, 'both readers polling in one tick read the path once');
+  await shared.evaluate(() => window.fixture.respond(1, 'second'));
+  await everyReader('second');
+  await shared.evaluate(() => window.fixture.pollNth(1));
+  await shared.waitForTimeout(30);
+  assert.equal(await sharedCount(), 2, "a reader's tick adopts an answer the other reader just fetched");
+  await shared.evaluate(() => window.fixture.pollNth(0));
+  assert.equal(await sharedCount(), 3, "a reader's own tick still reads again");
+  // A change goes out while that read is in flight; the dialog opens after it.
+  await shared.evaluate(() => window.fixture.mutate());
+  assert.equal(await sharedCount(), 4);
+  await shared.evaluate(() => window.fixture.respond(3, {saved: true}));
+  await shared.waitForTimeout(30);
+  await shared.evaluate(() => window.fixture.showDialog(false));
+  await shared.evaluate(() => window.fixture.showDialog(true));
+  await shared.waitForFunction(() => window.fixture.pending.length === 5);
+  assert.equal(await shared.evaluate(() => window.fixture.pending[2].signal?.aborted), true, 'a read that began before a change is replaced for a reader that arrives after it');
+  await shared.evaluate(() => window.fixture.respond(4, 'after the change'));
+  await everyReader('after the change');
+  // One reader leaving keeps the read; the last one aborts it. The dialog
+  // fetched the newest answer, so the page's tick takes it and the dialog's
+  // own tick asks again.
+  await shared.evaluate(() => window.fixture.pollNth(0));
+  await shared.waitForTimeout(30);
+  assert.equal(await sharedCount(), 5);
+  await shared.evaluate(() => window.fixture.pollNth(1));
+  assert.equal(await sharedCount(), 6);
+  await shared.evaluate(() => window.fixture.showDialog(false));
+  await shared.waitForTimeout(30);
+  assert.equal(await shared.evaluate(() => window.fixture.pending[5].signal?.aborted), false, 'a reader leaving does not abort a read another one waits for');
+  await shared.evaluate(() => window.fixture.showPage(false));
+  await shared.waitForTimeout(30);
+  assert.equal(await shared.evaluate(() => window.fixture.pending[5].signal?.aborted), true, 'the last reader leaving aborts the read');
+  assert.deepEqual(await shared.evaluate(() => window.fixture.timers()), []);
+  await shared.close();
+
   assert.deepEqual(errors, []);
-  const evidence = {timestamp:new Date().toISOString(),passed:true,scope:'Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data',checks:['initial load','newest same-path response wins over delayed error','path change hides prior data','late old-path response cannot overwrite new resource','null path resets data and stops polling','unmount invalidates pending work and disables saved reload/poll','a background tick while a read is in flight starts no second request','an interval change reschedules the poll without a read; interval 0 never polls','a refresh bump replaces the in-flight read and keeps loaded data without a loading flash','IDENTITY_MISMATCH drops the displayed record until a matching read','a browser network failure reads as a sentence and keeps the last good record']};
+  const evidence = {timestamp:new Date().toISOString(),passed:true,scope:'Actual React useResource hook in headless Chromium; explicitly synthetic deferred fetch responses, no product fleet data',checks:['initial load','newest same-path response wins over delayed error','path change hides prior data','late old-path response cannot overwrite new resource','null path resets data and stops polling','unmount invalidates pending work and disables saved reload/poll','a background tick while a read is in flight starts no second request','an interval change reschedules the poll without a read; interval 0 never polls','a refresh bump replaces the in-flight read and keeps loaded data without a loading flash','IDENTITY_MISMATCH drops the displayed record until a matching read','a browser network failure reads as a sentence and keeps the last good record','components reading one path share one request, one answer and one poll','a reader that arrives after a change never joins a read that began before it','the last reader leaving aborts the read; an earlier one leaving does not']};
   const file = path.resolve(process.env.VECTORY_RESOURCE_RACE_EVIDENCE || path.join(root, 'docs/evidence/resource-race.json'));
   await fs.mkdir(path.dirname(file), {recursive:true});
   await fs.writeFile(file, JSON.stringify(evidence,null,2)+'\n');

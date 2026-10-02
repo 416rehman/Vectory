@@ -1,9 +1,11 @@
-/** Pure Overview logic: health buckets, telemetry coverage, rollout progress. */
-import {
-  deviceDisplayStatus,
-  deviceStatuses,
-  type DeviceStatusInput,
-} from "./status";
+/** Pure Overview logic: health buckets, telemetry coverage, what runs where. */
+import { countLabel } from "./countLabel";
+import { deviceStatuses } from "./status";
+import type {
+  OverviewBusyDevice,
+  OverviewCounts,
+  OverviewRunning,
+} from "./api";
 
 export type HealthBucket =
   | "applied"
@@ -53,44 +55,6 @@ export const healthStates: Record<HealthBucket, string[]> = {
   unmanaged: ["unmanaged"],
 };
 
-export function healthBucket(device: DeviceStatusInput): HealthBucket | null {
-  const status = deviceDisplayStatus(device);
-  if (status === "revoked") return null;
-  for (const bucket of healthOrder)
-    if (healthStates[bucket].includes(status)) return bucket;
-  // A state added later reads as in progress rather than healthy.
-  return "updating";
-}
-
-export function healthCounts(devices: DeviceStatusInput[]) {
-  const counts = Object.fromEntries(healthOrder.map((b) => [b, 0])) as Record<
-    HealthBucket,
-    number
-  >;
-  let total = 0;
-  for (const device of devices) {
-    const bucket = healthBucket(device);
-    if (!bucket) continue;
-    counts[bucket]++;
-    total++;
-  }
-  return { counts, total };
-}
-
-type TelemetryDevice = {
-  id: string;
-  name: string;
-  status: string;
-  effective_policy?: { telemetry_enabled?: boolean } | null;
-  telemetry?: {
-    sampled_at: string;
-    events_per_second?: number | null;
-    /** Sink delivery rate, reported by newer agents. */
-    events_out_per_second?: number | null;
-    errors?: number | null;
-    errors_per_minute?: number | null;
-  } | null;
-};
 export const TELEMETRY_FRESH_MS = 3 * 60 * 1000;
 export type FleetTelemetry = {
   /** Live devices that could report (not revoked). */
@@ -126,115 +90,42 @@ export const present = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
 /**
- * Fleet throughput from each device's latest sample. Missing data stays
- * missing: a device without a fresh sample adds nothing, never a zero.
+ * Fleet throughput as the server summed it from each device's latest sample.
+ * Missing data stays missing: a fleet no fresh device reported on has a null
+ * total, never a zero.
  */
-export function fleetTelemetry(
-  devices: TelemetryDevice[],
-  now = Date.now(),
+export function telemetryFromCounts(
+  telemetry: OverviewCounts["telemetry"],
+  busiest: OverviewBusyDevice[],
 ): FleetTelemetry {
-  let reporting = 0,
-    stale = 0,
-    rateDevices = 0,
-    rate = 0,
-    out = 0,
-    outDevices = 0,
-    errors = 0,
-    errorDevices = 0,
-    errorRate = 0,
-    errorRateDevices = 0,
-    disabled = 0,
-    eligible = 0;
-  let freshest: number | null = null;
-  const top: FleetTelemetry["top"] = [];
-  for (const device of devices) {
-    if (device.status === "revoked") continue;
-    eligible++;
-    const sampled = Date.parse(device.telemetry?.sampled_at || "");
-    const fresh =
-      Number.isFinite(sampled) && now - sampled <= TELEMETRY_FRESH_MS;
-    if (!fresh) {
-      if (Number.isFinite(sampled)) stale++;
-      if (device.effective_policy?.telemetry_enabled === false) disabled++;
-      continue;
-    }
-    reporting++;
-    freshest = freshest === null ? sampled : Math.max(freshest, sampled);
-    const sample = device.telemetry!;
-    if (present(sample.events_per_second)) {
-      rate += sample.events_per_second;
-      rateDevices++;
-      top.push({
-        id: device.id,
-        name: device.name,
-        eventsPerSecond: sample.events_per_second,
-        eventsOutPerSecond: present(sample.events_out_per_second)
-          ? sample.events_out_per_second
-          : null,
-      });
-    }
-    if (present(sample.events_out_per_second)) {
-      out += sample.events_out_per_second;
-      outDevices++;
-    }
-    if (present(sample.errors)) {
-      errors += sample.errors;
-      errorDevices++;
-    }
-    if (present(sample.errors_per_minute)) {
-      errorRate += sample.errors_per_minute;
-      errorRateDevices++;
-    }
-  }
-  top.sort((a, b) => b.eventsPerSecond - a.eventsPerSecond);
   return {
-    eligible,
-    reporting,
-    stale,
-    eventsPerSecond: rateDevices ? rate : null,
-    rateDevices,
-    eventsOutPerSecond: outDevices ? out : null,
-    outDevices,
-    errors: errorDevices ? errors : null,
-    errorsPerMinute: errorRateDevices ? errorRate : null,
-    disabled,
-    top: top.slice(0, 5),
-    freshest: freshest === null ? null : new Date(freshest).toISOString(),
+    eligible: telemetry.eligible,
+    reporting: telemetry.reporting,
+    stale: telemetry.stale,
+    eventsPerSecond: telemetry.events_in_per_second,
+    rateDevices: telemetry.events_in_devices,
+    eventsOutPerSecond: telemetry.events_out_per_second,
+    outDevices: telemetry.events_out_devices,
+    errors: telemetry.errors,
+    errorsPerMinute: telemetry.errors_per_minute,
+    disabled: telemetry.disabled,
+    top: busiest.map((device) => ({
+      id: device.id,
+      name: device.name,
+      eventsPerSecond: device.events_in_per_second,
+      eventsOutPerSecond: device.events_out_per_second,
+    })),
+    freshest: telemetry.newest_sample_at,
   };
 }
 
-/** A device as far as delivery measurement and adopted workloads go. */
-type DeliveryDevice = {
-  status: string;
-  desired_version_id?: string | null;
-  desired_version?: {
-    configuration_id: string | null;
-    configuration_name: string | null;
-  } | null;
-  telemetry?: { sampled_at: string } | null;
-  actual_sha256?: string | null;
-  vector_running?: boolean;
-};
 /** Whether the agent sent a metrics sample in the last three minutes. */
 export function reportsMetrics(
-  device: Pick<DeliveryDevice, "telemetry">,
+  device: { telemetry?: { sampled_at: string } | null },
   now = Date.now(),
 ) {
   const sampled = Date.parse(device.telemetry?.sampled_at || "");
   return Number.isFinite(sampled) && now - sampled <= TELEMETRY_FRESH_MS;
-}
-/**
- * Devices verified running their pipeline whose delivery isn't measured: no
- * fresh metrics sample, so only Vector's log can show a failing sink and
- * "Applied" says nothing about events arriving.
- */
-export function deliveryUnmeasured(
-  devices: DeliveryDevice[],
-  now = Date.now(),
-) {
-  return devices.filter(
-    (device) => device.status === "verified" && !reportsMetrics(device, now),
-  ).length;
 }
 /** "Nothing is failing" only where Vectory measures delivery everywhere. */
 export function quietSummary(unmeasured: number) {
@@ -243,26 +134,28 @@ export function quietSummary(unmeasured: number) {
     : "Nothing is failing";
 }
 /**
- * The pipeline most devices without metrics run, to offer "Add monitoring to
- * <pipeline>"; null when none of them runs a named pipeline.
+ * The pipeline most running devices have no metrics from, to offer "Add
+ * monitoring to <pipeline>"; null when every running pipeline reports.
  */
-export function monitoringTarget(devices: DeliveryDevice[], now = Date.now()) {
+export function monitoringTarget(
+  running: Pick<
+    OverviewRunning,
+    | "configuration_id"
+    | "configuration_name"
+    | "device_count"
+    | "devices_reporting"
+  >[],
+) {
   const tally = new Map<string, { id: string; name: string; count: number }>();
-  for (const device of devices) {
-    const pipeline = device.desired_version;
-    if (
-      device.status === "revoked" ||
-      reportsMetrics(device, now) ||
-      !pipeline?.configuration_id ||
-      !pipeline.configuration_name
-    )
-      continue;
-    const entry = tally.get(pipeline.configuration_id) || {
-      id: pipeline.configuration_id,
-      name: pipeline.configuration_name,
+  for (const row of running) {
+    const silent = row.device_count - row.devices_reporting;
+    if (silent <= 0 || !row.configuration_name) continue;
+    const entry = tally.get(row.configuration_id) || {
+      id: row.configuration_id,
+      name: row.configuration_name,
       count: 0,
     };
-    entry.count++;
+    entry.count += silent;
     tally.set(entry.id, entry);
   }
   return (
@@ -276,62 +169,86 @@ export function monitoringTarget(devices: DeliveryDevice[], now = Date.now()) {
  * setup keeps running until a deployment replaces it; anywhere else Vector
  * starts only with the first deployment.
  */
-export function unmanagedDetail(devices: DeliveryDevice[]) {
-  const unmanaged = devices.filter(
-    (device) => device.status !== "revoked" && !device.desired_version_id,
-  );
-  const adopted = unmanaged.filter(
-    (device) => !!device.actual_sha256 && device.vector_running !== false,
-  ).length;
-  const one = unmanaged.length === 1;
+export function unmanagedDetail(count: number, adopted: number) {
+  const one = count === 1;
   if (!adopted)
     return `Vector starts on ${one ? "it" : "them"} when you deploy a pipeline.`;
-  if (adopted === unmanaged.length)
+  if (adopted >= count)
     return one
       ? "A local configuration adopted at setup keeps running until you deploy one."
       : "Local configurations adopted at setup keep running until you deploy one.";
   return `${adopted.toLocaleString()} ${adopted === 1 ? "runs" : "run"} a local configuration adopted at setup until you deploy one; Vector starts on the others when you deploy.`;
 }
 
-export type RolloutProgress = {
-  total: number;
-  verified: number;
-  inFlight: number;
-  waiting: number;
-  attention: number;
-  failed: number;
-};
-const inFlightStates = [
-  "desired",
-  "downloaded",
-  "validated",
-  "written",
-  "reload_requested",
-];
-/** Split persisted target states into the four stacks a rollout bar shows. */
-export function rolloutProgress(
-  counts: Record<string, number>,
-): RolloutProgress {
-  const progress: RolloutProgress = {
-    total: 0,
-    verified: 0,
-    inFlight: 0,
-    waiting: 0,
-    attention: 0,
-    failed: 0,
+/**
+ * The groups a version's devices are in, busiest first. Each leads to the
+ * devices of that group that run this version; `count` is how many.
+ */
+export function runningGroups(
+  row: Pick<OverviewRunning, "version_id" | "groups" | "more_groups">,
+) {
+  return {
+    chips: row.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      count: group.device_count,
+      href: `#/devices?running=${encodeURIComponent(row.version_id)}&group=${encodeURIComponent(group.id)}`,
+    })),
+    /** Groups beyond the ones listed. */
+    more: row.more_groups,
   };
-  for (const [state, value] of Object.entries(counts || {})) {
-    if (!present(value) || value <= 0 || state === "removed") continue;
-    progress.total += value;
-    if (state === "verified_applied") progress.verified += value;
-    else if (inFlightStates.includes(state)) progress.inFlight += value;
-    else if (["failed", "rolled_back", "incompatible"].includes(state))
-      progress.failed += value;
-    else if (["verification_unknown", "blocked"].includes(state))
-      progress.attention += value;
-    else progress.waiting += value;
+}
+/**
+ * Events in and out per second across a version's devices: "14.0 → 4.5/s".
+ * Null before any device reported; an unknown rate is never shown as 0.
+ */
+export function runningRate(
+  row: Pick<OverviewRunning, "events_in_per_second" | "events_out_per_second">,
+) {
+  const input = row.events_in_per_second;
+  const output = row.events_out_per_second;
+  if (input === null && output === null) return null;
+  if (input !== null && output !== null)
+    return `${formatRate(input)} → ${formatRate(output)}/s`;
+  return input !== null
+    ? `${formatRate(input)}/s in`
+    : `${formatRate(output ?? 0)}/s out`;
+}
+const canaryPhases: Record<
+  NonNullable<OverviewRunning["canary"]>["phase"],
+  string
+> = {
+  measuring: "measuring delivery",
+  observing: "observing for problems",
+  waiting: "waiting to start observing",
+};
+/**
+ * What a running version says besides "running": devices not delivering, and
+ * a canary rollout of it with what it is doing. Each note links to the page
+ * that explains it.
+ */
+export function runningNotes(row: OverviewRunning) {
+  const notes: { text: string; tone: "danger" | "info"; href: string }[] = [];
+  if (row.not_delivering > 0)
+    notes.push({
+      text: `${row.not_delivering.toLocaleString()} not delivering`,
+      tone: "danger",
+      href: `#/devices?running=${encodeURIComponent(row.version_id)}&status=degraded`,
+    });
+  const canary = row.canary;
+  if (canary) {
+    const names = canary.device_names;
+    const where =
+      names.length <= 2 && canary.device_count === names.length
+        ? names.join(" and ")
+        : countLabel(canary.device_count, "device");
+    notes.push({
+      text: `canary on ${where} · ${canaryPhases[canary.phase]}`,
+      tone: "info",
+      href: `#/deployments/${encodeURIComponent(canary.deployment_id)}`,
+    });
   }
-  return progress;
+  return notes;
 }
 
 export type ChecklistState = {

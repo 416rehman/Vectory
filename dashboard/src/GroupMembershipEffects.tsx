@@ -1,17 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   withRequestDeadline,
-  type Device,
   type Group,
   type GroupMembershipPreview,
 } from "./api";
-import { Spinner } from "./ui";
+import { Button, Spinner } from "./ui";
+import { setDifference } from "./deviceInventory";
 import {
+  AUTO_PREVIEW,
+  membershipEffects,
   membershipSentence,
   previewBusy,
   previewWithRetries,
+  previewWanted,
 } from "./groupMembership";
+
+/** Devices described one by one before the rest are summed up. */
+const LISTED = 50;
 
 /**
  * What saving this membership edit would change on each added or removed
@@ -20,23 +26,32 @@ import {
 export default function GroupMembershipEffects({
   group,
   ids,
-  devices,
 }: {
   group: Group;
-  ids: string[];
-  devices: Device[];
+  ids: ReadonlySet<string>;
 }) {
   const [preview, setPreview] = useState<GroupMembershipPreview | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
-  const key = [...ids].sort().join(",");
-  const changed =
-    ids.length !== group.device_ids.length ||
-    ids.some((id) => !group.device_ids.includes(id));
+  // The edit is what differs from the saved group: that is what a new preview
+  // waits for, however many devices the group holds.
+  const saved = useMemo(() => new Set(group.device_ids), [group.device_ids]);
+  const { key, changed, count } = useMemo(() => {
+    const { added, removed } = setDifference(ids, saved);
+    return {
+      key: `${added.sort().join(",")}|${removed.sort().join(",")}`,
+      changed: added.length > 0 || removed.length > 0,
+      count: added.length + removed.length,
+    };
+  }, [ids, saved]);
+  // A very large edit waits for a click, for this exact edit.
+  const [asked, setAsked] = useState("");
+  const wanted = previewWanted(count, key, asked);
+  const large = count > AUTO_PREVIEW;
   useEffect(() => {
     setPreview(null);
     setError("");
-    if (!changed || group.revision === undefined) return;
+    if (!wanted || group.revision === undefined) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       setLoading(true);
@@ -51,7 +66,7 @@ export default function GroupMembershipEffects({
                   method: "POST",
                   body: JSON.stringify({
                     group_id: group.id,
-                    device_ids: ids,
+                    device_ids: [...ids],
                     revision: group.revision,
                   }),
                   signal,
@@ -78,10 +93,12 @@ export default function GroupMembershipEffects({
     };
     // The selection key captures every membership change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, group.id, group.revision]);
+  }, [key, wanted, group.id, group.revision]);
   if (!changed) return null;
-  const name = (id: string, fallback: string | null) =>
-    devices.find((device) => device.id === id)?.name || fallback || id;
+  const name = (id: string, fallback: string | null) => fallback || id;
+  // A few devices read one by one; a large edit says what matters (the
+  // devices that change something) and counts the ones that change nothing.
+  const summary = preview ? membershipEffects(preview.devices, LISTED) : null;
   return (
     <section
       className="group-effects"
@@ -89,6 +106,17 @@ export default function GroupMembershipEffects({
       aria-labelledby="group-effects-heading"
     >
       <h4 id="group-effects-heading">What changes when you save</h4>
+      {large && !wanted && (
+        <>
+          <p className="control-muted">
+            This changes {count.toLocaleString()} devices. Saving checks every
+            one of them. A preview asks the server what changes on each.
+          </p>
+          <Button variant="secondary compact" onClick={() => setAsked(key)}>
+            Preview what changes
+          </Button>
+        </>
+      )}
       {loading && !preview && (
         <p className="control-muted" role="status">
           <Spinner /> Checking each device…
@@ -114,17 +142,28 @@ export default function GroupMembershipEffects({
           {blocker.reason}
         </p>
       ))}
-      {preview && (
-        <ul>
-          {preview.devices.map((entry) => (
-            <li key={entry.device_id} data-change={entry.change}>
-              {membershipSentence(
-                entry,
-                name(entry.device_id, entry.device_name),
-              )}
-            </li>
-          ))}
-        </ul>
+      {summary && (
+        <>
+          <ul>
+            {summary.listed.map((entry) => (
+              <li key={entry.device_id} data-change={entry.change}>
+                {membershipSentence(
+                  entry,
+                  name(entry.device_id, entry.device_name),
+                )}
+              </li>
+            ))}
+          </ul>
+          {summary.more > 0 && (
+            <p className="control-muted">
+              And {summary.more.toLocaleString()} more{" "}
+              {summary.more === 1 ? "device changes" : "devices change"}.
+            </p>
+          )}
+          {summary.quietSentence && (
+            <p className="control-muted">{summary.quietSentence}</p>
+          )}
+        </>
       )}
     </section>
   );

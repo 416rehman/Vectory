@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyStepTable,
   countdown,
+  degradedInLanes,
   describeDeployment,
   explainError,
   failedApplyStep,
@@ -10,9 +11,12 @@ import {
   lineageLabel,
   pipelineFixable,
   pickupText,
+  progressLine,
+  progressParts,
   progressSegments,
   releasePlan,
   requestRollbackReview,
+  rolloutProgress,
   takeRollbackReview,
   targetLabel,
   timelineSteps,
@@ -201,6 +205,101 @@ describe("devices that verified but aren't delivering", () => {
   });
 });
 
+describe("one rollout reads the same on every surface", () => {
+  // Three devices took the rollout and all three applied it; one of them
+  // isn't delivering. The Overview and the deployment list get the server's
+  // `degraded` count; the rollout page counts the delivery failures its lanes
+  // list. One state_counts and one degraded count go through both.
+  const stateCounts = { verified_applied: 3 };
+  const lanes = [
+    { state: "degraded", count: 1 },
+    { state: "failed", count: 4 },
+  ];
+  const lanesDegraded = degradedInLanes(lanes.slice(0, 1));
+
+  it("counts devices that aren't delivering out of the applied ones", () => {
+    const overview = rolloutProgress(stateCounts, 1);
+    const page = rolloutProgress(stateCounts, lanesDegraded);
+    expect(page).toEqual(overview);
+    expect(overview).toMatchObject({
+      total: 3,
+      applied: 2,
+      notDelivering: 1,
+      failed: 0,
+      needsCheck: 0,
+    });
+    expect(progressLine(overview)).toBe(
+      "2 of 3 devices applied · 1 not delivering",
+    );
+    expect(progressParts(page)).toEqual({
+      figure: "2 of 3",
+      noun: "devices",
+      notes: ["1 not delivering"],
+    });
+    expect(
+      appliedText({
+        target_count: 3,
+        verified_count: 3,
+        state_counts: stateCounts,
+        rolled_back_by: null,
+        degraded: 1,
+      }),
+    ).toBe("2 of 3 applied · 1 not delivering");
+  });
+
+  it("draws the bar from the same numbers", () => {
+    const { counts } = rolloutProgress(stateCounts, 1);
+    const bar = Object.fromEntries(
+      progressSegments(counts).map((s) => [s.key, s.count]),
+    );
+    expect(bar).toMatchObject({ verified: 2, failed: 1 });
+    // The recorded counts are never changed.
+    expect(stateCounts).toEqual({ verified_applied: 3 });
+  });
+
+  it("keeps not delivering apart from failed applies and devices to check", () => {
+    const progress = rolloutProgress(
+      { verified_applied: 2, failed: 1, verification_unknown: 2, pending: 1 },
+      1,
+    );
+    expect(progress).toMatchObject({
+      total: 6,
+      applied: 1,
+      notDelivering: 1,
+      failed: 1,
+      needsCheck: 2,
+    });
+    expect(progressLine(progress)).toBe(
+      "1 of 6 devices applied · 1 not delivering · 1 failed · 2 need a check",
+    );
+  });
+
+  it("reads a rollout with nothing wrong plainly, in the singular for one device", () => {
+    expect(progressLine(rolloutProgress({ verified_applied: 1 }))).toBe(
+      "1 of 1 device applied",
+    );
+    expect(
+      progressLine(rolloutProgress({ verification_unknown: 1, pending: 1 })),
+    ).toBe("0 of 2 devices applied · 1 needs a check");
+    expect(rolloutProgress({}, 3)).toMatchObject({
+      total: 0,
+      notDelivering: 0,
+    });
+  });
+
+  it("only counts lane failures that are delivery failures", () => {
+    expect(degradedInLanes(lanes)).toBe(1);
+    expect(degradedInLanes([])).toBe(0);
+    expect(
+      degradedInLanes([
+        { state: "degraded", count: 2 },
+        { state: "degraded", count: 1 },
+        { count: 5 },
+      ]),
+    ).toBe(3);
+  });
+});
+
 describe("release plan", () => {
   it("summarizes canary waves with an estimate", () => {
     expect(
@@ -240,6 +339,27 @@ describe("release plan", () => {
         checkInSeconds: 60,
       }).sentence,
     ).toBe("All 3 devices at once · about 2 min at 1 min check-ins");
+    // A large fleet reads with thousands separators, like every other count.
+    expect(
+      releasePlan({
+        kind: "all",
+        devices: 4750,
+        canarySize: 1,
+        batchSize: 1,
+        observeSeconds: 60,
+        checkInSeconds: 60,
+      }).sentence,
+    ).toBe("All 4,750 devices at once · about 2 min at 1 min check-ins");
+    expect(
+      releasePlan({
+        kind: "canary",
+        devices: 4750,
+        canarySize: 10,
+        batchSize: 1500,
+        observeSeconds: 0,
+        checkInSeconds: 60,
+      }).sentence,
+    ).toContain("→ 4 batches of up to 1,500");
     expect(
       releasePlan({
         kind: "canary",

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { configuredChannels } from "./notification-fixtures.mjs";
+import { slimOverview } from "./fleet-replies.mjs";
 
 const dashboard = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(dashboard, "..");
@@ -159,134 +160,164 @@ const fleetActivity = [
     target_name: "Malformed device",
   }),
 ];
-const overview = (extra = {}) => ({
-  devices_total: devices.length,
-  devices_online: 5,
-  configurations_total: 2,
-  deployments_active: 1,
-  issues_open: 2,
-  devices,
-  recent_activity: [
-    activity(20, { action: "login", outcome: "success", target_kind: "user" }),
-  ],
-  devices_managed: 5,
-  devices_on_desired: 3,
-  versions_total: 4,
-  versions: {
-    [version]: {
-      number: 3,
-      configuration_id: pipeline,
-      configuration_name: "Orders",
+// `GET /overview?slim=1`: numbers computed from `fleet` the way the server
+// counts them, plus what the server derives from rollouts and audit rows.
+// The revoked device is left out of every count.
+const overview = (extra = {}, fleet = devices) =>
+  slimOverview(fleet, {
+    configurations_total: 2,
+    deployments_active: 1,
+    issues_open: 2,
+    recent_activity: [
+      activity(20, {
+        action: "login",
+        outcome: "success",
+        target_kind: "user",
+      }),
+    ],
+    devices_managed: 5,
+    devices_on_desired: 3,
+    versions_total: 4,
+    rollouts: [
+      {
+        id: rolloutId,
+        name: null,
+        configuration_id: pipeline,
+        configuration_name: "Orders",
+        version_id: version,
+        version_number: 3,
+        policy: false,
+        status: "active",
+        scheduled_at: null,
+        created_at: ago(300),
+        priority: 100,
+        rollout_kind: "canary",
+        canary_size: 1,
+        batch_size: 2,
+        target_count: 7,
+        state_counts: {
+          verified_applied: 3,
+          written: 1,
+          failed: 1,
+          pending: 2,
+        },
+      },
+      {
+        id: scheduledId,
+        name: null,
+        configuration_id: null,
+        configuration_name: null,
+        version_id: null,
+        version_number: null,
+        policy: true,
+        status: "scheduled",
+        scheduled_at: new Date(now + 3 * 3600 * 1000).toISOString(),
+        created_at: ago(600),
+        priority: 50,
+        rollout_kind: "all",
+        canary_size: null,
+        batch_size: null,
+        target_count: 4,
+        state_counts: {},
+      },
+    ],
+    attention: [
+      {
+        cause: "failed",
+        severity: "danger",
+        count: 1,
+        device_ids: [uuid(5)],
+        device_names: ["edge-lon-01"],
+        version_id: version,
+        version_number: 3,
+        configuration_id: pipeline,
+        configuration_name: "Orders",
+        state: "failed",
+        since: null,
+        reason: 'data_dir "/var/lib/vector/" does not exist',
+      },
+      {
+        cause: "offline",
+        severity: "warning",
+        count: 1,
+        device_ids: [uuid(6)],
+        device_names: ["edge-syd-01"],
+        version_id: null,
+        version_number: null,
+        configuration_id: null,
+        configuration_name: null,
+        state: null,
+        since: ago(7200),
+        reason: null,
+      },
+      {
+        cause: "unmanaged",
+        severity: "neutral",
+        count: 1,
+        device_ids: [uuid(7)],
+        device_names: ["lab-01"],
+        version_id: null,
+        version_number: null,
+        configuration_id: null,
+        configuration_name: null,
+        state: null,
+        since: null,
+        reason: null,
+      },
+    ],
+    fleet_activity: fleetActivity,
+    security_events_hidden: 4,
+    ...extra,
+  });
+// What runs where: a canary of one version with a device not delivering, and
+// a version with a long name that no device reports metrics for.
+const runningRows = () => [
+  {
+    configuration_id: pipeline,
+    configuration_name: "Orders",
+    version_id: version,
+    version: 3,
+    device_count: 3,
+    devices_reporting: 2,
+    groups: [{ id: uuid(60), name: "Edge collectors", device_count: 3 }],
+    more_groups: 0,
+    events_in_per_second: 200.5,
+    events_out_per_second: 190.25,
+    state: "canary",
+    not_delivering: 1,
+    canary: {
+      deployment_id: rolloutId,
+      phase: "measuring",
+      device_count: 1,
+      device_names: ["edge-nyc-02"],
     },
   },
-  rollouts: [
-    {
-      id: rolloutId,
-      name: null,
-      configuration_id: pipeline,
-      configuration_name: "Orders",
-      version_id: version,
-      version_number: 3,
-      policy: false,
-      status: "active",
-      scheduled_at: null,
-      created_at: ago(300),
-      priority: 100,
-      rollout_kind: "canary",
-      canary_size: 1,
-      batch_size: 2,
-      target_count: 7,
-      state_counts: {
-        verified_applied: 3,
-        written: 1,
-        failed: 1,
-        pending: 2,
-      },
-    },
-    {
-      id: scheduledId,
-      name: null,
-      configuration_id: null,
-      configuration_name: null,
-      version_id: null,
-      version_number: null,
-      policy: true,
-      status: "scheduled",
-      scheduled_at: new Date(now + 3 * 3600 * 1000).toISOString(),
-      created_at: ago(600),
-      priority: 50,
-      rollout_kind: "all",
-      canary_size: null,
-      batch_size: null,
-      target_count: 4,
-      state_counts: {},
-    },
-  ],
-  attention: [
-    {
-      cause: "failed",
-      severity: "danger",
-      count: 1,
-      device_ids: [uuid(5)],
-      device_names: ["edge-lon-01"],
-      version_id: version,
-      version_number: 3,
-      configuration_id: pipeline,
-      configuration_name: "Orders",
-      state: "failed",
-      since: null,
-      reason: 'data_dir "/var/lib/vector/" does not exist',
-    },
-    {
-      cause: "offline",
-      severity: "warning",
-      count: 1,
-      device_ids: [uuid(6)],
-      device_names: ["edge-syd-01"],
-      version_id: null,
-      version_number: null,
-      configuration_id: null,
-      configuration_name: null,
-      state: null,
-      since: ago(7200),
-      reason: null,
-    },
-    {
-      cause: "unmanaged",
-      severity: "neutral",
-      count: 1,
-      device_ids: [uuid(7)],
-      device_names: ["lab-01"],
-      version_id: null,
-      version_number: null,
-      configuration_id: null,
-      configuration_name: null,
-      state: null,
-      since: null,
-      reason: null,
-    },
-  ],
-  fleet_activity: fleetActivity,
-  security_events_hidden: 4,
-  ...extra,
-});
-const empty = () => ({
-  devices_total: 0,
-  devices_online: 0,
-  configurations_total: 0,
-  deployments_active: 0,
-  issues_open: 0,
-  devices: [],
-  recent_activity: [],
-  devices_managed: 0,
-  devices_on_desired: 0,
-  versions_total: 0,
-  versions: {},
-  rollouts: [],
-  attention: [],
-  fleet_activity: [],
-  security_events_hidden: 1,
-});
+  {
+    configuration_id: uuid(61),
+    configuration_name:
+      "Regional access log enrichment and delivery for the whole European edge fleet",
+    version_id: uuid(62),
+    version: 12,
+    device_count: 2,
+    devices_reporting: 0,
+    groups: [
+      { id: uuid(63), name: "Web tier", device_count: 4 },
+      { id: uuid(64), name: "Edge collectors", device_count: 3 },
+    ],
+    more_groups: 2,
+    events_in_per_second: null,
+    events_out_per_second: null,
+    state: "running",
+    not_delivering: 0,
+    canary: null,
+  },
+];
+const empty = () =>
+  slimOverview([], {
+    devices_managed: 0,
+    devices_on_desired: 0,
+    security_events_hidden: 1,
+  });
 const series = Array.from({ length: 30 }, (_, index) => ({
   bucket: index,
   at: new Date(now - (29 - index) * 60000).toISOString(),
@@ -516,16 +547,168 @@ try {
       await expect(
         rollouts.nth(0).locator(".overview-rollout-meta"),
       ).toHaveText("3 of 7 devices applied · 1 failed");
+      // The bar is the one the rollout page and the deployment list draw.
       await expect(
-        rollouts.nth(0).locator(".overview-rollout-bar"),
+        rollouts.nth(0).locator(".rollout-bar-track"),
       ).toHaveAttribute(
         "aria-label",
-        "7 devices: 3 applied, 1 applying, 1 failed, 2 waiting",
+        "Device progress: 3 applied, 1 applying, 2 queued, 1 failed",
       );
       await expect(rollouts.nth(1)).toContainText("Agent settings");
       await expect(
         rollouts.nth(1).locator(".overview-rollout-meta"),
       ).toContainText(/Starts in (2h 5\dm|3h)/);
+      await context.close();
+    },
+  );
+  await check(
+    "A rollout reads the same on the Overview as on its own page: applied devices that aren't delivering are named apart",
+    async () => {
+      const base = overview();
+      const rollouts = [
+        {
+          ...base.rollouts[0],
+          target_count: 3,
+          state_counts: { verified_applied: 3 },
+          degraded: 1,
+        },
+      ];
+      const { context, page } = await open({
+        overview: { ...base, rollouts },
+      });
+      const item = page.locator(".overview-rollout-item").first();
+      await expect(item.locator(".overview-rollout-meta")).toHaveText(
+        "2 of 3 devices applied · 1 not delivering",
+      );
+      await expect(item.locator(".rollout-bar-track")).toHaveAttribute(
+        "aria-label",
+        "Device progress: 2 applied, 1 failed",
+      );
+      await context.close();
+    },
+  );
+  await check(
+    "Running now lists each pipeline version by devices, groups, rates and what it is doing, above Rollouts",
+    async () => {
+      const { context, page } = await open({
+        overview: overview({ running: runningRows(), running_total: 5 }),
+      });
+      const card = page.locator(".running-now");
+      await expect(card).toBeVisible();
+      // Above Rollouts, in the same column.
+      const headings = await page
+        .locator(".overview-column")
+        .nth(1)
+        .locator("h2")
+        .allTextContents();
+      expect(headings.slice(0, 2)).toEqual(["Running now", "Rollouts"]);
+      const rows = card.locator(".overview-running-item");
+      await expect(rows).toHaveCount(2);
+      const first = rows.nth(0);
+      await expect(
+        first.getByRole("link", { name: "Orders", exact: true }),
+      ).toHaveAttribute("href", `#/configurations/${pipeline}`);
+      await expect(first.locator(".overview-running-version")).toHaveText("v3");
+      await expect(first.locator(".overview-running-rate")).toContainText(
+        "201 → 190/s",
+      );
+      // The count leads to those devices; each group chip leads to the
+      // devices of that group that run this version.
+      await expect(
+        first.getByRole("link", { name: "3 devices", exact: true }),
+      ).toHaveAttribute("href", `#/devices?running=${version}`);
+      const chip = first.locator(".overview-running-group");
+      await expect(chip).toHaveCount(1);
+      await expect(chip).toContainText("Edge collectors");
+      // The count is read out with its unit, not as a bare number.
+      await expect(chip).toHaveAccessibleName("Edge collectors, 3 devices");
+      await expect(chip).toHaveAttribute(
+        "href",
+        `#/devices?running=${version}&group=${uuid(60)}`,
+      );
+      await expect(
+        first.getByRole("link", { name: "1 not delivering", exact: true }),
+      ).toHaveAttribute("href", `#/devices?running=${version}&status=degraded`);
+      await expect(
+        first.getByRole("link", {
+          name: "canary on edge-nyc-02 · measuring delivery",
+          exact: true,
+        }),
+      ).toHaveAttribute("href", `#/deployments/${rolloutId}`);
+      // A version no device reports metrics for says so; it is never a zero.
+      const second = rows.nth(1);
+      await expect(second.locator(".overview-running-rate")).toHaveText(
+        "No metrics yet",
+      );
+      await expect(second.locator(".overview-running-group")).toHaveText([
+        "Web tier4",
+        "Edge collectors3",
+        "and 2 more",
+      ]);
+      await expect(second.locator("a.overview-running-group")).toHaveCount(2);
+      await expect(
+        second.locator("a.overview-running-group").first(),
+      ).toHaveAccessibleName("Web tier, 4 devices");
+      await expect(card).toContainText("Showing 2 of 5 pipeline versions.");
+      await context.close();
+    },
+  );
+  await check(
+    "Running now with nothing running says how to change that, is left out without devices, and wraps long names on a phone",
+    async () => {
+      let { context, page } = await open({
+        overview: overview({ running: [], running_total: 0 }),
+      });
+      const card = page.locator(".running-now");
+      await expect(card).toContainText(
+        "Nothing is running yet. Deploy a pipeline to a device.",
+      );
+      await expect(
+        card.getByRole("link", { name: "Deploy a pipeline", exact: true }),
+      ).toHaveAttribute("href", "#/configurations");
+      await context.close();
+      // No devices at all: nothing to say about what runs where.
+      ({ context, page } = await open({ overview: empty() }));
+      await expect(page.locator(".overview-checklist")).toBeVisible();
+      await expect(page.locator(".running-now")).toHaveCount(0);
+      await context.close();
+      // A phone reads the whole name, stacked above its rate.
+      ({ context, page } = await open({
+        overview: overview({ running: runningRows(), running_total: 2 }),
+      }));
+      await page.setViewportSize({ width: 390, height: 900 });
+      const name = page.locator(".running-now .overview-running-name").nth(1);
+      await expect(name).toContainText("European edge fleet");
+      expect(
+        await name.evaluate((node) => node.scrollWidth <= node.clientWidth),
+        "the pipeline name isn't cut off",
+      ).toBe(true);
+      const lines = await name.evaluate(
+        (node) =>
+          node.getBoundingClientRect().height /
+          parseFloat(getComputedStyle(node).lineHeight),
+      );
+      expect(lines, "a long name wraps").toBeGreaterThan(1.5);
+      const rate = page.locator(".running-now .overview-running-rate").nth(1);
+      const nameBox = await name.boundingBox();
+      const rateBox = await rate.boundingBox();
+      expect(rateBox.y, "the rate sits under the name").toBeGreaterThanOrEqual(
+        nameBox.y + nameBox.height - 1,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((value) => {
+          document.documentElement.dataset.theme = value;
+        }, theme);
+        await page.locator(".running-now").screenshot({
+          path: resolve(output, `running-now-390-${theme}.png`),
+          animations: "disabled",
+        });
+      }
       await context.close();
     },
   );
@@ -848,7 +1031,7 @@ try {
         telemetry_enabled: false,
       };
       ({ context, page } = await open({
-        overview: overview({ devices: silent }),
+        overview: overview({}, silent),
       }));
       const howTo = page.locator(".overview-throughput-howto");
       await expect(howTo).toContainText("No device is reporting metrics");
@@ -948,7 +1131,9 @@ try {
   await check(
     "Desktop and mobile Overview stay readable and accessible in both themes",
     async () => {
-      const { context, page } = await open();
+      const { context, page } = await open({
+        overview: overview({ running: runningRows(), running_total: 2 }),
+      });
       for (const width of [1280, 390]) {
         await page.setViewportSize({
           width,
@@ -989,6 +1174,15 @@ try {
   expect(errors).toEqual([]);
   expect(unexpected).toEqual([]);
   expect(requests.every((request) => request.method === "GET")).toBe(true);
+  // The Overview reads the fleet as numbers, never as a row per device.
+  expect(
+    requests
+      .filter((request) => request.path.startsWith("/overview"))
+      .every((request) => request.path === "/overview?slim=1"),
+  ).toBe(true);
+  expect(
+    requests.some((request) => ["/devices", "/groups"].includes(request.path)),
+  ).toBe(false);
 } catch (error) {
   failure = error;
   console.error(error);

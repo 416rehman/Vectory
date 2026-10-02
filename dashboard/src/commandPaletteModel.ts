@@ -15,6 +15,12 @@ export type PaletteEntry = {
   title: string;
   subtitle?: string;
   keywords?: string;
+  /**
+   * The server already matched this entry to the query (on fields the entry
+   * doesn't show, such as a device's pipeline), so the text match only orders
+   * and highlights it.
+   */
+  matched?: boolean;
 };
 export type Range = [start: number, end: number];
 export type Match = { score: number; ranges: Range[] };
@@ -82,6 +88,8 @@ export function matchEntry(query: string, entry: PaletteEntry): Match | null {
   if (!words.length) return { score: 0, ranges: [] };
   const whole = fuzzyMatch(query, entry.title);
   if (whole && whole.score >= 700) return whole;
+  // Below every match of the title, but never filtered out.
+  if (entry.matched) return whole ?? { score: 100, ranges: [] };
   const haystack =
     `${entry.subtitle || ""} ${entry.keywords || ""}`.toLocaleLowerCase();
   let score = 0;
@@ -165,6 +173,26 @@ export function rankEntries<T extends PaletteEntry>(
         .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
         .slice(0, perKind),
     }));
+}
+
+/**
+ * What a device row says under its name: platform, then the pipeline it is
+ * assigned, so a match on the pipeline explains itself.
+ */
+export function deviceSubtitle(device: {
+  os?: string;
+  arch?: string;
+  desired_version?: {
+    number?: number | null;
+    configuration_name?: string | null;
+  } | null;
+}) {
+  const platform = [device.os, device.arch].filter(Boolean).join(" / ");
+  const version = device.desired_version;
+  const pipeline = version?.configuration_name
+    ? `${version.configuration_name}${version.number ? ` v${version.number}` : ""}`
+    : "";
+  return [platform, pipeline].filter(Boolean).join(" · ") || "Device";
 }
 
 /** Split a title into plain and highlighted parts for rendering. */

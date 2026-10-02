@@ -23,6 +23,19 @@ export function devicesText(count: number) {
   return countLabel(count, "device");
 }
 
+/** Devices named in a sentence: the first few, then how many more. */
+export function namedDevices(
+  ids: readonly string[],
+  name: (id: string) => string,
+  shown = 25,
+) {
+  const names = ids.slice(0, shown).map(name);
+  const more = ids.length - names.length;
+  return more > 0
+    ? `${names.join(", ")}, and ${more.toLocaleString()} more`
+    : names.join(", ");
+}
+
 /** "Web access logs v3", or "version 3" when the pipeline name is unknown. */
 export function requestedName(change: RequestedChange) {
   if (change.kind === "policy")

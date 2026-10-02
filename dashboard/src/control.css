@@ -285,26 +285,6 @@
 .control-note p:last-child {
   margin-bottom: 0;
 }
-.target-device-list {
-  max-height: 310px;
-  overflow: auto;
-}
-.target-device-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding-top: 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.target-device-pagination > div {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 .target-option {
   display: flex;
   gap: 12px;
