@@ -1776,21 +1776,31 @@ function RolloutPage({
             tone: "info",
           })
       : undefined;
+  // A dialog the palette opened rests on its safe choice, so an Enter pressed
+  // again right after the palette's own cannot confirm what it opened.
+  const [openedByPalette, setOpenedByPalette] = useState(false);
+  useEffect(() => {
+    if (!action) setOpenedByPalette(false);
+  }, [action]);
+  const askFirst = (key: string) => () => {
+    setOpenedByPalette(true);
+    stopRun(key)?.(null);
+  };
   useCommand(
     commandFor("rollout.pause", id),
-    () => stopRun("pause")?.(null),
+    askFirst("pause"),
     !!stopRun("pause"),
     refused("Pause"),
   );
   useCommand(
     commandFor("rollout.cancel", id),
-    () => stopRun("cancel")?.(null),
+    askFirst("cancel"),
     !!stopRun("cancel"),
     refused("Cancel"),
   );
   useCommand(
     commandFor("rollout.rollback", id),
-    () => stopRun("rollback")?.(null),
+    askFirst("rollback"),
     !!stopRun("rollback"),
     refused("Roll back"),
   );
@@ -2258,6 +2268,7 @@ function RolloutPage({
               : undefined
           }
           label={actionLabel}
+          safeFocus={openedByPalette}
           returnFocusRef={actionReturnFocus}
           onClose={closeAction}
           onConfirm={perform}
@@ -2572,6 +2583,7 @@ function ActionDialog({
   revision,
   onCancelFirst,
   label,
+  safeFocus,
   returnFocusRef,
   onClose,
   onConfirm,
@@ -2595,11 +2607,14 @@ function ActionDialog({
   revision: number;
   onCancelFirst?: () => void;
   label(name: string): string;
+  /** Open on the choice that changes nothing, not on the confirmation. */
+  safeFocus: boolean;
   returnFocusRef: React.RefObject<HTMLElement | null>;
   onClose(): void;
   onConfirm(): void;
   onRemove(): void;
 }) {
+  const keep = useRef<HTMLButtonElement>(null);
   const rollback = action === "rollback";
   const empty =
     rollback && !!rollbackPreview && nothingToRollBackTo(rollbackPreview);
@@ -2611,6 +2626,7 @@ function ActionDialog({
       onClose={onClose}
       returnFocusRef={returnFocusRef}
       title={rollback ? "Review rollback" : label(action)}
+      initialFocus={safeFocus ? keep : undefined}
       wide={rollback}
       className={rollback ? "rollback-review-modal" : ""}
       description={
@@ -2678,7 +2694,12 @@ function ActionDialog({
         )}
       </div>
       <div className="modal-footer">
-        <Button variant="secondary" disabled={committing} onClick={onClose}>
+        <Button
+          ref={keep}
+          variant="secondary"
+          disabled={committing}
+          onClick={onClose}
+        >
           {uncertain ? "Close" : "Keep current state"}
         </Button>
         {empty ? (
