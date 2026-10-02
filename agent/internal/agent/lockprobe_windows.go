@@ -2,10 +2,33 @@
 
 package agent
 
-import "golang.org/x/sys/windows"
+import (
+	"errors"
+	"os"
+	"path/filepath"
 
-// On Windows the Service Control Manager reports whether the agent runs.
-func agentLockHeld(dir string) bool { return false }
+	"golang.org/x/sys/windows"
+)
+
+// agentLockHeld reports whether an agent process holds the state lock. The
+// agent locks the first byte of agent.lock exclusively (lockAgentFile), so a
+// shared lock on it fails while one runs. The Service Control Manager reports a
+// registered service; this finds an agent that runs without one. It never
+// creates the lock file, and it releases at once what it takes.
+func agentLockHeld(dir string) bool {
+	f, err := os.OpenFile(filepath.Join(dir, "agent.lock"), os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var o windows.Overlapped
+	handle := windows.Handle(f.Fd())
+	if err := windows.LockFileEx(handle, windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &o); err != nil {
+		return errors.Is(err, windows.ERROR_LOCK_VIOLATION)
+	}
+	_ = windows.UnlockFileEx(handle, 0, 1, 0, &o)
+	return false
+}
 
 // processAlive reports whether pid is a running process.
 func processAlive(pid int) bool {
