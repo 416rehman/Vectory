@@ -24,6 +24,11 @@
 //!   and answers those whose state really changed. A preview that rolls its
 //!   simulated changes back wakes nobody, and a burst of changes wakes each
 //!   waiter once.
+//! - A committed device check asks the devices it is waiting for (`ask`):
+//!   their waits answer `changed:true` whatever their generations say, because
+//!   a check moves none and the answer is only the hint to check in, after
+//!   which the signed manifest carries the check. A check that is refused, or
+//!   addresses no device that is waiting, wakes nobody.
 //! - Wake-ups are paced: up to `Options::burst` answer at once, then
 //!   `Options::rate` a second, oldest first, so an all-at-once rollout to a
 //!   large fleet can't send every agent's heartbeat to the writer at the same
