@@ -225,6 +225,33 @@ Credentials stay on the devices, so a credential field holds a secret name, neve
 
 See [Keep credentials on the device](resources.md#keep-credentials-on-the-device).
 
+## A device check fails or doesn't answer
+
+[**Check on devices**](deployments.md#check-on-devices) asks each target device to check a version on its own host. A check never changes the device, so nothing needs undoing. Each row says one of these things:
+
+| Row says | What happened | Fix |
+| --- | --- | --- |
+| **Needs a secret**: Secret `API_KEY` isn't bound on this device (finding `SECRET_BINDING_MISSING`) | The version names a device secret, and this host has no file bound to it. | Run the commands on the row on that host, with the agent stopped (**Copy** takes them), then check again. See [Keep credentials on the device](resources.md#keep-credentials-on-the-device). |
+| **Needs a fix** with `SECRET_FILE_UNREADABLE` | The secret is bound, but its file is missing, empty or readable by other accounts. | Run `vectory configure-secrets` on the host. It prints the exact fix. |
+| **Needs a fix** with `CAPABILITY_DENIED` | The host's restricted mode doesn't allow a destination, listener or path the version uses. | Have the host operator run the `vectory allow` command the finding names, or [switch the host to full mode](agents.md#switch-between-restricted-and-full-mode). |
+| **Needs a fix** with `VECTOR_TIMEOUT` | Vector didn't finish validating, so the version isn't treated as valid. | A destination whose health check never answers is the usual cause. Check them from this device, then check again. |
+| **Needs a fix** with another Vector finding | Vector rejected the configuration on this host, or a test failed. | Read the first finding on the row: it names the step and the field, and often the fix. The [findings above](#a-pipeline-is-rejected-or-rolled-back) explain the common ones. |
+| **Needs a fix** with `ADOPTION_REQUIRED` | The agent hasn't adopted a Vector binary, so it can't check. | Run `vectory setup`, or `vectory install ... --adopt`, on the host. |
+| **Needs a fix** with `DISK_FULL` or `CHECK_UNAVAILABLE` | The agent couldn't stage the version on this host. | Free space on the disk the finding names, or run `vectory doctor` on the host, then check again. |
+| **Needs a fix** with `DOWNLOAD_INTERRUPTED`, `DOWNLOAD_TOO_LARGE` or `ARTIFACT_MISMATCH` | The device couldn't fetch the version, or what it got wasn't what was signed. | Check connectivity, then check again. A version above the agent's size limit needs a smaller one. |
+| **Needs a fix** with `CHECK_EXPIRED` | The server stopped offering the version to this device: the check ran out, or a newer check for this device replaced it. | Check again. Only the newest check for a device counts. |
+| **Offline: not checked** | The device hasn't checked in for three of its own intervals, so it wasn't asked. | Start its agent or restore its network, then choose **Retry**. See [A device is offline or never connects](#a-device-is-offline-or-never-connects). |
+| **No answer in time** | It didn't answer within 10 minutes (its agent stopped, it can't reach the server, or an apply on it ran long), or a newer check for the same device replaced this one. | Check that its agent runs and checks in, then choose **Retry**. |
+| **Older agent: can't check** | The agent never announced that it can check versions. | Choose **Upgrade agent** on its device page, then **Retry**. See [Upgrade the agent](agents.md#upgrade-the-agent). |
+| **These results are for the previous selection** | You changed the devices or their values after the check. | Choose **Check on devices** again. |
+| **Checks are limited to a few a minute. Try again in 40 s.** | Six checks a minute are allowed for each person. | Wait for the time the button names. |
+| **Too many checks are waiting for devices to answer.** | The server holds candidates for devices that haven't answered yet, up to a limit. | Try again in a few minutes. |
+| **These results are no longer available.** | Vectory keeps results for 24 hours, and only the person who asked, or an administrator, can read them. | Choose **Check on devices** again. |
+| **Your role can't run a check.** | Checks need the Operator or Administrator role. | Ask an operator or administrator. |
+| **Vectory didn't answer, so the check may not have started.** | The request or its answer was lost on the way. | Try again. A newer check for a device replaces an older one. |
+
+A check passing is the device's own report that validation found no error. It isn't evidence that the version is applied or healthy: only **Applied** says that.
+
 ## A deployment is pending, paused or conflicting
 
 | Status | Check |

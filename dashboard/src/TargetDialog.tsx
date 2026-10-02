@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { Button, CopyButton, ErrorBox, Field, Modal, useResource } from "./ui";
 import DocLink from "./DocLink";
+import DeviceCheck from "./DeviceCheck";
 import DevicePicker from "./DevicePicker";
 import { readMatchingIds } from "./deviceInventory";
 import RunningSelection from "./RunningSelection";
@@ -1864,6 +1865,18 @@ export default function TargetDialog({
                 </div>
               )}
             </dl>
+            {version && (
+              <DeviceCheck
+                request={preview.request}
+                devices={preview.devices}
+                artifacts={preview.artifact_previews}
+                testCount={
+                  Array.isArray(version.config?.tests)
+                    ? version.config.tests.length
+                    : 0
+                }
+              />
+            )}
             {preview.canary && (
               <CanaryPicker
                 devices={preview.devices}

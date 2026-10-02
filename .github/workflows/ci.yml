@@ -1191,6 +1191,12 @@ jobs:
         run: node tests/toast-placement-browser.mjs
         env:
           VECTORY_TOAST_PLACEMENT_OUTPUT: artifacts/browsers/toast-placement
+      - name: Check that the deploy review checks devices, in every state, without blocking Deploy
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        run: node tests/device-check-browser.mjs
+        env:
+          VECTORY_DEVICE_CHECK_OUTPUT: artifacts/browsers/device-check
       # Last and independent, so a stale table never hides a harness result.
       - name: Check docs/internal/CI.md lists every job of every workflow
         if: ${{ !cancelled() }}
