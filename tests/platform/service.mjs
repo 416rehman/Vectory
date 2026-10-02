@@ -625,9 +625,14 @@ async function lifecycle(evidence) {
       // The server's record is the baseline; the agent's own status, where an
       // administrator can read it, must agree.
       const row = await device();
-      if (row.apply_state !== "verified_applied" || !row.actual_sha256)
+      // The apply phase removes its assignments at the end: the device is
+      // unmanaged and keeps running the pipeline it last verified.
+      if (
+        !["verified_applied", "unmanaged"].includes(row.apply_state) ||
+        !row.actual_sha256
+      )
         throw new Error(
-          `No pipeline is verified on the device:\n${JSON.stringify(row)}`,
+          `No pipeline runs on the device:\n${JSON.stringify(row)}`,
         );
       const view = tryStatus(context);
       evidence.observe("status_readable", Boolean(view));
@@ -787,17 +792,23 @@ async function lifecycle(evidence) {
 async function uninstall(evidence) {
   const context = readContext();
   const adapter = adapterFor(context);
-  await evidence.step("service-uninstall removes the registration", () => {
+  await evidence.step("service-uninstall removes the registration", async () => {
     // Windows refuses to remove a running service; the other managers stop it.
     if (windows) adapter.stop();
     run(context.agent, ["service-uninstall"], {
       elevated: true,
       timeoutMs: 400000,
     });
-    if (!adapter.unregistered())
-      throw new Error(
-        `The manager still knows the service:\n${adapter.describe()}`,
-      );
+    // launchd forgets a job once its process has gone, and the agent takes up to
+    // its stop timeout to let Vector drain: wait for the manager to let go.
+    await until(
+      "the manager no longer knows the service",
+      () => adapter.unregistered(),
+      {
+        timeoutMs: 120000,
+        describe: () => `The manager still knows the service:\n${adapter.describe()}`,
+      },
+    );
     evidence.observe("registration_after", adapter.artifacts());
   });
   await evidence.step("Nothing the agent started is left running", async () => {

@@ -39,10 +39,15 @@ export function bind(context, api) {
   /** The server's record of the device. */
   const device = () => api(`/devices/${context.deviceId}`);
 
+  // The apply phase removes its assignments at the end, so the device is
+  // unmanaged and keeps running the pipeline it last verified.
+  const runsItsPipeline = (row) =>
+    ["verified_applied", "unmanaged"].includes(row.apply_state) &&
+    Boolean(row.actual_sha256);
   /**
    * Waits until the service is back: the manager reports it running, the server
-   * saw a check-in at or after `sinceMs` and shows the pipeline verified with
-   * its last known good digest (the managed file as the agent reports it), is
+   * saw a check-in at or after `sinceMs` and shows the pipeline verified (or kept after its
+   * assignments were removed) with its last known good digest (the managed file as the agent reports it), is
    * not told Vector stopped, exactly one supervisor and one Vector run and none
    * is among `oldVectors`. When the agent's local status is readable it must
    * agree: the same last known good, and no drift.
@@ -56,7 +61,7 @@ export function bind(context, api) {
         const { vectors, supervisors } = agentProcesses();
         if (!(
           checkedIn(row, sinceMs) &&
-          row.apply_state === "verified_applied" &&
+          runsItsPipeline(row) &&
           row.actual_sha256 === lastGood &&
           row.vector_running !== false &&
           vectors.length === 1 &&
