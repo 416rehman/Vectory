@@ -9,7 +9,11 @@ import { ErrorBox, Spinner, StatusBadge, useResource } from "./ui";
 import { deviceDisplayStatus, statusLabel } from "./status";
 import { relativeTime } from "./time";
 import { deploymentRoute } from "./deploymentRouting";
-import { appliedText, describeDeployment, interval } from "./deploymentStatus";
+import {
+  deploymentCounts,
+  describeDeployment,
+  interval,
+} from "./deploymentStatus";
 import { runningName } from "./deploymentReviewModel";
 import { healthOrder, healthStates } from "./overviewModel";
 import { useInventory } from "./useInventory";
@@ -216,7 +220,8 @@ export default function GroupOverview({
                     <ArrowRight size={13} aria-hidden="true" />
                   </a>
                   <span className="control-muted">
-                    {appliedText(d)} · {relativeTime(d.created_at)}
+                    {deploymentCounts(d).sentence} ·{" "}
+                    {relativeTime(d.created_at)}
                   </span>
                   <StatusBadge
                     domain="deployment"

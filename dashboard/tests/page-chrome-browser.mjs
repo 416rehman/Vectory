@@ -183,6 +183,39 @@ try {
   }
   results.push("Pages fit a phone with the phone title size");
   {
+    // Tabs that don't fit a phone fade where they are hidden, and a chevron
+    // says more wait there; tabs that fit show neither.
+    const { context, page } = await open(360);
+    await page.goto(`${origin}#/deployments`);
+    const nav = page.getByRole("navigation", { name: "Activity sections" });
+    const strip = nav.locator(".page-tabs-strip");
+    await expect(nav.getByRole("link", { name: "Audit log" })).toBeAttached();
+    await expect(nav).toHaveAttribute("data-hidden-after", "true");
+    await expect(nav).not.toHaveAttribute("data-hidden-before", /.*/);
+    await expect(nav.locator(".page-tabs-more")).toBeVisible();
+    expect(
+      await strip.evaluate((node) => getComputedStyle(node).maskImage),
+      "the strip fades at its hidden end",
+    ).toContain("linear-gradient");
+    await strip.evaluate((node) => {
+      node.scrollLeft = node.scrollWidth;
+    });
+    await expect(nav).toHaveAttribute("data-hidden-before", "true");
+    await expect(nav).not.toHaveAttribute("data-hidden-after", /.*/);
+    await expect(nav.locator(".page-tabs-more")).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(nav).not.toHaveAttribute("data-hidden-before", /.*/);
+    await expect(nav).not.toHaveAttribute("data-hidden-after", /.*/);
+    expect(
+      await strip.evaluate((node) => getComputedStyle(node).maskImage),
+      "a strip that fits has no fade",
+    ).toBe("none");
+    await context.close();
+  }
+  results.push(
+    "A tab strip that scrolls fades where tabs are hidden and shows a chevron; one that fits shows neither",
+  );
+  {
     // A dialog hands focus back to the button that opened it, including one
     // whose first field takes focus on open (Create pipeline used to drop it
     // on the page).

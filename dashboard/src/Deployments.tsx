@@ -88,6 +88,7 @@ import {
 import {
   deploymentLifecycle,
   describeDeployment,
+  deploymentCounts,
   explainError,
   exactTime,
   failureText,
@@ -96,15 +97,14 @@ import {
   degradedInLanes,
   pipelineFixable,
   pickupText,
-  progressParts,
   progressSegments,
   rolloutProgress,
   takeRollbackReview,
   statusFilters,
   targetFilterStates,
-  appliedText,
   targetLabel,
   targetState,
+  type DeploymentCounts,
 } from "./deploymentStatus";
 import { relativeTime } from "./time";
 import { useHashQuery } from "./urlState";
@@ -180,44 +180,54 @@ function DeploymentStatusCell({ d }: { d: DeploymentSummary }) {
     </span>
   );
 }
+/**
+ * A deployment's counts: the one sentence the list, the palette, the Overview
+ * and the rollout page share (see `deploymentCounts`), with a failure written
+ * in bold so a row that needs a look reads that way.
+ */
+function CountsLine({
+  counts,
+  strong = false,
+}: {
+  counts: DeploymentCounts;
+  /** Set the figure in bold, as the rollout page's heading does. */
+  strong?: boolean;
+}) {
+  return (
+    <>
+      {counts.figure && (
+        <>{strong ? <strong>{counts.figure}</strong> : counts.figure} </>
+      )}
+      {counts.base}
+      {counts.notes.map((note) => (
+        <span
+          key={note.key}
+          className={
+            note.key === "failed"
+              ? "rollout-count-note deployment-failed-count"
+              : "rollout-count-note"
+          }
+        >
+          {" "}
+          {"·"} {note.text}
+        </span>
+      ))}
+    </>
+  );
+}
 function DevicesCell({ d }: { d: DeploymentSummary }) {
   const stopped = !isLive(d.status);
-  const failed =
-    progressSegments(d.state_counts).find((s) => s.key === "failed")?.count ||
-    0;
-  const removed = d.state_counts.removed || 0;
-  const current = d.target_count - removed;
-  const replaced = d.replaced_by || [];
-  const moved = replaced.reduce((sum, entry) => sum + entry.device_count, 0);
-  const latest = replaced[replaced.length - 1];
-  if (!current && d.target_count)
-    return (
-      <div className="deployment-devices-cell">
-        <span className="control-muted">
-          {moved
-            ? `${moved} ${moved === 1 ? "device" : "devices"} moved to ${lineageLabel(latest || {}, d.configuration_name, "a newer version")}`
-            : `${removed} ${removed === 1 ? "device" : "devices"} no longer targeted`}
-        </span>
-      </div>
-    );
-  if (d.rolled_back_by)
-    return (
-      <div className="deployment-devices-cell">
-        <span className="control-muted">{appliedText(d)}</span>
-      </div>
-    );
+  const counts = deploymentCounts(d);
   return (
     <div className="deployment-devices-cell">
-      <span>
-        {appliedText(d)}
-        {failed > 0 && (
-          <strong className="deployment-failed-count">
-            {" "}
-            · {failed} failed
-          </strong>
-        )}
+      <span
+        className={
+          d.rolled_back_by || !counts.following ? "control-muted" : undefined
+        }
+      >
+        <CountsLine counts={counts} />
       </span>
-      {current > 0 && (
+      {counts.following > 0 && !d.rolled_back_by && (
         <ProgressBar
           counts={rolloutProgress(d.state_counts, d.degraded).counts}
           stopped={stopped}
@@ -582,7 +592,7 @@ export function Deployments({
               }
               mobileCard={(d) => {
                 const display = describeDeployment(d);
-                const current = d.target_count - (d.state_counts.removed || 0);
+                const counts = deploymentCounts(d);
                 return {
                   title: changeLink(d),
                   status: (
@@ -594,7 +604,7 @@ export function Deployments({
                   ),
                   meta: [
                     subtitle(d),
-                    current > 0 ? appliedText(d) : null,
+                    counts.following > 0 ? counts.sentence : null,
                     display.note,
                   ],
                 };
@@ -771,6 +781,7 @@ function DeviceResults({
   revision,
   live,
   stages,
+  findings,
   navigate,
   search,
   setSearch,
@@ -782,6 +793,8 @@ function DeviceResults({
   /** Poll every 4 s while the rollout can still move. */
   live: boolean;
   stages: Map<string, string>;
+  /** The leading finding's code for each device in a failure group. */
+  findings: Map<string, string>;
   navigate(path: string): void;
   search: string;
   setSearch(value: string): void;
@@ -896,19 +909,23 @@ function DeviceResults({
               : null
           }
           mobileCard={(t) => ({
-            title: deviceLink(t),
-            status: (
-              <StatusBadge
-                domain="target"
-                value={
-                  t.delivery
-                    ? "degraded"
-                    : targetState(t.state, {
-                        stopped,
-                        replaced: !!t.replaced_by,
-                      })
-                }
-              />
+            // The state sits on the title row, beside the name, so neither the
+            // timeline nor a long name has to make room for it.
+            title: (
+              <span className="rollout-card-title">
+                {deviceLink(t)}
+                <StatusBadge
+                  domain="target"
+                  value={
+                    t.delivery
+                      ? "degraded"
+                      : targetState(t.state, {
+                          stopped,
+                          replaced: !!t.replaced_by,
+                        })
+                  }
+                />
+              </span>
             ),
             meta: [
               stages.get(t.device_id) || null,
@@ -918,14 +935,18 @@ function DeviceResults({
               t.state === "removed" || t.state === "pending" ? null : (
                 <DeviceTimeline key="timeline" target={t} />
               ),
-              <span key="details" className="rollout-mobile-details">
-                <TargetDetails
-                  t={t}
-                  deployment={deployment}
-                  stopped={stopped}
-                  navigate={navigate}
-                />
-              </span>,
+              // Its time is on the timeline already.
+              t.state === "verified_applied" && !t.delivery ? null : (
+                <span key="details" className="rollout-mobile-details">
+                  <TargetDetails
+                    t={t}
+                    finding={findings.get(t.device_id)}
+                    deployment={deployment}
+                    stopped={stopped}
+                    navigate={navigate}
+                  />
+                </span>
+              ),
             ],
           })}
           loading={loading || correcting || query.search !== search.trim()}
@@ -1004,6 +1025,7 @@ function DeviceResults({
               cell: (t) => (
                 <TargetDetails
                   t={t}
+                  finding={findings.get(t.device_id)}
                   deployment={deployment}
                   stopped={stopped}
                   navigate={navigate}
@@ -1034,11 +1056,14 @@ function DeviceResults({
 }
 function TargetDetails({
   t,
+  finding,
   deployment,
   stopped,
   navigate,
 }: {
   t: DeploymentTarget;
+  /** The leading finding's code, when its failure group names one. */
+  finding?: string;
   deployment: DeploymentSummary;
   stopped: boolean;
   navigate(path: string): void;
@@ -1094,7 +1119,7 @@ function TargetDetails({
       : null;
   const explained = explainError(t.error);
   if (t.diagnostic) {
-    const text = failureText(t.diagnostic, t.error);
+    const text = failureText(t.diagnostic, t.error, finding);
     return (
       <span className="rollout-diagnostic">
         <span>{text.reason}</span>
@@ -1607,16 +1632,34 @@ function RolloutPage({
           map.set(device.device_id, laneTitle(lane));
     return map;
   }, [lanes.data]);
+  // A target row carries the agent's text but not its finding's code; the
+  // failure group the device sits in does.
+  const findingByDevice = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const failure of lanes.data?.failures || [])
+      if (failure.code && failure.state !== "degraded")
+        for (const device of failure.device_ids ??
+          failure.devices.map((entry) => entry.device_id))
+          map.set(device, failure.code);
+    return map;
+  }, [lanes.data]);
   const failedCount = deployment
     ? progressSegments(deployment.state_counts).find((s) => s.key === "failed")
         ?.count || 0
     : 0;
   // Devices that verified but aren't delivering read as failed here, as they
-  // do in the stages and failure groups below, and as on the Overview.
+  // do in the stages and failure groups below, and as on the Overview. The
+  // stages say which they are once they load; the summary's count until then.
+  const notDeliveringNow = lanes.data
+    ? degradedInLanes(lanes.data.failures)
+    : deployment?.degraded;
   const progress = rolloutProgress(
     deployment?.state_counts || {},
-    degradedInLanes(lanes.data?.failures || []),
+    notDeliveringNow,
   );
+  const counts = deployment
+    ? deploymentCounts(deployment, { degraded: notDeliveringNow })
+    : null;
   const operate = can(user, "operate") && !error && !!deployment;
   const locked = committing || actionUncertain || checkingStatus;
   const status = deployment?.status || "";
@@ -2061,11 +2104,7 @@ function RolloutPage({
               {currentTargets === 0 && deployment.target_count > 0 ? (
                 <div className="rollout-summary-head">
                   <p>
-                    <strong>
-                      {movedTargets
-                        ? `Replaced on ${movedTargets} ${movedTargets === 1 ? "device" : "devices"}`
-                        : "No devices follow this now"}
-                    </strong>
+                    <strong>{counts?.sentence}</strong>
                   </p>
                   <span className="control-muted">
                     {movedTargets
@@ -2076,14 +2115,7 @@ function RolloutPage({
               ) : (
                 <>
                   <div className="rollout-summary-head">
-                    <p>
-                      <strong>{progressParts(progress).figure}</strong>{" "}
-                      {progressParts(progress).noun} applied
-                      {deployment.rolled_back_by ? " before the rollback" : ""}
-                      {progressParts(progress).notes.map((note) => (
-                        <span key={note}> · {note}</span>
-                      ))}
-                    </p>
+                    <p>{counts && <CountsLine counts={counts} strong />}</p>
                     <span className="control-muted">
                       {deployment.rollout.kind === "canary"
                         ? deployment.rollout.failure_threshold === 0
@@ -2201,6 +2233,7 @@ function RolloutPage({
               revision={revision}
               live={live}
               stages={stageByDevice}
+              findings={findingByDevice}
               navigate={navigate}
               search={deviceSearch}
               setSearch={setDeviceSearch}

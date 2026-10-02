@@ -244,6 +244,217 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* What the line covers, when the device has reported less than the range. */
+.telemetry-span {
+  color: var(--text-subtle);
+  font-weight: 500;
+}
+
+/* Changes on the device: a dot on the chart, its hairline, and its words. The
+   status tokens carry the tone; every use also names the state in words. */
+.telemetry-marker,
+.telemetry-readout-change,
+.telemetry-changes li,
+.telemetry-legend li,
+.telemetry-marker-tip > span {
+  --marker: var(--mark-success);
+}
+:is(
+  .telemetry-marker,
+  .telemetry-readout-change,
+  .telemetry-changes li,
+  .telemetry-legend li,
+  .telemetry-marker-tip > span
+)[data-tone="danger"] {
+  --marker: var(--mark-danger);
+}
+:is(
+  .telemetry-marker,
+  .telemetry-readout-change,
+  .telemetry-changes li,
+  .telemetry-legend li,
+  .telemetry-marker-tip > span
+)[data-tone="warning"] {
+  --marker: var(--mark-warning);
+}
+:is(
+  .telemetry-marker,
+  .telemetry-readout-change,
+  .telemetry-changes li,
+  .telemetry-legend li,
+  .telemetry-marker-tip > span
+)[data-tone="info"] {
+  --marker: var(--mark-info);
+}
+:is(
+  .telemetry-marker,
+  .telemetry-readout-change,
+  .telemetry-changes li,
+  .telemetry-legend li,
+  .telemetry-marker-tip > span
+)[data-tone="neutral"] {
+  --marker: var(--mark-paused);
+}
+.telemetry-marker-key {
+  flex: none;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--marker);
+}
+.telemetry-markers {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 44px;
+  height: 120px;
+  pointer-events: none;
+}
+.telemetry-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  margin-left: -12px;
+  pointer-events: auto;
+}
+.telemetry-marker::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--marker);
+  opacity: 0.55;
+}
+.telemetry-marker-dot {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--marker);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+/* More than one change here: the dot wears a ring. */
+.telemetry-marker[data-many] .telemetry-marker-dot {
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--marker);
+}
+.telemetry-marker-tip {
+  position: absolute;
+  z-index: 3;
+  top: 20px;
+  display: none;
+  gap: 4px;
+  width: max-content;
+  max-width: 260px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  pointer-events: none;
+}
+.telemetry-marker[data-edge="start"] .telemetry-marker-tip {
+  left: 50%;
+  margin-left: -10px;
+}
+.telemetry-marker[data-edge="end"] .telemetry-marker-tip {
+  right: 50%;
+  margin-right: -10px;
+}
+.telemetry-marker:hover .telemetry-marker-tip {
+  display: grid;
+}
+.telemetry-marker-tip > span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.telemetry-marker-tip small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-readout .telemetry-readout-change {
+  gap: 6px;
+  color: var(--text);
+}
+
+/* The list that says what each dot is, newest first. */
+.telemetry-changes {
+  margin: 0 0 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.telemetry-changes h3 {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.telemetry-changes ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.telemetry-changes details ul {
+  margin-top: 6px;
+}
+.telemetry-changes-note {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.telemetry-changes li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+}
+.telemetry-changes li a {
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.telemetry-changes li a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.telemetry-changes time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.telemetry-changes summary {
+  margin-top: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.telemetry-changes + .telemetry-charts {
+  padding-top: 0;
+  border-top: 0;
+}
 .telemetry-note {
   margin: 14px 0 0;
   font-size: 12px;
@@ -280,49 +491,8 @@
   padding-top: 20px;
   border-top: 1px solid var(--line);
 }
-.telemetry-section-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 16px;
-  margin-bottom: 12px;
-}
-.telemetry-section-heading h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-.telemetry-section-heading span {
-  font-size: 12px;
-  color: var(--muted);
-}
-.telemetry-component-table td:not(:first-child),
-.telemetry-component-table th:not(:first-child) {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-.telemetry-component-table th:not(:first-child) .data-table-heading {
-  justify-content: flex-end;
-}
-.telemetry-component-table th:first-child {
-  min-width: 200px;
-}
-.telemetry-kind {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  text-transform: capitalize;
-}
-.telemetry-component-table td strong {
-  font-size: 13px;
-  font-weight: 500;
-}
-.telemetry-outputs {
-  display: block;
-  margin-top: 3px;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: normal;
+.telemetry-change-table {
+  margin-top: 14px;
 }
 .telemetry-samples {
   margin-top: 20px;
@@ -408,6 +578,19 @@
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid var(--line);
+}
+/* Five range buttons are 306 px wide: on the narrowest phones they tighten,
+   and the control never widens the page. */
+@media (max-width: 400px) {
+  .telemetry-controls .segmented {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .telemetry-controls .segmented button {
+    padding: 0 var(--space-1-5);
+    font-size: var(--text-xs);
+  }
 }
 @media (max-width: 700px) {
   .telemetry-controls {

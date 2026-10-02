@@ -27,6 +27,10 @@
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+/* A note after the count stays whole when the line wraps: "· 1 failed". */
+.rollout-count-note {
+  white-space: nowrap;
+}
 .deployment-failed-count {
   color: var(--rollout-danger-ink);
   font-weight: 600;
@@ -511,6 +515,38 @@ a.rollout-fix-link {
     .data-list-meta
     > span:has(> .rollout-mobile-details) {
     flex-basis: 100%;
+  }
+  /* A device's card: its name and state share the title row, and nothing in
+     the card is wider than the card, whatever the name or the reason says. */
+  .deployment-device-results .data-list-title {
+    display: block;
+    overflow: visible;
+  }
+  .rollout-card-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 4px var(--space-2);
+  }
+  /* A short name keeps the state beside it; a name too long for that takes
+     the row and the state drops under it, never off the card. */
+  .rollout-card-title > a {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .rollout-card-title > .status-badge {
+    flex: none;
+    max-width: 100%;
+  }
+  .deployment-device-results .data-list-meta {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .deployment-device-results .data-list-meta > span {
+    min-width: 0;
+    max-width: 100%;
   }
   .rollout-mobile-details {
     display: block;

@@ -196,7 +196,11 @@ To check the file yourself, see [Compare the managed file with what was offered]
 
 ## Follow a rollout
 
-Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Loaded in Vector** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Loaded in Vector** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. The page's address is its link: share it with anyone who has an account.
+Open [**Activity → Deployments**](/#/deployments) and select a deployment. Its page shows how many devices applied, are applying, are waiting or failed, each canary stage and batch, and every device's timeline: **Released**, **Downloaded**, **Validated**, **Written**, **Loaded in Vector** and **Applied**, the same steps as on the device page. A failure marks the step that failed, for example **Loaded in Vector** for a port that's already in use. Failures are grouped by reason, and each reason is printed once. A device that refused the version before Vector saw it says why in the same words as its own page: **Restricted mode refuses any top-level api block, and no allowance can permit it. Remove the api block, or deploy to a full-mode device.**, or **A component ID can't name a path, and devices in both modes refuse one. Rename the component and the inputs that name it.** The page's address is its link: share it with anyone who has an account.
+
+Everywhere that counts a rollout's devices, in the deployment list, the page header, the command palette, the Overview and a group's rollouts, the sentence is the same: **2 of 3 devices applied · 1 not delivering**. It counts the devices the rollout still follows, and a device only once its agent verified that Vector runs the version. What else is true follows, apart: **1 not delivering**, **1 failed**, **1 needs a check**. A rolled-back rollout reads **1 of 3 devices applied before the rollback**. When no device follows a rollout any more it says where they went (**2 devices moved to Edge syslog processing v3**) or **No devices follow this now**.
+
+On a phone, **Device results** is a list of cards: the device's name with its state beside it (under it, when the name is too long to leave room), when it last checked in, its timeline and, when it didn't apply, the reason. Long names and reasons wrap inside the card instead of widening the page.
 
 The page leads with the one action that fits:
 
@@ -204,7 +208,7 @@ The page leads with the one action that fits:
 | --- | --- |
 | It was rolled back | **Open rollback** names what the devices returned to, for example "Open rollback (Edge syslog processing v1)". |
 | A device still runs it but isn't delivering | A banner names the device, the step it can't deliver to and how full that buffer is. **Roll back edge-nyc-02** comes first. |
-| Only the pipeline can fix the failure: a port in use, a VRL error or an invalid option | **Fix in pipeline** opens the pipeline with the step the failure names selected and the setting it names in view. **Retry failed** comes second, since a retry sends the same version. |
+| Only the pipeline can fix the failure: a port in use, a VRL error, an invalid option, an `api` block or a component ID that names a path | **Fix in pipeline** opens the pipeline with the step the failure names selected and the setting it names in view. **Retry failed** comes second, since a retry sends the same version. |
 | Devices failed for another reason | **Retry failed**. |
 | It's paused | **Resume**. |
 
@@ -214,7 +218,7 @@ The Overview's **Needs you** lists what still needs a person, most urgent first:
 
 [**Activity → Deployments**](/#/deployments) lists every deployment. Search by pipeline, deployment name, version or status, and filter the **Status** column to what needs attention, what's in progress or what finished. [**Scheduled**](/#/schedules) lists upcoming, completed, cancelled and missed schedules, in your browser's time zone.
 
-Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
+Inside a deployment, search **Device results** or filter them by progress. A device counts toward **2 of 3 devices applied** only once its agent verified that Vector runs the version; one that applied but isn't delivering reads **Not delivering**, is named apart (**2 of 3 devices applied · 1 not delivering**) and doesn't count as applied. A device that left the deployment, for example because it was revoked, shows **No longer targeted**: it keeps its place in history but no longer counts.
 
 Before a schedule starts, **Update scheduled devices** compares its saved device list with current group membership. Review who is added and removed, then confirm. If anything changes while you review, refresh the review and confirm again.
 

@@ -81,7 +81,44 @@ const user = (id) => ({
 let signedIn = user("first"),
   nextLogin = user("second"),
   empty = false,
-  failing = false;
+  failing = false,
+  published = false,
+  running = 2;
+const failedRollout = {
+  id: "00000000-0000-4000-8000-0000000000f4",
+  name: null,
+  configuration_id: "active-0",
+  configuration_name: "Synthetic blue 00",
+  version_id: "00000000-0000-4000-8000-0000000000e4",
+  version_number: 4,
+  policy: null,
+  status: "failed",
+  created_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+  failed_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+  target_count: 3,
+  verified_count: 0,
+  state_counts: { rolled_back: 1, pending: 2 },
+};
+const historyReads = [];
+/** The first row, published as v4 while its devices run `running`. */
+const publishedRow = (item) => ({
+  ...item,
+  assigned_devices: 3,
+  running_versions: [
+    {
+      id: `00000000-0000-4000-8000-0000000000e${running}`,
+      number: running,
+      devices: 3,
+    },
+  ],
+  latest_version: {
+    id: failedRollout.version_id,
+    number: 4,
+    created_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+    author: "Synthetic",
+    draft_changed: false,
+  },
+});
 const records = [false, true].flatMap((archived) =>
   Array.from({ length: 13 }, (_, index) => ({
     id: `${archived ? "archived" : "active"}-${index}`,
@@ -157,10 +194,27 @@ await context.route("**/api/v1/**", async (route) => {
     );
     const number = Number(query.page);
     return reply({
-      items: rows.slice((number - 1) * 12, number * 12),
+      items: rows
+        .slice((number - 1) * 12, number * 12)
+        .map((item, index) =>
+          published && index === 0 && !item.archived
+            ? publishedRow(item)
+            : item,
+        ),
       total: rows.length,
       page: number,
       page_size: 12,
+    });
+  }
+  // Only a row whose latest version runs nowhere reads rollout history.
+  if (path === "/deployments/history" && method === "GET") {
+    const query = Object.fromEntries(url.searchParams);
+    historyReads.push(query);
+    return reply({
+      items: query.status === "failed" ? [failedRollout] : [],
+      total: query.status === "failed" ? 1 : 0,
+      page: 1,
+      page_size: Number(query.page_size),
     });
   }
   unexpected.push(`${method} ${path}`);
@@ -448,6 +502,82 @@ try {
       }, appearance);
       await page.setViewportSize({ width: 1280, height: 900 });
       await expect(rows).toHaveCount(12);
+    },
+  );
+  await check(
+    "a row whose latest version no device runs says how its newest rollout ended, linked to it, on desktop and phone",
+    async () => {
+      // Rows that publish nothing read no rollout history.
+      expect(historyReads).toEqual([]);
+      published = true;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      const first = page.locator(".pipeline-library-table tbody tr").first();
+      await expect(first).toContainText(
+        "Running v2 on 3 of 3 · v4 not running",
+      );
+      const outcome = first.getByRole("link", {
+        name: "v4 failed on 1 device",
+      });
+      await expect(outcome).toHaveAttribute(
+        "href",
+        `#/deployments/${failedRollout.id}`,
+      );
+      await expect(first.locator(".pipeline-status-outcome")).toContainText(
+        /v4 failed on 1 device · 1[12]m ago/,
+      );
+      // Bounded: the newest 20 of each ending, and nothing else.
+      await expect
+        .poll(() =>
+          historyReads
+            .map(({ status, page: n, page_size }) => [status, n, page_size])
+            .sort(),
+        )
+        .toEqual([
+          ["failed", "1", "20"],
+          ["rolled_back", "1", "20"],
+        ]);
+      // Other rows stay as they were.
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").nth(1),
+      ).not.toContainText("failed on");
+      // Phones read the same line in the card.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const card = page
+        .getByRole("list", { name: "Pipeline library", exact: true })
+        .locator("li.data-list-item")
+        .first();
+      await expect(
+        card.getByRole("link", { name: "v4 failed on 1 device" }),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: resolve(output, "outcome-mobile.png"),
+        animations: "disabled",
+      });
+      // Once the devices run that version, the row says nothing about the failure.
+      running = 4;
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").first(),
+      ).toContainText("Running v4 on 3 of 3");
+      await expect(page.locator(".pipeline-status-outcome")).toHaveCount(0);
+      published = false;
+      running = 2;
+      await page
+        .getByRole("button", { name: "Refresh now", exact: true })
+        .click();
+      await expect(
+        page.locator(".pipeline-library-table tbody tr").first(),
+      ).toContainText("Not published");
     },
   );
   await check(

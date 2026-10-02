@@ -529,15 +529,52 @@ details[open] > summary {
 }
 .page-tabs {
   position: relative;
-  display: flex;
-  gap: var(--space-6);
   margin: calc(-1 * var(--space-2)) 0 var(--space-5);
   border-bottom: 1px solid var(--border);
+}
+/* The strip scrolls. Its extra pixel lets the current tab's underline cover
+   the rule under the tabs instead of being clipped. */
+.page-tabs-strip {
+  display: flex;
+  gap: var(--space-6);
+  margin-bottom: -1px;
+  padding-bottom: 1px;
   overflow-x: auto;
   scrollbar-width: none;
 }
-.page-tabs::-webkit-scrollbar {
+.page-tabs-strip::-webkit-scrollbar {
   display: none;
+}
+/* Tabs hidden past an end fade out there; a chevron marks where more wait. */
+.page-tabs[data-hidden-after] .page-tabs-strip {
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 44px),
+    transparent calc(100% - 16px)
+  );
+}
+.page-tabs[data-hidden-before] .page-tabs-strip {
+  mask-image: linear-gradient(
+    to left,
+    #000 calc(100% - 44px),
+    transparent calc(100% - 16px)
+  );
+}
+.page-tabs[data-hidden-before][data-hidden-after] .page-tabs-strip {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 28px,
+    #000 calc(100% - 44px),
+    transparent calc(100% - 16px)
+  );
+}
+.page-tabs-more {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  color: var(--text-muted);
+  pointer-events: none;
 }
 .page-tabs a,
 .page-tabs button {
@@ -967,15 +1004,10 @@ td strong {
     line-height: 30px;
   }
   .page-tabs {
-    gap: var(--space-5);
     margin-bottom: var(--space-4);
-    mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      #000 12px,
-      #000 calc(100% - 24px),
-      transparent 100%
-    );
+  }
+  .page-tabs-strip {
+    gap: var(--space-5);
   }
   .page-toolbar-row {
     flex-wrap: wrap;

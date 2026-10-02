@@ -1037,6 +1037,259 @@ try {
       ).toBeFocused();
     },
   );
+  await check(
+    "phone rollout cards fit from 320 to 430 px in every state, with a long device name and the longest step labels",
+    async () => {
+      const stamp = (seconds) =>
+        new Date(Date.UTC(2026, 8, 28, 12, 0, seconds)).toISOString();
+      const events = (...states) =>
+        states.map((state, index) => ({ state, at: stamp(index * 7) }));
+      const released = { released_at: stamp(0) };
+      const longName = `ingest-gateway-frankfurt-primary-${"0123456789".repeat(4)}`;
+      const diagnostic =
+        "Unhandled error: expression can result in runtime error; handle the error case to ensure runtime success (by_severity.errors, line 1, column 1).";
+      const variants = [
+        [
+          "applied",
+          {
+            ...released,
+            state: "verified_applied",
+            verified_at: stamp(40),
+            last_seen: stamp(55),
+            timeline: events(
+              "desired",
+              "downloaded",
+              "validated",
+              "written",
+              "reload_requested",
+              "verified_applied",
+            ),
+          },
+        ],
+        [
+          "applying",
+          {
+            ...released,
+            state: "written",
+            last_seen: stamp(30),
+            timeline: events("desired", "downloaded", "validated", "written"),
+          },
+        ],
+        [
+          "failed",
+          {
+            ...released,
+            state: "failed",
+            error: "VALIDATION_FAILED",
+            diagnostic,
+            failure_stage: "validation",
+            last_seen: stamp(30),
+            timeline: events("desired", "downloaded"),
+          },
+        ],
+        [
+          "rolled-back",
+          {
+            ...released,
+            state: "rolled_back",
+            error: "APPLY_ROLLED_BACK (reload)",
+            diagnostic:
+              "Another process is already listening on this component's address.",
+            failure_stage: "reload",
+            last_seen: stamp(30),
+            timeline: events(
+              "desired",
+              "downloaded",
+              "validated",
+              "written",
+              "reload_requested",
+              "rolled_back",
+            ),
+          },
+        ],
+        ["waiting", { ...released, state: "desired", last_seen: null }],
+        [
+          "offline",
+          {
+            ...released,
+            state: "desired",
+            last_seen: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+          },
+        ],
+        ["held-back", { state: "pending", last_seen: stamp(30) }],
+        [
+          "replaced",
+          {
+            state: "removed",
+            replaced_by: "00000000-0000-4000-8000-0000000000aa",
+            last_seen: stamp(30),
+          },
+        ],
+        [
+          "not-delivering",
+          {
+            ...released,
+            state: "verified_applied",
+            verified_at: stamp(40),
+            last_seen: stamp(55),
+            timeline: events("desired", "verified_applied"),
+            delivery: {
+              code: "DATA_PLANE_SINK_ERRORS",
+              title: "out can't deliver events",
+              message:
+                "Every request to https://logs.example.test:8443/ads/ingest failed in the last 5 minutes.",
+              hint: "Check that the destination accepts connections from this host.",
+            },
+          },
+        ],
+      ];
+      targetOverrides.set(
+        "d-003",
+        variants.map(([tag, target], index) => ({
+          device_id: `00000000-0000-4000-8000-${String(index + 500).padStart(12, "0")}`,
+          device_name: `${String(index).padStart(2, "0")}-${tag}-${longName}`,
+          generation: 2,
+          error: null,
+          original: true,
+          ...target,
+        })),
+      );
+      await page.setViewportSize({ width: 1280, height: 960 });
+      await mount();
+      await page.setViewportSize({ width: 320, height: 900 });
+      await open(3);
+      const cards = details()
+        .getByRole("list", { name: "Device results", exact: true })
+        .locator("li.data-list-item");
+      await expect(cards).toHaveCount(variants.length);
+      // A badge under the pointer opens its tooltip, which sits outside the
+      // page's landmarks until the pointer leaves.
+      await page.mouse.move(1, 1);
+      await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+      for (const width of [320, 360, 390, 430]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const theme of ["light", "dark"]) {
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, theme);
+          const fit = await page.evaluate(() => {
+            const problems = [];
+            const surfaces = document.querySelectorAll(
+              ".rollout-card, .rollout-lane, .rollout-summary, .rollout-failures li, li.data-list-item",
+            );
+            for (const surface of surfaces) {
+              const box = surface.getBoundingClientRect();
+              const name = `${surface.className}`.slice(0, 40);
+              if (surface.scrollWidth > surface.clientWidth + 1)
+                problems.push(
+                  `${name}: scrollWidth ${surface.scrollWidth} > clientWidth ${surface.clientWidth}`,
+                );
+              for (const inner of surface.querySelectorAll("*")) {
+                if (inner.closest(".sr-only")) continue;
+                const at = inner.getBoundingClientRect();
+                if (
+                  at.width &&
+                  (at.right > box.right + 1 || at.left < box.left - 1)
+                )
+                  problems.push(
+                    `${name}: ${inner.tagName}.${`${inner.className}`.slice(0, 30)} spans ${Math.round(at.left)}-${Math.round(at.right)} outside ${Math.round(box.left)}-${Math.round(box.right)}`,
+                  );
+              }
+            }
+            if (document.documentElement.scrollWidth > innerWidth)
+              problems.push(
+                `page scrolls sideways: ${document.documentElement.scrollWidth} > ${innerWidth}`,
+              );
+            return problems.slice(0, 12);
+          });
+          expect(fit, `${width}px ${theme}`).toEqual([]);
+          const audit = await new AxeBuilder({ page }).analyze();
+          accessibility.push({
+            theme,
+            width,
+            violations: audit.violations.map((v) => v.id),
+          });
+          expect(
+            audit.violations.map(
+              (v) =>
+                `${v.id}: ${v.nodes.map((node) => `${node.target.join(" ")} ${node.html.slice(0, 160)}`).join(" | ")}`,
+            ),
+            `${width}px ${theme}`,
+          ).toEqual([]);
+        }
+      }
+      await page.setViewportSize({ width: 320, height: 900 });
+      // The state stays inside the title block, clear of the name: beside it,
+      // or under it when the name is too long to leave room.
+      for (let index = 0; index < variants.length; index++) {
+        const title = cards.nth(index).locator(".rollout-card-title");
+        const [box, link, badge] = await Promise.all([
+          title.boundingBox(),
+          title.locator("a").boundingBox(),
+          title.locator(".status-badge").boundingBox(),
+        ]);
+        const tag = variants[index][0];
+        expect(badge.y, tag).toBeGreaterThanOrEqual(box.y - 1);
+        expect(badge.y + badge.height, tag).toBeLessThanOrEqual(
+          box.y + box.height + 1,
+        );
+        expect(
+          badge.x >= link.x + link.width - 1 ||
+            badge.y >= link.y + link.height - 1,
+          `${tag}: the state overlaps the name`,
+        ).toBe(true);
+      }
+      await page.screenshot({
+        path: resolve(output, "phone-cards-long-320.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      // With an ordinary name the state sits beside it, in every state.
+      await closeDetails();
+      targetOverrides.set(
+        "d-003",
+        variants.map(([tag, target], index) => ({
+          device_id: `00000000-0000-4000-8000-${String(index + 500).padStart(12, "0")}`,
+          device_name: `edge-${tag}`,
+          generation: 2,
+          error: null,
+          original: true,
+          ...target,
+        })),
+      );
+      await open(3);
+      await expect(cards).toHaveCount(variants.length);
+      await page.mouse.move(1, 1);
+      await page.screenshot({
+        path: resolve(output, "phone-cards-320.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      // From 390 px the widest state still fits beside a short name.
+      await page.setViewportSize({ width: 390, height: 900 });
+      for (let index = 0; index < variants.length; index++) {
+        const title = cards.nth(index).locator(".rollout-card-title");
+        const [link, badge] = await Promise.all([
+          title.locator("a").boundingBox(),
+          title.locator(".status-badge").boundingBox(),
+        ]);
+        expect(badge.y, variants[index][0]).toBeLessThan(link.y + link.height);
+        expect(badge.x, variants[index][0]).toBeGreaterThanOrEqual(
+          link.x + link.width - 1,
+        );
+      }
+      await page.screenshot({
+        path: resolve(output, "phone-cards-390.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
+      await page.evaluate(() => {
+        document.documentElement.dataset.theme = "light";
+      });
+      targetOverrides.clear();
+      await closeDetails();
+    },
+  );
   expect(unexpected).toEqual([]);
   expect(errors).toEqual([]);
   const source_sha256 = {};

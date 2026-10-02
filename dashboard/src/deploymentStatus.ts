@@ -1,4 +1,5 @@
 import type { DeploymentSummary, DeploymentTarget } from "./api";
+import { agentRefusal } from "./agentRefusals";
 import { countLabel } from "./countLabel";
 import {
   applyStates,
@@ -164,29 +165,6 @@ function display(state: string) {
   return { state, label, tone };
 }
 
-/**
- * "2 of 3 applied": how many of the devices a rollout currently follows
- * applied it (the agent verified Vector runs it). One wording for the list,
- * the group view, cards and the rollout page.
- */
-export function appliedText(
-  d: Pick<
-    DeploymentSummary,
-    | "target_count"
-    | "verified_count"
-    | "state_counts"
-    | "rolled_back_by"
-    | "degraded"
-  >,
-) {
-  const current = d.target_count - (d.state_counts.removed || 0);
-  if (!current && d.target_count) return "No devices follow this now";
-  if (!current) return "No devices";
-  // Devices that applied but aren't delivering don't count as applied.
-  const { notDelivering } = rolloutProgress(d.state_counts, d.degraded);
-  return `${d.verified_count - notDelivering} of ${current} applied${notDelivering ? ` · ${notDelivering} not delivering` : ""}${d.rolled_back_by ? ", then rolled back" : ""}`;
-}
-
 /** Whether a rollout can still release devices (and is worth polling fast). */
 export function isLive(status: string) {
   return status === "active" || status === "paused" || status === "scheduled";
@@ -327,24 +305,100 @@ export function rolloutProgress(
 }
 export type RolloutProgress = ReturnType<typeof rolloutProgress>;
 
-/** The parts of "2 of 3 devices applied · 1 not delivering". */
-export function progressParts(progress: RolloutProgress) {
+/** What a deployment's counts need: the summary's, or the Overview's smaller one. */
+export type CountsInput = Pick<DeploymentSummary, "state_counts"> &
+  Partial<
+    Pick<
+      DeploymentSummary,
+      | "target_count"
+      | "degraded"
+      | "rolled_back_by"
+      | "replaced_by"
+      | "configuration_name"
+    >
+  >;
+
+export type DeploymentCounts = {
+  /** Devices the rollout still follows: its targets that haven't moved away. */
+  following: number;
+  /** Those that applied the version and are delivering. */
+  applied: number;
+  /** "2 of 3", for a heading that sets the figure apart; null when none follow. */
+  figure: string | null;
+  /** What follows the figure: "devices applied before the rollback". */
+  base: string;
+  /** What else is true of the devices, apart so a surface can style it. */
+  notes: { key: "not_delivering" | "failed" | "check"; text: string }[];
+  /** The whole sentence: the same words on every surface that counts devices. */
+  sentence: string;
+};
+
+/**
+ * How many of a deployment's devices applied it, in one sentence: "2 of 3
+ * devices applied · 1 not delivering". The deployment list, the rollout page,
+ * the command palette, the Overview and a group's rollouts all read this, so
+ * one deployment never reads two ways. It counts the devices the rollout still
+ * follows, from its recorded states, with those that applied it but aren't
+ * delivering counted as that instead (`options.degraded` is the rollout page's
+ * own reading of its stages; the summary's `degraded` otherwise). When no device
+ * follows it, it says where they went.
+ */
+export function deploymentCounts(
+  d: CountsInput,
+  options: { degraded?: number } = {},
+): DeploymentCounts {
+  const recorded = d.state_counts || {};
+  const targets =
+    d.target_count ?? Object.values(recorded).reduce((sum, n) => sum + n, 0);
+  const progress = rolloutProgress(
+    recorded,
+    options.degraded ?? d.degraded ?? 0,
+  );
+  if (!progress.total) {
+    const replaced = d.replaced_by || [];
+    const moved = replaced.reduce((sum, entry) => sum + entry.device_count, 0);
+    const text = !targets
+      ? "No devices"
+      : moved
+        ? `${countLabel(moved, "device")} moved to ${lineageLabel(replaced[replaced.length - 1] || {}, d.configuration_name, "a newer version")}`
+        : "No devices follow this now";
+    return {
+      following: 0,
+      applied: 0,
+      figure: null,
+      base: text,
+      notes: [],
+      sentence: text,
+    };
+  }
+  const figure = `${progress.applied.toLocaleString()} of ${progress.total.toLocaleString()}`;
+  const base = `${progress.total === 1 ? "device" : "devices"} applied${d.rolled_back_by ? " before the rollback" : ""}`;
+  const notes: DeploymentCounts["notes"] = [];
+  if (progress.notDelivering)
+    notes.push({
+      key: "not_delivering",
+      text: `${progress.notDelivering.toLocaleString()} not delivering`,
+    });
+  if (progress.failed)
+    notes.push({
+      key: "failed",
+      text: `${progress.failed.toLocaleString()} failed`,
+    });
+  if (progress.needsCheck)
+    notes.push({
+      key: "check",
+      text: `${progress.needsCheck.toLocaleString()} ${progress.needsCheck === 1 ? "needs" : "need"} a check`,
+    });
   return {
-    figure: `${progress.applied.toLocaleString()} of ${progress.total.toLocaleString()}`,
-    noun: progress.total === 1 ? "device" : "devices",
-    notes: [
-      progress.notDelivering &&
-        `${progress.notDelivering.toLocaleString()} not delivering`,
-      progress.failed && `${progress.failed.toLocaleString()} failed`,
-      progress.needsCheck &&
-        `${progress.needsCheck.toLocaleString()} ${progress.needsCheck === 1 ? "needs" : "need"} a check`,
-    ].filter(Boolean) as string[],
+    following: progress.total,
+    applied: progress.applied,
+    figure,
+    base,
+    notes,
+    sentence: [`${figure} ${base}`, ...notes.map((note) => note.text)].join(
+      " · ",
+    ),
   };
-}
-/** One line for a rollout's progress, the same words on every surface. */
-export function progressLine(progress: RolloutProgress) {
-  const { figure, noun, notes } = progressParts(progress);
-  return [`${figure} ${noun} applied`, ...notes].join(" · ");
 }
 /** Devices the rollout's lanes report as applied but not delivering. */
 export function degradedInLanes(failures: { state?: string; count: number }[]) {
@@ -627,8 +681,9 @@ export function timelineSteps(
 
 /**
  * Agent findings that only a pipeline change can clear: retrying the same
- * version meets the same port in use, VRL error or invalid option. Host
- * problems (a missing directory, a permission) are not among them.
+ * version meets the same port in use, VRL error, invalid option, api block or
+ * component ID that names a path. Host problems (a missing directory, a
+ * permission) are not among them.
  */
 export function pipelineFixable(code: string | null | undefined) {
   if (!code) return false;
@@ -640,6 +695,7 @@ export function pipelineFixable(code: string | null | undefined) {
       "UNKNOWN_FIELD",
       "UNKNOWN_COMPONENT_TYPE",
       "MISSING_FIELD",
+      "LOCAL_API_DENIED",
     ].includes(code) ||
     code.startsWith("VRL_") ||
     code.startsWith("INVALID_")
@@ -742,14 +798,24 @@ const sentence = (text: string) =>
  * when it sent one (the specific cause), otherwise the plain explanation of
  * its error. `effect` keeps a known error code's explanation (what happened
  * on the device) only beside a diagnostic that says something else; `code`
- * is the agent's code, for support.
+ * is the agent's code, for support. A refusal the agent decides itself, when
+ * `finding` (the leading finding's code) names one, says its own rule and next
+ * step instead of the generic policy sentence, which isn't true of it.
  */
 export function failureText(
   diagnostic: string | null | undefined,
   error: string | null | undefined,
+  finding?: string | null,
 ) {
   const explained = explainError(error);
   const cause = diagnostic?.trim() || null;
+  const refusal = agentRefusal(null, finding);
+  if (refusal)
+    return {
+      reason: cause || refusal.reason,
+      effect: cause ? `${refusal.reason} ${refusal.next}` : refusal.next,
+      code: explained?.code || null,
+    };
   return {
     reason: cause || explained?.summary || null,
     effect:
