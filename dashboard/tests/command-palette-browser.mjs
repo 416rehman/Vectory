@@ -804,7 +804,9 @@ try {
       await view();
       await pick("pause");
       await expect(
-        page.getByText("Pause isn't available for this rollout now."),
+        page
+          .getByRole("region", { name: "Notifications" })
+          .getByText("Pause isn't available for this rollout now."),
       ).toBeVisible();
       await expect(dialog("Pause rollout")).toHaveCount(0);
       await page.waitForTimeout(500);

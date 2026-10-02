@@ -79,7 +79,10 @@ test("publishing waits for the in-flight explicit save and uses its exact conten
       .getByRole("button", { name: "Choose devices", exact: true })
       .click();
     await expect(
-      page.getByRole("heading", { name: "Deploy version 1", exact: true }),
+      page.getByRole("heading", {
+        name: `Deploy ${doc.name} v1`,
+        exact: true,
+      }),
     ).toBeVisible();
     const versions = await page.request
       .get(`/api/v1/configurations/${doc.id}/versions`)
