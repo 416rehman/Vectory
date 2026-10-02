@@ -558,14 +558,19 @@ export function AuditLog({
         ],
         onChange: (outcome) => applyScope({ outcome }),
       },
-      cell: (item) =>
-        results.has(item.id) ? (
-          <span className="audit-muted audit-results-outcomes">
-            {deviceResultsSummary(results.get(item.id)!).outcomes}
-          </span>
+      cell: (item) => {
+        if (!results.has(item.id)) return <Result outcome={item.outcome} />;
+        const run = deviceResultsSummary(results.get(item.id)!);
+        // One device's run says its last state like any single event; several
+        // devices count their last states.
+        return run.last ? (
+          <Result outcome={run.last} />
         ) : (
-          <Result outcome={item.outcome} />
-        ),
+          <span className="audit-muted audit-results-outcomes">
+            {run.outcomes}
+          </span>
+        );
+      },
     },
     {
       id: "created_at",
@@ -770,29 +775,29 @@ export function AuditLog({
             onPage: (page) => setQuery((current) => ({ ...current, page })),
             noun: "events",
           }}
-          mobileCard={(item) =>
-            results.has(item.id)
-              ? {
-                  title: resultsToggle(item.id, results.get(item.id)!),
-                  meta: [
-                    deviceResultsSummary(results.get(item.id)!).devices,
-                    deviceResultsSummary(results.get(item.id)!).outcomes,
-                  ],
-                }
-              : {
-                  title: eventLink(item),
-                  status: <Result outcome={item.outcome} />,
-                  meta: [
-                    targetLabel(item),
-                    actorLabel(item) === targetLabel(item)
-                      ? null
-                      : actorLabel(item),
-                    item.created_at
-                      ? shortLocal(item.created_at)
-                      : "Time unavailable",
-                  ],
-                }
-          }
+          mobileCard={(item) => {
+            if (results.has(item.id)) {
+              const run = deviceResultsSummary(results.get(item.id)!);
+              return {
+                title: resultsToggle(item.id, results.get(item.id)!),
+                status: run.last ? <Result outcome={run.last} /> : undefined,
+                meta: [run.devices, run.last ? null : run.outcomes],
+              };
+            }
+            return {
+              title: eventLink(item),
+              status: <Result outcome={item.outcome} />,
+              meta: [
+                targetLabel(item),
+                actorLabel(item) === targetLabel(item)
+                  ? null
+                  : actorLabel(item),
+                item.created_at
+                  ? shortLocal(item.created_at)
+                  : "Time unavailable",
+              ],
+            };
+          }}
           empty={
             dateError ? (
               <EmptyState

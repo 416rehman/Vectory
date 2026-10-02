@@ -19,6 +19,19 @@ export const telemetryPollMs: Record<TelemetryRange, number> = {
   "30d": 600_000,
 };
 
+/** The ranges the device page offers, with the length of each in minutes. */
+export const chartRanges: {
+  value: TelemetryRange;
+  label: string;
+  minutes: number;
+}[] = [
+  { value: "15m", label: "15 min", minutes: 15 },
+  { value: "1h", label: "1 hour", minutes: 60 },
+  { value: "6h", label: "6 hours", minutes: 360 },
+  { value: "24h", label: "24 hours", minutes: 1440 },
+  { value: "7d", label: "7 days", minutes: 10080 },
+];
+
 export type TimelinePoint = {
   /** First minute (Unix minutes) of this slot. */
   bucket: number;
@@ -34,13 +47,23 @@ const sampleMinute = (sample: TelemetrySample) =>
   sample.bucket ?? Math.floor(Date.parse(sample.sampled_at) / 60000);
 
 /**
+ * A slot still collecting reads as a real value that the next report moves:
+ * one report in a five-minute slot is a fifth of its answer. A slot counts as
+ * complete this long after it ends, so a late check-in still lands in it.
+ */
+export const SLOT_GRACE_MS = 20_000;
+
+/**
  * Evenly spaced slots across the reported window. A range response carries
  * its window and step; the legacy shape (raw minutes) spans at most
- * `legacyMinutes` ending at the newest sample.
+ * `legacyMinutes` ending at the newest sample. With `now`, the slot still
+ * collecting is left out; with `notBefore`, so are the slots that ended before
+ * the device existed, which are no gap in its reports.
  */
 export function timeline(
   history: Pick<TelemetryHistory, "samples" | "step_seconds" | "from" | "to">,
   legacyMinutes = 120,
+  options: { now?: number; notBefore?: number | null } = {},
 ): TimelinePoint[] {
   const samples = history.samples.filter((sample) =>
     Number.isFinite(sampleMinute(sample)),
@@ -64,27 +87,95 @@ export function timeline(
   const bySlot = new Map(
     samples.map((sample) => [slot(sampleMinute(sample)), sample]),
   );
+  const { now, notBefore } = options;
   const points: TimelinePoint[] = [];
   for (
     let bucket = slot(start);
     bucket < end && points.length < 400;
     bucket += step
-  )
+  ) {
+    const slotEnd = (bucket + step) * 60000;
+    if (present(notBefore) && slotEnd <= notBefore) continue;
+    if (present(now) && slotEnd + SLOT_GRACE_MS > now) continue;
     points.push({
       bucket,
       at: new Date(bucket * 60000).toISOString(),
       sample: bySlot.get(bucket),
     });
+  }
   return points;
 }
 
-/** A clean axis maximum (1, 2 or 5 × 10^n) at or above the value. */
+/** The newest `count` slots: a shorter view of a longer read of the same step. */
+export function lastSlots<T>(points: T[], count: number): T[] {
+  return count >= points.length ? points : points.slice(points.length - count);
+}
+
+/**
+ * The range the charts open on: the shortest that holds all of the device's
+ * history, up to an hour. Seven minutes of history opens on 15 minutes, not on
+ * an hour that is nearly empty; longer ranges are one choice away.
+ */
+export function defaultRange(
+  points: Pick<TimelinePoint, "bucket" | "sample">[],
+  now: number,
+): "15m" | "1h" {
+  const first = points.find((point) => point.sample);
+  if (!first) return "15m";
+  return now - first.bucket * 60_000 <= 15 * 60_000 ? "15m" : "1h";
+}
+
+/**
+ * What the axis says about the time shown: "Last 4 minutes", "Last hour",
+ * "Last 3 days". The span is what the data covers, never the range asked for.
+ */
+export function spanLabel(startMs: number, endMs: number) {
+  const minutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
+  if (minutes < 2) return "Last minute";
+  if (minutes < 55 || (minutes > 65 && minutes < 90))
+    return `Last ${minutes} minutes`;
+  if (minutes <= 65) return "Last hour";
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `Last ${hours} hours`;
+  return `Last ${Math.round(hours / 24)} days`;
+}
+
+/**
+ * A y axis with ticks at 0, half and the top. Counts that are whole numbers
+ * get whole-number ticks (0, 1, 2 rather than 0, 0.5, 1); other values get the
+ * round maximum from `niceMax`.
+ */
+export function fitAxis(peak: number, integers: boolean) {
+  const top = Number.isFinite(peak) && peak > 0 ? peak : 0;
+  let max: number;
+  if (integers) {
+    const whole = Math.max(1, Math.ceil(top));
+    // An even maximum keeps the middle tick whole; of the round numbers past
+    // ten only 25 is odd.
+    max = whole <= 10 ? Math.ceil(whole / 2) * 2 : niceMax(whole);
+    if (!Number.isInteger(max / 2)) max = niceMax(max + 1);
+  } else max = niceMax(top);
+  return { max, ticks: [0, max / 2, max] as [number, number, number] };
+}
+
+const tick = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+/** An axis label: whole numbers as they are, others to two decimals at most. */
+export function formatTick(value: number) {
+  return Math.abs(value) >= 10000 ? compact.format(value) : tick.format(value);
+}
+
+/** Whether every present reading is a whole number (a count, not a rate). */
+export function wholeNumbers(values: (number | null | undefined)[]) {
+  return values.every((value) => !present(value) || Number.isInteger(value));
+}
+
+/** A round axis maximum at or above the value: 1, 2, 2.5, 5 or 10 × 10^n. */
 export function niceMax(value: number) {
-  if (!(value > 0)) return 1;
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const fraction = value / magnitude;
-  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return nice * magnitude;
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const power = 10 ** Math.floor(Math.log10(value));
+  for (const step of [1, 2, 2.5, 5, 10])
+    if (step * power >= value) return step * power;
+  return 10 * power;
 }
 
 /**

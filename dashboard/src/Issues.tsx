@@ -27,6 +27,7 @@ import {
   Spinner,
   useResource,
 } from "./ui";
+import { agentRefusal } from "./agentRefusals";
 import { countLabel } from "./countLabel";
 import DocLink from "./DocLink";
 import { DataTable, type TableColumn } from "./DataTable";
@@ -494,6 +495,8 @@ function DeviceLine({ issue }: { issue: Issue }) {
 
 function IssueSummary({ issue }: { issue: Issue }) {
   const fix = leadingDiagnostic(issue.diagnostics)?.hint;
+  const refusal =
+    issue.code === "CAPABILITY_DENIED" ? agentRefusal(issue.diagnostics) : null;
   return (
     <div className="issue-summary">
       <strong>
@@ -558,6 +561,11 @@ function IssueSummary({ issue }: { issue: Issue }) {
             the last working version. This closes by itself after three clean
             checks. On the host, <code>vectory logs</code> shows Vector's full
             output.
+          </p>
+        ) : refusal ? (
+          <p>
+            {refusal.reason} {refusal.next} On the host,{" "}
+            <code>vectory status</code> shows the same finding.
           </p>
         ) : (
           <p>

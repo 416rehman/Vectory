@@ -421,9 +421,14 @@ export function groupDeviceResults<T extends GroupableEvent>(
   return rows;
 }
 /**
- * "3 device results" with names and outcomes, most common outcome first.
- * Outcomes count each device once, by its latest result: one device that
- * waited and then applied is "1 applied", not two results of two devices.
+ * What a run of device results says: its last word, with the steps behind a
+ * disclosure. Outcomes count each device once, by its latest result, so one
+ * device that waited and then applied is "applied", not two results.
+ *
+ * - One device: `title` is "edge-nyc-02 · rolled back" and `last` is that
+ *   outcome, for a badge in the Result column; `devices` counts the steps.
+ * - Several: "3 device results" with their names, and `outcomes` the count of
+ *   each device's last outcome, most common first ("2 applied, 1 rolled back").
  */
 export function deviceResultsSummary(items: GroupableEvent[]) {
   const time = (item: GroupableEvent) => Date.parse(item.created_at || "");
@@ -454,12 +459,16 @@ export function deviceResultsSummary(items: GroupableEvent[]) {
         `${count} ${auditOutcomeLabel(outcome).toLowerCase()}`,
     )
     .join(", ");
+  const only = latest.size === 1 ? [...latest.values()][0] : null;
   return {
-    title:
-      latest.size === items.length
+    title: only
+      ? `${only.target_name || "A device"} · ${auditOutcomeLabel(only.outcome).toLowerCase()}`
+      : latest.size === items.length
         ? `${items.length} device results`
-        : `${items.length} results for ${latest.size} ${latest.size === 1 ? "device" : "devices"}`,
-    devices,
+        : `${items.length} results for ${latest.size} devices`,
+    devices: only ? `${items.length} results` : devices,
     outcomes,
+    /** The one device's last outcome; null when the run covers several. */
+    last: only ? only.outcome : null,
   };
 }

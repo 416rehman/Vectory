@@ -193,6 +193,7 @@ describe("readable audit rows", () => {
       title: "3 device results",
       devices: "edge-nyc-01, edge-nyc-02 and 1 more",
       outcomes: "2 applied, 1 rolled back",
+      last: null,
     });
   });
   it("counts one device's steps once, by its latest result", () => {
@@ -212,10 +213,61 @@ describe("readable audit rows", () => {
       ],
     ])
       expect(deviceResultsSummary(items)).toEqual({
-        title: "2 results for 1 device",
-        devices: "web-01",
+        title: "web-01 · applied",
+        devices: "2 results",
         outcomes: "1 applied",
+        last: "verified_applied",
       });
+  });
+  it("reports one device's last state, not a count of every step it took", () => {
+    // A device that waited, applied, was released again and rolled back: the
+    // run reads as its last state; the steps are behind the row's disclosure.
+    const steps = [
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "desired",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "verified_applied",
+      "rolled_back",
+    ].map((outcome, index) => ({
+      ...event(`${index}`, "device.apply_state", outcome, "edge-nyc-02"),
+      created_at: new Date(Date.UTC(2026, 9, 2, 16, index)).toISOString(),
+    }));
+    const [row] = groupDeviceResults([...steps].reverse());
+    expect(row.kind).toBe("results");
+    expect(
+      deviceResultsSummary(row.kind === "results" ? row.items : []),
+    ).toEqual({
+      title: "edge-nyc-02 · rolled back",
+      devices: "12 results",
+      outcomes: "1 rolled back",
+      last: "rolled_back",
+    });
+  });
+  it("counts each device's last state when a run covers several, repeats and all", () => {
+    const at = (id: string, name: string, outcome: string, minute: number) => ({
+      ...event(id, "device.apply_state", outcome, name),
+      created_at: new Date(Date.UTC(2026, 9, 2, 16, minute)).toISOString(),
+    });
+    expect(
+      deviceResultsSummary([
+        at("4", "b", "failed", 3),
+        at("3", "a", "verified_applied", 2),
+        at("2", "b", "desired", 1),
+        at("1", "a", "desired", 0),
+      ]),
+    ).toEqual({
+      title: "4 results for 2 devices",
+      devices: "b and a",
+      outcomes: "1 failed, 1 applied",
+      last: null,
+    });
   });
   it("names a refused enrollment", () => {
     expect(

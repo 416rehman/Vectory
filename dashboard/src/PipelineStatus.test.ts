@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PipelineSummary } from "./api";
 import { libraryStatus } from "./PipelineStatus";
+import type { RolloutOutcome } from "./rolloutOutcome";
 
 const base: PipelineSummary = {
   id: "p",
@@ -80,6 +81,61 @@ describe("library status", () => {
     expect(libraryStatus({ ...base, latest_version: version() }).changed).toBe(
       false,
     );
+  });
+
+  describe("how the latest version's rollout ended", () => {
+    const failed: RolloutOutcome = {
+      kind: "failed",
+      deploymentId: "d1",
+      at: "2026-10-02T18:57:21Z",
+      devices: 1,
+    };
+    const latest = { ...base, latest_version: version(false) };
+    it("says a rolled-back version failed, where the row said only that it was not assigned", () => {
+      const status = libraryStatus(
+        { ...latest, assigned_devices: 0, running_versions: [] },
+        { ...failed, kind: "rolled_back" },
+      );
+      expect(status.detail).toBe("Not assigned to devices");
+      expect(status.outcome).toEqual({
+        text: "v3 rolled back on 1 device",
+        at: failed.at,
+        deploymentId: "d1",
+      });
+    });
+    it("names it while only an older version runs", () => {
+      expect(
+        libraryStatus(
+          {
+            ...latest,
+            assigned_devices: 3,
+            running_versions: [{ id: "v2", number: 2, devices: 3 }],
+          },
+          failed,
+        ).outcome?.text,
+      ).toBe("v3 failed on 1 device");
+    });
+    it("stays silent once a device runs the version, or when nothing is known", () => {
+      expect(
+        libraryStatus(
+          {
+            ...latest,
+            assigned_devices: 3,
+            running_versions: [{ id: "v3", number: 3, devices: 1 }],
+          },
+          failed,
+        ).outcome,
+      ).toBeUndefined();
+      expect(libraryStatus({ ...latest, assigned_devices: 0 }).outcome).toBe(
+        undefined,
+      );
+      expect(
+        libraryStatus(
+          { ...base, archived: true, latest_version: version() },
+          failed,
+        ).outcome,
+      ).toBeUndefined();
+    });
   });
 
   it("describes drafts and archived pipelines without counting revisions", () => {

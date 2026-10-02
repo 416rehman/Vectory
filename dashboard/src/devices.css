@@ -323,6 +323,10 @@ a.device-version-name:hover {
   gap: var(--space-4);
   min-width: 0;
 }
+/* The Components table, full width under both columns. */
+.device-components {
+  margin-top: var(--space-4);
+}
 .device-card {
   min-width: 0;
   padding: var(--space-4) var(--space-5) var(--space-5);

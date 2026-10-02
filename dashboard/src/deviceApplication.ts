@@ -1,4 +1,5 @@
 import type { Device, Version } from "./api";
+import { agentRefusal } from "./agentRefusals";
 import {
   describeDiagnostic,
   leadingDiagnostic,
@@ -77,6 +78,20 @@ function withFinding(reason: string, diagnostics: Diagnostic[]) {
   return finding ? `${reason} ${describeDiagnostic(finding)}` : reason;
 }
 
+/**
+ * A refusal the agent decides itself says what it found and what clears it,
+ * not the general sentence about allowances, which is false of it. The next
+ * step is added only when the finding came without its own.
+ */
+function refusalReason(diagnostics: Diagnostic[]) {
+  const finding = diagnostics.find((entry) => agentRefusal([entry]));
+  const refusal = finding && agentRefusal([finding]);
+  if (!finding || !refusal) return null;
+  return finding.hint
+    ? describeDiagnostic(finding)
+    : `${describeDiagnostic(finding)} ${refusal.next}`;
+}
+
 export function deviceApplicationExplanation(
   device: Device,
   version?: Pick<Version, "id" | "sha256"> | null,
@@ -95,12 +110,19 @@ export function deviceApplicationExplanation(
   const attempt = currentConfigurationAttempt(device, version);
   if (device.apply_state === "verification_unknown")
     return "The agent could not confirm that this version is running. Inspect the host before retrying.";
-  if (device.apply_state === "failed" && attempt?.state === "failed")
-    return withFinding(
-      failureReasons[attempt.error?.code || ""] ||
-        "The agent could not apply this version. Review device activity for the reported issue.",
-      attemptDiagnostics(device, version),
+  if (device.apply_state === "failed" && attempt?.state === "failed") {
+    const diagnostics = attemptDiagnostics(device, version);
+    return (
+      (attempt.error?.code === "CAPABILITY_DENIED"
+        ? refusalReason(diagnostics)
+        : null) ??
+      withFinding(
+        failureReasons[attempt.error?.code || ""] ||
+          "The agent could not apply this version. Review device activity for the reported issue.",
+        diagnostics,
+      )
     );
+  }
   if (device.apply_state === "rolled_back" && attempt?.state === "rolled_back")
     return withFinding(
       "This version did not start successfully. The agent restored its last verified configuration.",

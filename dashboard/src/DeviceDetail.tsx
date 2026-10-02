@@ -17,6 +17,7 @@ import {
 import {
   type AuditHistoryPage,
   type Configuration,
+  type ConfigurationAttempt,
   type Device,
   type IssueHistoryPage,
   type Policy,
@@ -30,6 +31,9 @@ import AgentUpgrade from "./AgentUpgrade";
 import TargetDialog from "./LazyTargetDialog";
 import DeploymentPicker from "./DeploymentPicker";
 import TelemetryPanel from "./TelemetryPanel";
+import ComponentMetrics from "./ComponentMetrics";
+import { agentRefusal, capabilityPhrase } from "./agentRefusals";
+import { agentSettingsLine } from "./agentSettingsLine";
 import DeviceSecrets from "./DeviceSecrets";
 import EffectiveConfiguration from "./EffectiveConfiguration";
 import DeviceRevocation from "./DeviceAccessRevocation";
@@ -55,6 +59,7 @@ import {
   Skeleton,
   StatusBadge,
   TimeAgo,
+  useMediaQuery,
   useResource,
 } from "./ui";
 import {
@@ -368,14 +373,22 @@ function RunningLine({ device, number }: { device: Device; number?: number }) {
   );
 }
 /**
- * Refusals the agent decides itself, before Vector sees the version: the
- * failure is the host's policy, not a Vector check.
+ * Why a failure happened, in the headline's words. A refusal the agent decides
+ * itself, before Vector sees the version, names its own cause (an api block,
+ * a component ID that names a path); any other capability refusal is the
+ * host's policy, which depends on the host's mode. Anything else is the
+ * apply step that failed.
  */
-const agentRefusals: Record<string, string> = {
-  CAPABILITY_DENIED: "because this host's restricted mode doesn't allow it",
-  DYNAMIC_CAPABILITY_DENIED:
-    "because this host's restricted mode doesn't allow it",
-};
+export function failurePhrase(device: Device, attempt: ConfigurationAttempt) {
+  const error = attempt.error;
+  if (!error) return "";
+  if (error.code !== "CAPABILITY_DENIED")
+    return failureStagePhrase(error.stage);
+  return (
+    agentRefusal(error.diagnostics)?.phrase ??
+    capabilityPhrase(device.configuration_mode)
+  );
+}
 function FailureDetails({
   device,
   version,
@@ -386,9 +399,11 @@ function FailureDetails({
   const attempt = currentConfigurationAttempt(device, version);
   if (!attempt?.error || !["failed", "rolled_back"].includes(attempt.state))
     return null;
-  const phrase =
-    agentRefusals[attempt.error.code] ||
-    failureStagePhrase(attempt.error.stage);
+  const phrase = failurePhrase(device, attempt);
+  const refusal =
+    attempt.error.code === "CAPABILITY_DENIED"
+      ? agentRefusal(attempt.error.diagnostics)
+      : null;
   return (
     <div className="device-failure-details" role="note">
       <div className="device-failure-details-head">
@@ -399,6 +414,12 @@ function FailureDetails({
         </strong>
         <small className="device-muted">
           Agent code <code>{attempt.error.code}</code>
+          {refusal && (
+            <>
+              {" · finding "}
+              <code>{refusal.code}</code>
+            </>
+          )}
         </small>
       </div>
       {/* The reason is explained from the code above; agent messages are
@@ -813,6 +834,9 @@ export default function DeviceDetail({
   if (applying !== fast) setFast(applying);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [deployOpen, setDeployOpen] = useState(false);
+  // Where the layout is two columns, the Components table has a full-width
+  // card of its own below them; in one column it follows the charts.
+  const wide = useMediaQuery("(min-width: 1100px)");
   const canReviewPolicy =
     roleAllows(user, "operate") && device?.status !== "revoked";
   useEffect(() => {
@@ -848,6 +872,7 @@ export default function DeviceDetail({
   };
   const pipelineAssignment = assignmentLink(device?.assignment?.id);
   const settingsAssignment = assignmentLink(device?.policy_assignment?.id);
+  const settingsLine = device ? agentSettingsLine(device) : "";
   const breadcrumb = [{ label: "Devices", href: "#/devices" }];
   const live = {
     updatedAt: resource.updatedAt,
@@ -1214,7 +1239,7 @@ export default function DeviceDetail({
           />
           <EffectiveConfiguration key={device.id} device={device} />
           {/* Vector's warnings and errors have their own card below. */}
-          <TelemetryPanel device={device} logs={false} />
+          <TelemetryPanel device={device} logs={false} components={!wide} />
           <VectorLogs device={device} />
           <DeviceActivity device={device} outage={!!resource.error} />
         </div>
@@ -1290,17 +1315,20 @@ export default function DeviceDetail({
             <div className="device-card-head">
               <h2 id="device-agent-settings-heading">Agent settings</h2>
             </div>
-            <p className="device-card-text">
-              {device.policy_assignment
-                ? `Current server policy comes from an assignment with priority ${device.policy_assignment.priority}.`
-                : "No settings assignment reported."}
-            </p>
+            {settingsLine && (
+              <p
+                className="device-card-text"
+                title={
+                  device.policy_assignment?.created_at
+                    ? exactLocal(device.policy_assignment.created_at)
+                    : undefined
+                }
+              >
+                {settingsLine}
+              </p>
+            )}
             {device.effective_policy ? (
               <dl className="control-summary-list">
-                <div>
-                  <dt>Check-in interval</dt>
-                  <dd>{device.effective_policy.heartbeat_seconds} seconds</dd>
-                </div>
                 <div>
                   <dt>Metrics</dt>
                   <dd>
@@ -1482,6 +1510,15 @@ export default function DeviceDetail({
           </Disclosure>
         </aside>
       </div>
+      {wide && (device.telemetry?.components?.length ?? 0) > 0 && (
+        <div className="device-card device-components">
+          <ComponentMetrics
+            components={device.telemetry!.components!}
+            sampledAt={device.telemetry!.sampled_at}
+            level={2}
+          />
+        </div>
+      )}
       {deployOpen && operate && (
         <DeploymentPicker
           user={user}

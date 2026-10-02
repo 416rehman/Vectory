@@ -1,0 +1,187 @@
+/* The device page's Components table: five numeric columns, each fact once.
+   Out / s carries what was filtered out beneath it, Errors carries what was
+   dropped, and the two fills are 40 px meters (the number is in the tooltip and
+   in the cell for screen readers). */
+.component-metrics {
+  min-width: 0;
+}
+.component-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.component-heading :is(h2, h3) {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
+  font-weight: var(--weight-semibold);
+}
+.component-heading span {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+/* The shared table rules set cell padding and alignment with three classes of
+   weight; these match them so the numbers line up under their headings. */
+.data-table-scroll > table.data-table.component-table {
+  min-width: 600px;
+}
+.data-table-scroll .data-table.component-table :is(th, td) {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.data-table-scroll .data-table.component-table th:first-child {
+  min-width: 200px;
+}
+.data-table-scroll .data-table.component-table td:first-child strong {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+.data-table-scroll .data-table.component-table .component-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.data-table-scroll
+  .data-table.component-table
+  th.component-number
+  .data-table-heading {
+  justify-content: flex-end;
+}
+/* The sort arrow sits before the label, so the label ends where the numbers do. */
+.data-table-scroll
+  .data-table.component-table
+  th.component-number
+  .data-table-sort {
+  flex-direction: row-reverse;
+  margin-right: -6px;
+  margin-left: 0;
+}
+.data-table-scroll .data-table.component-table .component-meter-column {
+  width: 1%;
+  white-space: nowrap;
+}
+.component-kind,
+.component-outputs,
+.component-subline {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+  font-weight: var(--weight-regular);
+}
+.component-kind,
+.component-outputs {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.component-subline {
+  white-space: nowrap;
+}
+.component-subline[data-bad],
+.component-errors[data-bad] {
+  color: var(--danger-text);
+}
+.component-errors[data-bad] {
+  font-weight: var(--weight-semibold);
+}
+.component-unit {
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+}
+.component-missing {
+  color: var(--text-subtle);
+}
+.component-meter-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The unfilled track is a quieter step of the same line colour. */
+.component-meter {
+  display: inline-block;
+  width: 40px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.component-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--mark-info);
+}
+.component-meter[data-tone="warning"] > span {
+  background: var(--mark-warning);
+}
+.component-meter[data-tone="danger"] > span {
+  background: var(--mark-danger);
+}
+.component-meter-value {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.component-meter-value[data-tone="warning"] {
+  color: var(--warning-text);
+}
+.component-meter-value[data-tone="danger"] {
+  color: var(--danger-text);
+}
+.component-kind-chip {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-transform: capitalize;
+}
+
+/* Phone card: every fact the table has, two to a row. */
+.component-metrics .data-list-meta > span:has(> .component-facts) {
+  flex-basis: 100%;
+}
+.component-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1-5) var(--space-4);
+  margin: var(--space-1) 0 0;
+}
+.component-facts > div {
+  min-width: 0;
+}
+.component-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-xs);
+}
+.component-facts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* The cells hold text for screen readers that is positioned absolutely. Where
+   the scroller is its containing block it is clipped with the rest; otherwise
+   it sits past the table's far edge and widens the page. */
+.component-scroll {
+  position: relative;
+}
+/* A table that has to scroll says so. */
+.component-scroll-cue {
+  display: none;
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+.component-scroll[data-overflow] ~ .component-scroll-cue {
+  display: block;
+}
+.component-note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-sm);
+}

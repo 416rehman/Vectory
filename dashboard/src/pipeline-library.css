@@ -306,6 +306,12 @@
   color: var(--muted);
   font-size: 12px;
 }
+/* How the newest rollout of an unrunning version ended, linked to it. */
+.pipeline-status-outcome a {
+  color: var(--danger-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .pipeline-status-chip {
   padding: 1px 7px;
   border: 1px solid var(--ed-warning-line);

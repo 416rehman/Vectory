@@ -510,7 +510,11 @@ export function FailureGroups({
                 navigate={navigate}
               />
             );
-          const text = failureText(failure.diagnostic, failure.message);
+          const text = failureText(
+            failure.diagnostic,
+            failure.message,
+            failure.code,
+          );
           const fix = fixHref && pipelineFixable(failure.code) ? fixHref : null;
           const code = failure.code || text.code;
           return (
