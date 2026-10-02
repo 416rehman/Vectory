@@ -18,6 +18,7 @@ pub mod device;
 pub mod device_ca;
 pub mod device_recovery_requests;
 pub mod device_revocation;
+pub mod effective_config;
 pub mod enrollment_scope;
 pub mod error;
 pub mod fleet;
