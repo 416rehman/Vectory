@@ -107,7 +107,7 @@ const testCase = (name, target = "enrich") => ({
     },
   ],
 });
-function baseDocument(tests, lua) {
+function baseDocument(tests, kind) {
   const config = {
     sources: { demo: { type: "demo_logs", format: "json" } },
     transforms: {
@@ -115,7 +115,20 @@ function baseDocument(tests, lua) {
     },
     sinks: { output: { type: "blackhole", inputs: ["enrich"] } },
   };
-  if (lua) {
+  if (kind === "enrichment") {
+    config.enrichment_tables = {
+      regions: {
+        type: "file",
+        file: {
+          path: "/etc/vectory/regions.csv",
+          encoding: { type: "csv", include_headers: true },
+        },
+      },
+    };
+    config.transforms.enrich.source =
+      '.seen = true\n.region = get_enrichment_table_record!("regions", { "id": .id })';
+  }
+  if (kind === "lua") {
     config.transforms.probe = {
       type: "lua",
       version: "2",
@@ -189,7 +202,7 @@ const luaTestReply = {
     {
       severity: "error",
       section: "tests",
-      code: "lua_on_devices",
+      code: "tests_on_devices",
       message: luaSentence,
     },
   ],
@@ -219,8 +232,51 @@ const luaValidation = {
   ],
   vector_version: "0.58.0",
 };
+// The same for a draft with an enrichment table that reads a file: the isolated
+// worker never opens an author's path.
+const enrichmentSentence =
+  "Enrichment tables are read on devices, so tests that use them run only on devices. Use Check on devices with Also run the pipeline's tests.";
+const enrichmentTestReply = {
+  ...luaTestReply,
+  deferred_reasons: ["Enrichment tables are read on devices"],
+  errors: [enrichmentSentence],
+  warnings: [
+    "Each device checks enrichment data files before applying this version.",
+  ],
+  diagnostics: [
+    {
+      severity: "error",
+      section: "tests",
+      code: "tests_on_devices",
+      message: enrichmentSentence,
+    },
+  ],
+};
+const enrichmentValidation = {
+  ...luaValidation,
+  deferred_reasons: [
+    "Enrichment tables are read on devices",
+    "device enrichment data",
+    "device-local paths or external code files",
+  ],
+  diagnostics: [
+    {
+      severity: "warning",
+      section: "transforms",
+      component: "enrich",
+      code: "device_check",
+      message:
+        "This step looks up an enrichment table, which each device reads.",
+    },
+  ],
+  warnings: [
+    "transforms.enrich: This step looks up an enrichment table, which each device reads.",
+    "Each device checks enrichment data files and local files and paths before applying this version.",
+  ],
+};
 function testReply(mode) {
   if (mode === "lua") return luaTestReply;
+  if (mode === "enrichment") return enrichmentTestReply;
   const tests = rows[mode];
   const stopped = tests.filter((t) => !t.passed).length;
   return {
@@ -251,7 +307,7 @@ function state(options = {}) {
             ),
           )
         : undefined,
-      options.mode === "lua",
+      ["lua", "enrichment"].includes(options.mode) ? options.mode : undefined,
     ),
     mode: options.mode || "passed",
     versions: [],
@@ -393,16 +449,18 @@ async function start(f, options = {}) {
       return reply(
         f.mode === "lua"
           ? luaValidation
-          : {
-              valid: true,
-              vector_validated: true,
-              static_checked: true,
-              deferred: false,
-              diagnostics: [],
-              errors: [],
-              warnings: [],
-              vector_version: "0.58.0",
-            },
+          : f.mode === "enrichment"
+            ? enrichmentValidation
+            : {
+                valid: true,
+                vector_validated: true,
+                static_checked: true,
+                deferred: false,
+                diagnostics: [],
+                errors: [],
+                warnings: [],
+                vector_version: "0.58.0",
+              },
       );
     if (
       method === "POST" &&
@@ -788,6 +846,47 @@ try {
           s.page.getByRole("dialog", { name: "Version 1 published" }),
         ).toBeVisible();
         expect(s.f.posts).toHaveLength(1);
+        expect(s.f.posts[0].body.acknowledge_test_failures).toBe(true);
+        clean(s.f);
+      } finally {
+        await s.close();
+      }
+    },
+  );
+
+  await run(
+    "an enrichment table that reads a file: the tests did not run here, the sentence says why, and the check line names the files",
+    async () => {
+      const s = await start(state({ mode: "enrichment" }));
+      try {
+        await openReview(s.page);
+        const region = testsRegion(s.page);
+        await expect(region).toHaveAttribute("data-tests-state", "failing");
+        await expect(region).toContainText(
+          "Tests: Vector didn't run either of the 2 tests",
+        );
+        await expect(region).toContainText(enrichmentSentence);
+        await runCheck(s.page);
+        await expect(reviewDialog(s.page)).toContainText(
+          "Vector 0.58 accepted this pipeline. Each device checks enrichment data files and local files and paths before applying it.",
+        );
+        // The check line keeps its own words, never the raw reason.
+        expect(
+          await reviewDialog(s.page)
+            .locator(".publish-review-check")
+            .innerText(),
+        ).not.toContain("Enrichment tables are read on devices");
+        await expect(footer(s.page)).toHaveText([
+          "Back to draft",
+          "Open tests",
+          "Publish anyway",
+        ]);
+        await reviewDialog(s.page)
+          .getByRole("button", { name: "Publish anyway", exact: true })
+          .click();
+        await expect(
+          s.page.getByRole("dialog", { name: "Version 1 published" }),
+        ).toBeVisible();
         expect(s.f.posts[0].body.acknowledge_test_failures).toBe(true);
         clean(s.f);
       } finally {

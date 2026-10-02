@@ -542,6 +542,7 @@ const deferralPhrases: Record<string, string> = {
   "Lua runs on devices": "Lua code",
   "native configuration provider": "the configuration provider",
   "device enrichment data": "enrichment data files",
+  "Enrichment tables are read on devices": "enrichment data files",
   "device-local paths or external code files": "local files and paths",
 };
 
