@@ -101,15 +101,17 @@ jobs:
         if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs install
-      - name: Read the generated unit's sandbox from the running service
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        timeout-minutes: 10
-        run: node tests/platform/linux-sandbox.mjs generated
       - name: Run the clean-install workflow against the service
         id: apply
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs apply generated
+      # After the apply, which gives the agent a data directory to report. A failed
+      # apply still gets its reading: the mount table is what explains it.
+      - name: Read the generated unit's sandbox from the running service
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/linux-sandbox.mjs generated
       - name: Restart the service, kill the agent and stop the service
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         timeout-minutes: 25
@@ -327,6 +329,18 @@ jobs:
             }
             Get-ChildItem -LiteralPath (Join-Path $folder.FullName 'state') -Filter 'vector.log*' -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item -LiteralPath $_.FullName (Join-Path $logs "$($folder.Name) $($_.Name)") }
           }
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          foreach ($name in 'validator.log', 'validator-error.log', 'server.log', 'server-error.log') {
+            $file = Join-Path $PWD ".local/preview/$name"
+            if (Test-Path -LiteralPath $file) {
+              Write-Host "::group::$name"
+              Get-Content -LiteralPath $file -Tail 40
+              Write-Host '::endgroup::'
+            }
+          }
+          Write-Host '::group::The service, if it is still registered'
+          sc.exe query Vectory
+          Write-Host '::endgroup::'
           foreach ($name in 'server.pid', 'validator.pid') {
             $file = Join-Path $PWD ".local/preview/$name"
             if (Test-Path -LiteralPath $file) { Stop-Process -Id ([int](Get-Content -LiteralPath $file)) -Force -ErrorAction SilentlyContinue }

@@ -48,6 +48,17 @@ const indent = (text) =>
  * The command line is logged, so keep secrets out of arguments: pass them in
  * `input`, which is never logged.
  */
+/**
+ * The environment for Windows PowerShell. A step that runs under PowerShell 7
+ * carries its module path, and Windows PowerShell 5.1 then cannot load its own
+ * Microsoft.PowerShell.Security ("Set-Acl ... the module could not be loaded").
+ */
+export function windowsPowerShellEnv(env = process.env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.toLowerCase() !== "psmodulepath"),
+  );
+}
+
 export function run(command, args = [], options = {}) {
   const {
     input,
@@ -70,7 +81,12 @@ export function run(command, args = [], options = {}) {
     timeout: timeoutMs,
     windowsHide: true,
     maxBuffer: 256 * 1024 * 1024,
-    env: env ? { ...process.env, ...env } : process.env,
+    env: {
+      ...(windows && /^powershell(\.exe)?$/i.test(command)
+        ? windowsPowerShellEnv()
+        : process.env),
+      ...env,
+    },
   });
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";

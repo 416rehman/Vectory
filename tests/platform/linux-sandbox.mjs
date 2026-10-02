@@ -458,11 +458,13 @@ async function packaged(evidence) {
 
   // What the server last verified on the device, before the unit changes.
   const row = await device();
-  const lastGood =
-    row.apply_state === "verified_applied" ? row.actual_sha256 : null;
+  // (After the apply phase the device is unmanaged and keeps running it.)
+  const lastGood = ["verified_applied", "unmanaged"].includes(row.apply_state)
+    ? row.actual_sha256
+    : null;
   if (!lastGood)
     throw new Error(
-      `No pipeline is verified on the device; run service.mjs apply first: ${JSON.stringify(row)}`,
+      `No pipeline runs on the device; run service.mjs apply first: ${JSON.stringify(row)}`,
     );
 
   await evidence.step(

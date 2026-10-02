@@ -7,7 +7,7 @@ import net from "node:net";
 import http from "node:http";
 import { existsSync, readdirSync } from "node:fs";
 import { agentPort, connect, downloadAgent, previewDir } from "./platform/instance.mjs";
-import { windows } from "./platform/lib.mjs";
+import { windows, windowsPowerShellEnv } from "./platform/lib.mjs";
 // The clean-install workflow against a running preview (scripts/preview.sh):
 // first administrator (on a fresh instance), agent download from the release
 // listing with its SHA-256, install, enroll, publish, assign, apply, drift,
@@ -242,7 +242,11 @@ try {
           "-Path",
           secretFile,
         ],
-        { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+        {
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: windowsPowerShellEnv(),
+        },
       );
       let said = "";
       p.stdout.on("data", (chunk) => (said += chunk));
