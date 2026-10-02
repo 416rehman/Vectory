@@ -72,10 +72,13 @@ function assertResponseIdentity(path: string, method: string, value: unknown) {
     match =
       route === "/devices/inventory"
         ? null
-        : route.match(/^\/devices\/([^/]+)(\/telemetry)?$/);
+        : route.match(
+            /^\/devices\/([^/]+)(\/telemetry|\/configuration(?:\/diff)?)?$/,
+          );
     if (match?.[2]) {
       field = "device_id";
-      resource = "device metrics";
+      resource =
+        match[2] === "/telemetry" ? "device metrics" : "device configuration";
     }
     if (!match) {
       match = route.match(/^\/versions\/([^/]+)$/);
@@ -711,6 +714,89 @@ export type VersionLabel = {
   number: number | null;
   configuration_id: string | null;
   configuration_name: string | null;
+};
+/** One generation a device was offered (`GET /devices/{id}/configuration`). */
+export type OfferedGeneration = {
+  generation: number;
+  version: VersionLabel;
+  sha256: string;
+  /** Null for a generation assigned before artifacts were stored per generation. */
+  offered_at: string | null;
+};
+export type ConfigurationVariable = {
+  name: string;
+  /** RFC 6901 pointer to the declared field. */
+  path: string;
+  type: "string" | "integer" | "boolean";
+  /** What the offered bytes hold there; null when it is never shown. */
+  value: string | number | boolean | null;
+  /** `group` is reserved and not sent yet; null when nothing explains the value. */
+  source: "device" | "group" | "default" | null;
+};
+/** What the agent reports about its managed file, beside the offered artifact. */
+export type RunningConfiguration = {
+  sha256: string | null;
+  template_sha256: string | null;
+  /** Null: nothing to compare (no digest, nothing offered, or revoked). */
+  matches: boolean | null;
+  /** Another generation the report is, never a claim about a local file. */
+  matches_generation: number | null;
+  reported_at: string | null;
+};
+/** What a device was offered, exactly as stored, with the agent's report. */
+export type DeviceConfiguration = {
+  device_id: string;
+  generation: number;
+  current: boolean;
+  offered_at: string | null;
+  version: VersionLabel | null;
+  sha256: string | null;
+  size: number | null;
+  format: "json" | "yaml" | null;
+  content: string | null;
+  uses_local_secrets: boolean;
+  variables: ConfigurationVariable[];
+  running: RunningConfiguration;
+  previous: {
+    generation: number;
+    version: VersionLabel;
+    sha256: string;
+  } | null;
+  generations: { total: number; items: OfferedGeneration[] };
+};
+export type ConfigurationDiffLine = {
+  kind: "context" | "removed" | "added";
+  old_line: number | null;
+  new_line: number | null;
+  text: string;
+};
+export type ConfigurationDiffHunk = {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  /** Dotted keys around the first changed line; null at the top level. */
+  section: string | null;
+  lines: ConfigurationDiffLine[];
+};
+export type ConfigurationDiffSide = {
+  generation: number;
+  version: VersionLabel;
+  sha256: string;
+  size: number;
+  offered_at: string | null;
+};
+export type DeviceConfigurationDiff = {
+  device_id: string;
+  from: ConfigurationDiffSide | null;
+  to: ConfigurationDiffSide;
+  identical: boolean;
+  counts: { added: number; removed: number; changed: number };
+  hunks: ConfigurationDiffHunk[];
+  unified: string;
+  truncated: boolean;
+  total_lines: number;
+  approximate: boolean;
 };
 export type Group = {
   id: string;
@@ -1725,6 +1811,127 @@ export const DeviceSchema = z
       .optional(),
   })
   .passthrough();
+const artifactDigest = z.string().regex(/^[a-f0-9]{64}$/);
+const generationNumber = z
+  .number()
+  .int()
+  .positive()
+  .max(Number.MAX_SAFE_INTEGER);
+const OfferedVersionSchema = z.object({
+  id: z.string(),
+  number: z.number().int().positive().nullable(),
+  configuration_id: z.string().nullable(),
+  configuration_name: z.string().nullable(),
+});
+const OfferedGenerationSchema = z
+  .object({
+    generation: generationNumber,
+    version: OfferedVersionSchema,
+    sha256: artifactDigest,
+    offered_at: z.string().nullable(),
+  })
+  .passthrough();
+/** What a device was offered and what its agent reports running. */
+export const DeviceConfigurationSchema = z
+  .object({
+    device_id: z.string(),
+    generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    current: z.boolean(),
+    offered_at: z.string().nullable(),
+    version: OfferedVersionSchema.nullable(),
+    sha256: artifactDigest.nullable(),
+    size: z.number().int().positive().max(1_048_576).nullable(),
+    format: z.enum(["json", "yaml"]).nullable(),
+    content: z.string().max(1_048_576).nullable(),
+    uses_local_secrets: z.boolean(),
+    variables: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            path: z.string(),
+            type: z.enum(["string", "integer", "boolean"]),
+            value: z.union([z.string(), z.number(), z.boolean()]).nullable(),
+            source: z.enum(["device", "group", "default"]).nullable(),
+          })
+          .passthrough(),
+      )
+      .max(64),
+    running: z
+      .object({
+        sha256: artifactDigest.nullable(),
+        template_sha256: artifactDigest.nullable(),
+        matches: z.boolean().nullable(),
+        matches_generation: generationNumber.nullable(),
+        reported_at: z.string().nullable(),
+      })
+      .passthrough(),
+    previous: z
+      .object({
+        generation: generationNumber,
+        version: OfferedVersionSchema,
+        sha256: artifactDigest,
+      })
+      .passthrough()
+      .nullable(),
+    generations: z
+      .object({
+        total: z.number().int().nonnegative(),
+        items: z.array(OfferedGenerationSchema).max(50),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+const DiffSideSchema = z
+  .object({
+    generation: generationNumber,
+    version: OfferedVersionSchema,
+    sha256: artifactDigest,
+    size: z.number().int().positive().max(1_048_576),
+    offered_at: z.string().nullable(),
+  })
+  .passthrough();
+/** A bounded comparison of two offered generations. */
+export const DeviceConfigurationDiffSchema = z
+  .object({
+    device_id: z.string(),
+    from: DiffSideSchema.nullable(),
+    to: DiffSideSchema,
+    identical: z.boolean(),
+    counts: z.object({
+      added: z.number().int().nonnegative(),
+      removed: z.number().int().nonnegative(),
+      changed: z.number().int().nonnegative(),
+    }),
+    hunks: z
+      .array(
+        z
+          .object({
+            old_start: z.number().int().nonnegative(),
+            old_lines: z.number().int().nonnegative(),
+            new_start: z.number().int().nonnegative(),
+            new_lines: z.number().int().nonnegative(),
+            section: z.string().max(200).nullable(),
+            lines: z
+              .array(
+                z.object({
+                  kind: z.enum(["context", "removed", "added"]),
+                  old_line: z.number().int().positive().nullable(),
+                  new_line: z.number().int().positive().nullable(),
+                  text: z.string(),
+                }),
+              )
+              .max(1997),
+          })
+          .passthrough(),
+      )
+      .max(1000),
+    unified: z.string(),
+    truncated: z.boolean(),
+    total_lines: z.number().int().nonnegative(),
+    approximate: z.boolean(),
+  })
+  .passthrough();
 export const ConfigurationSchema = z
   .object({
     id: z.string(),
@@ -2152,6 +2359,10 @@ function responseSchema(path: string, method: string): z.ZodType | undefined {
     return DeploymentRequestLookupSchema;
   if (path === "/devices") return z.array(DeviceSchema);
   if (/^\/devices\/[^/]+\/telemetry$/.test(path)) return TelemetryHistorySchema;
+  if (/^\/devices\/[^/]+\/configuration$/.test(path))
+    return DeviceConfigurationSchema;
+  if (/^\/devices\/[^/]+\/configuration\/diff$/.test(path))
+    return DeviceConfigurationDiffSchema;
   if (path === "/telemetry/summary") return TelemetrySummarySchema;
   if (/^\/versions\/[^/]+\/telemetry$/.test(path))
     return VersionTelemetrySchema;

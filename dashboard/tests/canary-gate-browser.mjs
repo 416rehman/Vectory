@@ -2,6 +2,7 @@
 import { createServer } from "vite";
 import { chromium, expect } from "@playwright/test";
 import AxeBuilder from "./axe.mjs";
+import { nothingOffered } from "./fleet-replies.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -303,6 +304,10 @@ async function start(
         (d) => path === "/devices/" + d.id + "/telemetry",
       );
       if (telemetry) return respond({ device_id: telemetry.id, samples: [] });
+      const configuration = f.devices.find(
+        (d) => path === "/devices/" + d.id + "/configuration",
+      );
+      if (configuration) return respond(nothingOffered(configuration.id));
     }
     // ...and group names, open issues and recent activity.
     if (path === "/groups") return respond([]);
