@@ -252,7 +252,16 @@ async fn main() -> anyhow::Result<()> {
         api::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
     tracing::info!(%web_addr,"dashboard listener ready (use a TLS reverse proxy in production)");
     if let (Some(cert), Some(key), Some(agent_addr)) = (cert, key, agent_addr) {
-        tokio::select! {result=axum::serve(listener,app)=>{result?},result=device::serve_tls(state.clone(),&agent_addr,&cert,&key)=>{result?},_=shutdown_signal()=>{release_waits(&state).await}}
+        // `axum::serve` logs a failed accept and tries again; `serve_tls` does
+        // the same and returns only when its listener is unusable. Whichever
+        // way the server ends, the agents' parked waits are answered first.
+        let outcome = tokio::select! {
+            result = axum::serve(listener, app) => result.map_err(anyhow::Error::from),
+            result = device::serve_tls(state.clone(), &agent_addr, &cert, &key) => result,
+            _ = shutdown_signal() => Ok(()),
+        };
+        release_waits(&state).await;
+        outcome?;
     } else {
         tracing::warn!(
             "Explicit development mode: agent listener disabled without TLS certificate and key"

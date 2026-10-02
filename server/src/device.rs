@@ -1175,6 +1175,148 @@ pub async fn artifact(
     );
     Ok(response)
 }
+/// Where the agent listener takes its connections from: a TCP listener in
+/// production. A test wraps one to make an accept fail.
+pub trait Accept: Send + 'static {
+    fn accept(
+        &mut self,
+    ) -> impl std::future::Future<
+        Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>,
+    > + Send;
+}
+impl Accept for tokio::net::TcpListener {
+    async fn accept(&mut self) -> std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
+        tokio::net::TcpListener::accept(self).await
+    }
+}
+
+/// What a failed `accept` means for the listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceptFailure {
+    /// One connection went away before it was accepted: take the next at once.
+    Skip,
+    /// The process or the host is short of descriptors, buffers or memory
+    /// (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`), or met some other passing
+    /// trouble. Closing connections frees what it needs, so wait a moment.
+    Pause,
+    /// The listening socket itself is unusable.
+    Unusable,
+}
+
+/// How the listener treats an `accept` error. Only a socket that can never
+/// accept again ends the listener; ending it ends the whole server, and every
+/// parked wait with it.
+pub fn accept_failure(error: &std::io::Error) -> AcceptFailure {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::ConnectionAborted
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionRefused
+        | ErrorKind::Interrupted
+        | ErrorKind::WouldBlock
+        | ErrorKind::TimedOut => AcceptFailure::Skip,
+        ErrorKind::InvalidInput => AcceptFailure::Unusable,
+        _ if not_a_socket(error.raw_os_error()) => AcceptFailure::Unusable,
+        _ => AcceptFailure::Pause,
+    }
+}
+
+/// `EBADF` and `ENOTSOCK` (`WSAEBADF` and `WSAENOTSOCK` on Windows): the
+/// descriptor is not an open socket.
+fn not_a_socket(code: Option<i32>) -> bool {
+    #[cfg(target_os = "linux")]
+    const CODES: &[i32] = &[9, 88];
+    #[cfg(all(unix, not(target_os = "linux")))]
+    const CODES: &[i32] = &[9, 38];
+    #[cfg(windows)]
+    const CODES: &[i32] = &[10009, 10038];
+    #[cfg(not(any(unix, windows)))]
+    const CODES: &[i32] = &[];
+    code.is_some_and(|code| CODES.contains(&code))
+}
+
+const PAUSE_SHORTEST: std::time::Duration = std::time::Duration::from_millis(10);
+const PAUSE_LONGEST: std::time::Duration = std::time::Duration::from_millis(100);
+const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A run of failed accepts: how long to pause after the next one, and how
+/// often the log hears about it (a descriptor shortage can last as long as an
+/// attack does).
+#[derive(Default)]
+struct AcceptTrouble {
+    in_a_row: u32,
+    unreported: u64,
+    reported: Option<std::time::Instant>,
+}
+impl AcceptTrouble {
+    /// Note one more failure and say how long to wait before accepting again:
+    /// 10 ms, doubling to 100 ms while it lasts.
+    fn failed(&mut self, error: &std::io::Error, now: std::time::Instant) -> std::time::Duration {
+        self.in_a_row = self.in_a_row.saturating_add(1);
+        self.unreported += 1;
+        if self
+            .reported
+            .is_none_or(|at| now.duration_since(at) >= REPORT_EVERY)
+        {
+            tracing::warn!(
+                %error,
+                failures = self.unreported,
+                "the agent listener could not accept a connection; pausing briefly and trying again"
+            );
+            self.reported = Some(now);
+            self.unreported = 0;
+        }
+        (PAUSE_SHORTEST * 2u32.saturating_pow(self.in_a_row - 1)).min(PAUSE_LONGEST)
+    }
+    fn accepted(&mut self) {
+        if self.reported.is_some() {
+            tracing::info!("the agent listener accepts connections again");
+        }
+        *self = Self::default();
+    }
+}
+
+/// A connection must deliver its whole ClientHello this soon after it opens.
+/// A real client sends it with its first packet. Nothing is reserved for a
+/// connection until then, so a flood of silent or slow sockets costs sockets
+/// for a few seconds and never a handshake slot.
+const CLIENT_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// How long a slot may wait for a free handshake, and a handshake may take
+/// once its ClientHello is in.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Handshakes in progress at once, from the connection limit. They finish in
+/// milliseconds, so the limit is reached only by a flood of valid hellos.
+fn handshake_slots(maximum_connections: usize) -> usize {
+    (maximum_connections / 8).clamp(128, 4096)
+}
+
+/// One connection's TLS handshake, in the order that keeps silent and slow
+/// sockets away from the slots real devices need.
+async fn begin_tls(
+    socket: tokio::net::TcpStream,
+    config: std::sync::Arc<rustls::ServerConfig>,
+    handshakes: &std::sync::Arc<tokio::sync::Semaphore>,
+) -> Option<tokio_rustls::server::TlsStream<tokio::net::TcpStream>> {
+    let hello = tokio::time::timeout(
+        CLIENT_HELLO_TIMEOUT,
+        tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), socket),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let slot = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshakes.clone().acquire_owned())
+        .await
+        .ok()?
+        .ok()?;
+    let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, hello.into_stream(config))
+        .await
+        .ok()?
+        .ok()?;
+    drop(slot);
+    Some(tls)
+}
+
 pub async fn serve_tls(
     s: State,
     addr: &str,
@@ -1182,8 +1324,20 @@ pub async fn serve_tls(
     key: &std::path::Path,
 ) -> anyhow::Result<()> {
     let config = s.keys.tls_config(cert, key)?;
-    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(%addr,"device TLS listener ready");
+    serve_tls_on(s, listener, config).await
+}
+
+/// The agent listener's loop over any source of connections. It returns only
+/// when the source can never accept again; a failed accept is logged, waited
+/// out and retried.
+pub async fn serve_tls_on<A: Accept>(
+    s: State,
+    mut listener: A,
+    config: rustls::ServerConfig,
+) -> anyhow::Result<()> {
+    let config = std::sync::Arc::new(config);
     let router = router(s);
     let maximum_connections = std::env::var("VECTORY_MAX_AGENT_CONNECTIONS")
         .ok()
@@ -1191,38 +1345,41 @@ pub async fn serve_tls(
         .unwrap_or(16384)
         .clamp(64, 65536);
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(maximum_connections));
-    let handshakes = std::sync::Arc::new(tokio::sync::Semaphore::new(128));
-    tracing::info!(%addr,"device TLS listener ready");
+    let handshakes = std::sync::Arc::new(tokio::sync::Semaphore::new(handshake_slots(
+        maximum_connections,
+    )));
+    let mut trouble = AcceptTrouble::default();
     loop {
-        let (socket, address) = listener.accept().await?;
+        let (socket, address) = match listener.accept().await {
+            Ok(accepted) => {
+                trouble.accepted();
+                accepted
+            }
+            Err(error) => match accept_failure(&error) {
+                AcceptFailure::Skip => continue,
+                AcceptFailure::Pause => {
+                    let pause = trouble.failed(&error, std::time::Instant::now());
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
+                AcceptFailure::Unusable => {
+                    return Err(anyhow::Error::new(error)
+                        .context("the agent listener cannot accept connections"));
+                }
+            },
+        };
         let Ok(permit) = semaphore.clone().try_acquire_owned() else {
             continue;
         };
-        let acceptor = acceptor.clone();
+        let config = config.clone();
         let handshakes = handshakes.clone();
         let router = router.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let handshake_permit = match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                handshakes.acquire_owned(),
-            )
-            .await
-            {
-                Ok(Ok(permit)) => permit,
-                _ => return,
-            };
             let _ = socket.set_nodelay(true);
-            let tls = match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                acceptor.accept(socket),
-            )
-            .await
-            {
-                Ok(Ok(tls)) => tls,
-                _ => return,
+            let Some(tls) = begin_tls(socket, config, &handshakes).await else {
+                return;
             };
-            drop(handshake_permit);
             let peer = PeerCertificate(
                 tls.get_ref()
                     .1
@@ -1251,5 +1408,84 @@ pub async fn serve_tls(
                 .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
                 .await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn an_aborted_connection_is_skipped_and_a_shortage_is_waited_out() {
+        for kind in [
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+        ] {
+            assert_eq!(accept_failure(&Error::from(kind)), AcceptFailure::Skip);
+        }
+        // Anything else that passes is waited out, never fatal.
+        assert_eq!(
+            accept_failure(&Error::other("something passing")),
+            AcceptFailure::Pause
+        );
+        assert_eq!(
+            accept_failure(&Error::from(ErrorKind::OutOfMemory)),
+            AcceptFailure::Pause
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn descriptor_and_memory_shortages_are_waited_out_and_a_dead_socket_ends_the_listener() {
+        // EMFILE, ENFILE, ENOMEM and ENOBUFS (Linux numbers).
+        for code in [24, 23, 12, 105] {
+            assert_eq!(
+                accept_failure(&Error::from_raw_os_error(code)),
+                AcceptFailure::Pause,
+                "{code}"
+            );
+        }
+        // ECONNABORTED and EINTR.
+        for code in [103, 4] {
+            assert_eq!(
+                accept_failure(&Error::from_raw_os_error(code)),
+                AcceptFailure::Skip,
+                "{code}"
+            );
+        }
+        // EBADF, ENOTSOCK and EINVAL (not listening): nothing will ever be accepted.
+        for code in [9, 88, 22] {
+            assert_eq!(
+                accept_failure(&Error::from_raw_os_error(code)),
+                AcceptFailure::Unusable,
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn pauses_start_short_grow_and_stop_at_a_tenth_of_a_second() {
+        let mut trouble = AcceptTrouble::default();
+        let error = Error::other("Too many open files");
+        let now = std::time::Instant::now();
+        let pauses: Vec<u64> = (0..8)
+            .map(|_| trouble.failed(&error, now).as_millis() as u64)
+            .collect();
+        assert_eq!(pauses, [10, 20, 40, 80, 100, 100, 100, 100]);
+        // Accepting again starts the next shortage over.
+        trouble.accepted();
+        assert_eq!(trouble.failed(&error, now).as_millis(), 10);
+    }
+
+    #[test]
+    fn handshake_slots_follow_the_connection_limit() {
+        assert_eq!(handshake_slots(16384), 2048);
+        assert_eq!(handshake_slots(64), 128);
+        assert_eq!(handshake_slots(1024), 128);
+        assert_eq!(handshake_slots(8192), 1024);
+        assert_eq!(handshake_slots(65536), 4096);
     }
 }
