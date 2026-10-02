@@ -79,35 +79,45 @@ func TestServiceAccountMustBeAbleToReachItsFolders(t *testing.T) {
 	if err := os.MkdirAll(leaf, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The walk stops at the test's own folder: what is above it (the system's
+	// temporary directory, private to the user on macOS) is not the test's.
+	stop := filepath.Dir(root)
 	// Another account, as the service account is for a root-owned tree: the
-	// closed directory is no way in.
+	// closed directories are no way in.
 	other, otherGroup := os.Getuid()+1000, os.Getgid()+1000
-	err := checkServiceCanReach(leaf, "vectory", other, otherGroup)
-	if err == nil || !strings.Contains(err.Error(), "chmod o+x") || !strings.Contains(err.Error(), filepath.Join(closed, "vectory")) {
-		t.Fatalf("a closed directory above the folder: %v", err)
+	dir, mode, err := closedAbove(leaf, stop, other, otherGroup)
+	if err != nil || dir != filepath.Join(closed, "vectory") || mode != 0700 {
+		t.Fatalf("the first closed directory above the folder: %q %04o %v", dir, mode, err)
 	}
-	// Opening every directory above it lets the account in (the test's own
-	// folders, up to the system's temporary directory, included).
-	for dir := filepath.Join(closed, "vectory"); dir != os.TempDir() && dir != "/"; dir = filepath.Dir(dir) {
-		if err := os.Chmod(dir, 0755); err != nil {
+	// Opening every directory above it lets the account in.
+	for _, d := range []string{filepath.Join(closed, "vectory"), closed, root} {
+		if err := os.Chmod(d, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := checkServiceCanReach(leaf, "vectory", other, otherGroup); err != nil {
-		t.Fatalf("open directories: %v", err)
+	if dir, _, err := closedAbove(leaf, stop, other, otherGroup); err != nil || dir != "" {
+		t.Fatalf("open directories: %q %v", dir, err)
 	}
 	// A directory the account itself owns is open to it whatever its mode.
 	if err := os.Chmod(filepath.Join(closed, "vectory"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkServiceCanReach(leaf, "vectory", os.Getuid(), os.Getgid()); err != nil {
-		t.Fatalf("a directory the account owns: %v", err)
+	if dir, _, err := closedAbove(leaf, stop, os.Getuid(), os.Getgid()); err != nil || dir != "" {
+		t.Fatalf("a directory the account owns: %q %v", dir, err)
 	}
 	// A group that may search it is enough.
 	if err := os.Chmod(filepath.Join(closed, "vectory"), 0710); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkServiceCanReach(leaf, "vectory", other, os.Getgid()); err != nil {
-		t.Fatalf("a group that may search: %v", err)
+	if dir, _, err := closedAbove(leaf, stop, other, os.Getgid()); err != nil || dir != "" {
+		t.Fatalf("a group that may search: %q %v", dir, err)
+	}
+	// What the operator reads names the directory and the command that opens it.
+	if err := os.Chmod(filepath.Join(closed, "vectory"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	e := checkServiceCanReach(leaf, "vectory", other, otherGroup)
+	if e == nil || !strings.Contains(e.Error(), "chmod o+x") || !strings.Contains(e.Error(), filepath.Join(closed, "vectory")) {
+		t.Fatalf("the message: %v", e)
 	}
 }
