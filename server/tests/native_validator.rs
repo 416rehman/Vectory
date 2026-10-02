@@ -1195,6 +1195,14 @@ async fn components_that_act_when_vector_runs_never_start_under_validate_or_test
         vector_runs_until(&vector, &path, None, &backend).await,
         "the marker never appeared under a normal run, so this test proves nothing"
     );
+    // Vector itself runs the backend under `vector test`, so the removal above
+    // is what keeps the program from running in the worker.
+    std::fs::remove_file(&backend).unwrap();
+    vector_ends(&vector, &["test", "--config-json"], &path, None).await;
+    assert!(
+        backend.exists(),
+        "Vector no longer runs a secret backend for a test: review what the worker removes"
+    );
     child.kill().await.ok();
 }
 
@@ -1489,5 +1497,382 @@ async fn lua_never_runs_in_the_validator() {
     .await;
     assert_eq!(ran(), none, "an acknowledged publish ran Lua: {version}");
     assert_eq!(status, axum::http::StatusCode::OK, "{version}");
+    child.kill().await.ok();
+}
+
+/// A named pipe standing in for a path an author names. A writer's `open`
+/// returns only when something opens the pipe for reading, so `opened()` says
+/// whether anything tried to read the path.
+#[cfg(target_os = "linux")]
+struct Tripwire {
+    path: std::path::PathBuf,
+    opened: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(target_os = "linux")]
+impl Tripwire {
+    fn new(path: std::path::PathBuf) -> Self {
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let opened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (flag, pipe) = (opened.clone(), path.clone());
+        std::thread::spawn(move || {
+            if std::fs::OpenOptions::new().write(true).open(&pipe).is_ok() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        Tripwire { path, opened }
+    }
+    async fn opened(&self) -> bool {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        self.opened.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Tripwire {
+    // Lets a writer that nothing opened for end: on Linux a read-write open of
+    // a pipe does not block.
+    fn drop(&mut self) {
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path);
+    }
+}
+
+/// A pipeline whose one step looks up an enrichment table, and a test of it.
+#[cfg(target_os = "linux")]
+fn enrichment_pipeline(table: serde_json::Value, condition: &str) -> serde_json::Value {
+    json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"look": {"type": "remap", "inputs": ["in"],
+            "source": format!(".row = get_enrichment_table_record!(\"lk\", {condition})")}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["look"]}},
+        "enrichment_tables": {"lk": table},
+        "tests": [{"name": "looks it up",
+            "inputs": [{"insert_at": "look", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "look", "conditions": [{"type": "vrl", "source": "assert_eq!(.row.v, \"nope\")"}]}]}],
+    })
+}
+
+/// An enrichment table that reads a file makes Vector open that file when it
+/// builds the table, which `vector test` does, and the lookup returns the rows
+/// to whoever wrote it. The server never reads a path an author names: a device
+/// reads its own files. Every table type but `memory` stays out of the worker's
+/// Vector, through the worker, the test route and the validate route.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn enrichment_tables_that_read_files_never_reach_the_validator() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; enrichment file guard unverified");
+        return;
+    };
+    const SENTINEL: &str = "SENTINEL-4f9a1c-in-no-reply";
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("lookup.csv");
+    std::fs::write(&csv, format!("k,v\nAAA,{SENTINEL}\n")).unwrap();
+    let table = |kind: &str, path: &std::path::Path| match kind {
+        "file" => json!({"type": "file",
+            "file": {"path": path, "encoding": {"type": "csv", "include_headers": true}},
+            "schema": {"k": "string", "v": "string"}}),
+        other => json!({"type": other, "path": path}),
+    };
+    let by_key = r#"{"k": "AAA"}"#;
+    let by_ip = r#"{"ip": "1.2.3.4"}"#;
+
+    // Control: Vector itself opens each path and returns the file's rows, so a
+    // pipe that stays unopened below means something kept the table away.
+    let control = enrichment_pipeline(table("file", &csv), by_key);
+    let control_path = dir.path().join("control.json");
+    std::fs::write(&control_path, control.to_string()).unwrap();
+    let (_, text) = vector_ends(&vector, &["test", "--config-json"], &control_path, None).await;
+    assert!(
+        text.contains(SENTINEL),
+        "the control lookup did not return the file's row: {text}"
+    );
+    for (kind, condition) in [("file", by_key), ("geoip", by_ip), ("mmdb", by_ip)] {
+        let pipe = Tripwire::new(dir.path().join(format!("control-{kind}")));
+        let config = enrichment_pipeline(table(kind, &pipe.path), condition);
+        let path = dir.path().join(format!("control-{kind}.json"));
+        std::fs::write(&path, config.to_string()).unwrap();
+        vector_ends(&vector, &["test", "--config-json"], &path, None).await;
+        assert!(
+            pipe.opened().await,
+            "{kind}: Vector did not open the path under a normal test, so this test proves nothing"
+        );
+    }
+
+    // The same pipelines through the worker and the API.
+    let cases = vec![
+        (
+            "file with rows",
+            Some(enrichment_pipeline(table("file", &csv), by_key)),
+            None,
+        ),
+        ("file", None, Some(("file", by_key))),
+        ("geoip", None, Some(("geoip", by_ip))),
+        ("mmdb", None, Some(("mmdb", by_ip))),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    let (_state_dir, state) = public_state(&url).await;
+    let app = vectory_server::api::router(state.clone());
+    let editor = session(&state, "editor").await;
+    let (status, created) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations",
+        json!({"name":"Enrichment","description":"","config":{"sources":{"in":{"type":"demo_logs","format":"json"}},"sinks":{"out":{"type":"blackhole","inputs":["in"]}}},"graph":{"nodes":[],"edges":[]}}),
+        &editor,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let mut replies = Vec::new();
+    let mut pipes = Vec::new();
+    for (name, config, pipe) in cases {
+        let config = match (config, pipe) {
+            (Some(config), _) => config,
+            (None, Some((kind, condition))) => {
+                let tripwire = Tripwire::new(dir.path().join(format!("worker-{kind}")));
+                let config = enrichment_pipeline(table(kind, &tripwire.path), condition);
+                pipes.push((name, tripwire));
+                config
+            }
+            (None, None) => unreachable!(),
+        };
+        let tests = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tests["tests_run"], false, "{name}: {tests}");
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!(["look"]), "{name}: {checked}");
+        let (status, run) = api(
+            &app,
+            "POST",
+            "/api/v1/configurations/test",
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {run}");
+        assert_eq!(run["tests_run"], false, "{name}: {run}");
+        assert_eq!(run["deferred"], true, "{name}: {run}");
+        assert_eq!(run["tests"], json!([]), "{name}: {run}");
+        assert!(
+            run["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Enrichment tables are read on devices")),
+            "{name}: {run}"
+        );
+        assert_eq!(
+            run["errors"],
+            json!([
+                "Enrichment tables are read on devices, so tests that use them run only on devices. Use Check on devices with Also run the pipeline's tests."
+            ]),
+            "{name}: {run}"
+        );
+        let (status, validated) = api(
+            &app,
+            "POST",
+            &format!("/api/v1/configurations/{id}/validate"),
+            json!({"config": config}),
+            &editor,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{name}: {validated}");
+        assert_eq!(validated["valid"], true, "{name}: {validated}");
+        assert_eq!(validated["deferred"], true, "{name}: {validated}");
+        assert_eq!(validated["vector_validated"], false, "{name}: {validated}");
+        assert!(
+            validated["deferred_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Enrichment tables are read on devices")),
+            "{name}: {validated}"
+        );
+        assert!(
+            validated["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| {
+                    d["code"] == "device_check"
+                        && d["component"] == "look"
+                        && d["message"]
+                            == "This step looks up an enrichment table, which each device reads."
+                }),
+            "{name}: {validated}"
+        );
+        replies.extend([tests, checked, run, validated]);
+    }
+    for reply in &replies {
+        assert!(
+            !reply.to_string().contains(SENTINEL),
+            "a reply carried the file's row: {reply}"
+        );
+    }
+    for (name, pipe) in &pipes {
+        assert!(
+            !pipe.opened().await,
+            "{name}: the worker opened a path the author named"
+        );
+    }
+
+    // A memory table reads no file: its tests still run, as before.
+    let memory = json!({
+        "sources": {"in": {"type": "demo_logs", "format": "json"}},
+        "transforms": {"keep": {"type": "remap", "inputs": ["in"], "source": ".seen = true"}},
+        "sinks": {"out": {"type": "blackhole", "inputs": ["keep"]}},
+        "enrichment_tables": {"memo": {"type": "memory", "ttl": 60}},
+        "tests": [{"name": "keeps working",
+            "inputs": [{"insert_at": "keep", "type": "log", "log_fields": {"message": "x"}}],
+            "outputs": [{"extract_from": "keep", "conditions": [{"type": "vrl", "source": ".seen == true"}]}]}],
+    });
+    let tests = post(&client, &url, "tests", json!({"config": memory})).await;
+    assert_eq!(tests["tests_run"], true, "{tests}");
+    assert_eq!(tests["tests"][0]["passed"], true, "{tests}");
+    let (_, run) = api(
+        &app,
+        "POST",
+        "/api/v1/configurations/test",
+        json!({"config": memory}),
+        &editor,
+    )
+    .await;
+    assert_eq!(run["tests_run"], true, "{run}");
+    assert_eq!(run["valid"], true, "{run}");
+    child.kill().await.ok();
+}
+
+/// Run Vector for a moment and stop it, for a program that makes it wait on a
+/// path.
+#[cfg(target_os = "linux")]
+async fn vector_briefly(vector: &str, args: &[&str], config: &std::path::Path) {
+    let mut child = tokio::process::Command::new(vector)
+        .args(args)
+        .arg(config)
+        .current_dir(config.parent().unwrap())
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await;
+    child.kill().await.ok();
+}
+
+/// `parse_groks(alias_sources:)` and `parse_etld(psl:)` read the file a call
+/// passes when Vector compiles the program, whichever command compiles it. The
+/// server never opens a path an author names: not in the static check, the
+/// tests or the sample runner.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_vrl_call_that_passes_a_file_never_opens_it_in_the_worker() {
+    let Ok(vector) = std::env::var("VECTORY_TEST_VECTOR") else {
+        eprintln!("SKIP: VECTORY_TEST_VECTOR absent; VRL file argument guard unverified");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline = |source: &str| {
+        json!({
+            "sources": {"in": {"type": "demo_logs", "format": "json"}},
+            "transforms": {"look": {"type": "remap", "inputs": ["in"], "source": source}},
+            "sinks": {"out": {"type": "blackhole", "inputs": ["look"]}},
+            "tests": [{"name": "t",
+                "inputs": [{"insert_at": "look", "type": "log", "log_fields": {"message": "x"}}],
+                "outputs": [{"extract_from": "look", "conditions": [{"type": "vrl", "source": "true"}]}]}],
+        })
+    };
+    let programs: [(&str, fn(&std::path::Path) -> String); 2] = [
+        ("parse_groks", |path| {
+            format!(
+                ".x = parse_groks!(.message, [\"%{{A:a}}\"], alias_sources: [\"{}\"])",
+                path.display()
+            )
+        }),
+        ("parse_etld", |path| {
+            format!(".x = parse_etld!(.message, psl: \"{}\")", path.display())
+        }),
+    ];
+    let (mut child, url, client) = start_worker(&vector).await;
+    for (name, program) in programs {
+        // Control: Vector opens the path when it compiles the program.
+        let control = Tripwire::new(dir.path().join(format!("control-{name}")));
+        let path = dir.path().join(format!("control-{name}.json"));
+        std::fs::write(&path, pipeline(&program(&control.path)).to_string()).unwrap();
+        vector_briefly(&vector, &["validate", "--no-environment"], &path).await;
+        assert!(
+            control.opened().await,
+            "{name}: Vector did not open the path, so this test proves nothing"
+        );
+
+        // The worker, on every route that compiles a program.
+        let pipe = Tripwire::new(dir.path().join(format!("worker-{name}")));
+        let source = program(&pipe.path);
+        let config = pipeline(&source);
+        let checked = post(&client, &url, "validate", json!({"config": config})).await;
+        assert_eq!(checked["valid"], true, "{name}: {checked}");
+        assert_eq!(checked["stubbed"], json!(["look"]), "{name}: {checked}");
+        let tests = post(&client, &url, "tests", json!({"config": config})).await;
+        assert_eq!(tests["tests_run"], false, "{name}: {tests}");
+        assert_eq!(
+            tests["diagnostics"][0]["code"], "vrl_function_unavailable",
+            "{name}: {tests}"
+        );
+        let sample = post(
+            &client,
+            &url,
+            "transform-test",
+            json!({"transform": {"type": "remap", "source": source}, "samples": [{"message": "x"}]}),
+        )
+        .await;
+        assert_eq!(sample["compiled"], false, "{name}: {sample}");
+        assert_eq!(
+            sample["diagnostics"][0]["code"], "vrl_function_unavailable",
+            "{name}: {sample}"
+        );
+        let single = post(
+            &client,
+            &url,
+            "vrl-test",
+            json!({"program": source, "sample": {"message": "x"}}),
+        )
+        .await;
+        assert_eq!(single["valid"], false, "{name}: {single}");
+        assert!(
+            !pipe.opened().await,
+            "{name}: the worker opened a path a program named"
+        );
+    }
+
+    // Without a file the same functions are ordinary, and stay checked here.
+    for source in [
+        ".x = parse_etld!(.message)",
+        ".x = parse_groks!(.message, [\"%{WORD:w}\"])",
+    ] {
+        let checked = post(
+            &client,
+            &url,
+            "validate",
+            json!({"config": pipeline(source)}),
+        )
+        .await;
+        assert_eq!(checked["valid"], true, "{source}: {checked}");
+        assert_eq!(checked["stubbed"], json!([]), "{source}: {checked}");
+        let sample = post(
+            &client,
+            &url,
+            "transform-test",
+            json!({"transform": {"type": "remap", "source": source}, "samples": [{"message": "www.example.com"}]}),
+        )
+        .await;
+        assert_eq!(sample["compiled"], true, "{source}: {sample}");
+    }
     child.kill().await.ok();
 }
