@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
@@ -72,6 +73,13 @@ type Desired struct {
 	Size          int64  `json:"size"`
 	ArtifactPath  string `json:"artifact_path"`
 	VectorVersion string `json:"vector_version"`
+	// VersionNumber and ConfigurationName say which pipeline version this is, in
+	// the server's words, for `vectory status`. They are display-only: Identity
+	// leaves them out, so renaming a pipeline never invalidates a generation,
+	// and a value that isn't well formed reads as absent instead of failing the
+	// manifest. Older servers don't send them.
+	VersionNumber     displayNumber `json:"version_number,omitempty"`
+	ConfigurationName displayName   `json:"configuration_name,omitempty"`
 }
 type Manifest struct {
 	ProtocolVersion  int       `json:"protocol_version"`
@@ -86,6 +94,10 @@ type Manifest struct {
 	// Features lists additive heartbeat fields this server accepts. Older
 	// servers omit it, and the agent then sends the original heartbeat shape.
 	Features []string `json:"features,omitempty"`
+	// Validation asks this device to check a candidate version without applying
+	// it (validation.go). It stays raw so that a block this agent can't read
+	// never keeps the manifest itself from being verified and applied.
+	Validation json.RawMessage `json:"validation,omitempty"`
 }
 type Envelope struct {
 	Payload   string `json:"payload"`
@@ -150,6 +162,14 @@ type Heartbeat struct {
 	// Both go only to servers that list them in features.
 	AgentSHA256 string `json:"agent_sha256,omitempty"`
 	StateDir    string `json:"state_dir,omitempty"`
+	// AgentFeatures announces what this agent can do, ValidationResult answers a
+	// request to check a candidate and Readiness reports facts about this host
+	// (validation.go). Each goes only to servers whose manifest lists
+	// "validation", and AgentFeatures and Readiness in every such heartbeat:
+	// the server reads a heartbeat without them as "not announced now".
+	AgentFeatures    []string          `json:"agent_features,omitempty"`
+	ValidationResult *ValidationResult `json:"validation_result,omitempty"`
+	Readiness        *Readiness        `json:"readiness,omitempty"`
 }
 
 // ConfigurationAttempt identifies an observed result for an authenticated
@@ -286,6 +306,14 @@ type State struct {
 	Agent *AgentBuild `json:"agent,omitempty"`
 	// CheckInFailure is the latest failed check-in since the last success.
 	CheckInFailure *CheckInFailure `json:"check_in_failure,omitempty"`
+	// Applied is the pipeline version this device last verified as running, as
+	// the signed manifest that delivered it named it. Only `vectory status`
+	// reads it.
+	Applied *AppliedVersion `json:"applied,omitempty"`
+	// Wake is what the run loop last saw of wake-ups when it differs from the
+	// ordinary: wakeOffRun or wakeFailed (wake.go). Only `vectory status` reads
+	// it.
+	Wake string `json:"wake,omitempty"`
 }
 
 // CheckInFailure records why the agent couldn't check in. The message is a

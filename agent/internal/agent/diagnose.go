@@ -80,6 +80,8 @@ type redactor struct {
 	components   map[string]componentRef
 	// listen holds each component's configured socket addresses.
 	listen map[string][]string
+	// limit is the most diagnostics one parse returns; zero means maxDiagnostics.
+	limit int
 }
 
 var (
@@ -472,10 +474,12 @@ var codeHints = map[string]string{
 	"VECTOR_TIMEOUT":         "Vector kept running the previous configuration. A destination whose health check never answers is the usual cause: check them from this device, then choose Retry application.",
 }
 
-// diagnosticSet dedupes, orders (errors first) and bounds diagnostics.
+// diagnosticSet dedupes, orders (errors first) and bounds diagnostics: at most
+// limit of them, or maxDiagnostics when limit is zero.
 type diagnosticSet struct {
 	items []Diagnostic
 	seen  map[string]int
+	limit int
 }
 
 // add keeps one record per finding. Vector repeats transform errors in its
@@ -507,8 +511,12 @@ func (s *diagnosticSet) result() []Diagnostic {
 	sort.SliceStable(s.items, func(i, j int) bool {
 		return s.items[i].Severity == "error" && s.items[j].Severity != "error"
 	})
-	if len(s.items) > maxDiagnostics {
-		return s.items[:maxDiagnostics]
+	limit := s.limit
+	if limit <= 0 {
+		limit = maxDiagnostics
+	}
+	if len(s.items) > limit {
+		return s.items[:limit]
 	}
 	return s.items
 }
@@ -829,7 +837,7 @@ func eventTypes(list string) string {
 // parseValidateOutput turns `vector validate` text output into diagnostics.
 func (r *redactor) parseValidateOutput(output []byte) []Diagnostic {
 	lines := strings.Split(strings.ToValidUTF8(ansiEscape.ReplaceAllString(string(output), ""), ""), "\n")
-	var set diagnosticSet
+	set := diagnosticSet{limit: r.limit}
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], " \r")
 		switch {
@@ -870,8 +878,24 @@ var (
 // parseTestOutput reports each failing `vector test` case with its first
 // failing condition. Output payloads are never included.
 func (r *redactor) parseTestOutput(output []byte) []Diagnostic {
+	set := diagnosticSet{limit: r.limit}
+	for _, finding := range r.testFindings(output) {
+		set.add(finding.diagnostic)
+	}
+	return set.result()
+}
+
+// testFinding is the diagnostic for one failing test, with the test's name.
+type testFinding struct {
+	name       string
+	diagnostic Diagnostic
+}
+
+// testFindings lists the failing `vector test` cases, in the order Vector
+// reports them, each with the diagnostic parseTestOutput returns for it.
+func (r *redactor) testFindings(output []byte) []testFinding {
 	lines := strings.Split(strings.ToValidUTF8(ansiEscape.ReplaceAllString(string(output), ""), ""), "\n")
-	var set diagnosticSet
+	var findings []testFinding
 	failing := map[string]bool{}
 	for _, line := range lines {
 		if m := testFailedLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -898,7 +922,7 @@ func (r *redactor) parseTestOutput(output []byte) []Diagnostic {
 			}
 			if strings.Contains(line, "no events") {
 				reported[current] = true
-				set.add(r.finalize(Diagnostic{Code: "TEST_FAILED", ComponentKind: "transform", ComponentID: component, Field: "tests", Message: "Test \"" + current + "\" failed: " + line}))
+				findings = append(findings, testFinding{current, r.finalize(Diagnostic{Code: "TEST_FAILED", ComponentKind: "transform", ComponentID: component, Field: "tests", Message: "Test \"" + current + "\" failed: " + line})})
 			}
 			continue
 		}
@@ -918,17 +942,22 @@ func (r *redactor) parseTestOutput(output []byte) []Diagnostic {
 				message = detail
 			}
 			d.Message = "Test \"" + current + "\" failed: " + message
-			set.add(r.finalize(d))
+			findings = append(findings, testFinding{current, r.finalize(d)})
 			reported[current] = true
 			i = j - 1
 		}
 	}
+	names := make([]string, 0, len(failing))
 	for name := range failing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if !reported[name] {
-			set.add(r.finalize(Diagnostic{Code: "TEST_FAILED", Field: "tests", Message: "Test \"" + name + "\" failed."}))
+			findings = append(findings, testFinding{name, r.finalize(Diagnostic{Code: "TEST_FAILED", Field: "tests", Message: "Test \"" + name + "\" failed."})})
 		}
 	}
-	return set.result()
+	return findings
 }
 
 // ---- Runtime JSON logs ----
@@ -997,7 +1026,7 @@ func parseVectorRecord(line []byte) (vectorRecord, bool) {
 // parseRuntimeRecords explains why Vector failed to start or reload, from
 // the JSON log records written during that attempt.
 func (r *redactor) parseRuntimeRecords(records []vectorRecord) []Diagnostic {
-	var set diagnosticSet
+	set := diagnosticSet{limit: r.limit}
 	addresses := map[string]string{}
 	for _, rec := range records {
 		if rec.Address != "" && rec.ComponentID != "" {
@@ -1065,7 +1094,12 @@ func (e *Engine) diagnoseFailure(err error, effective []byte) []Diagnostic {
 	if failure == nil {
 		return nil
 	}
-	r := e.redactorFor(effective)
+	return e.redactorFor(effective).diagnose(failure)
+}
+
+// diagnose turns a native failure into redacted diagnostics, at most r's limit
+// of each kind.
+func (r *redactor) diagnose(failure *VectorFailure) []Diagnostic {
 	var out []Diagnostic
 	switch failure.Phase {
 	case "validate":
@@ -1124,6 +1158,11 @@ func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
 	if !errors.As(err, &ref) {
 		return nil
 	}
+	return []Diagnostic{secretDiagnostic(ref, e.redactorFor(template))}
+}
+
+// secretDiagnostic is the diagnostic for one failed reference, redacted by r.
+func secretDiagnostic(ref *secretReferenceError, r *redactor) Diagnostic {
 	d := Diagnostic{Code: ref.code, ComponentKind: ref.kind, ComponentID: ref.id, Field: ref.field}
 	switch ref.code {
 	case "SECRET_BINDING_MISSING":
@@ -1138,12 +1177,11 @@ func (e *Engine) secretDiagnostics(err error, template []byte) []Diagnostic {
 	default:
 		d.Message = "Secret \"" + ref.name + "\" contains interpolation syntax that full mode would expand."
 	}
-	r := e.redactorFor(template)
 	if ref.field != "" {
 		// The field path is made of template keys; name it even when it is long.
 		r.safe[ref.field] = true
 	}
-	return []Diagnostic{r.finalize(d)}
+	return r.finalize(d)
 }
 
 func (e *Engine) redactorFor(effective []byte) *redactor {

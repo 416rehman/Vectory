@@ -176,11 +176,26 @@ When Vector doesn't finish in time, the last line is `Drain limit reached after 
 
 ## status
 
-Show the device's identity, server, last check-in, pipeline and the next step.
+Show the device's identity, server, last check-in, pipeline and the next step, and say what it runs, when it checks in next and whether it waits for wake-ups.
 
 ```sh
 sudo vectory status
 ```
+
+It reads local state only. **Pipeline** names the pipeline and version the server's signed manifest gave, with the version's short ID and generation. **Check-in** says when the next check-in is due. **Wake-ups** says whether the agent holds a request open between check-ins.
+
+```text
+Pipeline   Edge syslog processing · version 3 (3f2a9c1d, generation 12) · applied and verified
+Check-in   next due in 48 s (every minute)
+Wake-ups   on · a new version or setting reaches this device within seconds
+```
+
+- **Pipeline** shows the name and version number only when the server sends both. Otherwise it reads `Version 3f2a9c1d (generation 12) · applied and verified`.
+- **Running** appears when the version that runs isn't the one **Pipeline** describes: after a rollback, or after the device was unassigned. `Edge syslog processing · version 3`.
+- **Check-in** is the last successful check-in plus the interval of the device's agent settings: `next due in 48 s (every minute)`, or `overdue by 35 s (every minute)` when it has passed. The agent adds up to 20% of random spacing, so a few seconds late is normal. It shows only while the agent runs.
+- **Wake-ups** reads `on`, `off · turned off on this host` ([turn them back on](agents.md#turn-off-wake-ups)), `off · this run was started with --no-wake`, `paused while check-ins fail`, or `not getting through` when the last request failed and the agent keeps its schedule. It is absent when the server doesn't hold wake-ups or the agent isn't running.
+
+With `--json`, the keys `running_pipeline` (`name`, `version_number`, `version_id`, `generation`), `check_in` (`interval_seconds`, `last_at`, `next_due_at`, and `due_in_seconds` or `overdue_by_seconds`) and `wake_ups` (`listening`, and `reason` when it isn't) are added. Each is present only when the agent has something true to say, and every key `status --json` always had is unchanged.
 
 When Vector's own log shows a sink failing requests in the last minute, `status` says so under **Vector**, and **Next** says what to check instead of "Nothing to do":
 

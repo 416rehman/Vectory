@@ -164,25 +164,39 @@ func ResolveLocalSecrets(template []byte, bindings map[string]string) (effective
 }
 
 func resolveLocalSecrets(template []byte, bindings map[string]string, fullVector bool) (effective []byte, used bool, err error) {
+	effective, used, _, err = resolveSecretReferences(template, bindings, fullVector, false)
+	return effective, used, err
+}
+
+// resolveSecretReferences is resolveLocalSecrets, and the one place references
+// are resolved. With collect set it doesn't stop at the first reference it can't
+// resolve: it walks the whole configuration (in a fixed order) and returns each
+// one in problems, so a check can name every missing binding at once. Nothing
+// is materialized then. Without collect, problems is nil and the first
+// reference that fails is the error, as an apply reports it.
+func resolveSecretReferences(template []byte, bindings map[string]string, fullVector, collect bool) (effective []byte, used bool, problems []*secretReferenceError, err error) {
 	decoder := json.NewDecoder(bytes.NewReader(template))
 	decoder.UseNumber()
 	var root map[string]any
 	if err = decoder.Decode(&root); err != nil || root == nil {
-		return nil, false, errors.New("configuration must be a JSON object")
+		return nil, false, nil, errors.New("configuration must be a JSON object")
 	}
 	var trailing any
 	if decoder.Decode(&trailing) != io.EOF {
-		return nil, false, errors.New("configuration has trailing data")
+		return nil, false, nil, errors.New("configuration has trailing data")
 	}
 	values := map[string]string{}
+	// unresolved holds the names that failed, in collect mode: a name is
+	// reported once, at its first place.
+	unresolved := map[string]bool{}
 	// path holds the steps from the root; indexes the position of each list
 	// item on it, for messages.
 	var walk func(value any, path []secretStep, indexes []int) (any, error)
 	walk = func(value any, path []secretStep, indexes []int) (any, error) {
 		switch v := value.(type) {
 		case map[string]any:
-			for key, child := range v {
-				next, e := walk(child, append(path[:len(path):len(path)], secretStep{key: key}), indexes)
+			for _, key := range sortedKeys(v) {
+				next, e := walk(v[key], append(path[:len(path):len(path)], secretStep{key: key}), indexes)
 				if e != nil {
 					return nil, e
 				}
@@ -205,43 +219,58 @@ func resolveLocalSecrets(template []byte, bindings map[string]string, fullVector
 			at := locateSecretField(root, path)
 			fieldIndexes := indexes[len(indexes)-countItems(at.field):]
 			field := fieldPath(at.field, fieldIndexes)
-			refused := func(message string) error {
-				return &secretReferenceError{"", at.kind, at.id, field, "SECRET_REFERENCE_REFUSED", errors.New(message)}
+			// fails is how a reference that can't be resolved ends the walk, or,
+			// when collecting, is noted while the walk goes on.
+			fails := func(ref *secretReferenceError) (any, error) {
+				if !collect {
+					return nil, ref
+				}
+				if ref.name != "" {
+					unresolved[ref.name] = true
+				}
+				problems = append(problems, ref)
+				return v, nil
+			}
+			refused := func(message string) (any, error) {
+				return fails(&secretReferenceError{"", at.kind, at.id, field, "SECRET_REFERENCE_REFUSED", errors.New(message)})
 			}
 			if !at.credential() {
 				where := field
 				if at.inComponent {
 					where = at.section + "." + at.id + "." + field
 				}
-				return nil, refused("local secret references are allowed only in supported credential fields; " + where + " is not one")
+				return refused("local secret references are allowed only in supported credential fields; " + where + " is not one")
 			}
 			name, whole := strings.CutPrefix(v, secretPrefix)
 			if !whole {
-				return nil, refused("a local secret reference must be the whole value of " + field)
+				return refused("a local secret reference must be the whole value of " + field)
 			}
 			if !secretName.MatchString(name) {
-				return nil, refused("invalid local secret reference name in " + field)
+				return refused("invalid local secret reference name in " + field)
 			}
 			used = true
 			if cached, ok := values[name]; ok {
 				return cached, nil
 			}
-			if len(values) >= maxSecretNames {
+			if unresolved[name] {
+				return v, nil
+			}
+			if len(values)+len(unresolved) >= maxSecretNames {
 				return nil, errors.New("local secret reference limit exceeded")
 			}
 			file, ok := bindings[name]
 			if !ok {
-				return nil, &secretReferenceError{name, at.kind, at.id, field, "SECRET_BINDING_MISSING", errors.New("a local secret reference has no host-operator binding")}
+				return fails(&secretReferenceError{name, at.kind, at.id, field, "SECRET_BINDING_MISSING", errors.New("a local secret reference has no host-operator binding")})
 			}
 			secret, e := readLocalSecret(file)
 			if e != nil {
-				return nil, &secretReferenceError{name, at.kind, at.id, field, "SECRET_FILE_UNREADABLE", e}
+				return fails(&secretReferenceError{name, at.kind, at.id, field, "SECRET_FILE_UNREADABLE", e})
 			}
 			// Full Vector interpolation runs after typed materialization. A local
 			// credential must remain literal, never become another provider/env
 			// reference or be changed by Vector's dollar escaping.
 			if fullVector && (environmentVariable.MatchString(secret) || strings.Contains(secret, "${") || strings.Contains(secret, "$$") || strings.Contains(secret, "SECRET[")) {
-				return nil, &secretReferenceError{name, at.kind, at.id, field, "SECRET_VALUE_REJECTED", errors.New("local credential contains native interpolation syntax; use a native provider directly for that credential")}
+				return fails(&secretReferenceError{name, at.kind, at.id, field, "SECRET_VALUE_REJECTED", errors.New("local credential contains native interpolation syntax; use a native provider directly for that credential")})
 			}
 			values[name] = secret
 			return secret, nil
@@ -249,19 +278,22 @@ func resolveLocalSecrets(template []byte, bindings map[string]string, fullVector
 		return value, nil
 	}
 	if _, err = walk(root, nil, nil); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
+	}
+	if len(problems) > 0 {
+		return nil, false, problems, problems[0]
 	}
 	if !used {
-		return template, false, nil
+		return template, false, nil, nil
 	}
 	effective, err = json.Marshal(root)
 	if err != nil {
-		return nil, false, errors.New("cannot render local secret references")
+		return nil, false, nil, errors.New("cannot render local secret references")
 	}
 	if len(effective) > MaxArtifact {
-		return nil, false, errors.New("effective configuration exceeds artifact limit")
+		return nil, false, nil, errors.New("effective configuration exceeds artifact limit")
 	}
-	return effective, true, nil
+	return effective, true, nil, nil
 }
 func readLocalSecret(path string) (string, error) {
 	if !filepath.IsAbs(path) || SafePath(path) != nil {

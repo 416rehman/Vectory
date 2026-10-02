@@ -27,6 +27,27 @@ import (
 // hold waits. Agents wait only for servers that list it.
 const featureWake = "wake"
 
+// What the run loop last saw of waits when it isn't the ordinary, kept in the
+// state for `vectory status`, which can't ask the running process. Nothing
+// else reads it.
+const (
+	// wakeOffRun: this run was started with --no-wake.
+	wakeOffRun = "off_run"
+	// wakeFailed: the last wait ended in an error, so the schedule covers its
+	// interval.
+	wakeFailed = "failed"
+)
+
+// noteWake records what the loop saw. It saves only when that changed, so the
+// steady state costs no writes.
+func (e *Engine) noteWake(observation string) {
+	if e.State.Wake == observation {
+		return
+	}
+	e.State.Wake = observation
+	_ = e.save()
+}
+
 // wakeSpacing bounds how fast wake-ups can drive the loop: a heartbeat a
 // wake-up asks for starts at least this long after the previous check-in
 // ended, and a wait that ends sooner than this without a change is not
