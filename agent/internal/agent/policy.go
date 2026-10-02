@@ -309,7 +309,9 @@ var driveLetterPrefix = regexp.MustCompile(`^[A-Za-z]:`)
 func componentIDRefusal(root map[string]any) *PolicyRefusal {
 	refused := func(section, id, typ, problem string) *PolicyRefusal {
 		r := refusal("INVALID_COMPONENT_ID", "component ID must be a plain name")
-		r.Section, r.ComponentID, r.ComponentType, r.problem = section, id, typ, problem
+		// The type comes from the same pipeline: shown, it can't push the
+		// reason out of the message either.
+		r.Section, r.ComponentID, r.ComponentType, r.problem = section, id, shortText(typ, 40), problem
 		return r
 	}
 	for _, section := range []string{"sinks", "sources", "transforms"} {
@@ -365,14 +367,14 @@ func componentIDProblem(id string) string {
 	return ""
 }
 
-// shortID is how a message shows a component ID: control characters as
-// escapes, and nothing past 64 characters, so a hostile ID can't break the
-// line or push the explanation out of it.
-func shortID(id string) string {
+// shortText is how a message shows text that came from a pipeline: control
+// characters as escapes, and nothing past max characters, so a hostile value
+// can't break the line or push the explanation out of it.
+func shortText(text string, max int) string {
 	var out strings.Builder
 	shown := 0
-	for _, r := range id {
-		if shown == 64 {
+	for _, r := range text {
+		if shown == max {
 			out.WriteString("…")
 			break
 		}
@@ -385,6 +387,9 @@ func shortID(id string) string {
 	}
 	return out.String()
 }
+
+// shortID is how a message shows a component ID.
+func shortID(id string) string { return shortText(id, 64) }
 
 // monitoringExporter finds the one listener restricted mode allows without a
 // host allowance: Vectory's own monitoring path, a prometheus_exporter sink

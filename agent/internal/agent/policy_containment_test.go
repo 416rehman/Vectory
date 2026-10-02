@@ -373,6 +373,23 @@ func TestComponentIDRefusalsFitTheServerForAnyID(t *testing.T) {
 			}
 		}
 	}
+	// The component's type comes from the same pipeline, so it can be anything
+	// too: the diagnostic still fits, and still says what is wrong with the ID.
+	for _, typ := range []string{"a\nb", "\x1b[31mred", strings.Repeat("t", 5000), "naïve type"} {
+		config, _ := json.Marshal(map[string]any{"sinks": map[string]any{"/tmp/x": map[string]any{"type": typ, "inputs": []string{}}}})
+		e := &Engine{}
+		diagnostics := e.policyDiagnostics((CapabilityPolicy{FullVectorConfig: true}).Check(config), config)
+		if len(diagnostics) != 1 {
+			t.Fatalf("type %q: %+v", typ, diagnostics)
+		}
+		d := diagnostics[0]
+		if err := serverAcceptsDiagnostic(d); err != nil {
+			t.Errorf("type %q: the server would refuse this diagnostic: %v\n%+v", typ, err, d)
+		}
+		if !strings.HasPrefix(d.Message, `Sink "/tmp/x" (`) || !strings.HasSuffix(d.Message, " has a slash in its ID.") {
+			t.Errorf("type %q: the message lost what is wrong with the ID: %q", typ, d.Message)
+		}
+	}
 	if got := shortID("x\u0007y\nz"); got != `x\x07y\x0az` {
 		t.Errorf("escapes: %q", got)
 	}
