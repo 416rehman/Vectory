@@ -559,12 +559,45 @@ const CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 6
 const ACCOUNT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 /// How long a client that signed in stays exempt from the account-wide budget.
 const KNOWN_CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// Attempts a minute one client may make on a sign-in step.
+pub(crate) const CLIENT_ATTEMPTS: u32 = 60;
+/// Attempts a minute the whole instance allows on a sign-in step. They bound
+/// the password hashing a flood can ask for and the failure ledger's growth.
+const SHARED_ATTEMPTS: u32 = 600;
+/// The part of the shared budget only clients that have signed in can use, so
+/// a flood from other addresses can't lock out the people who would answer it.
+const KNOWN_CLIENT_RESERVE: u32 = 100;
+/// Wrong second factors one account takes on the combined password-and-code
+/// form in `FACTOR_WINDOW`, from any addresses, before that form refuses
+/// every code, right or wrong, until the window ends.
+const FACTOR_FAILURES: u32 = 5;
+const FACTOR_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The marker for a client (an address, or an IPv6 /64) that has completed a
+/// sign-in to any account within `KNOWN_CLIENT_WINDOW`.
+fn known_client_key(group: &str) -> String {
+    format!("login-known-client:{group}")
+}
+/// Charge one attempt on a sign-in step to the budget every client shares,
+/// after the client's own budget let it through. A client that has signed in
+/// can use the reserved part as well.
+pub(crate) fn charge_shared_attempt(s: &crate::App, key: &str, group: &str) -> Result<()> {
+    let known = s.sign_in_failures().seen(&known_client_key(group));
+    let ceiling = if known {
+        SHARED_ATTEMPTS
+    } else {
+        SHARED_ATTEMPTS - KNOWN_CLIENT_RESERVE
+    };
+    s.limit(key.to_owned(), ceiling, std::time::Duration::from_secs(60))
+}
+
 /// Sign-in failure keys for one attempt. Every key uses the client's throttle
 /// group, so one IPv6 host cannot multiply its budget across its /64.
 struct SignInKeys {
     account_client: String,
     account: String,
     known_client: String,
+    known_anywhere: String,
 }
 impl SignInKeys {
     fn new(email: &str, group: &str) -> Self {
@@ -572,6 +605,7 @@ impl SignInKeys {
             account_client: format!("login-fail:{email}:{group}"),
             account: format!("login-fail:{email}"),
             known_client: format!("login-known:{email}:{group}"),
+            known_anywhere: known_client_key(group),
         }
     }
     /// Refuse when the budget is spent; otherwise reserve one failure before
@@ -594,14 +628,23 @@ impl SignInKeys {
         ledger.add(&self.account, ACCOUNT_WINDOW);
         Ok(())
     }
-    /// The password was right: return the reservation, clear this client's
-    /// failures and remember it as a client of this account.
+    /// The sign-in is complete: the password was right and, when the account
+    /// has a second factor, the factor verified. Return the reservation,
+    /// clear this client's failures and remember it as a client of this
+    /// account. Nothing earlier may call this: whoever holds only the
+    /// password is not a client of the account.
     fn succeeded(&self, s: &crate::App) {
         let mut ledger = s.sign_in_failures();
         ledger.remove(&self.account_client);
         ledger.refund(&self.account);
         ledger.add(&self.known_client, KNOWN_CLIENT_WINDOW);
+        ledger.add(&self.known_anywhere, KNOWN_CLIENT_WINDOW);
     }
+}
+/// A sign-in that finished in the second step (`login_challenges::complete`):
+/// the same completion `login` records when the account has no second factor.
+pub(crate) fn signed_in(s: &crate::App, email: &str, client: &str) {
+    SignInKeys::new(email, &crate::throttle_group(client)).succeeded(s);
 }
 /// Sign-in audit with the matched account (never the attempted email) and the
 /// client address. Credentials and factors never enter audit records.
@@ -671,23 +714,21 @@ pub async fn login(
     if h.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("cross-site") {
         return Err(ApiError::forbidden());
     }
-    // Coarse flood guards bound password-hashing work. They count attempts, but
-    // only failures count toward an account's lockout, so signing in
-    // successfully never locks anyone out.
+    // The client's own budget comes first, and only an attempt it lets through
+    // is charged to the budget every client shares. That one bounds password
+    // hashing, so one address can never spend what the others need. Only
+    // failures count toward an account's lockout, so signing in successfully
+    // never locks anyone out.
     let client = s.client_key(&h, peer);
     let group = crate::throttle_group(&client);
     s.limit(
-        "login-global".into(),
-        600,
-        std::time::Duration::from_secs(60),
-    )?;
-    s.limit(
         format!("login-client:{group}"),
-        60,
+        CLIENT_ATTEMPTS,
         std::time::Duration::from_secs(60),
     )?;
     let email = user_email(&v)?;
     let password = db::string(&v, "password", 256)?.to_owned();
+    charge_shared_attempt(&s, "login-global", &group)?;
     let keys = SignInKeys::new(&email, &group);
     if let Err(wait) = keys.reserve(&s) {
         audit_throttled(&s, &email, &client, &group).await;
@@ -731,30 +772,47 @@ pub async fn login(
         tx.commit().await?;
         return Err(ApiError::unauthorized());
     }
-    keys.succeeded(&s);
     let fresh = fresh.unwrap();
     let user = public_user(&fresh);
+    let user_id = user["id"].as_str().unwrap();
+    let factor_sent = [v["totp_code"].as_str(), v["recovery_code"].as_str()]
+        .into_iter()
+        .any(|code| code.is_some_and(|code| !code.is_empty()));
     // Reveal MFA only after the password and live account have been verified.
-    // Combined credentials+factor requests remain supported for existing clients.
-    if v["totp_code"].as_str().is_none_or(str::is_empty)
-        && v["recovery_code"].as_str().is_none_or(str::is_empty)
-    {
-        let cipher: Option<String> = sqlx::query_scalar(
-            "SELECT secret_ciphertext FROM user_mfa WHERE user_id=? AND enabled=1",
-        )
-        .bind(user["id"].as_str().unwrap())
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(cipher) = cipher {
-            let challenge = crate::login_challenges::issue(&mut tx, &fresh, &cipher).await?;
-            tx.commit().await?;
-            return Ok((HeaderMap::new(), Json(challenge)));
-        }
+    let cipher: Option<String> =
+        sqlx::query_scalar("SELECT secret_ciphertext FROM user_mfa WHERE user_id=? AND enabled=1")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(cipher) = cipher else {
+        // No second factor: the password is the whole sign-in. (A factor sent
+        // anyway is ignored, as it always was.)
+        let response = finish_login(&s, &mut tx, &h, &client, user).await?;
+        tx.commit().await?;
+        keys.succeeded(&s);
+        return Ok(response);
+    };
+    if !factor_sent {
+        // A password alone is not a sign-in. Its reservation stays and the
+        // client is not remembered until the factor verifies in
+        // `login_challenges::complete`.
+        let challenge = crate::login_challenges::issue(&mut tx, &fresh, &cipher).await?;
+        tx.commit().await?;
+        return Ok((HeaderMap::new(), Json(challenge)));
     }
+    // The combined form, kept for existing clients: the factor arrives with
+    // the password and meets the limits the two-step form has. All of the
+    // account's attempts, from either form, share one budget, and five wrong
+    // codes lock this form for the account, whichever address guessed them.
+    let failures = format!("login-mfa-fail:{user_id}");
+    if let Some(wait) = s.sign_in_failures().blocked(&failures, FACTOR_FAILURES) {
+        return Err(signin_throttled(wait));
+    }
+    crate::login_challenges::charge_factor_attempt(&s, user_id)?;
     if let Err(error) = crate::mfa::verify_login(
         &s,
         &mut tx,
-        user["id"].as_str().unwrap(),
+        user_id,
         v["totp_code"].as_str(),
         v["recovery_code"].as_str(),
     )
@@ -766,19 +824,18 @@ pub async fn login(
         if error.code != "UNAUTHENTICATED" {
             return Err(error);
         }
-        db::audit(
-            &mut tx,
-            user["id"].as_str().unwrap(),
-            "login.mfa",
-            "",
-            "denied",
-        )
-        .await?;
+        let locked = {
+            let mut ledger = s.sign_in_failures();
+            ledger.add(&failures, FACTOR_WINDOW);
+            ledger.blocked(&failures, FACTOR_FAILURES)
+        };
+        db::audit(&mut tx, user_id, "login.mfa", "", "denied").await?;
         tx.commit().await?;
-        return Err(error);
+        return Err(locked.map_or(error, signin_throttled));
     }
     let response = finish_login(&s, &mut tx, &h, &client, user).await?;
     tx.commit().await?;
+    keys.succeeded(&s);
     Ok(response)
 }
 pub(crate) async fn finish_login(

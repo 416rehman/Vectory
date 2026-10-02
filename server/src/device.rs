@@ -143,27 +143,36 @@ pub async fn enroll(
     crate::ClientAddress(peer): crate::ClientAddress,
     Json(v): Json<Value>,
 ) -> Result<Json<Value>> {
-    // One client (an IPv6 /64 counts as one) gets the budget the whole server
-    // used to share, so a noisy host cannot block `vectory setup` fleet-wide.
+    // One client (an IPv6 /64 counts as one) has its own budget, charged
+    // first; the budget every client shares is charged only for what that lets
+    // through, so a noisy host cannot block `vectory setup` fleet-wide.
     let client = peer.map_or_else(
         || "unknown".into(),
         |ip| crate::throttle_group(&ip.to_string()),
     );
     let minute = std::time::Duration::from_secs(60);
-    s.limit("enrollment".into(), 600, minute)?;
     s.limit(format!("enrollment:{client}"), 60, minute)?;
+    s.limit("enrollment".into(), 600, minute)?;
     let mut details = attempt_details(&v, peer);
     let (reason, token_id, error) = match enroll_inner(&s, &v, &details).await {
         Ok(response) => return Ok(response),
         Err(Refusal::Refused { reason, token_id }) => (reason, token_id, ApiError::enrollment()),
         Err(Refusal::Error(error)) => ("INTERNAL", None, error),
     };
-    // Refusals that carry no real token are junk or a repeated typo: record
-    // the first per client and reason each minute. The audit log is
-    // append-only, so repeats must not grow it without bound.
-    if matches!(reason, "TOKEN_UNKNOWN" | "MALFORMED")
-        && s.limit(format!("enrollment-audit:{client}:{reason}"), 1, minute)
-            .is_err()
+    // The audit log is append-only, so a refusal that repeats must not grow it
+    // without bound: record the first of each kind each minute. Junk and typos
+    // carry no real token, so they count per client and reason; a refusal for
+    // a real token (revoked, used up, expired, a name it doesn't allow) counts
+    // per token and reason, whichever hosts keep trying.
+    let audit_budget = match token_id.as_deref() {
+        Some(token) => Some(format!("enrollment-audit:token:{token}:{reason}")),
+        None if matches!(reason, "TOKEN_UNKNOWN" | "MALFORMED") => {
+            Some(format!("enrollment-audit:{client}:{reason}"))
+        }
+        None => None,
+    };
+    if let Some(key) = audit_budget
+        && s.limit(key, 1, minute).is_err()
     {
         return Err(error);
     }

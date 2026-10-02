@@ -954,3 +954,281 @@ async fn concurrent_failures_cannot_exceed_challenge_budget_or_bypass_user_rate(
     assert!(!h.contains_key("set-cookie"));
     assert_eq!(count(&f, "mfa_recovery_codes").await, 8);
 }
+
+/// A request as the address `address` makes it.
+async fn from(
+    app: &Router,
+    address: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value, HeaderMap) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(
+            address.parse().unwrap(),
+            443,
+        )));
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap(), headers)
+}
+fn code_of(body: &Value) -> &str {
+    body["error"]["code"].as_str().unwrap_or("")
+}
+/// How much of a budget has been spent: the number of calls it admitted.
+fn spent(ledger: &std::sync::Mutex<vectory_server::ledger::Ledger>, key: &str) -> usize {
+    let mut ledger = ledger.lock().unwrap();
+    (1..=5000)
+        .take_while(|count| ledger.blocked(key, *count).is_some())
+        .count()
+}
+fn combined(code: &str) -> Value {
+    json!({"email":"admin@example.test","password":PASSWORD,"totp_code":code})
+}
+
+#[tokio::test]
+async fn a_combined_sign_in_counts_wrong_codes_against_the_account() {
+    let f = fixture().await;
+    // The account's authenticator is in step with the server's clock.
+    sqlx::query("UPDATE user_mfa SET last_used_step=-1")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    // The password is right and the code is guessed, from two addresses.
+    let mut outcomes = Vec::new();
+    for address in ["192.0.2.1", "198.51.100.2"].iter().cycle().take(6) {
+        let (status, body, headers) =
+            from(&f.app, address, "/api/v1/login", combined("000000")).await;
+        assert!(!headers.contains_key("set-cookie"));
+        outcomes.push((
+            status,
+            code_of(&body).to_owned(),
+            headers.contains_key("retry-after"),
+        ));
+    }
+    // Four wrong codes are plain refusals. The fifth spends the account's
+    // budget, and from then on the account's second factor is locked, for
+    // every address.
+    for outcome in &outcomes[..4] {
+        assert_eq!(
+            outcome,
+            &(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHENTICATED".to_owned(),
+                false
+            )
+        );
+    }
+    for outcome in &outcomes[4..] {
+        assert_eq!(
+            outcome,
+            &(
+                StatusCode::TOO_MANY_REQUESTS,
+                "SIGNIN_THROTTLED".to_owned(),
+                true
+            )
+        );
+    }
+    // A correct code inside the lock is refused too, from either address.
+    let right = generator(&f.secret).generate_current().unwrap();
+    for address in ["192.0.2.1", "198.51.100.2", "203.0.113.50"] {
+        let (status, body, headers) =
+            from(&f.app, address, "/api/v1/login", combined(&right)).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(code_of(&body), "SIGNIN_THROTTLED");
+        assert!(headers.contains_key("retry-after") && !headers.contains_key("set-cookie"));
+    }
+    assert_eq!(
+        count(&f, "sessions").await,
+        1,
+        "only the setup session exists"
+    );
+    // Every wrong code is on the record, and none of them is a code.
+    let denied: Vec<String> = sqlx::query_scalar(
+        "SELECT data FROM records WHERE kind='audit' AND json_extract(data,'$.action')='login.mfa'",
+    )
+    .fetch_all(&f.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(denied.len(), 5);
+    assert!(
+        denied
+            .iter()
+            .all(|row| !row.contains("000000") && !row.contains(&right))
+    );
+}
+
+#[tokio::test]
+async fn a_combined_sign_in_with_the_right_code_still_works_after_a_few_wrong_ones() {
+    let f = fixture().await;
+    sqlx::query("UPDATE user_mfa SET last_used_step=-1")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        let (status, body, _) =
+            from(&f.app, "192.0.2.1", "/api/v1/login", combined("000000")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    }
+    let right = generator(&f.secret).generate_current().unwrap();
+    let (status, body, headers) =
+        from(&f.app, "198.51.100.2", "/api/v1/login", combined(&right)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(headers.contains_key("set-cookie"));
+}
+
+#[tokio::test]
+async fn a_password_alone_neither_returns_its_failure_nor_marks_the_client_known() {
+    let f = fixture().await;
+    let address = "192.0.2.77";
+    let known = format!("login-known:admin@example.test:{address}");
+    let failures = format!("login-fail:admin@example.test:{address}");
+    let (status, challenge, _) = from(
+        &f.app,
+        address,
+        "/api/v1/login",
+        json!({"email":"admin@example.test","password":PASSWORD}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{challenge}");
+    assert_eq!(challenge["mfa_required"], true);
+    {
+        // Whoever holds only the password is not a client of this account yet,
+        // and the attempt still counts against it.
+        let mut ledger = f.state.sign_in_failures();
+        assert!(
+            !ledger.seen(&known),
+            "a password alone marked the client as known"
+        );
+        assert!(
+            ledger.seen(&failures),
+            "the attempt was refunded before the factor"
+        );
+    }
+    // The factor completes the sign-in: now the client is known and the attempt
+    // is returned.
+    let token = challenge["challenge_token"].as_str().unwrap();
+    let (status, body, _) =
+        from(&f.app, address, "/api/v1/login/mfa", recovery(&f, token, 0)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut ledger = f.state.sign_in_failures();
+    assert!(ledger.seen(&known));
+    assert!(!ledger.seen(&failures));
+}
+
+#[tokio::test]
+async fn one_address_cannot_block_second_factor_completion_for_everyone_else() {
+    let f = fixture().await;
+    let (status, challenge, _) = from(
+        &f.app,
+        "198.51.100.20",
+        "/api/v1/login",
+        json!({"email":"admin@example.test","password":PASSWORD}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{challenge}");
+    let token = challenge["challenge_token"].as_str().unwrap().to_owned();
+    let (mut expired, mut rate_limited) = (0, 0);
+    for _ in 0..700 {
+        let (status, body, _) = from(
+            &f.app,
+            "192.0.2.10",
+            "/api/v1/login/mfa",
+            json!({"challenge_token":"0".repeat(64),"totp_code":"123456"}),
+        )
+        .await;
+        match (status, code_of(&body)) {
+            (StatusCode::UNAUTHORIZED, "MFA_CHALLENGE_EXPIRED") => expired += 1,
+            (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED") => rate_limited += 1,
+            (status, code) => panic!("unexpected {status} {code}"),
+        }
+    }
+    assert_eq!((expired, rate_limited), (60, 640));
+    let (status, body, _) = from(
+        &f.app,
+        "198.51.100.20",
+        "/api/v1/login/mfa",
+        recovery(&f, &token, 0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(spent(&f.state.limits, "login-mfa-global"), 61);
+}
+
+#[tokio::test]
+async fn a_known_client_completes_the_second_factor_while_others_flood_it() {
+    let f = fixture().await;
+    let known = "198.51.100.30";
+    let password_step = |address: &'static str| {
+        let f = &f;
+        async move {
+            let (status, challenge, _) = from(
+                &f.app,
+                address,
+                "/api/v1/login",
+                json!({"email":"admin@example.test","password":PASSWORD}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{challenge}");
+            challenge["challenge_token"].as_str().unwrap().to_owned()
+        }
+    };
+    // The operator has signed in from here before.
+    let earlier = password_step("198.51.100.30").await;
+    assert_eq!(
+        from(
+            &f.app,
+            known,
+            "/api/v1/login/mfa",
+            recovery(&f, &earlier, 0)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    // Ten addresses flood the second step with made-up challenges.
+    let (mut expired, mut rate_limited) = (0, 0);
+    for address in 0..10 {
+        for _ in 0..60 {
+            let (status, body, _) = from(
+                &f.app,
+                &format!("10.9.0.{address}"),
+                "/api/v1/login/mfa",
+                json!({"challenge_token":"0".repeat(64),"totp_code":"123456"}),
+            )
+            .await;
+            match (status, code_of(&body)) {
+                (StatusCode::UNAUTHORIZED, "MFA_CHALLENGE_EXPIRED") => expired += 1,
+                (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED") => rate_limited += 1,
+                (status, code) => panic!("unexpected {status} {code}"),
+            }
+        }
+    }
+    // The ordinary share is 500 a minute; the operator's earlier completion
+    // used one of them.
+    assert_eq!((expired, rate_limited), (499, 101));
+    // Someone who has never signed in is refused, whatever they hold.
+    let (status, body, _) = from(
+        &f.app,
+        "203.0.113.30",
+        "/api/v1/login/mfa",
+        json!({"challenge_token":"1".repeat(64),"recovery_code":"abcd-abcd"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(code_of(&body), "RATE_LIMITED");
+    // The operator signs in again from their usual address.
+    let token = password_step("198.51.100.30").await;
+    let (status, body, _) = from(&f.app, known, "/api/v1/login/mfa", recovery(&f, &token, 2)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
