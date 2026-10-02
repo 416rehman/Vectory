@@ -31,6 +31,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 60000,
+  // A browser that starts cold on a hosted machine needs longer than the default
+  // five seconds for its first page.
+  ...(smoke ? { expect: { timeout: 15000 } } : {}),
   use: {
     ...(smoke ? {} : { storageState: "../.local/preview/browser-auth.json" }),
     baseURL: process.env.VECTORY_UI_URL || "http://127.0.0.1:5173",

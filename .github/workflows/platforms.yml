@@ -101,15 +101,15 @@ jobs:
         if: ${{ !cancelled() && steps.instance.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs install
+      - name: Read the generated unit's sandbox from the running service
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tests/platform/linux-sandbox.mjs generated
       - name: Run the clean-install workflow against the service
         id: apply
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         timeout-minutes: 15
         run: node tests/platform/service.mjs apply generated
-      - name: Read the generated unit's sandbox from the running service
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        timeout-minutes: 10
-        run: node tests/platform/linux-sandbox.mjs generated
       - name: Restart the service, kill the agent and stop the service
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         timeout-minutes: 25
@@ -135,6 +135,13 @@ jobs:
           set +e
           node tests/platform/service.mjs collect
           mkdir -p "$VECTORY_PLATFORM_OUTPUT/logs"
+          # What a failed run needs, in the log itself (the artifact holds the rest).
+          echo "::group::The service's journal"
+          sudo journalctl -u vectory --no-pager -n 150
+          echo "::endgroup::"
+          echo "::group::The folders the service writes"
+          sudo ls -la /etc/vectory /etc/vectory/managed /var/lib/vectory-agent /var/lib/vector
+          echo "::endgroup::"
           scripts/preview.sh stop
           cp "$VECTORY_PREVIEW_DIR"/server.log "$VECTORY_PREVIEW_DIR"/validator.log "$VECTORY_PLATFORM_OUTPUT/logs/"
           exit 0
@@ -528,7 +535,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/platforms/browsers
           scripts/preview.sh start
-          trap 'scripts/preview.sh stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "artifacts/platforms/browsers/firefox-$log.log" 2>/dev/null || true; done' EXIT
+          trap '"$GITHUB_WORKSPACE/scripts/preview.sh" stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "$GITHUB_WORKSPACE/artifacts/platforms/browsers/firefox-$log.log" 2>/dev/null || true; done' EXIT
           cd dashboard
           npx playwright test --reporter=list,json
       - name: WebKit, on a fresh instance
@@ -544,7 +551,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/platforms/browsers
           scripts/preview.sh start
-          trap 'scripts/preview.sh stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "artifacts/platforms/browsers/webkit-$log.log" 2>/dev/null || true; done' EXIT
+          trap '"$GITHUB_WORKSPACE/scripts/preview.sh" stop; for log in server validator; do cp "$VECTORY_PREVIEW_DIR/$log.log" "$GITHUB_WORKSPACE/artifacts/platforms/browsers/webkit-$log.log" 2>/dev/null || true; done' EXIT
           cd dashboard
           npx playwright test --reporter=list,json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
