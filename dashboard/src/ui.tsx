@@ -966,11 +966,35 @@ export function PageHeader({
   );
 }
 function SectionTabs({ shell }: { shell: ShellInfo }) {
-  const list = useRef<HTMLElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  // Tabs hidden past either end of a strip that scrolls: they fade out there,
+  // and a chevron marks the end where more tabs wait.
+  const [hidden, setHidden] = useState({ before: false, after: false });
+  useLayoutEffect(() => {
+    const node = strip.current;
+    if (!node) return;
+    const measure = () => {
+      const before = node.scrollLeft > 1;
+      const after = node.scrollLeft + node.clientWidth < node.scrollWidth - 1;
+      setHidden((was) =>
+        was.before === before && was.after === after ? was : { before, after },
+      );
+    };
+    measure();
+    node.addEventListener("scroll", measure, { passive: true });
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(node);
+    if (node.firstElementChild) observer?.observe(node.firstElementChild);
+    return () => {
+      node.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [shell.tabs.length]);
   useEffect(() => {
     // Scroll only the strip. scrollIntoView would also move the sequential
     // focus start, so the first Tab would skip the skip link and the shell.
-    const nav = list.current;
+    const nav = strip.current;
     const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
     if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
     const left =
@@ -985,22 +1009,33 @@ function SectionTabs({ shell }: { shell: ShellInfo }) {
   }, [shell.currentTab]);
   return (
     <nav
-      ref={list}
       className="page-tabs"
       aria-label={shell.tabsLabel || `${shell.sectionLabel} sections`}
+      data-hidden-before={hidden.before || undefined}
+      data-hidden-after={hidden.after || undefined}
     >
-      {shell.tabs.map((tab) => (
-        <a
-          key={tab.id}
-          href={tab.href}
-          aria-current={shell.currentTab === tab.id ? "page" : undefined}
-        >
-          <span className="tab-label">
-            <tab.icon size={15} aria-hidden="true" focusable="false" />
-            <span>{tab.label}</span>
-          </span>
-        </a>
-      ))}
+      <div ref={strip} className="page-tabs-strip">
+        {shell.tabs.map((tab) => (
+          <a
+            key={tab.id}
+            href={tab.href}
+            aria-current={shell.currentTab === tab.id ? "page" : undefined}
+          >
+            <span className="tab-label">
+              <tab.icon size={15} aria-hidden="true" focusable="false" />
+              <span>{tab.label}</span>
+            </span>
+          </a>
+        ))}
+      </div>
+      {hidden.after && (
+        <ChevronRight
+          className="page-tabs-more"
+          size={16}
+          aria-hidden="true"
+          focusable="false"
+        />
+      )}
     </nav>
   );
 }

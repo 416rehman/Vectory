@@ -8,7 +8,6 @@ import {
   healthOrder,
   healthStates,
   monitoringTarget,
-  niceCeiling,
   quietSummary,
   runningGroups,
   runningNotes,
@@ -160,13 +159,6 @@ describe("number formatting", () => {
     expect(formatRate(12345)).toBe("12.3K");
     expect(countLabel(1, "device")).toBe("1 device");
     expect(countLabel(3, "device")).toBe("3 devices");
-  });
-
-  it("rounds axis maxima up to a readable step", () => {
-    expect(niceCeiling(0)).toBe(1);
-    expect(niceCeiling(4.2)).toBe(5);
-    expect(niceCeiling(12)).toBe(20);
-    expect(niceCeiling(2400)).toBe(2500);
   });
 });
 

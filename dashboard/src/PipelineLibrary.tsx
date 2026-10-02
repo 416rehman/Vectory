@@ -35,7 +35,11 @@ import {
   useResource,
 } from "./ui";
 import type { StartImport } from "./PipelineStartChoice";
-import PipelineStatus, { libraryStatus } from "./PipelineStatus";
+import PipelineStatus, {
+  libraryStatus,
+  OutcomeLine,
+  useLibraryOutcomes,
+} from "./PipelineStatus";
 import PipelineCreationRecovery, {
   type PipelineCreationRecoveryHandle,
 } from "./PipelineCreationRecovery";
@@ -161,6 +165,7 @@ export default function PipelineLibrary({
       page: query.page,
       page_size: 12,
     });
+  const outcomeOf = useLibraryOutcomes(data.items);
   const searching = search.trim() !== query.search;
   const lastPage = Math.max(1, Math.ceil(data.total / data.page_size));
   const correctingPage = !loading && !error && query.page > lastPage;
@@ -454,7 +459,7 @@ export default function PipelineLibrary({
               : null
           }
           mobileCard={(pipeline) => {
-            const status = libraryStatus(pipeline);
+            const status = libraryStatus(pipeline, outcomeOf(pipeline));
             return {
               title: pipeline.name,
               href: `#/${pipelineRoute(pipeline.id, initialDeviceId, destination)}`,
@@ -463,7 +468,11 @@ export default function PipelineLibrary({
                   Unpublished changes
                 </span>
               ) : undefined,
-              meta: [status.primary, status.detail],
+              meta: [
+                status.primary,
+                status.detail,
+                status.outcome && <OutcomeLine outcome={status.outcome} />,
+              ],
             };
           }}
           manualSorting
@@ -557,7 +566,9 @@ export default function PipelineLibrary({
                 onChange: (state) =>
                   setQuery({ ...query, search: search.trim(), state, page: 1 }),
               },
-              cell: (c) => <PipelineStatus pipeline={c} />,
+              cell: (c) => (
+                <PipelineStatus pipeline={c} outcome={outcomeOf(c)} />
+              ),
             },
             {
               id: "updated",

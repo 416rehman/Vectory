@@ -42,7 +42,6 @@ import {
   healthOrder,
   monitoringTarget,
   needsYouRows,
-  niceCeiling,
   present,
   quietSummary,
   telemetryFromCounts,
@@ -54,7 +53,7 @@ import {
 import { ProgressBar } from "./DeploymentRollout";
 import { Card, CardLink } from "./OverviewCard";
 import RunningNow from "./RunningNow";
-import { isLive, progressLine, rolloutProgress } from "./deploymentStatus";
+import { deploymentCounts, isLive, rolloutProgress } from "./deploymentStatus";
 import { pipelineRoute } from "./SelectedDevice";
 import {
   activityTone,
@@ -65,6 +64,7 @@ import {
   type Part,
 } from "./activityModel";
 import { duration, exactLocal, shortLocal } from "./time";
+import { fitAxis, formatTick, spanLabel, wholeNumbers } from "./telemetryChart";
 import {
   StoppedRolloutItem,
   StoppedRolloutsCheckFailed,
@@ -1230,7 +1230,7 @@ function Rollouts({
                       />
                       <span className="overview-rollout-meta">
                         {progress.total
-                          ? progressLine(progress)
+                          ? deploymentCounts(rollout).sentence
                           : "No devices targeted yet"}
                       </span>
                     </>
@@ -1286,6 +1286,14 @@ function FleetThroughput({
       .length >= 2
       ? complete
       : null;
+  // What the line covers: a fleet that has reported for four minutes says so.
+  const span = series
+    ? spanLabel(
+        Date.parse(series[0].at),
+        Date.parse(series[series.length - 1].at) +
+          (summary?.stepSeconds || 60) * 1000,
+      )
+    : null;
   const coverage = reporting
     ? `${reporting.toLocaleString()} of ${countLabel(eligible, "device")} reporting${reporting < eligible ? ". Totals cover those devices only" : ""}`
     : undefined;
@@ -1307,9 +1315,7 @@ function FleetThroughput({
       }
       className="throughput"
       action={
-        series ? (
-          <span className="overview-card-meta">Last hour</span>
-        ) : undefined
+        span ? <span className="overview-card-meta">{span}</span> : undefined
       }
     >
       {!reporting ? (
@@ -1388,7 +1394,11 @@ function FleetThroughput({
             </div>
           </dl>
           {series ? (
-            <FleetChart series={series} showOut={eventsOut !== null} />
+            <FleetChart
+              series={series}
+              showOut={eventsOut !== null}
+              covers={span!}
+            />
           ) : (
             local.top.length > 0 && (
               <BusiestDevices
@@ -1569,9 +1579,12 @@ const CHART_WIDTH = 600,
 function FleetChart({
   series,
   showOut,
+  covers,
 }: {
   series: SummaryPoint[];
   showOut: boolean;
+  /** What the series covers, "Last 4 minutes". */
+  covers: string;
 }) {
   const [cursor, setCursor] = useState<number | null>(null);
   const plot = useRef<HTMLDivElement>(null);
@@ -1583,7 +1596,13 @@ function FleetChart({
     point.in ?? 0,
     showOut ? (point.out ?? 0) : 0,
   ]);
-  const top = niceCeiling(Math.max(...values));
+  // Counts that are whole numbers get whole-number ticks.
+  const { max: top, ticks } = fitAxis(
+    Math.max(...values),
+    wholeNumbers(
+      series.flatMap((point) => [point.in, showOut ? point.out : null]),
+    ),
+  );
   const x = (index: number) => ((times[index] - start) / span) * CHART_WIDTH;
   const y = (value: number) => CHART_HEIGHT - (value / top) * CHART_HEIGHT;
   // Gaps stay gaps: a missing value breaks the line instead of dropping to zero.
@@ -1644,7 +1663,7 @@ function FleetChart({
         className="fleet-chart-frame"
         tabIndex={0}
         role="group"
-        aria-label="Fleet throughput over the last hour. Use the arrow keys to read samples."
+        aria-label={`Fleet throughput, ${covers.toLowerCase()}. Use the arrow keys to read samples.`}
         onKeyDown={(event) => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
             return;
@@ -1663,8 +1682,8 @@ function FleetChart({
         onBlur={() => setCursor(null)}
       >
         <div className="fleet-chart-axis-y" aria-hidden="true">
-          <span>{formatRate(top)}</span>
-          <span>{formatRate(top / 2)}</span>
+          <span>{formatTick(ticks[2])}</span>
+          <span>{formatTick(ticks[1])}</span>
           <span>0</span>
         </div>
         <div

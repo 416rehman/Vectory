@@ -56,7 +56,7 @@ import { searchText } from "./deviceInventory";
 import type { ListDevice } from "./deviceModel";
 import { pageEntries } from "./navigation";
 import { deviceDisplayStatus, type StatusDomain } from "./status";
-import { describeDeployment } from "./deploymentStatus";
+import { deploymentCounts, describeDeployment } from "./deploymentStatus";
 import { relativeTime } from "./time";
 import { Kbd, Spinner, StatusBadge, useMediaQuery } from "./ui";
 import "./command-palette.css";
@@ -498,15 +498,14 @@ export default function CommandPalette({
         key: `deployment:${deployment.id}`,
         kind: "deployment",
         title: deploymentTitle(deployment),
-        subtitle: `${deployment.target_count} ${deployment.target_count === 1 ? "device" : "devices"} · ${relativeTime(deployment.created_at)}`,
+        // The same sentence and status as the Deployments list and its page.
+        subtitle: `${deploymentCounts(deployment).sentence} · ${relativeTime(deployment.created_at)}`,
         keywords: `${deployment.configuration_name || ""} ${deployment.name || ""} deployment rollout`,
         icon: Rocket,
         href: `#/deployments/${deployment.id}`,
-        // The same words as the Deployments list ("Replaced", "Rolled back").
         status: {
           domain: "deployment",
-          value: deployment.status,
-          label: describeDeployment(deployment).label,
+          value: describeDeployment(deployment).state,
         },
         recent: {
           key: `deployment:${deployment.id}`,

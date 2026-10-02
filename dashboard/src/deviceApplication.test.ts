@@ -235,6 +235,60 @@ describe("current configuration attempt presentation", () => {
       "Unhandled error",
     );
   });
+  it("explains the agent's own refusals by what it found, not by allowances", () => {
+    const refused = (diagnostics: Diagnostic[]) =>
+      device({
+        configuration_attempt: {
+          ...device().configuration_attempt!,
+          error: {
+            code: "CAPABILITY_DENIED",
+            stage: "startup",
+            message: "",
+            diagnostics,
+          },
+        },
+      });
+    const api: Diagnostic = {
+      severity: "error",
+      code: "LOCAL_API_DENIED",
+      field: "api",
+      message:
+        'The pipeline has an "api" block. Vector\'s local API has no authentication, so any user on this host could read live events from it, and restricted mode never allows it.',
+      hint: "Remove the api block, or deploy to a full-mode device. No host allowance can permit it.",
+    };
+    expect(deviceApplicationExplanation(refused([api]), version)).toBe(
+      `${api.message} ${api.hint}`,
+    );
+    // A path as a component ID is not a capability the host could allow.
+    const id: Diagnostic = {
+      severity: "error",
+      code: "INVALID_COMPONENT_ID",
+      component_kind: "sink",
+      message: 'Sink "/tmp/x" (http) has a slash in its ID.',
+      hint: "Rename it and the inputs that name it. Vector uses an ID as a directory name in its data directory, so it can't be a path.",
+    };
+    const explained = deviceApplicationExplanation(refused([id]), version);
+    expect(explained).not.toContain("capabilities");
+    expect(explained).toContain("has a slash in its ID");
+    // A finding that arrives without its own next step still names one.
+    const { hint: _hint, ...bare } = id;
+    expect(deviceApplicationExplanation(refused([bare]), version)).toBe(
+      'Sink "/tmp/x" (http) has a slash in its ID. Rename the component and the inputs that name it.',
+    );
+    // Any other capability refusal keeps the general sentence.
+    expect(
+      deviceApplicationExplanation(
+        refused([
+          {
+            severity: "error",
+            code: "NETWORK_DESTINATION_DENIED",
+            message: 'Sink "out" (http) sends to 127.0.0.1:9.',
+          },
+        ]),
+        version,
+      ),
+    ).toMatch(/^This version requires capabilities that are not allowed/);
+  });
   it("a paused device still running its verified version says so", () => {
     expect(
       deviceApplicationExplanation(
