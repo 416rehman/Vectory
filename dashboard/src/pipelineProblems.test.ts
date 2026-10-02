@@ -258,6 +258,29 @@ describe("pipeline problems", () => {
     expect(checkVerdict(check, 2)).toBe("2 problems to fix before publishing.");
   });
 
+  it("says a Lua step is checked on devices in a sentence, never as the raw reason", () => {
+    const lua: PipelineCheck = {
+      ...check,
+      valid: true,
+      diagnostics: [],
+      deferred_reasons: ["Lua runs on devices"],
+    };
+    expect(checkVerdict(lua, 0)).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks Lua code before applying it.",
+    );
+    expect(
+      checkVerdict(
+        {
+          ...lua,
+          deferred_reasons: ["Lua runs on devices", "environment variables"],
+        },
+        0,
+      ),
+    ).toBe(
+      "Vector 0.58 accepted this pipeline. Each device checks Lua code and environment variables before applying it.",
+    );
+  });
+
   it("applies span and line fixes and refuses stale positions", () => {
     const program = '. = parse_nginx_log(.message, "combined")\n.ok = true';
     expect(applyFix(program, check.diagnostics![0] as any)).toBe(
