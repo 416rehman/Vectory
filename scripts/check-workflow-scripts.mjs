@@ -100,6 +100,12 @@ export function checkWorkflow(text, file = "workflow") {
       problems.push(
         `${step.file}:${step.line} (job ${step.job}): ${result.stderr.trim().split("\n")[0]}`,
       );
+    // With pipefail, `writer | grep -q x` fails whenever grep finds x before the
+    // writer has finished: the writer dies of a broken pipe.
+    if (/pipefail/.test(script) && /\|\s*grep\s+-[a-zA-Z]*q/.test(script))
+      problems.push(
+        `${step.file}:${step.line} (job ${step.job}): grep -q at the end of a pipeline under pipefail; count with grep -c or keep the output in a variable`,
+      );
   }
   return problems;
 }

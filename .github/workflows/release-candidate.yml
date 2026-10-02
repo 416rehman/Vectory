@@ -106,7 +106,7 @@ jobs:
             test -f /usr/lib/systemd/system/vectory.service
             # The slim image leaves /usr/share/doc out of an installed system, so the
             # licence is checked in the package itself.
-            dpkg-deb -c /packages/vectory_*_amd64.deb | grep -q " ./usr/share/doc/vectory/LICENSE$"
+            test "$(dpkg-deb -c /packages/vectory_*_amd64.deb | grep -c " ./usr/share/doc/vectory/LICENSE$")" -ge 1
             test ! -e /var/lib/vectory-agent
             if getent passwd vectory; then echo "installing created an account"; exit 1; fi
             status=0; vectory run --state-dir /tmp/absent || status=$?; test "$status" = 78
@@ -138,11 +138,13 @@ jobs:
           deb=$(ls artifacts/packages/vectory_*_arm64.deb)
           dpkg-deb -f "$deb" Package Version Architecture
           [ "$(dpkg-deb -f "$deb" Architecture)" = arm64 ]
-          dpkg-deb -c "$deb" | grep -q ' ./usr/bin/vectory$'
+          # grep -c reads the whole listing: grep -q would end the pipe early, and
+          # pipefail then reports the writer's broken pipe as a failure.
+          [ "$(dpkg-deb -c "$deb" | grep -c ' ./usr/bin/vectory$')" -ge 1 ]
           docker run --rm --network none -v "$PWD/artifacts/packages:/packages:ro" "$ALMALINUX_IMAGE" sh -euxc '
             rpm -qp --queryformat "%{NAME} %{VERSION} %{ARCH}\n" /packages/vectory-*.aarch64.rpm
             test "$(rpm -qp --queryformat "%{ARCH}" /packages/vectory-*.aarch64.rpm)" = aarch64
-            rpm -qlp /packages/vectory-*.aarch64.rpm | grep -qx /usr/bin/vectory
+            test "$(rpm -qlp /packages/vectory-*.aarch64.rpm | grep -cx /usr/bin/vectory)" -ge 1
           '
   msi:
     needs: agents
