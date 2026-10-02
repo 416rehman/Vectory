@@ -53,6 +53,57 @@ Decisions for sampling:
 - Samples exist only in server memory, for 15 minutes, for the requester. Promotion into a VRL sample or a unit test is explicit and audited because it makes the data durable.
 - The measured Vector behaviors (fixed reload address, fatal bind failure, surviving streams) are pinned to 0.58. A Vector upgrade reruns the native behavior probe before sampling stays enabled.
 
+## Graduated capability tiers
+
+Proposed in [ADR 0012](../adr/0012-graduated-capability-tiers.md); nothing is built. Restricted mode gains built-in components, component types a host approves and two host capabilities (`managed-ca`, `instance-credentials`), and on Linux with systemd the service sandbox follows the host's mode and allowances. The [implementation plan](../internal/CAPABILITY-IMPLEMENTATION-PLAN.md) assigns the tests named below.
+
+Assets added: the capability table compiled into the agent; the host's approvals (`allowed_components` and `allowed_capabilities` in `settings.json`); the generated sandbox drop-in (`/etc/systemd/system/vectory.service.d/10-vectory-sandbox.conf`); the capability report each heartbeat carries and the server's stored copy.
+
+| Attacker | Control | Residual risk | Acceptance probe |
+| --- | --- | --- | --- |
+| Compromised server or signing key | The agent decides with its own compiled table and the host's local approvals. No manifest, policy or response field reaches either, and an older agent keeps its older table. The server's needs and the device's report only explain | It can deploy any built-in component, or any component the host approved, within the host's destinations, listeners and roots. An approval reaches what it says: every broker an approved Kafka cluster advertises, every bucket the host's credentials can write. With `instance-credentials` granted it signs with the host's cloud identity | Settings and drop-in bytes are identical after hostile manifests (WP3, WP6). An unapproved component is refused with `COMPONENT_NOT_APPROVED` (fixtures, WP2) |
+| Operator with a stolen session | Operator role and CSRF for deployments. The dashboard prints host commands and can't run them. `vectory allow` shows what it adds and asks before it restarts the service, and refuses `/`, volume roots and roots overlapping the agent's state or the managed configuration | The thief can deploy within what hosts allow, and can put a broad command in a deploy review hoping a host operator runs it unread, such as `--component docker_logs` | The printed command never carries `--yes` (WP5). Dangerous roots are refused (WP3) |
+| Malicious pipeline author | The table refuses programs, code loading, providers, secret backends, environment interpolation, unconfined templates, passthrough options, and ambient credentials without the capability, on the configuration after every substitution. Vector confines templates and the agent checks their static parts. On Linux with systemd the kernel enforces the write half | Within approved resources the author controls everything: which approved destination, which file under an approved root, which topic under an approved prefix. A field the table misclassifies is a hole until a review finds it | Golden fixtures for each refused shape (WP2). The native probe pins Vector's confinement. The native sandbox job refuses a write outside the roots with `SANDBOX_READ_ONLY` (WP6) |
+| Hostile event data | Vector 0.58 confines templates: an event can't change a URI's host or port, add a query, or leave a file sink's base directory. The agent refuses the opt-out | An event chooses suffixes (file names under a base directory, topics and keys under a prefix, labels) and can create many of them inside an approved root or destination. An escaping event is dropped and logged | ADR 0012's measurements [at validation](../adr/0012-graduated-capability-tiers.md#templates-at-validation) and [at run time](../adr/0012-graduated-capability-tiers.md#templates-at-run-time), reproduced by the native probe |
+| Compromised Vector process or service account | The sandbox bounds where it writes (Linux with systemd). Every value regenerated into a unit is revalidated and quoted, so a value can't become a directive, and the root-run command prints every path the sandbox gains | It shares the agent's account and namespace: it can write the agent's state, including `settings.json`, and so widen the policy at the next agent start and the paths the next root-run regeneration adds. macOS and Windows have no sandbox; the account's permissions are the limit | Hostile-value tests checked with `systemd-analyze verify` (WP6) |
+| Compromised device | The server validates the capability report (keys, bounds, characters), never treats it as a grant, and audits changes as observations | A device can lie about its approvals and sandbox. That only misleads its own deploy review: a claimed approval reads "allowed" and the device then refuses | Report validation (WP4) |
+| Network attacker | Unchanged: mutual TLS and signed manifests; nothing new listens | As today | The existing protocol suite |
+
+Decisions for capability tiers:
+
+- The host decides. Approvals live only in local settings, written by local commands; the server never sends a capability profile, and a device's report is never a grant.
+- A component is built in only when its reviewed profile shows that it reaches nothing its settings don't name, through fields the host approves one by one. Unreviewed means full mode.
+- Templates are allowed only where Vector confines them, never with the opt-out, and their static parts are checked like literals.
+- Ambient cloud credentials need `instance-credentials`, and CA certificates delivered by Vectory need `managed-ca`.
+- A Unix socket that a component connects to is a destination named exactly. A file root never covers it, the agent's state or the managed configuration.
+- On Linux with systemd the sandbox follows the mode and the allowances, in a drop-in Vectory owns; the operator's own drop-ins win. macOS and Windows claim no sandbox.
+- A policy change applies at a stopped-agent checkpoint, and the host operator consents to the restart.
+
+## Managed assets
+
+Proposed in [ADR 0013](../adr/0013-managed-assets.md); nothing is built. Assets are files a version pins by digest, stored on the server and delivered to devices over their own mutual-TLS channel. They are configuration, not secrets.
+
+Assets added: asset bytes and revisions in the server's database and its backups; each version's pins; the asset files in each device's state directory; the agent's asset download route.
+
+| Attacker | Control | Residual risk | Acceptance probe |
+| --- | --- | --- | --- |
+| Compromised server or signing key | The agent verifies size and digest against the signed manifest, bounds count and total, chooses every path itself (content-addressed), and in restricted mode allows only the files it placed, in its own table's fields. A CA certificate needs `managed-ca` | It can pin any bytes into a version it signs: a poisoned lookup table, a hostile MaxMind file for Vector's parser, or, where `managed-ca` is granted, a CA certificate that makes a pipeline trust an attacker's endpoint (the attacker still needs a network position) | A manifest list that disagrees with the artifact is refused, and no path leaves the assets directory (WP8) |
+| Editor or operator with a stolen session | Uploading needs Editor or above. A replaced asset changes no device until an operator publishes and deploys a version that pins it, and the publish review lists every changed asset. Uploads are audited, rate-limited and bounded by the quota | A replaced asset can pass an inattentive publish review. Uploads can fill the quota | The publish review lists changes (WP9). Quota and rate limits (WP7) |
+| Viewer | Metadata only; downloading bytes needs Editor or above | Names, sizes and digests are visible | The role matrix (WP7) |
+| Malicious pipeline author | References only at the agent's asset fields, of the matching kind | Any asset of the instance can be referenced, and a lookup can copy its content to an approved destination | Reference placement tests (WP7, WP8) |
+| Compromised device | The route serves only assets pinned by the device's current desired version or its open validation; a known digest grants nothing; one transfer at a time per device, rate-limited | It can download its own version's assets again within the limits, and lie about presence on its own page | Another device's asset and a guessed digest are refused (WP11) |
+| Network attacker | Mutual TLS, verified digests, no redirects; a cut-off download leaves no file | It can delay or drop a download; the device keeps its last verified configuration and retries | Cut-off and altered downloads (WP8) |
+| Local user or service account on the device | Files are read-only in a directory private to the service account; the agent re-verifies before each apply and fingerprints them at each check-in | The service account or root can change a file between verification and Vector's read | Drift tests (WP8) |
+| Stolen backup or database copy | Private keys are refused at upload and in drafts | Every asset's bytes are in the backup, including internal data a lookup table holds | Private-key refusal tests (WP7) |
+
+Decisions for managed assets:
+
+- A version pins exact bytes inside its artifact, a rollback restores them, and the server keeps every pinned revision.
+- The agent fetches only what its signed manifest lists, verifies digest and size, chooses the path, never overwrites, and keeps every file a retained configuration names.
+- Assets are configuration, not secrets. Private keys are refused everywhere; TLS keys stay device secrets.
+- In restricted mode a CA certificate asset needs the host's `managed-ca` approval.
+- A version with assets is never released to an agent that can't receive them.
+
 ## Consequential decisions
 
 1. Browser TLS terminates at a private reverse proxy. The HTTP API must not be host-exposed. Agent TLS terminates in Rust; no forwarded-header authentication is trusted. Enrollment is the only agent operation without a device certificate.
