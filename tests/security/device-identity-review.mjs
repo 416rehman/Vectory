@@ -12,7 +12,7 @@ const {chromium,expect:strictExpect}=require('@playwright/test');const AxeBuilde
 // than expect's 5 s default to paint a page. What each assertion checks is unchanged.
 const expect=strictExpect.configure({timeout:15000});
 // The deploy dialog reads devices a page at a time: its synthetic replies are the shared ones.
-const {fleetReplies}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
+const {fleetReplies,nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_IDENTITY_OUTPUT||'.local/device-identity-after');
 await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-identity-review';
@@ -59,6 +59,7 @@ async function fixture({route=`devices/${A.id}`,initial=A,modes={},width=899,the
   if(method==='GET'&&/^\/devices\/inventory(\/ids)?$/.test(path)){const paged=(state.fleet??=fleetReplies({devices:()=>[state.initial,B,C],groups:()=>[]})).handle(method,url);if(paged)return reply(paged.json,paged.status);}
   if(/^\/devices\/[^/]+$/.test(path)&&method==='GET'){const source=decodeURIComponent(path.split('/')[2]);return execute(source===A.id?state.initial:[B,C].find(d=>d.id===source));}
   if(/^\/devices\/[^/]+\/revocation$/.test(path)&&method==='GET'){const source=path.split('/')[2];state.statusReads.push(source);return execute({device_id:source,revocation_status:true,revoked:false});}
+  if(/^\/devices\/[^/]+\/configuration$/.test(path)&&method==='GET')return reply(nothingOffered(path.split('/')[2]));
   if(/^\/devices\/[^/]+\/telemetry$/.test(path)&&method==='GET')return execute({device_id:path.split('/')[2],samples:[]});
   if(path===`/devices/${A.id}/retry`&&method==='POST')return execute({...assigned,desired_generation:4});
   if(/^\/versions\/[^/]+$/.test(path)&&method==='GET')return execute(path.endsWith(version.id)?version:wrongVersion);

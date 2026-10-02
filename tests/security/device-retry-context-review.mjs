@@ -5,6 +5,7 @@ import {resolve,dirname,relative} from 'node:path';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),dashboard=resolve(root,'dashboard');
+const {nothingOffered}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
 const require=createRequire(resolve(dashboard,'package.json'));
 const {createServer}=await import(pathToFileURL(require.resolve('vite')));
 const {chromium,expect:strictExpect}=require('@playwright/test');const AxeBuilder=require('@axe-core/playwright').default;
@@ -56,6 +57,7 @@ async function fixture({route=`devices/${A.id}`,initial=assigned,modes={},width=
   if(path==='/status')return reply({initialized:true,version:'synthetic'});if(path==='/session'){state.sessions++;return reply({user:state.actor,csrf_token:'synthetic-unused-csrf'});}if(path==='/settings')return reply({instance_name:'Synthetic identity review'});
   if(/^\/devices\/[^/]+$/.test(path)&&method==='GET'){const source=decodeURIComponent(path.split('/')[2]);return execute(source===A.id?state.initial:[B,C].find(d=>d.id===source));}
   if(/^\/devices\/[^/]+\/revocation$/.test(path)&&method==='GET'){const source=path.split('/')[2];state.statusReads.push(source);return execute({device_id:source,revocation_status:true,revoked:false});}
+  if(/^\/devices\/[^/]+\/configuration$/.test(path)&&method==='GET')return reply(nothingOffered(path.split('/')[2]));
   if(/^\/devices\/[^/]+\/telemetry$/.test(path)&&method==='GET')return execute({device_id:path.split('/')[2],samples:[]});
   if(path===`/devices/${A.id}/retry`&&method==='POST')return execute({...state.initial,desired_version_id:req.postDataJSON().expected_version_id,desired_generation:req.postDataJSON().expected_generation+1});
   if(/^\/versions\/[^/]+$/.test(path)&&method==='GET')return execute(path.endsWith(version.id)?version:wrongVersion);
