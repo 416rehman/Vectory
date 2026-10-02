@@ -94,6 +94,32 @@ describe("the publish review reads tests the way the server does", () => {
     }
   });
 
+  it("stops on the server's answer for a Lua step: the tests did not run here", () => {
+    const lua: PipelineTestRun = {
+      valid: false,
+      tests_run: false,
+      tests: [],
+      deferred: true,
+      errors: [
+        "Lua can run any program, so tests that include it run only on devices. Use Check on devices with Also run the pipeline's tests.",
+      ],
+      warnings: ["Each device checks Lua code before applying this version."],
+    };
+    const result = readTestRun(lua, 2);
+    expect(result.state).toBe("failing");
+    expect(stopsPublishing(result)).toBe(true);
+    expect(result.state === "failing" && result.counts).toEqual({
+      total: 2,
+      passed: 0,
+      failed: 0,
+      refused: 0,
+      notRun: 2,
+    });
+    expect(testsHeadline(result)).toBe(
+      "Vector didn't run either of the 2 tests",
+    );
+  });
+
   it("stops when no answer came, because the server will not publish either", () => {
     const none: TestsView = {
       state: "unavailable",
