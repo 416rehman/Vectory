@@ -69,7 +69,7 @@ sudo vectory allow --network logs.example.net:443
 sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx
 ```
 
-Each flag can be repeated. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. When a restricted device refuses a version, its fix on the device page and in `vectory status` gives the exact `vectory allow` command, and the deploy review writes one for each host.
+Each flag can be repeated. `allow` refuses a file root that would give pipelines the agent's own files, such as `/` or a directory that holds the state directory, and changes nothing: see [A file root is refused](troubleshooting.md#a-file-root-is-refused). Otherwise it prints what it added and everything the host allows now, and notes the change in `vectory logs`. When a restricted device refuses a version, its fix on the device page and in `vectory status` gives the exact `vectory allow` command, and the deploy review writes one for each host.
 
 To replace the lists instead (for example, to remove an entry), edit the protected allowance file and pass it to `install`:
 
@@ -81,7 +81,7 @@ The file replaces all three lists, so keep every entry the device still needs. `
 
 Before you remove an allowance, deploy a pipeline that no longer needs it. At startup, the agent refuses a configuration whose resources are no longer allowed.
 
-No allowance covers Vector's `api` block, which has no authentication. A restricted device refuses a pipeline that sets it, and at startup refuses a configuration that already has one. Deploy a version without the block, or [switch the device to full mode](#switch-between-restricted-and-full-mode).
+No allowance covers Vector's `api` block, which has no authentication. A restricted device refuses a pipeline that sets it, and at startup refuses a configuration that already has one. Deploy a version without the block, or [switch the device to full mode](#switch-between-restricted-and-full-mode). An AWS credentials file and AWS credentials the host supplies are refused the same way, at an apply and at startup: deploy a version that gives the sink explicit keys as device secrets.
 
 A changed allowance lets the device try a version it rejected earlier. It doesn't resume a paused device or turn on full mode.
 

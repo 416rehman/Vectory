@@ -268,7 +268,7 @@ sudo vectory allow --listener 0.0.0.0:514 --file-root /var/log/nginx
 | --- | --- |
 | `--network HOST:PORT` | A destination pipelines may send to, exactly `host:port`. |
 | `--listener ADDR:PORT` | An address pipelines may listen on. |
-| `--file-root PATH` | An absolute directory pipelines may read and write under. |
+| `--file-root PATH` | An absolute directory pipelines may read and write under. Not `/` or a drive root, and not a directory that is, holds or lies inside the agent's state directory, the managed configuration or a bound secret file. |
 
 Repeat a flag for more entries. `allow` prints what it added and everything the host allows now, and notes the change in `vectory logs`. Only a host operator can change allowances; the dashboard can't. To remove an entry, replace the lists with `install --capability-policy`.
 
