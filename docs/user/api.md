@@ -69,6 +69,31 @@ curl -fsS -b cookies.txt "https://vectory.example.com/api/v1/devices/$id/configu
 
 `running.matches` is `true` when the digest the agent last reported is the digest of `content`, `false` when it's another one and `null` when Vectory can't say. [How Vectory compares them](deployments.md#how-vectory-compares-them) has the rest.
 
+## Check devices before you deploy
+
+`POST /api/v1/deployments/preview` takes `device_validation: true` to ask the reviewed devices to validate the version on their own hosts. Nothing is deployed. The reply gains a `validation_id`, and `GET /api/v1/device-validations/{id}` reads the answers until its `state` is `complete`. Add `run_tests: true` to run the pipeline's own tests on each device too. Send the same body you would send to create the deployment, with `device_validation` added; `POST /api/v1/deployments` itself refuses the field.
+
+```sh
+id=$(curl -fsS -b cookies.txt -X POST -H "X-CSRF-Token: $(cat csrf.txt)" \
+  -H 'Content-Type: application/json' -d @review.json \
+  https://vectory.example.com/api/v1/deployments/preview | jq -r .validation_id)
+curl -fsS -b cookies.txt "https://vectory.example.com/api/v1/device-validations/$id" \
+  | jq '.state, (.devices[] | {name, state})'
+```
+
+Each device in the answer has one `state`:
+
+| State | Meaning |
+| --- | --- |
+| `pending` | Asked, no answer yet. |
+| `passed` | The device validated the version and found no error. |
+| `failed` | It found at least one: read `diagnostics`, `tests` and `secrets_missing` (device-secret names it hasn't bound). |
+| `offline` | It hadn't checked in for three of its own intervals, so it wasn't asked. |
+| `expired` | No answer in ten minutes, a newer check for it replaced this one, or it was revoked. |
+| `unsupported` | Its agent can't be checked, so it wasn't asked. |
+
+A request checks the first 50 devices by name, fewer when their candidates together would be larger than 10 MiB, and sets `validation_truncated` when more were reviewed. You can make 6 requests a minute, and each device has one check at a time: a newer request replaces an older one that is still waiting. A `429` with a `Retry-After` header means you're over your six, or that the server is holding as many waiting candidates as it keeps (128 MiB): wait that long and ask again. Only the person who asked, or an administrator, can read a check; others get `404`. Answers are kept for 24 hours. A check is advisory: it changes no deployment, generation, setting or issue, and `passed` is the device's own report, not evidence that a version is applied.
+
 ## Use the interactive reference
 
 [Open the interactive API reference](/api-reference.html). It lists every operation by area, with request and response schemas.

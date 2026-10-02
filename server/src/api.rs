@@ -122,6 +122,10 @@ pub fn router(s: State) -> Router {
         .route("/api/v1/mfa/{action}", post(crate::mfa::manage))
         .route("/api/v1/deployments/preview", post(deployment_preview))
         .route(
+            "/api/v1/device-validations/{id}",
+            get(crate::device_validations::get),
+        )
+        .route(
             "/api/v1/deployments/binding-suggestions",
             post(crate::deployment_history::binding_suggestions),
         )
@@ -1137,12 +1141,43 @@ pub async fn action(
 pub async fn deployment_preview(
     AppState(s): AppState<State>,
     h: HeaderMap,
-    Json(v): Json<Value>,
+    Json(mut v): Json<Value>,
 ) -> Result<Json<Value>> {
-    auth::authorize(&s, &h, &["operator"], true).await?;
+    let user = auth::authorize(&s, &h, &["operator"], true).await?;
+    // `device_validation` and `run_tests` ask for a check on the devices and
+    // are no part of a deployment: they leave the body here.
+    let check = crate::device_validations::Request::take(&mut v)?;
+    check.check(&v)?;
+    check.limit(&s, &user)?;
     let (_guard, mut tx) = crate::db::write_tx(&s).await?;
-    auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
-    Ok(Json(rollout::preview(&mut tx, &v).await?))
+    let actor = auth::authorize_in(&mut tx, &h, &["operator"], true).await?;
+    if !check.device_validation {
+        // A preview never persists anything: its transaction ends unfinished.
+        return Ok(Json(rollout::preview(&mut tx, &v).await?));
+    }
+    // The preview runs in a savepoint that is rolled back, so the only thing
+    // this transaction keeps is the check itself.
+    let mut simulation = sqlx::Acquire::begin(&mut *tx).await?;
+    let mut preview = rollout::preview(&mut simulation, &v).await?;
+    simulation.rollback().await?;
+    let created = crate::device_validations::create(
+        &mut tx,
+        text(&actor, "id"),
+        &v,
+        &preview,
+        check.run_tests,
+    )
+    .await?;
+    if let Some(created) = &created {
+        preview["validation_id"] = json!(created.id);
+        preview["validation_truncated"] = json!(created.truncated);
+    }
+    tx.commit().await?;
+    // Only a committed check asks anyone to check in.
+    for device in created.iter().flat_map(|created| &created.asked) {
+        crate::wake::ask(device);
+    }
+    Ok(Json(preview))
 }
 pub(crate) async fn recent_activity(conn: &mut sqlx::SqliteConnection) -> Result<Vec<Value>> {
     Ok(crate::audit::rows(

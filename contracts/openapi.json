@@ -6151,7 +6151,7 @@
     },
     "/api/v1/deployments/preview": {
       "post": {
-        "summary": "Preview effective targets and transactional priority conflicts",
+        "summary": "Preview effective targets and transactional priority conflicts. With device_validation:true it also asks the reviewed devices to validate the version on their own hosts (Check on devices): the response then carries validation_id, and GET /api/v1/device-validations/{id} reads the answers. Nothing is deployed, released or changed on a device.",
         "operationId": "post__api_v1_deployments_preview",
         "security": [
           {
@@ -6173,7 +6173,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DeploymentRequest"
+                "$ref": "#/components/schemas/PreviewRequest"
               }
             }
           }
@@ -6230,7 +6230,22 @@
             }
           },
           "429": {
-            "description": "Rate limit"
+            "description": "RATE_LIMITED with Retry-After: device_validation requests are limited to 6 a minute per user (a refused request creates nothing), or CAPACITY_BUSY with Retry-After 60 while 128 MiB of candidates wait for answers.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -10037,6 +10052,96 @@
         ]
       }
     },
+    "/api/v1/device-validations/{id}": {
+      "get": {
+        "summary": "The answers of the devices of one check on devices (Check on devices), for the operator who requested it or an administrator; anyone else, and an unknown or expired-and-pruned ID, gets 404. Operators and administrators; 429 beyond 240 reads a minute per account; no query parameters",
+        "operationId": "get__api_v1_device_validations__id_",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceValidation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check, or it is not yours (administrators read every check)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or stale revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit"
+          }
+        },
+        "tags": [
+          "Deployments"
+        ]
+      }
+    },
     "/api/v1/devices/inventory": {
       "get": {
         "summary": "One page of devices as lists show them, filtered, sorted and counted on the server. Any authenticated role. Unknown, repeated or malformed parameters return 400; an empty filter value is no filter.",
@@ -13135,7 +13240,7 @@
     },
     "/agent/v1/wait": {
       "get": {
-        "summary": "Wake-up hint (mTLS, no body): held until this device's desired or policy generation differs from the agent's last accepted values, the device is revoked, or 25 seconds pass. Answers go out after the writer commits, up to 100 at once and then 50 a second, oldest first. The response head is sent at once and the body when the answer is known. Authenticated like the heartbeat; unsigned, carries no configuration and changes no state",
+        "summary": "Wake-up hint (mTLS, no body): held until this device's desired or policy generation differs from the agent's last accepted values, the device is revoked, a committed check on devices asks this device, or 25 seconds pass. Answers go out after the writer commits, up to 100 at once and then 50 a second, oldest first. The response head is sent at once and the body when the answer is known. Authenticated like the heartbeat; unsigned, carries no configuration and changes no state",
         "operationId": "get__agent_v1_wait",
         "security": [
           {
@@ -13345,7 +13450,7 @@
     },
     "/agent/v1/artifacts/{sha256}": {
       "get": {
-        "summary": "Fetch only current released device artifact",
+        "summary": "Fetch only the current released device artifact, or the candidate of this device's own pending, unexpired device check (Check on devices) when its digest is that one. Never another device's candidate, and never one that was answered, superseded or has expired; every other refusal is unchanged",
         "operationId": "get__agent_v1_artifacts__sha256_",
         "security": [
           {
@@ -15239,6 +15344,40 @@
                 "maximum": 9007199254740991
               },
               "next_released_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "validation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "configuration_id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "run_tests": {
+                "type": "boolean"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "device_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "pending_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "offline_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "unsupported_count": {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
@@ -19963,6 +20102,31 @@
             "type": "boolean",
             "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
           },
+          "agent_features": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_]{1,32}$"
+            },
+            "description": "What the agent announced it can do in its latest check-in (validation: it can be checked on, see Check on devices); absent when that check-in announced nothing. Names the server does not know are kept as given and never acted on."
+          },
+          "readiness": {
+            "type": "object",
+            "properties": {
+              "data_dir_writable": {
+                "type": "boolean"
+              },
+              "allowed_listener_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              }
+            },
+            "required": [],
+            "additionalProperties": false,
+            "description": "Facts the agent reported about the host in its latest check-in: whether its data directory is writable and how many listeners its local capability policy allows (a count, never the list). Absent when that check-in reported none; each member is absent when the agent did not say. Reported, not verified by the server."
+          },
           "agent_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$",
@@ -21921,6 +22085,15 @@
               "format": "uuid"
             },
             "description": "Configuration targets whose sync is paused; they apply the change after sync resumes."
+          },
+          "validation_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Present when device_validation was requested and at least one device was addressed: read the answers with GET /api/v1/device-validations/{id}. Nothing was deployed."
+          },
+          "validation_truncated": {
+            "type": "boolean",
+            "description": "Present with validation_id: true when more devices were reviewed than were addressed (the first 50 by name, and at most 10 MiB of candidate bytes in all)."
           }
         },
         "required": [
@@ -24125,6 +24298,70 @@
             "type": "string",
             "maxLength": 4096,
             "description": "The agent state directory, an absolute local path (POSIX, or a Windows drive path) and not a secret. Sent only to servers that list the state_dir feature."
+          },
+          "agent_features": {
+            "anyOf": [
+              {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z_]{1,32}$"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this agent can do: validation means it can be checked on. Sent only after a verified manifest lists validation. The server keeps the latest announcement per device; a check-in without it means nothing is announced now. Null is treated as absent."
+          },
+          "validation_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer to the check the manifest carried. Null is treated as absent."
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "data_dir_writable": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "allowed_listener_count": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Booleans and counts only (data_dir_writable, allowed_listener_count), sent only after a verified manifest lists validation. configuration_mode and vector_version already ride every heartbeat. Null is treated as absent, here and for each member."
           }
         },
         "required": [
@@ -24166,6 +24403,18 @@
           },
           "vector_version": {
             "type": "string"
+          },
+          "version_number": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "Optional, for vectory status: the number of version_id within its pipeline. Covered by the signature like the rest; omitted when the server does not know it. An older agent ignores it. Not part of the desired identity: it never changes for a version_id."
+          },
+          "configuration_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Optional, for vectory status: the pipeline's name as the server shows it now (cut to 120 characters, omitted when it is empty or has control characters). It can change at an unchanged generation when the pipeline is renamed, so an agent must keep it out of the identity it compares for a repeated generation. An older agent ignores it."
           }
         },
         "required": [
@@ -24228,7 +24477,11 @@
               "type": "string",
               "pattern": "^[a-z0-9_]{1,64}$"
             },
-            "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running, agent_sha256, state_dir), and wake while it holds GET /agent/v1/wait. Agents send those fields, and wait, only when listed, so older servers keep their strict validation. Unknown names are ignored."
+            "description": "Additive heartbeat fields this server accepts (diagnostics, host_runtime, vector_log_summary, telemetry_v2, secret_names, service_manager, vector_running, agent_sha256, state_dir), validation (agent_features, validation_result and readiness, see Check on devices), and wake while it holds GET /agent/v1/wait. Agents send those fields, and wait, only when listed, so older servers keep their strict validation. Unknown names are ignored."
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ManifestValidation",
+            "description": "At most one, optional: the device check this device is asked to run now. Present only while the device has an unexpired, unanswered check and announced agent_features:[\"validation\"] in the heartbeat this manifest answers. Covered by the signature and bound to the recipient and nonce like every other member. An agent ignores it when expires_at is in the past or later than 15 minutes after issued_at."
           }
         },
         "required": [
@@ -28175,6 +28428,31 @@
             "type": "boolean",
             "description": "Whether Vector runs on the device, from its latest check-in; absent when the agent does not report it. false with a failed first version means nothing runs."
           },
+          "agent_features": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_]{1,32}$"
+            },
+            "description": "What the agent announced it can do in its latest check-in (validation: it can be checked on, see Check on devices); absent when that check-in announced nothing. Names the server does not know are kept as given and never acted on."
+          },
+          "readiness": {
+            "type": "object",
+            "properties": {
+              "data_dir_writable": {
+                "type": "boolean"
+              },
+              "allowed_listener_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              }
+            },
+            "required": [],
+            "additionalProperties": false,
+            "description": "Facts the agent reported about the host in its latest check-in: whether its data directory is writable and how many listeners its local capability policy allows (a count, never the list). Absent when that check-in reported none; each member is absent when the agent did not say. Reported, not verified by the server."
+          },
           "agent_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$",
@@ -28328,7 +28606,7 @@
         "properties": {
           "changed": {
             "type": "boolean",
-            "description": "true: this device's desired or policy generation differs from the ones the agent sent, or its access was revoked: check in now. false: nothing changed (the hold ended, a newer wait from this device replaced this one, or the server is stopping)."
+            "description": "true: this device's desired or policy generation differs from the ones the agent sent, its access was revoked, or a check on devices is waiting for it: check in now. false: nothing changed (the hold ended, a newer wait from this device replaced this one, or the server is stopping)."
           }
         },
         "required": [
@@ -29450,6 +29728,406 @@
         ],
         "additionalProperties": false,
         "description": "A bounded comparison of two generations this device was offered, by default the previous one with the current one."
+      },
+      "ValidationTest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "At most 200 bytes, no control characters."
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "not_run": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Vector did not run this test, for example because another test could not be read or built. It never counts as passed. Null is treated as absent."
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "At most 512 bytes, no control characters; redacted on the device like a diagnostic. Null is treated as absent."
+          }
+        },
+        "required": [
+          "name",
+          "passed"
+        ],
+        "additionalProperties": false,
+        "description": "One of the pipeline's own tests as `vector test` ran it on the device. Reported only when the check asked for tests (run_tests)."
+      },
+      "ValidationResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The validation.id of the manifest that asked, exactly as sent (lowercase, hyphenated)."
+          },
+          "valid": {
+            "type": "boolean",
+            "description": "The device validated the candidate with its own Vector, local capability policy and device-local secrets, and nothing it found is an error."
+          },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AgentDiagnostic"
+                },
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "At most 20 redacted findings, errors first, each at most 512 serialized bytes; the server keeps errors first whatever order they arrive in. Absent or null means none."
+          },
+          "tests": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ValidationTest"
+                },
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "At most 100. Absent or null means none."
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long the device took. Absent or null means not reported."
+          },
+          "secrets_missing": {
+            "anyOf": [
+              {
+                "type": "array",
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Names only, sorted, at most 64: the device-secret names the candidate references that this device has not bound. Never file paths or values. Absent or null means none."
+          }
+        },
+        "required": [
+          "id",
+          "valid"
+        ],
+        "additionalProperties": false,
+        "description": "The answer of one device to one check, sent in every heartbeat until the manifest it receives no longer carries that validation.id. Strict like every heartbeat member: unknown keys, an oversized list or text, a malformed ID, an answer that serializes to more than 128 KiB as the server stores it, refuse the whole heartbeat with 400 INVALID_INPUT (so an agent must not resend an answer the server refused). An answer for an ID that is unknown, belongs to another device, was already answered or has expired is ignored, never an error. It changes no desired state, generation, policy or issue."
+      },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "data_dir_writable": {
+            "type": "boolean"
+          },
+          "allowed_listener_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "Facts the agent reported about the host in its latest check-in: whether its data directory is writable and how many listeners its local capability policy allows (a count, never the list). Absent when that check-in reported none; each member is absent when the agent did not say. Reported, not verified by the server."
+      },
+      "ManifestValidation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The check this device answers. Every device of one request shares it; with the device it identifies the row."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Digest of the candidate this device is asked to validate: the artifact the review computed for it, with its own variable values applied and device secrets still vectory-secret:NAME references."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16777216
+          },
+          "artifact_path": {
+            "type": "string",
+            "pattern": "^/agent/v1/artifacts/[a-f0-9]{64}$",
+            "description": "Always the path of sha256. Only this device can fetch it, and only while the check is pending and unexpired."
+          },
+          "run_tests": {
+            "type": "boolean",
+            "description": "Also run the pipeline's own tests (vector test)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC, ten minutes after the check was requested."
+          }
+        },
+        "required": [
+          "id",
+          "sha256",
+          "size",
+          "artifact_path",
+          "run_tests",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "PreviewRequest": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional durable create identity scoped to the authenticated actor. Reuse only with the identical payload."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/AgentPolicy"
+          },
+          "variable_bindings": {
+            "$ref": "#/components/schemas/VariableBindings"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "expected_device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "target_mode": {
+            "enum": [
+              "snapshot",
+              "persistent"
+            ]
+          },
+          "scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollout": {
+            "$ref": "#/components/schemas/Rollout"
+          },
+          "replaces": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Existing assignments of the same resource that this deployment explicitly replaces on the selected devices. Until this deployment releases a device the replaced assignment keeps it; each release retires the replaced assignment there (history kept, persistent selectors exclude the device). An assignment left with nothing to deliver is retired (status unassigned, status_before_removal kept). Without replaces, equal-priority different payloads still conflict. A replaced assignment that changed or no longer selects any of these devices returns 409 REPLACEMENT_CHANGED."
+          },
+          "policy_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Saved agent settings a policy deployment applies. The policy must equal their current values, otherwise preview and creation return 409."
+          },
+          "device_validation": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also ask every reviewed device that is not revoked, the first 50 by name, to validate this version on its own host. Needs a pipeline version (not agent settings). Creating a deployment refuses this field."
+          },
+          "run_tests": {
+            "type": "boolean",
+            "default": false,
+            "description": "With device_validation: also run the pipeline's own tests on each device. Stored with the check; it does nothing on its own."
+          }
+        },
+        "required": [
+          "selector",
+          "priority",
+          "target_mode",
+          "rollout"
+        ],
+        "additionalProperties": false,
+        "description": "A deployment request, previewed. device_validation and run_tests are removed before the request is checked as a deployment, so POST /deployments still refuses them."
+      },
+      "DeviceValidationDevice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The device's name when the check was requested."
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "passed",
+              "failed",
+              "offline",
+              "expired",
+              "unsupported"
+            ],
+            "description": "pending: asked, not answered yet. passed: the device validated the candidate and found no error. failed: it found at least one (diagnostics, tests or secrets_missing say what). offline: it had not checked in for three of its own intervals (or never) when the check was requested, so it was not asked. expired: it did not answer in ten minutes, or a newer check for it replaced this one, or it was revoked. unsupported: it was online but had not announced validation in agent_features, so it was not asked (an older agent)."
+          },
+          "valid": {
+            "type": "boolean",
+            "description": "Present with passed and failed."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentDiagnostic"
+            },
+            "maxItems": 20
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationTest"
+            },
+            "maxItems": 100
+          },
+          "secrets_missing": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+            }
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400000
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this device last changed state: the request, the answer, the supersede or revocation, or the expiry."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "diagnostics",
+          "tests",
+          "secrets_missing",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "DeviceValidation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "complete"
+            ],
+            "description": "running while any device is pending; complete otherwise (also once every pending device has expired)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More devices were reviewed than were addressed."
+          },
+          "run_tests": {
+            "type": "boolean"
+          },
+          "devices": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/DeviceValidationDevice"
+            },
+            "description": "In name order (digits compare by value: edge-2 before edge-10)."
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "created_at",
+          "expires_at",
+          "truncated",
+          "run_tests",
+          "devices"
+        ],
+        "additionalProperties": false,
+        "description": "What the devices of one preview answered when asked to validate a candidate version on their own hosts. Advisory: no deployment, desired state, generation, policy or issue changes because of an answer, and nothing waits for one. Diagnostics are redacted on the device; the server stores what it received within its bounds and keeps rows 24 hours."
       },
       "GroupRef": {
         "type": "object",
@@ -31504,7 +32182,7 @@
     },
     {
       "name": "Deployments",
-      "description": "Assigning versions to devices: previews, rollouts, canary gates, pauses, removal and rollback."
+      "description": "Assigning versions to devices: previews, checks on the devices, rollouts, canary gates, pauses, removal and rollback."
     },
     {
       "name": "Groups",

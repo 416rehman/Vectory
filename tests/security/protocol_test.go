@@ -751,6 +751,302 @@ func TestIndependentSecurityBoundaries(t *testing.T) {
 			t.Fatal("request identity overrode mTLS principal")
 		}
 	})
+	t.Run("check-on-devices", func(t *testing.T) {
+		type host struct {
+			id          string
+			client      *http.Client
+			credentials map[string]any
+		}
+		enrollHost := func(name string) host {
+			key, csr := keyCSR(t)
+			n, credentials := h.enroll(token, name, fmt.Sprintf("%x", serial()), csr)
+			okay(t, n, credentials)
+			client := h.client(credentials, key)
+			t.Cleanup(client.CloseIdleConnections)
+			return host{credentials["device_id"].(string), client, credentials}
+		}
+		a, b, c := enrollHost("sec-check-a"), enrollHost("sec-check-b"), enrollHost("sec-check-c")
+		// beatAs sends a heartbeat like an agent that announced the feature and
+		// returns the signed payload bytes, its JSON and the envelope.
+		beatAs := func(who host, nonce string, extra map[string]any) (map[string]any, []byte, map[string]any) {
+			body := map[string]any{"agent_features": []string{"validation"}}
+			for k, v := range beat {
+				body[k] = v
+			}
+			body["nonce"], body["request_id"] = nonce, fmt.Sprintf("%x", serial())
+			for k, v := range extra {
+				body[k] = v
+			}
+			n, envelope, _ := h.req(who.client, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+			okay(t, n, envelope)
+			payload, e := base64.StdEncoding.DecodeString(envelope["payload"].(string))
+			if e != nil {
+				t.Fatal(e)
+			}
+			var manifest map[string]any
+			if e = json.Unmarshal(payload, &manifest); e != nil {
+				t.Fatal(e)
+			}
+			return manifest, payload, envelope
+		}
+		signedFor := func(who host, payload []byte, envelope map[string]any) bool {
+			public, _ := base64.StdEncoding.DecodeString(who.credentials["signing_public_key"].(string))
+			signature, _ := base64.StdEncoding.DecodeString(envelope["signature"].(string))
+			return ed25519.Verify(public, payload, signature)
+		}
+		fetch := func(who host, digest string) (int, []byte) {
+			res, e := who.client.Get(h.https + "/agent/v1/artifacts/" + digest)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer res.Body.Close()
+			body, _ := io.ReadAll(io.LimitReader(res.Body, 2*1024*1024))
+			return res.StatusCode, body
+		}
+		nonce := func(n byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{n}, 32)) }
+
+		// An operator reviews a version whose variable differs per device and asks the devices to check it.
+		for _, who := range []host{a, b, c} {
+			beatAs(who, nonce(7), nil)
+		}
+		config := map[string]any{"sources": map[string]any{"test": map[string]any{"type": "demo_logs", "format": "json", "interval": 1}}, "sinks": map[string]any{"discard": map[string]any{"type": "blackhole", "inputs": []string{"test"}}}}
+		n, created, _ := h.api("POST", "/configurations", map[string]any{"name": "isolated device check fixture", "description": "test only", "graph": map[string]any{"nodes": []any{}, "edges": []any{}}, "config": config, "variables": []any{map[string]any{"name": "interval", "path": "/sources/test/interval", "type": "integer"}}})
+		okay(t, n, created)
+		n, version, _ := h.api("POST", "/configurations/"+created["id"].(string)+"/publish", map[string]any{"revision": created["revision"], "message": "device check fixture"})
+		okay(t, n, version)
+		login := func(label, role string) (string, string) {
+			email := "check-" + label + "@example.invalid"
+			n, v, _ := h.api("POST", "/users", map[string]any{"email": email, "name": "check " + label, "role": role, "password": "test-only-password-82734"})
+			okay(t, n, v)
+			n, v, headers := h.req(h.plain, h.http, "POST", "/api/v1/login", map[string]any{"email": email, "password": "test-only-password-82734"}, "", "")
+			okay(t, n, v)
+			return strings.Split(headers.Get("Set-Cookie"), ";")[0], v["csrf_token"].(string)
+		}
+		cookie, csrf := login("requester", "operator")
+		request := map[string]any{"version_id": version["id"], "priority": 1, "target_mode": "snapshot", "selector": map[string]any{"device_ids": []string{a.id, b.id}, "group_ids": []string{}, "exclude_ids": []string{}}, "rollout": map[string]any{"kind": "all", "canary_size": 1, "batch_size": 10, "observation_seconds": 0, "failure_threshold": 0}, "variable_bindings": map[string]any{"defaults": map[string]any{"interval": 1}, "devices": map[string]any{b.id: map[string]any{"interval": 2}}}, "device_validation": true}
+		// A device that holds a wait when the check is requested hears of it at once, with the unsigned hint
+		// and nothing else; a device the check did not address does not.
+		type hint struct {
+			status int
+			body   string
+			at     time.Time
+			err    error
+		}
+		hold := func(who host) chan hint {
+			out := make(chan hint, 1)
+			go func() {
+				res, e := who.client.Get(h.https + "/agent/v1/wait?generation=0&policy_generation=0")
+				if e != nil {
+					out <- hint{err: e}
+					return
+				}
+				defer res.Body.Close()
+				body, e := io.ReadAll(io.LimitReader(res.Body, 4096))
+				out <- hint{res.StatusCode, string(body), time.Now(), e}
+			}()
+			return out
+		}
+		heldA, heldC := hold(a), hold(c)
+		select {
+		case x := <-heldA:
+			t.Fatalf("a wait at the current generations answered before any check: %+v", x)
+		case <-time.After(500 * time.Millisecond):
+		}
+		requested := time.Now()
+		n, preview, _ := h.req(h.plain, h.http, "POST", "/api/v1/deployments/preview", request, cookie, csrf)
+		okay(t, n, preview)
+		check := preview["validation_id"].(string)
+		select {
+		case x := <-heldA:
+			if x.err != nil || x.status != 200 || x.body != `{"changed":true}` {
+				t.Fatalf("the device the check asked did not hear of it: %+v", x)
+			}
+			if late := x.at.Sub(requested); late > 2*time.Second {
+				t.Fatalf("the parked wait answered %v after the check was requested", late)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a check never answered the wait of a device it asked")
+		}
+		select {
+		case x := <-heldC:
+			t.Fatalf("a device the check did not address was woken: %+v", x)
+		case <-time.After(500 * time.Millisecond):
+		}
+		digests := map[string]string{}
+		for _, raw := range preview["artifact_previews"].([]any) {
+			entry := raw.(map[string]any)
+			digests[entry["device_id"].(string)] = entry["sha256"].(string)
+		}
+		if digests[a.id] == digests[b.id] {
+			t.Fatal("the two devices were reviewed with the same bytes; the isolation probe needs different ones")
+		}
+
+		var payloadA []byte
+		var envelopeA map[string]any
+		t.Run("manifest-is-signed-and-bound-to-recipient-and-nonce", func(t *testing.T) {
+			manifest, payload, envelope := beatAs(a, nonce(11), nil)
+			payloadA, envelopeA = payload, envelope
+			if !signedFor(a, payload, envelope) {
+				t.Fatal("manifest signature invalid")
+			}
+			if manifest["device_id"] != a.id || manifest["nonce"] != nonce(11) {
+				t.Fatalf("manifest not bound to its recipient and nonce: %#v", manifest)
+			}
+			validation, _ := manifest["validation"].(map[string]any)
+			if validation == nil || validation["id"] != check || validation["sha256"] != digests[a.id] || validation["artifact_path"] != "/agent/v1/artifacts/"+digests[a.id] || validation["run_tests"] != false {
+				t.Fatalf("manifest does not carry this device's check: %#v", manifest["validation"])
+			}
+			expires, e := time.Parse(time.RFC3339, validation["expires_at"].(string))
+			if e != nil || time.Until(expires) > 11*time.Minute || time.Until(expires) < 8*time.Minute {
+				t.Fatalf("a check expires ten minutes after it was asked for: %v", validation["expires_at"])
+			}
+			// The check moves no generation, assignment or policy.
+			if manifest["desired"] != nil || manifest["generation"] != float64(0) || manifest["policy_generation"] != float64(0) {
+				t.Fatalf("a device check changed desired state: %#v", manifest)
+			}
+			// Another device is asked for its own candidate, under its own recipient and nonce.
+			other, otherPayload, otherEnvelope := beatAs(b, nonce(12), nil)
+			if other["device_id"] != b.id || other["nonce"] != nonce(12) || other["validation"].(map[string]any)["sha256"] != digests[b.id] || !signedFor(b, otherPayload, otherEnvelope) {
+				t.Fatalf("second device's manifest: %#v", other)
+			}
+			// A fresh nonce is a fresh signature: the first payload is never valid for the second request.
+			again, againPayload, againEnvelope := beatAs(a, nonce(13), nil)
+			if again["nonce"] != nonce(13) || bytes.Equal(againPayload, payload) || againEnvelope["signature"] == envelope["signature"] {
+				t.Fatal("a repeated heartbeat with another nonce reused the earlier signed payload")
+			}
+			// The device that was not reviewed is never asked.
+			outside, _, _ := beatAs(c, nonce(14), nil)
+			if _, asked := outside["validation"]; asked {
+				t.Fatalf("a device outside the check was asked: %#v", outside)
+			}
+		})
+		t.Run("tampered-validation-fails-the-signature-check", func(t *testing.T) {
+			if len(payloadA) == 0 {
+				t.Skip("needs the manifest of the previous subtest")
+			}
+			mutations := map[string][]byte{
+				"digest swapped for the other device's candidate": bytes.ReplaceAll(payloadA, []byte(digests[a.id]), []byte(digests[b.id])),
+				"digest changed":            bytes.ReplaceAll(payloadA, []byte(digests[a.id]), []byte(strings.Repeat("0", 64))),
+				"tests switched on":         bytes.Replace(payloadA, []byte(`"run_tests":false`), []byte(`"run_tests":true`), 1),
+				"check ID changed":          bytes.Replace(payloadA, []byte(check), []byte(strings.Repeat("a", 8)+check[8:]), 1),
+				"recipient changed":         bytes.Replace(payloadA, []byte(a.id), []byte(b.id), 1),
+				"check removed":             bytes.Replace(payloadA, []byte(`"validation":`), []byte(`"validatio_":`), 1),
+				"one byte flipped anywhere": append([]byte{payloadA[0] ^ 1}, payloadA[1:]...),
+			}
+			for name, tampered := range mutations {
+				if bytes.Equal(tampered, payloadA) {
+					t.Fatalf("%s: the mutation changed nothing", name)
+				}
+				if signedFor(a, tampered, envelopeA) {
+					t.Fatalf("%s: a tampered check passed the signature", name)
+				}
+			}
+			if !signedFor(a, payloadA, envelopeA) {
+				t.Fatal("the untouched payload no longer verifies")
+			}
+		})
+		t.Run("a-candidate-is-fetched-only-by-its-own-device", func(t *testing.T) {
+			status, body := fetch(a, digests[a.id])
+			if status != 200 || fmt.Sprintf("%x", sha256.Sum256(body)) != digests[a.id] {
+				t.Fatalf("a device cannot fetch its own candidate: %d", status)
+			}
+			if status, _ = fetch(b, digests[b.id]); status != 200 {
+				t.Fatalf("second device cannot fetch its own candidate: %d", status)
+			}
+			for _, probe := range []struct {
+				who    host
+				digest string
+				label  string
+			}{
+				{b, digests[a.id], "another device's candidate"},
+				{a, digests[b.id], "another device's candidate (reverse)"},
+				{c, digests[a.id], "a candidate of a check that did not address this device"},
+				{c, digests[b.id], "a candidate of a check that did not address this device (second)"},
+				{a, strings.Repeat("0", 64), "an unknown digest"},
+			} {
+				if status, _ = fetch(probe.who, probe.digest); status != 403 {
+					t.Fatalf("%s: HTTP %d", probe.label, status)
+				}
+			}
+			n, v, _ := h.req(h.tls, h.https, "GET", "/agent/v1/artifacts/"+digests[a.id], nil, "", "")
+			expect(t, n, 401, v)
+		})
+		t.Run("answers-and-reads-are-scoped-and-change-nothing-else", func(t *testing.T) {
+			// A device outside the check, and one answering for another, are ignored.
+			result := map[string]any{"id": check, "valid": true, "diagnostics": []any{}, "tests": []any{}, "duration_ms": 5, "secrets_missing": []string{}}
+			beatAs(c, nonce(21), map[string]any{"validation_result": result})
+			n, v, _ := h.req(h.plain, h.http, "GET", "/api/v1/device-validations/"+check, nil, cookie, csrf)
+			okay(t, n, v)
+			for _, raw := range v["devices"].([]any) {
+				if raw.(map[string]any)["state"] != "pending" {
+					t.Fatalf("an answer from a device outside the check was recorded: %#v", v)
+				}
+			}
+			// An oversized answer refuses the whole heartbeat, with nothing recorded.
+			diagnostics := make([]any, 21)
+			for i := range diagnostics {
+				diagnostics[i] = map[string]any{"severity": "error", "code": "X", "message": "m"}
+			}
+			body := map[string]any{"validation_result": map[string]any{"id": check, "valid": false, "diagnostics": diagnostics}}
+			for k, value := range beat {
+				body[k] = value
+			}
+			n, rejected, _ := h.req(a.client, h.https, "POST", "/agent/v1/heartbeat", body, "", "")
+			expect(t, n, 400, rejected)
+			// Its own answer counts, ends the check for it, and withdraws its candidate.
+			manifest, _, _ := beatAs(a, nonce(22), map[string]any{"validation_result": map[string]any{"id": check, "valid": false, "diagnostics": []any{map[string]any{"severity": "error", "code": "SECRET_BINDING_MISSING", "message": "A device secret is not bound."}}, "tests": []any{}, "duration_ms": 12, "secrets_missing": []string{"TOKEN"}}})
+			if _, asked := manifest["validation"]; asked {
+				t.Fatalf("an answered check is still in the manifest: %#v", manifest)
+			}
+			if status, _ := fetch(a, digests[a.id]); status != 403 {
+				t.Fatalf("an answered check still authorizes its candidate: %d", status)
+			}
+			if status, _ := fetch(b, digests[b.id]); status != 200 {
+				t.Fatalf("another device's pending check was affected by this answer: %d", status)
+			}
+			// Reads: the requester and an administrator; another operator, an editor and a viewer are refused.
+			n, v, _ = h.req(h.plain, h.http, "GET", "/api/v1/device-validations/"+check, nil, cookie, csrf)
+			okay(t, n, v)
+			states := map[string]any{}
+			for _, raw := range v["devices"].([]any) {
+				entry := raw.(map[string]any)
+				states[entry["id"].(string)] = entry["state"]
+			}
+			if states[a.id] != "failed" || states[b.id] != "pending" || v["state"] != "running" {
+				t.Fatalf("states after one answer: %#v", v)
+			}
+			n, v, _ = h.api("GET", "/device-validations/"+check, nil)
+			okay(t, n, v)
+			read := func(who, role string) (int, map[string]any) {
+				whoCookie, whoCSRF := login(who, role)
+				n, v, _ := h.req(h.plain, h.http, "GET", "/api/v1/device-validations/"+check, nil, whoCookie, whoCSRF)
+				return n, v
+			}
+			if n, v = read("second-operator", "operator"); n != 404 {
+				t.Fatalf("another operator read a check they did not request: HTTP %d %#v", n, v)
+			}
+			for _, role := range []string{"viewer", "editor"} {
+				if n, v = read("check-"+role, role); n != 403 {
+					t.Fatalf("%s read a check: HTTP %d %#v", role, n, v)
+				}
+			}
+			n, v, _ = h.req(h.plain, h.http, "GET", "/api/v1/device-validations/"+check, nil, "", "")
+			expect(t, n, 401, v)
+			// The audit event names the pipeline version and counts, never the configuration.
+			n, v, _ = h.api("GET", "/audit/history?action=deployment.device_validation_requested", nil)
+			okay(t, n, v)
+			items, _ := v["items"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("expected one audit event for the check: %#v", v)
+			}
+			n, v, _ = h.api("GET", "/audit/"+items[0].(map[string]any)["id"].(string), nil)
+			okay(t, n, v)
+			details := v["details"].(map[string]any)
+			if details["validation_id"] != check || details["device_count"] != float64(2) || details["pending_count"] != float64(2) || strings.Contains(fmt.Sprint(v), "demo_logs") {
+				t.Fatalf("audit event: %#v", v)
+			}
+		})
+	})
 	t.Run("wake-up-hint-is-authenticated-and-carries-no-state", func(t *testing.T) {
 		n, v, _ := h.req(h.tls, h.https, "GET", "/agent/v1/wait?generation=0&policy_generation=0", nil, "", "")
 		expect(t, n, 401, v)

@@ -24,6 +24,11 @@
 //!   and answers those whose state really changed. A preview that rolls its
 //!   simulated changes back wakes nobody, and a burst of changes wakes each
 //!   waiter once.
+//! - A committed device check asks the devices it is waiting for (`ask`):
+//!   their waits answer `changed:true` whatever their generations say, because
+//!   a check moves none and the answer is only the hint to check in, after
+//!   which the signed manifest carries the check. A check that is refused, or
+//!   addresses no device that is waiting, wakes nobody.
 //! - Wake-ups are paced: up to `Options::burst` answer at once, then
 //!   `Options::rate` a second, oldest first, so an all-at-once rollout to a
 //!   large fleet can't send every agent's heartbeat to the writer at the same
@@ -414,10 +419,19 @@ fn wake(s: &State, device: &str, ticket: u64) {
     }
 }
 
+/// What the current request or scheduler tick staged.
+#[derive(Default)]
+struct Staged {
+    /// Devices whose desired state or access it may have changed: answered
+    /// when their committed generations differ from what their agent accepted.
+    changed: Vec<String>,
+    /// Devices it asked to check in whatever their generations say: a device
+    /// check is waiting for them.
+    asked: Vec<String>,
+}
+
 tokio::task_local! {
-    /// Devices whose desired state the current request or scheduler tick may
-    /// have changed.
-    static STAGED: RefCell<Vec<String>>;
+    static STAGED: RefCell<Staged>;
 }
 
 /// Records that this device's desired generation, policy generation or
@@ -425,7 +439,17 @@ tokio::task_local! {
 /// the surrounding request or tick has finished (see `changes`); outside one,
 /// for example in the offline maintenance tool, this does nothing.
 pub fn stage(device: &str) {
-    let _ = STAGED.try_with(|staged| staged.borrow_mut().push(device.to_owned()));
+    let _ = STAGED.try_with(|staged| staged.borrow_mut().changed.push(device.to_owned()));
+}
+
+/// Records that a check on devices is waiting for this device, so its parked
+/// wait answers `changed:true` once the request has finished and its
+/// transaction has committed. Unlike `stage` this compares no generations: a
+/// check changes none, and the answer is only the hint to check in, after
+/// which the signed manifest carries the check. Call it only for a check that
+/// was committed.
+pub fn ask(device: &str) {
+    let _ = STAGED.try_with(|staged| staged.borrow_mut().asked.push(device.to_owned()));
 }
 
 /// Runs a request or a scheduler tick, then answers the waits of the devices
@@ -448,12 +472,27 @@ pub async fn middleware(AppState(s): AppState<State>, request: Request, next: Ne
     changes(&s, next.run(request)).await
 }
 
-/// Answers the waits of staged devices whose committed desired generation or
-/// policy generation differs from what their agent last accepted, or whose
-/// access was revoked. One read for all of them, and none when no staged
-/// device is waiting.
-async fn flush(s: &State, mut devices: Vec<String>) {
-    if devices.is_empty() || !s.wake.enabled() {
+/// Answers the waits of the devices a finished request asked to check in, and
+/// those of staged devices whose committed desired generation or policy
+/// generation differs from what their agent last accepted, or whose access
+/// was revoked. One read for all of the latter, and none when no staged device
+/// is waiting.
+async fn flush(s: &State, staged: Staged) {
+    if !s.wake.enabled() {
+        return;
+    }
+    let Staged {
+        changed: mut devices,
+        asked: mut checked,
+    } = staged;
+    if !checked.is_empty() {
+        checked.sort_unstable();
+        checked.dedup();
+        for (device, ticket, _, _) in s.wake.waiting_among(&checked) {
+            wake(s, &device, ticket);
+        }
+    }
+    if devices.is_empty() {
         return;
     }
     devices.sort_unstable();
