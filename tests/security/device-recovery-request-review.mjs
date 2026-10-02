@@ -9,6 +9,8 @@ const {createServer}=await import(pathToFileURL(require.resolve('vite'))),{chrom
 // Patience only: the dev server transforms modules on demand, so a slow runner can need more
 // than expect's 5 s default to paint a page. What each assertion checks is unchanged.
 const expect=strictExpect.configure({timeout:15000});
+// Devices are read a page at a time: the synthetic replies to those reads are the shared ones.
+const {fleetReplies}=await import(pathToFileURL(resolve(dashboard,'tests/fleet-replies.mjs')));
 const output=resolve(root,process.env.VECTORY_DEVICE_RECOVERY_REQUEST_OUTPUT||'.local/device-recovery-request-after');await mkdir(output,{recursive:true});
 const virtual='\0virtual:device-recovery-request-review';
 const server=await createServer({root:dashboard,configFile:resolve(dashboard,'vite.config.ts'),server:{host:'127.0.0.1',port:0,strictPort:false,proxy:{},hmr:false},plugins:[{
@@ -50,6 +52,7 @@ async function fixture(options={}){
   const reply=async(json,status=200)=>{try{await route.fulfill({json,status});}catch{}};
   const error=(code,status=409)=>reply({error:{code,message:`Synthetic ${code} refusal`}},status);
   if(path==='/status')return reply({initialized:true,version:'synthetic'});if(path==='/session'){state.sessions++;return reply({user:state.actor,csrf_token:'synthetic-unused-csrf'});}if(path==='/settings')return reply({instance_name:'Synthetic recovery review'});
+  if(method==='GET'&&/^\/devices\/inventory(\/ids)?$/.test(path)){const paged=(state.fleet??=fleetReplies({devices:()=>[state.device],groups:()=>[]})).handle(method,url);if(paged)return reply(paged.json,paged.status);}
   if(path===`/devices/${device.id}`&&method==='GET')return reply(state.device);if(path==='/devices')return reply([state.device]);if(path==='/groups'||path==='/policies')return reply([]);
   const lookup=new RegExp(`^/devices/${device.id}/recovery-requests/([^/]+)$`).exec(path),cancel=new RegExp(`^/devices/${device.id}/recovery-requests/([^/]+)/cancel$`).exec(path);
   if(lookup&&method==='GET'){state.lookups.push(lookup[1]);const mode=state.next.lookup;state.next.lookup=null;await hold(mode);if(mode?.abort)return route.abort('failed');if(mode?.error)return error(mode.error,mode.status);const result=state.requests.get(lookup[1])||negative(lookup[1]);return reply(mode?.transform?mode.transform(result):mode?.json||result);}
