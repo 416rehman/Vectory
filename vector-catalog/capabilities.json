@@ -231,6 +231,7 @@
             "capability": "instance-credentials",
             "reason": "assumes an AWS role starting from this host's own credentials"
           },
+          "force_path_style": { "class": "data", "reason": "puts the bucket in the URL path instead of the host name" },
           "sqs.deferred.queue_url": { "class": "resource", "kind": "url" },
           "sqs.queue_url": { "class": "resource", "kind": "url" }
         },
@@ -307,6 +308,7 @@
         "fields": {
           "address": { "class": "resource", "kind": "listen", "required": true },
           "path": { "class": "data", "reason": "the URL path it serves" },
+          "path_key": { "class": "data", "reason": "the event field that receives the request path" },
           "strict_path": { "class": "data", "reason": "whether requests must match path exactly" }
         }
       },
@@ -405,7 +407,8 @@
             "when": { "sasl.enabled": [true] },
             "code": "UNSUPPORTED_LOCAL_CAPABILITY",
             "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
-          }
+          },
+          "socket_timeout_ms": { "class": "data", "reason": "a timeout for broker connections" }
         }
       },
       "kubernetes_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
@@ -446,10 +449,11 @@
       "syslog": {
         "tier": "builtin",
         "reach": "listens on an address the host allows, or on a Unix socket under an allowed file root",
-        "review": "Restricted mode runs it today. Schema: mode tcp and udp require address (a SocketListenAddr listener); mode unix requires path, a socket Vector creates. permit_origin only filters senders.",
+        "review": "Restricted mode runs it today. Schema: mode tcp and udp require address (a SocketListenAddr listener); mode unix requires path, a socket Vector creates, and socket_file_mode sets that socket's permissions, which decide which local users may send to it, as today. permit_origin only filters senders.",
         "fields": {
           "address": { "class": "resource", "kind": "listen", "required": true, "when": { "mode": ["tcp", "udp"] } },
-          "path": { "class": "resource", "kind": "unix_listen", "writes": true }
+          "path": { "class": "resource", "kind": "unix_listen", "writes": true },
+          "socket_file_mode": { "class": "data", "reason": "the permissions of the socket it creates" }
         }
       },
       "vector": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
@@ -590,6 +594,7 @@
             "code": "UNCONFINED_TEMPLATE_DENIED",
             "reason": "turns off Vector's template confinement"
           },
+          "force_path_style": { "class": "data", "reason": "puts the bucket in the URL path instead of the host name" },
           "key_prefix": { "class": "template", "reason": "an object key prefix within the bucket" },
           "ssekms_key_id": { "class": "template", "reason": "the KMS key that encrypts each object" }
         },
@@ -788,6 +793,7 @@
             "code": "UNSUPPORTED_LOCAL_CAPABILITY",
             "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
           },
+          "socket_timeout_ms": { "class": "data", "reason": "a timeout for broker connections" },
           "topic": { "class": "template", "reason": "a topic within the approved cluster" }
         }
       },

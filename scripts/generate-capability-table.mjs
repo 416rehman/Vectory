@@ -56,8 +56,18 @@ const COVERING = new Set(["refused", "options", "data", "ambient"]);
 
 // Field names that look like a resource: a path, an address, a program or a
 // passthrough map. A match in a built-in or approval component needs a rule.
-const RESOURCE_NAME =
-  /^(?:path|paths|dir|directory|endpoint|endpoints|uri|url|urls|address|addresses|host|hosts|hostname|server|servers|socket|command|exec|program|script|include|exclude|args|bootstrap_servers|connection_string|dsn|assume_role|imds|profile|credentials)$|_(?:file|files|path|paths|dir|directory|endpoint|endpoints|uri|url|urls|address|host|hosts|server|servers|socket|command|cmd|options|args|program|location)$/;
+// "path" counts anywhere in a name, and the words for an address or a program
+// count anywhere between underscores ("endpoint_override", "url_template");
+// the other words count as the whole name or its last word, because "host_key"
+// and "file_key" name event fields.
+const RESOURCE_NAME = new RegExp(
+  [
+    "path",
+    "(?:^|_)(?:endpoints?|uris?|urls?|address(?:es)?|sockets?|commands?|cmd|exec|programs?|scripts?)(?:_|$)",
+    "^(?:dir|dirs|directory|directories|host|hosts|hostname|hostnames|server|servers|include|exclude|args|bootstrap_servers|connection_string|dsn|assume_role|imds|profile|credentials)$",
+    "_(?:file|files|dir|dirs|directory|directories|host|hosts|server|servers|options|args|location)$",
+  ].join("|"),
+);
 // Schema types that hold a resource.
 const RESOURCE_TYPES = new Set([
   "stdlib::PathBuf",

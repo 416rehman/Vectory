@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/generate-capability-table.mjs from vector-catalog/capabilities.json",
-  "id": "0.58.0/046f6c732c20eadb",
+  "id": "0.58.0/35297f0e84f9331e",
   "path_syntax": "Fields are joined with \".\", \"[]\" marks list items and \"*\" marks map values.",
   "vector_version": "0.58.0",
   "schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
@@ -182,6 +182,10 @@
           "class": "resource",
           "kind": "url",
           "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "force_path_style": {
+          "class": "data",
+          "reason": "puts the bucket in the URL path instead of the host name"
         },
         "proxy.enabled": {
           "class": "data",
@@ -615,6 +619,10 @@
           "class": "data",
           "reason": "the URL path it serves"
         },
+        "path_key": {
+          "class": "data",
+          "reason": "the event field that receives the request path"
+        },
         "proxy.enabled": {
           "class": "data",
           "reason": "turns the proxy on",
@@ -895,6 +903,10 @@
           },
           "code": "UNSUPPORTED_LOCAL_CAPABILITY",
           "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+        },
+        "socket_timeout_ms": {
+          "class": "data",
+          "reason": "a timeout for broker connections"
         },
         "tls.alpn_protocols": {
           "class": "data",
@@ -1330,6 +1342,10 @@
           "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
           "from": "vector_core::config::proxy::ProxyConfig"
         },
+        "socket_file_mode": {
+          "class": "data",
+          "reason": "the permissions of the socket it creates"
+        },
         "tls.alpn_protocols": {
           "class": "data",
           "reason": "protocols offered during the handshake",
@@ -1698,6 +1714,10 @@
           "class": "resource",
           "kind": "url",
           "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "force_path_style": {
+          "class": "data",
+          "reason": "puts the bucket in the URL path instead of the host name"
         },
         "healthcheck.uri": {
           "class": "resource",
@@ -2823,6 +2843,10 @@
           },
           "code": "UNSUPPORTED_LOCAL_CAPABILITY",
           "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+        },
+        "socket_timeout_ms": {
+          "class": "data",
+          "reason": "a timeout for broker connections"
         },
         "tls.alpn_protocols": {
           "class": "data",
