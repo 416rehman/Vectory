@@ -1095,7 +1095,7 @@ func (e *Engine) policyDiagnostics(err error, effective []byte) []Diagnostic {
 		return nil
 	}
 	r := e.redactorFor(effective)
-	for _, token := range []string{refusal.Resource, refusal.Suggested} {
+	for _, token := range []string{refusal.Resource, refusal.Suggested, shortID(refusal.ComponentID)} {
 		if token != "" && !r.containsSecret(token) {
 			r.safe[token] = true
 		}

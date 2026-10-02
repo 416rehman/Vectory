@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // This policy is operator-owned. No field in the server protocol can modify it.
@@ -50,6 +51,16 @@ func DescribeAllowances(p CapabilityPolicy) string {
 		return "nothing yet: restricted pipelines can't read files, reach destinations or open listeners here"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// refusedMessage is the one-line reason this host gives for refusing a pipeline.
+// Full mode refuses little (a component ID that is a path), and not because of
+// restricted mode.
+func (p CapabilityPolicy) refusedMessage() string {
+	if p.FullVectorConfig {
+		return "This host's local policy doesn't allow this pipeline"
+	}
+	return "This host's restricted-mode policy doesn't allow this pipeline"
 }
 
 func (p CapabilityPolicy) ConfigurationMode() string {
@@ -101,6 +112,7 @@ type PolicyRefusal struct {
 	Resource      string // host:port, listen address, path, setting or VRL function
 	Allowance     string // allowed_network_hosts, allowed_listen_addresses, allowed_file_roots
 	Suggested     string // the allowance entry that would permit it
+	problem       string // INVALID_COMPONENT_ID: what is wrong with the ID, such as "a slash in its ID"
 }
 
 func (e *PolicyRefusal) Error() string { return e.Category }
@@ -120,7 +132,7 @@ func (e *PolicyRefusal) subject() string {
 		return "The pipeline"
 	}
 	kind := componentKind(e.Section)
-	subject := strings.ToUpper(kind[:1]) + kind[1:] + ` "` + e.ComponentID + `"`
+	subject := strings.ToUpper(kind[:1]) + kind[1:] + ` "` + shortID(e.ComponentID) + `"`
 	if e.ComponentType != "" {
 		subject += " (" + e.ComponentType + ")"
 	}
@@ -154,8 +166,15 @@ func (e *PolicyRefusal) Diagnostic() Diagnostic {
 		d.Message = subject + " uses " + e.Resource + ", which restricted mode can't approve: use http(s)://host:port without credentials."
 	case e.Code == "NETWORK_DESTINATION_DENIED":
 		d.Message = subject + " needs an explicit " + e.Field + " in restricted mode."
-	case e.Code == "LISTENER_DENIED" && e.ComponentID == "":
-		d.Message = "The Vector API must listen on a loopback address in restricted mode."
+	case e.Code == "LOCAL_API_DENIED":
+		d.Message = `The pipeline has an "api" block. Vector's local API has no authentication, so any user on this host could read live events from it, and restricted mode never allows it.`
+		d.Hint = "Remove the api block, or deploy to a full-mode device. No host allowance can permit it."
+	case e.Code == "INVALID_COMPONENT_ID":
+		// The ID is not a plain token, which is what component_id carries: the
+		// message names it, escaped and bounded.
+		d.ComponentID = ""
+		d.Message = subject + " has " + e.problem + "."
+		d.Hint = "Rename it and the inputs that name it. Vector uses an ID as a directory name in its data directory, so it can't be a path."
 	case e.Code == "LISTENER_DENIED":
 		d.Message = subject + " needs an explicit listen address in restricted mode."
 	case e.Code == "FILE_ACCESS_DENIED" && e.Resource != "":
@@ -206,6 +225,11 @@ func (p CapabilityPolicy) Check(data []byte) error {
 	if root == nil {
 		return errors.New("configuration must be an object")
 	}
+	// A component ID that names a path makes Vector write outside its data
+	// directory. That is a containment rule, so it holds in every mode.
+	if e := componentIDRefusal(root); e != nil {
+		return e
+	}
 	// This explicit local grant trusts publishers with all capabilities of the
 	// adopted Vector process. Vector itself still validates the complete bundle.
 	if p.FullVectorConfig {
@@ -245,19 +269,14 @@ func (p CapabilityPolicy) Check(data []byte) error {
 				return e
 			}
 		case "api":
-			a, ok := v.(map[string]any)
-			if !ok {
-				return errors.New("api must be an object")
-			}
-			if enabled, _ := a["enabled"].(bool); enabled {
-				addr, _ := a["address"].(string)
-				host, _, e := net.SplitHostPort(addr)
-				if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-					r := refusal("LISTENER_DENIED", "Vector API must use an explicit loopback address")
-					r.Field = "api.address"
-					return r
-				}
-			}
+			// Vector's API has no authentication: while it is open, any user on
+			// the host can read every component's live events. No allowance
+			// covers it, and a block that is switched off is refused too: the
+			// host decides whether the API exists, never a pipeline. A
+			// pipeline that needs one runs in full mode.
+			r := refusal("LOCAL_API_DENIED", "capability denied: Vector's local API has no authentication")
+			r.Field = "api"
+			return r
 		case "acknowledgements", "healthchecks", "timezone":
 			if e := p.walk(v, k); e != nil {
 				return e
@@ -273,6 +292,98 @@ func (p CapabilityPolicy) Check(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// driveLetterPrefix is a Windows drive prefix at the start of an ID: one ASCII
+// letter and a colon. It is the check the server's validate makes (an ASCII
+// alphabetic first character, then ':'), so the two never disagree.
+var driveLetterPrefix = regexp.MustCompile(`^[A-Za-z]:`)
+
+// componentIDRefusal refuses the first component, in a stable order, whose ID
+// could be a path. Vector joins an ID onto its data_dir for checkpoints and
+// disk buffers, so an absolute path replaces the directory: a pipeline could
+// make Vector create files anywhere its account can write. Vector itself
+// refuses a "." in an ID, so "." and ".." never get this far. A memory
+// enrichment table counts too: with inputs it is a sink named by the table,
+// and its source_key names a source of its own.
+func componentIDRefusal(root map[string]any) *PolicyRefusal {
+	refused := func(section, id, typ, problem string) *PolicyRefusal {
+		r := refusal("INVALID_COMPONENT_ID", "component ID must be a plain name")
+		r.Section, r.ComponentID, r.ComponentType, r.problem = section, id, typ, problem
+		return r
+	}
+	for _, section := range []string{"sinks", "sources", "transforms"} {
+		components, ok := root[section].(map[string]any)
+		if !ok {
+			continue // Vector rejects a section that is not an object
+		}
+		for _, id := range sortedKeys(components) {
+			if problem := componentIDProblem(id); problem != "" {
+				component, _ := components[id].(map[string]any)
+				typ, _ := component["type"].(string)
+				return refused(section, id, typ, problem)
+			}
+		}
+	}
+	tables, _ := root["enrichment_tables"].(map[string]any)
+	for _, name := range sortedKeys(tables) {
+		table, _ := tables[name].(map[string]any)
+		if table["type"] != "memory" {
+			continue
+		}
+		if _, takesInputs := table["inputs"]; takesInputs {
+			if problem := componentIDProblem(name); problem != "" {
+				return refused("sinks", name, "memory", problem)
+			}
+		}
+		source, _ := table["source_config"].(map[string]any)
+		if key, ok := source["source_key"].(string); ok {
+			if problem := componentIDProblem(key); problem != "" {
+				return refused("sources", key, "memory", problem)
+			}
+		}
+	}
+	return nil
+}
+
+// componentIDProblem says what makes id more than a name, or "": a path
+// separator or a control character anywhere, or a drive letter and a colon at
+// the start, which Windows reads as a path on that drive. Nothing else is
+// refused: Vector accepts the rest (a colon elsewhere, spaces, commas, quotes,
+// non-ASCII), and so does the server.
+func componentIDProblem(id string) string {
+	switch {
+	case strings.Contains(id, "/"):
+		return "a slash in its ID"
+	case strings.Contains(id, `\`):
+		return "a backslash in its ID"
+	case strings.IndexFunc(id, unicode.IsControl) >= 0:
+		return "a control character in its ID"
+	case driveLetterPrefix.MatchString(id):
+		return "a drive letter and colon at the start of its ID"
+	}
+	return ""
+}
+
+// shortID is how a message shows a component ID: control characters as
+// escapes, and nothing past 64 characters, so a hostile ID can't break the
+// line or push the explanation out of it.
+func shortID(id string) string {
+	var out strings.Builder
+	shown := 0
+	for _, r := range id {
+		if shown == 64 {
+			out.WriteString("…")
+			break
+		}
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&out, `\x%02x`, r)
+		} else {
+			out.WriteRune(r)
+		}
+		shown++
+	}
+	return out.String()
 }
 
 // monitoringExporter finds the one listener restricted mode allows without a
