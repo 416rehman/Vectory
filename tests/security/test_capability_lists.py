@@ -8,6 +8,10 @@ and the dashboard read the component set from the catalog, where `localTypes`
 in scripts/generate-vector-catalog.mjs marks it. If the copies drift, a
 deployment reaches a device that then refuses it, or is blocked for no reason:
 the server and the agent once disagreed about the `api` block that way.
+
+The capability table (vector-catalog/capabilities.json) will replace these
+lists. Until the three readers use it, its `current_restricted_mode` section
+must equal them and the tiers must keep every one of them built in.
 """
 
 import json
@@ -161,6 +165,51 @@ class RestrictedModeLists(unittest.TestCase):
         self.assertIn('c["file"]; ok && typ == "remap"', read(POLICY))
         self.assertIn('typ == "remap" && !component["file"].is_null()', SERVER_RULE)
         self.assertIn('component?.type === "remap" &&', DASHBOARD_RULE)
+
+
+TABLE = json.loads(read("dashboard/src/generated/capability-table.json"))
+CURRENT = TABLE["current_restricted_mode"]
+SCOPES = {
+    scope["scope"]: scope
+    for scope in TABLE["components"] + TABLE["global_settings"] + TABLE["enrichment_tables"]
+}
+
+
+class CapabilityTable(unittest.TestCase):
+    def test_current_section_equals_the_code(self):
+        self.assertEqual({s: sorted(CURRENT["components"][s]) for s in SECTIONS}, AGENT_COMPONENTS)
+        roots = sorted([*CURRENT["global_settings"], "tests", *SECTIONS])
+        self.assertEqual(roots, AGENT_ROOTS)
+
+    def test_what_restricted_mode_runs_today_stays_built_in(self):
+        for section in SECTIONS:
+            for typ in CURRENT["components"][section]:
+                self.assertEqual(SCOPES[f"{section}/{typ}"]["tier"], "builtin", typ)
+        for key in [*CURRENT["global_settings"], "tests"]:
+            self.assertEqual(SCOPES[f"global/{key}"]["tier"], "builtin", key)
+
+    def test_the_api_block_stays_host_owned(self):
+        self.assertEqual(SCOPES["global/api"]["tier"], "full")
+        self.assertEqual(SCOPES["global/api"]["code"], "LOCAL_API_DENIED")
+
+    def test_programs_providers_and_secret_backends_stay_full(self):
+        for scope in ["sources/exec", "transforms/lua", "global/provider", "global/secret"]:
+            self.assertEqual(SCOPES[scope]["tier"], "full", scope)
+
+    def test_the_table_keeps_todays_refusals(self):
+        markers = {rule.get("contains") or rule.get("pattern") for rule in TABLE["string_rules"]}
+        self.assertTrue({"${", "{{", "%{", "SECRET[", r"\$[A-Za-z_]"} <= markers)
+        console = SCOPES["sinks/console"]["rules"]["target"]
+        self.assertEqual((console["allowed"], console["default"]), (["stderr"], "stdout"))
+        self.assertEqual(SCOPES["transforms/remap"]["rules"]["file"]["class"], "refused")
+        for scope in ["sinks/http", "sinks/loki", "sinks/elasticsearch"]:
+            rule = SCOPES[scope]["rules"]["tls.verify_certificate"]
+            self.assertEqual(rule["refused_values"], [False], scope)
+
+    def test_unreviewed_components_need_full_mode(self):
+        for scope in TABLE["components"]:
+            if not scope["reviewed"]:
+                self.assertEqual(scope["tier"], "full", scope["scope"])
 
 
 if __name__ == "__main__":

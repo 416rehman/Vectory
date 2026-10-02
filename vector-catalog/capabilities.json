@@ -1,0 +1,1027 @@
+{
+  "about": "What restricted mode allows of each component type, global setting and enrichment table of the pinned Vector, and why. Reviewed by hand: scripts/generate-capability-table.mjs checks it against the pinned schema and writes the agent's, the server's and the dashboard's copies, and vector-catalog/fixtures/capabilities/README.md says how a configuration's needs follow from it. A scope whose review says \"not yet reviewed\" needs full mode.",
+  "vector_version": "0.58.0",
+  "schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
+  "tiers": {
+    "builtin": "Works on every restricted device. Every resource it touches is named in its settings and allowed one by one: a destination, a listener or a file root.",
+    "approval": "Reaches something its settings don't name: cluster members a server advertises, a vendor's endpoints, or this host's own state. A host approves the type once with vectory allow --component TYPE; named resources still need their allowances.",
+    "full": "Runs programs, loads code, replaces the signed pipeline, can't be bounded, or isn't reviewed for restricted mode yet. Only a full-mode device runs it (vectory install --allow-full-vector-config)."
+  },
+  "capabilities": {
+    "instance-credentials": "Sign with this host's own cloud identity: an AWS instance or task role, a Google service account from the metadata server, an Azure managed or workload identity.",
+    "managed-ca": "Trust CA certificates that Vectory delivers with a version: a vectory-asset: reference in tls.ca_file."
+  },
+  "resource_kinds": {
+    "url": "A URL Vector connects to. Its scheme, host and port are literal, and host:port is a destination the host allows (--network HOST:PORT).",
+    "host_port": "A host:port Vector connects to: a destination the host allows.",
+    "host_port_list": "A comma-separated list of host:port destinations, each allowed by the host.",
+    "listen": "An address Vector listens on: a listener the host allows (--listener ADDRESS), compared as written.",
+    "file": "A file Vector reads, or writes when the rule says so. It lies under a file root the host allows (--file-root DIR).",
+    "glob": "A file pattern Vector reads. The directory before its first wildcard lies under an allowed file root.",
+    "dir": "A directory Vector reads, or writes when the rule says so. It lies under an allowed file root.",
+    "unix_listen": "A Unix socket Vector creates and listens on. It lies under an allowed file root.",
+    "unix_connect": "A Unix socket Vector connects to: a destination the host allows by its exact path (--network unix:PATH), never covered by a file root."
+  },
+  "asset_kinds": {
+    "csv": "A CSV lookup table, in file.path of a file enrichment table.",
+    "mmdb": "A MaxMind database, in path of a geoip or mmdb enrichment table.",
+    "pem_certificates": "PEM certificates, in tls.ca_file (which also needs managed-ca) or tls.crt_file."
+  },
+  "codes": {
+    "UNSUPPORTED_LOCAL_CAPABILITY": "Only full mode allows it: a component, setting or field that runs programs, loads code, replaces the signed pipeline, or isn't reviewed for restricted mode.",
+    "LOCAL_API_DENIED": "The pipeline opens Vector's API, which has no authentication; the host decides whether it exists.",
+    "DYNAMIC_CAPABILITY_DENIED": "An environment reference, a native secret reference, a template outside a template field, or a VRL function that reaches outside the event.",
+    "UNCONFINED_TEMPLATE_DENIED": "The sink turns off Vector's template confinement.",
+    "TEMPLATE_RESOURCE_DENIED": "A template in a field that names a resource leaves no static part restricted mode can check.",
+    "PASSTHROUGH_OPTION_DENIED": "A passthrough option outside the reviewed list.",
+    "NETWORK_DESTINATION_DENIED": "A destination restricted mode can't approve: implicit, malformed, with credentials in it, or of a scheme the field doesn't take.",
+    "LISTENER_DENIED": "A listener restricted mode can't approve: implicit or malformed.",
+    "FILE_ACCESS_DENIED": "A path restricted mode can't approve: relative, with a .. segment, a filesystem root, or overlapping the agent's own directories.",
+    "TLS_VERIFICATION_REQUIRED": "TLS certificate or host name verification is off.",
+    "CONSOLE_TARGET_DENIED": "Console output goes anywhere but standard error.",
+    "ASSET_REFERENCE_REFUSED": "A managed asset reference outside an asset field of its kind, or not pinned by the version. Refused in every mode."
+  },
+  "string_rules": [
+    {
+      "pattern": "\\$[A-Za-z_]",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads an environment variable ($NAME), which only full mode interpolates"
+    },
+    {
+      "contains": "${",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads an environment variable (${NAME}), which only full mode interpolates"
+    },
+    {
+      "contains": "%{",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "uses a %{ substitution, which restricted mode refuses"
+    },
+    {
+      "contains": "SECRET[",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads a native secret, which needs a secret backend only full mode allows"
+    },
+    {
+      "contains": "{{",
+      "except": "template_fields",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "uses a template in a field that isn't a reviewed template field"
+    }
+  ],
+  "credential_shapes": {
+    "aws": {
+      "capability": "instance-credentials",
+      "explicit": ["access_key_id"],
+      "ambient_keys": ["assume_role", "imds", "profile"],
+      "refused_keys": {
+        "credentials_file": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "names an AWS credentials file, which can make Vector run a program (credential_process)"
+        }
+      },
+      "review": "Measured with the pinned binary: an aws_s3 sink whose auth.credentials_file named a profile with credential_process ran that program during vector validate with health checks on, as the agent validates. Without access_key_id the AWS credential chain falls back to the service environment, shared profiles, the ECS task role and the instance metadata service (ADR 0012, Appendix A); assume_role calls STS, imds tunes the metadata client and profile selects a shared profile, so each counts as ambient, as ADR 0012 lists them. The ADR allows credentials_file under an allowed root; that is wrong, because a pipeline's own file sink can write such a file under a root, so the table refuses it in restricted mode."
+    },
+    "gcp": {
+      "capability": "instance-credentials",
+      "explicit": ["api_key", "skip_authentication"],
+      "ambient_keys": [],
+      "refused_keys": {
+        "credentials_path": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "names a Google credentials file, which isn't reviewed for restricted mode"
+        }
+      },
+      "review": "From the schema (vector::gcp::GcpAuthConfig, flattened into each Google component): without api_key or credentials_path, and unless skip_authentication is true, Vector reads GOOGLE_APPLICATION_CREDENTIALS (scrubbed in restricted mode) and then asks the metadata server for the instance's service account. A credentials file also names the token endpoint; it stays refused until measured. Prepared for the review of the Google components, none of which is reviewed yet."
+    },
+    "azure": {
+      "capability": "instance-credentials",
+      "explicit": [],
+      "ambient_keys": [],
+      "refused_keys": {},
+      "kind_field": "azure_credential_kind",
+      "ambient_kinds": ["managed_identity", "managed_identity_client_assertion", "workload_identity"],
+      "refused_kinds": {
+        "azure_cli": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "runs the Azure CLI (az) to get a token"
+        }
+      },
+      "review": "From the schema (vector::sinks::azure_common::config::SpecificAzureCredential): azure_cli runs the az program; managed_identity, managed_identity_client_assertion and workload_identity use this host's identity; client_secret_credential and client_certificate_credential are explicit. Prepared for the review of the Azure sinks, none of which is reviewed yet."
+    }
+  },
+  "shared_types": {
+    "vector_core::tls::settings::TlsConfig": {
+      "review": "Schema: ca_file, crt_file and key_file are stdlib::PathBuf and also accept inline PEM (ADR 0012, Appendix A); restricted mode takes only a path under an allowed root or, for the two certificate fields, a managed asset. A CA decides whom the TLS connection trusts, so a CA asset needs managed-ca (ADR 0013, section 7). verify_certificate and verify_hostname may not be false, as today.",
+      "fields": {
+        "alpn_protocols": { "class": "data", "reason": "protocols offered during the handshake" },
+        "ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca"
+        },
+        "crt_file": { "class": "resource", "kind": "file", "asset": "pem_certificates" },
+        "key_file": { "class": "resource", "kind": "file" },
+        "key_pass": { "class": "data", "reason": "a credential; device secrets cover it" },
+        "server_name": { "class": "data", "reason": "the name sent and verified; it adds no destination" },
+        "verify_certificate": {
+          "class": "constrained",
+          "refused_values": [false],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification"
+        },
+        "verify_hostname": {
+          "class": "constrained",
+          "refused_values": [false],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification"
+        }
+      }
+    },
+    "vector_core::tls::settings::TlsEnableableConfig": {
+      "review": "Schema: TlsConfig plus enabled.",
+      "fields": {
+        "enabled": { "class": "data", "reason": "turns TLS on" }
+      }
+    },
+    "vector_core::tls::settings::TlsSourceConfig": {
+      "review": "Schema: TlsEnableableConfig plus client_metadata_key, an event field.",
+      "fields": {
+        "client_metadata_key": { "class": "data", "reason": "an event field for the client certificate's metadata" }
+      }
+    },
+    "vector_core::config::proxy::ProxyConfig": {
+      "review": "Schema: every source and sink carries a proxy. http and https are proxy URLs Vector connects to, so each is a destination; no_proxy lists hosts Vector then reaches directly, which the pipeline must still name.",
+      "fields": {
+        "enabled": { "class": "data", "reason": "turns the proxy on" },
+        "http": { "class": "resource", "kind": "url" },
+        "https": { "class": "resource", "kind": "url" },
+        "no_proxy": { "class": "data", "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline" }
+      }
+    },
+    "vector::sinks::util::uri::UriSerde": {
+      "review": "Schema: a URI Vector connects to, such as every sink's healthcheck.uri and healthcheck_uri. Always a destination, never a listener.",
+      "fields": {
+        "": { "class": "resource", "kind": "url" }
+      }
+    },
+    "vector::sinks::util::uri::HttpEndpoint": {
+      "review": "Schema: an HTTP endpoint Vector connects to (Loki's endpoint, Elasticsearch's endpoints).",
+      "fields": {
+        "": { "class": "resource", "kind": "url" }
+      }
+    },
+    "vector::aws::region::RegionOrEndpoint": {
+      "review": "Schema: region selects AWS endpoints, which an approved AWS component reaches; endpoint names a destination of its own.",
+      "fields": {
+        "endpoint": { "class": "resource", "kind": "url" },
+        "region": { "class": "data", "reason": "an AWS region; the endpoints it implies are what approving an AWS component covers" }
+      }
+    },
+    "vector::sinks::util::http::RequestConfig": {
+      "review": "Schema and ADR 0012, Appendix A: header values are templates Vector confines; they travel to a destination the pipeline names. Concurrency, rate and retry settings tune requests.",
+      "fields": {
+        "headers.*": { "class": "template", "reason": "a header value sent to the approved destination" }
+      }
+    },
+    "vector::http::Auth": {
+      "review": "Schema: basic, bearer and custom strategies hold credentials (device secrets cover them). The aws strategy signs with the AWS credential in auth; without explicit keys it reaches the host's identity (credential shape aws).",
+      "fields": {
+        "password": { "class": "data", "reason": "a credential; device secrets cover it" },
+        "service": { "class": "data", "reason": "the AWS service name used for signing" },
+        "strategy": { "class": "data", "reason": "the authentication strategy" },
+        "token": { "class": "data", "reason": "a credential; device secrets cover it" },
+        "user": { "class": "data", "reason": "a credential; device secrets cover it" },
+        "value": { "class": "data", "reason": "a credential sent as the Authorization header" }
+      },
+      "credentials": {
+        "auth": { "shape": "aws", "when": { "strategy": ["aws"] } }
+      }
+    },
+    "codecs::decoding::format::protobuf::ProtobufDeserializerOptions": {
+      "review": "Schema: desc_file is a stdlib::PathBuf Vector reads to decode protobuf, as the agent checks it today.",
+      "fields": {
+        "desc_file": { "class": "resource", "kind": "file" }
+      }
+    },
+    "codecs::encoding::format::protobuf::ProtobufSerializerOptions": {
+      "review": "Schema: desc_file is a stdlib::PathBuf Vector reads to encode protobuf, as the agent checks it today.",
+      "fields": {
+        "desc_file": { "class": "resource", "kind": "file" }
+      }
+    }
+  },
+  "components": {
+    "sources": {
+      "amqp": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "apache_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "aws_ecs_metrics": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_kinesis_firehose": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "aws_s3": {
+        "tier": "approval",
+        "reach": "reaches AWS's S3 and SQS endpoints for its region, and the objects its queue messages name",
+        "review": "Schema: region selects the S3 and SQS endpoints and sqs.queue_url names the queue; the source downloads whatever bucket and key each message names, so it is an approval (ADR 0012). endpoint, sqs.queue_url and sqs.deferred.queue_url are destinations of their own: the queue URL's host is the SQS endpoint Vector calls. auth follows the aws credential shape; the deprecated top-level assume_role calls STS with the host's identity.",
+        "fields": {
+          "assume_role": {
+            "class": "ambient",
+            "capability": "instance-credentials",
+            "reason": "assumes an AWS role starting from this host's own credentials"
+          },
+          "sqs.deferred.queue_url": { "class": "resource", "kind": "url" },
+          "sqs.queue_url": { "class": "resource", "kind": "url" }
+        },
+        "credentials": {
+          "auth": { "shape": "aws" }
+        }
+      },
+      "aws_sqs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "datadog_agent": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "demo_logs": {
+        "tier": "builtin",
+        "reach": "generates sample events inside Vector",
+        "review": "Restricted mode runs it today. Schema: count, format, interval, lines and sequence name no resource; decoding and framing are shared codecs."
+      },
+      "dnstap": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "docker_logs": {
+        "tier": "approval",
+        "reach": "reads container logs and metadata from this host's Docker API",
+        "review": "Schema: with no docker_host it connects to this host's Docker socket (DOCKER_HOST is scrubbed in restricted mode), which is the host state an approval covers; it only reads logs and metadata. An explicit docker_host names another Docker API: unix:///path is a Unix socket destination, http(s):// and tcp:// a host:port destination. Its tls block is its own type, with the same files as TlsConfig.",
+        "fields": {
+          "docker_host": { "class": "resource", "kind": "url", "schemes": ["http", "https", "tcp", "unix"] },
+          "tls.ca_file": { "class": "resource", "kind": "file", "asset": "pem_certificates", "asset_capability": "managed-ca" },
+          "tls.crt_file": { "class": "resource", "kind": "file", "asset": "pem_certificates" },
+          "tls.key_file": { "class": "resource", "kind": "file" }
+        }
+      },
+      "eventstoredb_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "exec": {
+        "tier": "full",
+        "reach": "runs programs",
+        "review": "It runs the command it names (ADR 0012); nothing about it can be bounded by an allowance."
+      },
+      "file": {
+        "tier": "builtin",
+        "reach": "reads files under the host's allowed file roots",
+        "review": "Restricted mode runs it today. Schema: include[] are globs Vector reads (stdlib::PathBuf); exclude[] only narrows them and opens nothing; data_dir holds checkpoints Vector writes. remove_after_secs deletes read files, which lie under the same roots. The *_key fields are event fields.",
+        "fields": {
+          "data_dir": { "class": "resource", "kind": "dir", "writes": true },
+          "exclude": { "class": "data", "reason": "patterns that only narrow include" },
+          "include[]": { "class": "resource", "kind": "glob", "required": true }
+        }
+      },
+      "file_descriptor": {
+        "tier": "full",
+        "reach": "reads a file descriptor the agent never connects",
+        "review": "It reads a descriptor inherited from whoever started Vector; there is nothing to bound or approve (ADR 0012)."
+      },
+      "fluent": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "gcp_pubsub": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "heroku_logs": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "host_metrics": {
+        "tier": "approval",
+        "reach": "reads this host's system metrics: CPU, memory, disks, file systems, network, processes and cgroups",
+        "review": "Schema: every collector reads this host's own state from /proc, /sys and the mount table, which is what an approval covers; the device, mount point, process and cgroup lists only filter. cgroups.base_dir is documented for testing and points the collector at another directory, and cgroups.base is joined under the cgroup root, where a .. segment walks out of it and lists other directories as cgroup names: both need full mode until a measurement shows otherwise.",
+        "fields": {
+          "cgroups.base": {
+            "class": "refused",
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "names a path under the cgroup root that a .. segment can leave"
+          },
+          "cgroups.base_dir": {
+            "class": "refused",
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "points the collector at another directory, for testing"
+          }
+        }
+      },
+      "http": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "http_client": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "http_server": {
+        "tier": "builtin",
+        "reach": "listens on an address the host allows",
+        "review": "Restricted mode runs it today. Schema: address is a stdlib::SocketAddr Vector listens on and has no default; path, path_key, headers and query_parameters are request parts or event fields; auth holds credentials or, with the custom strategy, a VRL program checked like every program.",
+        "fields": {
+          "address": { "class": "resource", "kind": "listen", "required": true },
+          "path": { "class": "data", "reason": "the URL path it serves" },
+          "strict_path": { "class": "data", "reason": "whether requests must match path exactly" }
+        }
+      },
+      "internal_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "internal_metrics": {
+        "tier": "builtin",
+        "reach": "reads Vector's own metrics",
+        "review": "Restricted mode runs it today. Schema: namespace, scrape_interval_secs and tags name no resource."
+      },
+      "journald": {
+        "tier": "approval",
+        "reach": "runs this host's journalctl to read the systemd journal",
+        "review": "Pinned source (vector-catalog/upstream/src/sources/journald.rs): Vector runs journalctl from PATH with fixed options plus --directory, --namespace and the cursor; unit and match filters are applied inside Vector, never passed to journalctl. journalctl_path would run another program and extra_args passes options straight to journalctl, so both need full mode, as ADR 0012 lists them. journal_directory is a directory journalctl reads; data_dir holds checkpoints.",
+        "fields": {
+          "data_dir": { "class": "resource", "kind": "dir", "writes": true },
+          "extra_args": {
+            "class": "refused",
+            "code": "PASSTHROUGH_OPTION_DENIED",
+            "reason": "passes options straight to journalctl"
+          },
+          "journal_directory": { "class": "resource", "kind": "dir" },
+          "journalctl_path": {
+            "class": "refused",
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "runs the program it names instead of this host's journalctl"
+          }
+        }
+      },
+      "kafka": {
+        "tier": "approval",
+        "reach": "connects to the brokers its cluster advertises, beyond the bootstrap servers it names",
+        "review": "Schema: bootstrap_servers is a comma-separated broker list; the cluster then advertises more brokers, which is what an approval trusts. librdkafka_options passes properties straight to librdkafka: measured with the pinned binary, vector validate ran sasl.kerberos.kinit.cmd and tried to dlopen plugin.library.paths, so only the reviewed tuning keys pass (measured: vector validate created a consumer and a producer with every allowed key set, so each is a real librdkafka property). sasl.mechanism GSSAPI uses this host's Kerberos credentials and runs kinit, and librdkafka chooses GSSAPI when SASL is on and no mechanism is set; OAUTHBEARER needs a token endpoint the options would name. decompression.dictionary_path is a file Vector reads.",
+        "fields": {
+          "bootstrap_servers": { "class": "resource", "kind": "host_port_list", "required": true },
+          "decompression.dictionary_path": { "class": "resource", "kind": "file" },
+          "librdkafka_options": {
+            "class": "options",
+            "allowed_keys": [
+              "allow.auto.create.topics",
+              "api.version.fallback.ms",
+              "api.version.request",
+              "api.version.request.timeout.ms",
+              "auto.commit.interval.ms",
+              "auto.offset.reset",
+              "broker.address.family",
+              "broker.address.ttl",
+              "broker.version.fallback",
+              "check.crcs",
+              "client.id",
+              "client.rack",
+              "connections.max.idle.ms",
+              "fetch.error.backoff.ms",
+              "fetch.max.bytes",
+              "fetch.message.max.bytes",
+              "fetch.min.bytes",
+              "fetch.queue.backoff.ms",
+              "fetch.wait.max.ms",
+              "group.instance.id",
+              "heartbeat.interval.ms",
+              "isolation.level",
+              "log.connection.close",
+              "max.partition.fetch.bytes",
+              "max.poll.interval.ms",
+              "message.copy.max.bytes",
+              "message.max.bytes",
+              "metadata.max.age.ms",
+              "partition.assignment.strategy",
+              "queued.max.messages.kbytes",
+              "queued.min.messages",
+              "receive.message.max.bytes",
+              "reconnect.backoff.max.ms",
+              "reconnect.backoff.ms",
+              "retry.backoff.max.ms",
+              "retry.backoff.ms",
+              "session.timeout.ms",
+              "socket.connection.setup.timeout.ms",
+              "socket.keepalive.enable",
+              "socket.max.fails",
+              "socket.nagle.disable",
+              "socket.receive.buffer.bytes",
+              "socket.send.buffer.bytes",
+              "socket.timeout.ms",
+              "statistics.interval.ms",
+              "topic.metadata.propagation.max.ms",
+              "topic.metadata.refresh.fast.interval.ms",
+              "topic.metadata.refresh.interval.ms",
+              "topic.metadata.refresh.sparse"
+            ],
+            "code": "PASSTHROUGH_OPTION_DENIED",
+            "reason": "passes options straight to librdkafka, where they can run a command, load a library, name other brokers or turn off TLS checks"
+          },
+          "sasl.mechanism": {
+            "class": "constrained",
+            "allowed": ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"],
+            "default": "GSSAPI",
+            "when": { "sasl.enabled": [true] },
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+          }
+        }
+      },
+      "kubernetes_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "logstash": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "mongodb_metrics": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "mqtt": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "nats": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "nginx_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "okta": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "opentelemetry": {
+        "tier": "builtin",
+        "reach": "listens on gRPC and HTTP addresses the host allows",
+        "review": "Restricted mode runs it today. Schema: grpc.address and http.address are stdlib::SocketAddr listeners, both required, as the agent requires them today; http.headers lists header names to keep.",
+        "fields": {
+          "grpc.address": { "class": "resource", "kind": "listen", "required": true },
+          "http.address": { "class": "resource", "kind": "listen", "required": true }
+        }
+      },
+      "postgresql_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "prometheus_pushgateway": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "prometheus_remote_write": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "prometheus_scrape": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "pulsar": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "redis": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "socket": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "splunk_hec": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "static_metrics": {
+        "tier": "builtin",
+        "reach": "emits the metrics its settings list",
+        "review": "Schema: interval_secs, namespace and metrics (names, kinds, tags and values) name no resource; it emits fixed values on a timer, like demo_logs."
+      },
+      "statsd": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "stdin": {
+        "tier": "full",
+        "reach": "reads standard input, which the agent never connects",
+        "review": "It reads whatever started Vector passes on standard input; there is nothing to bound or approve (ADR 0012)."
+      },
+      "syslog": {
+        "tier": "builtin",
+        "reach": "listens on an address the host allows, or on a Unix socket under an allowed file root",
+        "review": "Restricted mode runs it today. Schema: mode tcp and udp require address (a SocketListenAddr listener); mode unix requires path, a socket Vector creates. permit_origin only filters senders.",
+        "fields": {
+          "address": { "class": "resource", "kind": "listen", "required": true, "when": { "mode": ["tcp", "udp"] } },
+          "path": { "class": "resource", "kind": "unix_listen", "writes": true }
+        }
+      },
+      "vector": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "websocket": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "windows_event_log": { "tier": "full", "review": "not yet reviewed", "target": "approval" }
+    },
+    "transforms": {
+      "aggregate": {
+        "tier": "builtin",
+        "reach": "aggregates metrics in memory",
+        "review": "Schema: interval_ms and mode name no resource; it works only on events in memory."
+      },
+      "aws_ec2_metadata": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "dedupe": {
+        "tier": "builtin",
+        "reach": "drops duplicate events in memory",
+        "review": "Schema: cache, fields and time_settings name no resource; it works only on events in memory."
+      },
+      "delay": {
+        "tier": "builtin",
+        "reach": "holds events in memory for a while",
+        "review": "Schema: delay_ms, queue_capacity, overflow_strategy and a condition name no resource; the condition's VRL is checked like every program."
+      },
+      "exclusive_route": {
+        "tier": "builtin",
+        "reach": "routes events by conditions in memory",
+        "review": "Schema: routes are names and conditions; their VRL is checked like every program."
+      },
+      "filter": {
+        "tier": "builtin",
+        "reach": "drops events by a condition in memory",
+        "review": "Restricted mode runs it today. Schema: condition only; its VRL is checked like every program."
+      },
+      "incremental_to_absolute": {
+        "tier": "builtin",
+        "reach": "converts metrics in memory",
+        "review": "Schema: cache limits only; it works only on events in memory."
+      },
+      "log_to_metric": {
+        "tier": "builtin",
+        "reach": "turns events into metrics in memory",
+        "review": "Restricted mode runs it today. Schema: metrics[].field, name, namespace and tags are templates over event fields that name no resource.",
+        "fields": {
+          "metrics[].field": { "class": "template", "reason": "the event field a metric reads" },
+          "metrics[].name": { "class": "template", "reason": "a metric name" },
+          "metrics[].namespace": { "class": "template", "reason": "a metric namespace" },
+          "metrics[].tags.*": { "class": "template", "reason": "a metric tag value" },
+          "metrics[].tags.*[]": { "class": "template", "reason": "a metric tag value" }
+        }
+      },
+      "lua": {
+        "tier": "full",
+        "reach": "runs Lua scripts, which can run programs and write files",
+        "review": "Measured for ADR 0012 (Appendix A): a version 2 script called os.execute and io.open, and both files appeared."
+      },
+      "metric_to_log": {
+        "tier": "builtin",
+        "reach": "turns metrics into events in memory",
+        "review": "Schema: host_tag, metric_tag_values and timezone name no resource."
+      },
+      "reduce": {
+        "tier": "builtin",
+        "reach": "merges events in memory",
+        "review": "Restricted mode runs it today. Schema: group_by, merge_strategies, limits and conditions; their VRL is checked like every program."
+      },
+      "remap": {
+        "tier": "builtin",
+        "reach": "changes events with a VRL program",
+        "review": "Restricted mode runs it today. Schema: source is a VRL program, checked for the functions restricted mode refuses; file and files load a program from the device, which neither the server nor the agent can check, so both need full mode, as today.",
+        "fields": {
+          "file": {
+            "class": "refused",
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "loads its VRL program from a file on this device"
+          },
+          "files": {
+            "class": "refused",
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "loads VRL from files on this device"
+          }
+        }
+      },
+      "route": {
+        "tier": "builtin",
+        "reach": "routes events by conditions in memory",
+        "review": "Restricted mode runs it today. Schema: route maps output names to conditions; their VRL is checked like every program."
+      },
+      "sample": {
+        "tier": "builtin",
+        "reach": "keeps a share of events in memory",
+        "review": "Restricted mode runs it today. Schema: group_by is a template over event fields; exclude is a condition whose VRL is checked like every program.",
+        "fields": {
+          "exclude": { "class": "data", "reason": "a condition; its VRL is checked like every program" },
+          "group_by": { "class": "template", "reason": "a key built from event fields" }
+        }
+      },
+      "tag_cardinality_limit": {
+        "tier": "builtin",
+        "reach": "limits metric tag values in memory",
+        "review": "Schema: limits, modes and per-metric and per-tag settings name no resource."
+      },
+      "throttle": {
+        "tier": "builtin",
+        "reach": "rate-limits events in memory",
+        "review": "Schema: key_field is a template over event fields; exclude is a condition whose VRL is checked like every program.",
+        "fields": {
+          "exclude": { "class": "data", "reason": "a condition; its VRL is checked like every program" },
+          "key_field": { "class": "template", "reason": "a key built from event fields" }
+        }
+      },
+      "trace_to_log": {
+        "tier": "builtin",
+        "reach": "turns traces into events in memory",
+        "review": "Schema: log_namespace only."
+      },
+      "window": {
+        "tier": "builtin",
+        "reach": "buffers events around a condition in memory",
+        "review": "Schema: event counts and two conditions; their VRL is checked like every program."
+      }
+    },
+    "sinks": {
+      "amqp": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "appsignal": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "aws_cloudwatch_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_cloudwatch_metrics": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_kinesis_firehose": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_kinesis_streams": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_s3": {
+        "tier": "approval",
+        "reach": "writes to AWS S3 at the endpoints for its region",
+        "review": "Schema: region selects the S3 endpoint, which is what an approval covers; endpoint is a destination of its own. bucket, key_prefix and ssekms_key_id choose objects within the account the credential reaches; key_prefix and ssekms_key_id are templates Vector confines (ADR 0012, Appendix A). batch_encoding.schema_file is a file Vector reads. auth follows the aws credential shape.",
+        "fields": {
+          "batch_encoding.schema_file": { "class": "resource", "kind": "file" },
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "key_prefix": { "class": "template", "reason": "an object key prefix within the bucket" },
+          "ssekms_key_id": { "class": "template", "reason": "the KMS key that encrypts each object" }
+        },
+        "credentials": {
+          "auth": { "shape": "aws" }
+        }
+      },
+      "aws_sns": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "aws_sqs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "axiom": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "azure_blob": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "azure_logs_ingestion": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "blackhole": {
+        "tier": "builtin",
+        "reach": "discards events",
+        "review": "Restricted mode runs it today. Schema: print_interval_secs and rate name no resource."
+      },
+      "clickhouse": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "console": {
+        "tier": "builtin",
+        "reach": "writes events to Vector's standard error",
+        "review": "Restricted mode runs it today. Schema: target defaults to stdout, where Vector writes its JSON startup log that the agent reads, so restricted mode requires stderr, as today.",
+        "fields": {
+          "target": {
+            "class": "constrained",
+            "allowed": ["stderr"],
+            "default": "stdout",
+            "code": "CONSOLE_TARGET_DENIED",
+            "reason": "writes to standard output, where Vector's startup log goes"
+          }
+        }
+      },
+      "databend": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "databricks_zerobus": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "datadog_events": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "datadog_logs": {
+        "tier": "approval",
+        "reach": "sends to Datadog's intake for its site",
+        "review": "Schema: site (datadoghq.com unless set; DD_SITE is scrubbed in restricted mode) selects Datadog's endpoints, which is what an approval covers; endpoint is a destination of its own. default_api_key is a credential.",
+        "fields": {
+          "endpoint": { "class": "resource", "kind": "url" },
+          "site": { "class": "data", "reason": "the Datadog site whose endpoints an approval covers" }
+        }
+      },
+      "datadog_metrics": {
+        "tier": "approval",
+        "reach": "sends to Datadog's API for its site",
+        "review": "Schema: site (datadoghq.com unless set; DD_SITE is scrubbed in restricted mode) selects Datadog's endpoints, which is what an approval covers; endpoint is a destination of its own. default_api_key is a credential.",
+        "fields": {
+          "endpoint": { "class": "resource", "kind": "url" },
+          "site": { "class": "data", "reason": "the Datadog site whose endpoints an approval covers" }
+        }
+      },
+      "datadog_traces": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "doris": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "elasticsearch": {
+        "tier": "builtin",
+        "reach": "sends to the Elasticsearch endpoints it names",
+        "review": "Restricted mode runs it today. Schema: endpoints[] (and the deprecated endpoint) are HttpEndpoint destinations; restricted mode requires endpoints, as today. bulk.index and the data_stream fields are templates Vector confines; bulk.action and bulk.version are unconfined templates that choose no resource, though an event can then pick the bulk action, delete included, on the approved cluster. query values can be VRL, checked like every program. auth with strategy aws follows the aws credential shape (measured for ADR 0012, Appendix A: Vector validates auth.strategy aws without keys, and the chain then reaches instance metadata).",
+        "fields": {
+          "bulk.action": { "class": "template", "reason": "the bulk action" },
+          "bulk.index": { "class": "template", "reason": "an index on the approved cluster" },
+          "bulk.version": { "class": "template", "reason": "a document version" },
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "data_stream.dataset": { "class": "template", "reason": "a data stream on the approved cluster" },
+          "data_stream.namespace": { "class": "template", "reason": "a data stream on the approved cluster" },
+          "data_stream.type": { "class": "template", "reason": "a data stream on the approved cluster" },
+          "endpoints[]": { "class": "resource", "kind": "url", "required": true }
+        },
+        "credentials": {
+          "auth": { "shape": "aws", "when": { "auth.strategy": ["aws"] } }
+        }
+      },
+      "file": {
+        "tier": "builtin",
+        "reach": "writes files under the host's allowed file roots",
+        "review": "Measured with the pinned binary: with base_dir set every rendered path, static, time-based or templated, stays under it (a static path outside fails vector validate, a templated one outside drops the event with confinement_failed) and a relative path resolves under it; without base_dir a templated path is confined to its literal prefix up to the last separator before the first {{ or %, and a .. segment in that prefix is normalized first. So the directory restricted mode checks is base_dir when set, otherwise that prefix, or the path itself when it has neither (ADR 0012, Templates). Built in, it lets any publisher write event content under every allowed file root: today no restricted component writes arbitrary content there, so roots granted for reading gain that meaning when the tiers take effect, which the release note must say.",
+        "fields": {
+          "base_dir": { "class": "resource", "kind": "dir", "writes": true },
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "path": { "class": "resource", "kind": "file", "template": true, "base_dir": "base_dir", "writes": true, "required": true }
+        }
+      },
+      "gcp_chronicle_unstructured": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "gcp_cloud_storage": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "gcp_pubsub": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "gcp_stackdriver_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "gcp_stackdriver_metrics": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "greptimedb": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "greptimedb_logs": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "greptimedb_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "honeycomb": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "http": {
+        "tier": "builtin",
+        "reach": "sends to the URL it names",
+        "review": "Restricted mode runs it today. Schema: uri is a vector::template::Template destination; Vector refuses a template in its scheme, host or port and confines it to the path (ADR 0012, Appendix A), and restricted mode checks the literal part like a URL. Header values are confined templates. auth with strategy aws follows the aws credential shape.",
+        "fields": {
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "uri": { "class": "resource", "kind": "url", "template": true, "required": true }
+        }
+      },
+      "humio_logs": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "humio_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "influxdb_logs": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "influxdb_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "kafka": {
+        "tier": "approval",
+        "reach": "connects to the brokers its cluster advertises, beyond the bootstrap servers it names",
+        "review": "Schema: the same broker list, librdkafka_options and SASL review as the kafka source. topic is a template Vector confines (ADR 0012, Appendix A): it chooses a topic within the approved cluster.",
+        "fields": {
+          "bootstrap_servers": { "class": "resource", "kind": "host_port_list", "required": true },
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "librdkafka_options": {
+            "class": "options",
+            "allowed_keys": [
+              "acks",
+              "allow.auto.create.topics",
+              "api.version.fallback.ms",
+              "api.version.request",
+              "api.version.request.timeout.ms",
+              "batch.num.messages",
+              "batch.size",
+              "broker.address.family",
+              "broker.address.ttl",
+              "broker.version.fallback",
+              "client.id",
+              "client.rack",
+              "compression.codec",
+              "compression.level",
+              "compression.type",
+              "connections.max.idle.ms",
+              "delivery.timeout.ms",
+              "enable.idempotence",
+              "linger.ms",
+              "log.connection.close",
+              "max.in.flight.requests.per.connection",
+              "message.copy.max.bytes",
+              "message.max.bytes",
+              "message.send.max.retries",
+              "message.timeout.ms",
+              "metadata.max.age.ms",
+              "partitioner",
+              "queue.buffering.max.kbytes",
+              "queue.buffering.max.messages",
+              "queue.buffering.max.ms",
+              "receive.message.max.bytes",
+              "reconnect.backoff.max.ms",
+              "reconnect.backoff.ms",
+              "request.required.acks",
+              "request.timeout.ms",
+              "retries",
+              "retry.backoff.max.ms",
+              "retry.backoff.ms",
+              "socket.connection.setup.timeout.ms",
+              "socket.keepalive.enable",
+              "socket.max.fails",
+              "socket.nagle.disable",
+              "socket.receive.buffer.bytes",
+              "socket.send.buffer.bytes",
+              "socket.timeout.ms",
+              "statistics.interval.ms",
+              "sticky.partitioning.linger.ms",
+              "topic.metadata.propagation.max.ms",
+              "topic.metadata.refresh.fast.interval.ms",
+              "topic.metadata.refresh.interval.ms",
+              "topic.metadata.refresh.sparse"
+            ],
+            "code": "PASSTHROUGH_OPTION_DENIED",
+            "reason": "passes options straight to librdkafka, where they can run a command, load a library, name other brokers or turn off TLS checks"
+          },
+          "sasl.mechanism": {
+            "class": "constrained",
+            "allowed": ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"],
+            "default": "GSSAPI",
+            "when": { "sasl.enabled": [true] },
+            "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+            "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+          },
+          "topic": { "class": "template", "reason": "a topic within the approved cluster" }
+        }
+      },
+      "keep": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "loki": {
+        "tier": "builtin",
+        "reach": "sends to the Loki endpoint it names",
+        "review": "Restricted mode runs it today. Schema: endpoint is an HttpEndpoint destination and required; path is the URL path appended to it. tenant_id is a template Vector confines; label and structured metadata values are unconfined templates that choose no resource (ADR 0012, Appendix A). auth with strategy aws follows the aws credential shape.",
+        "fields": {
+          "dangerously_allow_unconfined_template_resolution": {
+            "class": "constrained",
+            "refused_values": [true],
+            "code": "UNCONFINED_TEMPLATE_DENIED",
+            "reason": "turns off Vector's template confinement"
+          },
+          "endpoint": { "class": "resource", "kind": "url", "required": true },
+          "labels.*": { "class": "template", "reason": "a label value" },
+          "path": { "class": "data", "reason": "the URL path appended to endpoint" },
+          "structured_metadata.*": { "class": "template", "reason": "a structured metadata value" },
+          "tenant_id": { "class": "template", "reason": "the tenant on the approved Loki" }
+        }
+      },
+      "mezmo": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "mqtt": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "nats": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "new_relic": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "opentelemetry": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "papertrail": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "postgres": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "prometheus_exporter": {
+        "tier": "builtin",
+        "reach": "serves metrics on an address the host allows",
+        "review": "Restricted mode runs it today. Schema: address is a stdlib::SocketAddr listener with a default (0.0.0.0:9598) that restricted mode won't assume, so it is required. The first exporter on a loopback IP literal fed only by internal_metrics sources needs no listener allowance (the monitoring exporter, as today). auth with strategy aws follows the aws credential shape.",
+        "fields": {
+          "address": { "class": "resource", "kind": "listen", "required": true }
+        }
+      },
+      "prometheus_remote_write": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "pulsar": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "redis": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "sematext_logs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "sematext_metrics": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "socket": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "splunk_hec_logs": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "splunk_hec_metrics": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "statsd": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "vector": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "webhdfs": { "tier": "full", "review": "not yet reviewed", "target": "approval" },
+      "websocket": { "tier": "full", "review": "not yet reviewed", "target": "builtin" },
+      "websocket_server": { "tier": "full", "review": "not yet reviewed", "target": "builtin" }
+    }
+  },
+  "global_settings": {
+    "acknowledgements": {
+      "tier": "builtin",
+      "reach": "turns end-to-end acknowledgements on",
+      "review": "Restricted mode accepts it today. Schema: enabled only."
+    },
+    "api": {
+      "tier": "full",
+      "code": "LOCAL_API_DENIED",
+      "reach": "opens Vector's API, which has no authentication",
+      "review": "Host owned (ADR 0012, ADR 0011): any local user could read live events through it, so no pipeline may open it in restricted mode, enabled or not, as today."
+    },
+    "buffer_utilization_ewma_half_life_seconds": {
+      "tier": "builtin",
+      "reach": "tunes how Vector smooths buffer metrics",
+      "review": "Schema: a number. It tunes Vector's own metrics."
+    },
+    "data_dir": {
+      "tier": "builtin",
+      "reach": "chooses where Vector keeps checkpoints and disk buffers",
+      "review": "Restricted mode accepts it today under an allowed file root. Schema: a stdlib::PathBuf directory Vector writes.",
+      "fields": {
+        "data_dir": { "class": "resource", "kind": "dir", "writes": true }
+      }
+    },
+    "enrichment_tables": {
+      "tier": "builtin",
+      "reach": "declares lookup tables",
+      "review": "Each table is classified by its type under enrichment_tables."
+    },
+    "expire_metrics": {
+      "tier": "builtin",
+      "reach": "tunes when Vector forgets metrics",
+      "review": "Schema: a duration. It tunes Vector's own metrics."
+    },
+    "expire_metrics_per_metric_set": {
+      "tier": "builtin",
+      "reach": "tunes when Vector forgets chosen metrics",
+      "review": "Schema: metric name and label matchers (exact values or regular expressions) with a duration."
+    },
+    "expire_metrics_secs": {
+      "tier": "builtin",
+      "reach": "tunes when Vector forgets metrics",
+      "review": "Schema: a number of seconds."
+    },
+    "healthchecks": {
+      "tier": "builtin",
+      "reach": "tunes Vector's start-up health checks",
+      "review": "Restricted mode accepts it today. Schema: enabled and require_healthy."
+    },
+    "latency_ewma_alpha": {
+      "tier": "builtin",
+      "reach": "tunes how Vector smooths latency metrics",
+      "review": "Schema: a number."
+    },
+    "log_schema": {
+      "tier": "builtin",
+      "reach": "renames the event fields Vector uses",
+      "review": "Schema: host_key, message_key, metadata_key, source_type_key and timestamp_key are event paths."
+    },
+    "metrics_storage_refresh_period": {
+      "tier": "builtin",
+      "reach": "tunes how often Vector refreshes its metrics",
+      "review": "Schema: a number of seconds."
+    },
+    "provider": {
+      "tier": "full",
+      "reach": "replaces the signed pipeline with configuration fetched elsewhere",
+      "review": "ADR 0012: a provider loads configuration that no published version holds."
+    },
+    "proxy": {
+      "tier": "builtin",
+      "reach": "sends Vector's HTTP requests through a proxy",
+      "review": "Restricted mode refuses it today; ADR 0012 makes each proxy URL a destination that needs its allowance (shared ProxyConfig rule)."
+    },
+    "schema": {
+      "tier": "builtin",
+      "reach": "turns on schema checks and the log namespace",
+      "review": "Schema: enabled, validation and log_namespace."
+    },
+    "secret": {
+      "tier": "full",
+      "reach": "defines secret backends, which can run programs and read files",
+      "review": "ADR 0012: exec backends run programs and file and directory backends read files; device secrets are restricted mode's alternative (ADR 0008)."
+    },
+    "telemetry": {
+      "tier": "builtin",
+      "reach": "tunes the tags on Vector's own metrics",
+      "review": "Schema: tags.emit_service and tags.emit_source."
+    },
+    "tests": {
+      "tier": "builtin",
+      "reach": "runs the pipeline's unit tests during validation",
+      "review": "Restricted mode accepts it today. Unit tests insert sample events into transforms during vector test; their events and outputs are data, and only their VRL is checked.",
+      "fields": {
+        "tests": { "class": "data", "reason": "unit tests: sample events and conditions, whose VRL is checked like every program" }
+      }
+    },
+    "timezone": {
+      "tier": "builtin",
+      "reach": "sets the time zone for timestamps",
+      "review": "Restricted mode accepts it today. Schema: local or an IANA name."
+    },
+    "wildcard_matching": {
+      "tier": "builtin",
+      "reach": "chooses how wildcard inputs match",
+      "review": "Schema: strict or relaxed."
+    }
+  },
+  "enrichment_tables": {
+    "file": {
+      "tier": "builtin",
+      "reach": "reads a CSV file under an allowed file root or delivered as an asset",
+      "review": "Schema: file.path is a stdlib::PathBuf Vector reads, and plain vector validate loads it (ADR 0012, Appendix A); encoding and schema describe the columns.",
+      "fields": {
+        "file.path": { "class": "resource", "kind": "file", "asset": "csv" }
+      }
+    },
+    "geoip": {
+      "tier": "builtin",
+      "reach": "reads a MaxMind database under an allowed file root or delivered as an asset",
+      "review": "Schema: path is a stdlib::PathBuf Vector reads (ADR 0012, Appendix A); locale only chooses names.",
+      "fields": {
+        "path": { "class": "resource", "kind": "file", "asset": "mmdb" }
+      }
+    },
+    "memory": {
+      "tier": "builtin",
+      "reach": "keeps a table in memory, and in a file under an allowed root when a filter persists it",
+      "review": "Measured with the pinned binary: a memory table with a cuckoo filter and filter.persistence_path wrote that file (2,172 bytes) and reads it at start-up, so the table is not purely in memory as ADR 0012 says; the path is a file restricted mode checks and Vector writes. Everything else holds entries in memory; source_config.source_key names a source in the same pipeline.",
+      "fields": {
+        "filter.persistence_path": { "class": "resource", "kind": "file", "writes": true }
+      }
+    },
+    "mmdb": {
+      "tier": "builtin",
+      "reach": "reads a MaxMind database under an allowed file root or delivered as an asset",
+      "review": "Schema: path is a stdlib::PathBuf Vector reads; plain vector validate refuses a malformed database (ADR 0012, Appendix A).",
+      "fields": {
+        "path": { "class": "resource", "kind": "file", "asset": "mmdb" }
+      }
+    }
+  },
+  "vrl_functions": {
+    "refused": [
+      "dns_lookup",
+      "encode_proto",
+      "get_env_var",
+      "get_secret",
+      "http_request",
+      "parse_proto",
+      "remove_secret",
+      "reverse_dns",
+      "set_secret",
+      "validate_json_schema"
+    ],
+    "device_only": [
+      "dns_lookup",
+      "encode_proto",
+      "find_enrichment_table_records",
+      "get_enrichment_table_record",
+      "get_env_var",
+      "get_secret",
+      "http_request",
+      "parse_proto",
+      "remove_secret",
+      "reverse_dns",
+      "set_secret",
+      "validate_json_schema"
+    ],
+    "review": "Restricted mode refuses functions that reach outside the event: the environment, secrets, DNS, HTTP and files (a JSON schema or a protobuf descriptor). The two enrichment-table functions leave that list (ADR 0012): measured for ADR 0012 (Appendix A), Vector refuses at compile time a lookup of a table the same configuration doesn't declare, and declared tables are classified above. The server's isolated worker can't load tables, so all twelve stay functions only a device evaluates (DEVICE_VRL_FUNCTIONS in server/src/validation.rs)."
+  },
+  "current_restricted_mode": {
+    "review": "What restricted mode accepts in this release, until the agent, the server and the dashboard read the tiers: the component set and the top-level settings of supported in policy.go, requires_full_mode in rollout.rs and fullModeRequirements in hostRequirements.ts. tests/security/test_capability_lists.py pins those lists to this section and docs/user/security.md shows it. The change that makes them read the tiers deletes it.",
+    "components": {
+      "sources": ["demo_logs", "internal_metrics", "file", "http_server", "syslog", "opentelemetry"],
+      "transforms": ["remap", "filter", "route", "sample", "reduce", "log_to_metric"],
+      "sinks": ["console", "blackhole", "http", "loki", "elasticsearch", "prometheus_exporter"]
+    },
+    "notes": {
+      "sinks/console": "to stderr only"
+    },
+    "global_settings": ["data_dir", "acknowledgements", "healthchecks", "timezone"]
+  }
+}

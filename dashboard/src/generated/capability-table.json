@@ -1,0 +1,4568 @@
+{
+  "generated_by": "scripts/generate-capability-table.mjs from vector-catalog/capabilities.json",
+  "id": "0.58.0/046f6c732c20eadb",
+  "path_syntax": "Fields are joined with \".\", \"[]\" marks list items and \"*\" marks map values.",
+  "vector_version": "0.58.0",
+  "schema_sha256": "7e5f4b3fc2522898bbbbd3e17940b83640eeb06c6b381e735f25bcc2de9bcbff",
+  "tiers": {
+    "builtin": "Works on every restricted device. Every resource it touches is named in its settings and allowed one by one: a destination, a listener or a file root.",
+    "approval": "Reaches something its settings don't name: cluster members a server advertises, a vendor's endpoints, or this host's own state. A host approves the type once with vectory allow --component TYPE; named resources still need their allowances.",
+    "full": "Runs programs, loads code, replaces the signed pipeline, can't be bounded, or isn't reviewed for restricted mode yet. Only a full-mode device runs it (vectory install --allow-full-vector-config)."
+  },
+  "capabilities": {
+    "instance-credentials": "Sign with this host's own cloud identity: an AWS instance or task role, a Google service account from the metadata server, an Azure managed or workload identity.",
+    "managed-ca": "Trust CA certificates that Vectory delivers with a version: a vectory-asset: reference in tls.ca_file."
+  },
+  "resource_kinds": {
+    "url": "A URL Vector connects to. Its scheme, host and port are literal, and host:port is a destination the host allows (--network HOST:PORT).",
+    "host_port": "A host:port Vector connects to: a destination the host allows.",
+    "host_port_list": "A comma-separated list of host:port destinations, each allowed by the host.",
+    "listen": "An address Vector listens on: a listener the host allows (--listener ADDRESS), compared as written.",
+    "file": "A file Vector reads, or writes when the rule says so. It lies under a file root the host allows (--file-root DIR).",
+    "glob": "A file pattern Vector reads. The directory before its first wildcard lies under an allowed file root.",
+    "dir": "A directory Vector reads, or writes when the rule says so. It lies under an allowed file root.",
+    "unix_listen": "A Unix socket Vector creates and listens on. It lies under an allowed file root.",
+    "unix_connect": "A Unix socket Vector connects to: a destination the host allows by its exact path (--network unix:PATH), never covered by a file root."
+  },
+  "asset_kinds": {
+    "csv": "A CSV lookup table, in file.path of a file enrichment table.",
+    "mmdb": "A MaxMind database, in path of a geoip or mmdb enrichment table.",
+    "pem_certificates": "PEM certificates, in tls.ca_file (which also needs managed-ca) or tls.crt_file."
+  },
+  "codes": {
+    "UNSUPPORTED_LOCAL_CAPABILITY": "Only full mode allows it: a component, setting or field that runs programs, loads code, replaces the signed pipeline, or isn't reviewed for restricted mode.",
+    "LOCAL_API_DENIED": "The pipeline opens Vector's API, which has no authentication; the host decides whether it exists.",
+    "DYNAMIC_CAPABILITY_DENIED": "An environment reference, a native secret reference, a template outside a template field, or a VRL function that reaches outside the event.",
+    "UNCONFINED_TEMPLATE_DENIED": "The sink turns off Vector's template confinement.",
+    "TEMPLATE_RESOURCE_DENIED": "A template in a field that names a resource leaves no static part restricted mode can check.",
+    "PASSTHROUGH_OPTION_DENIED": "A passthrough option outside the reviewed list.",
+    "NETWORK_DESTINATION_DENIED": "A destination restricted mode can't approve: implicit, malformed, with credentials in it, or of a scheme the field doesn't take.",
+    "LISTENER_DENIED": "A listener restricted mode can't approve: implicit or malformed.",
+    "FILE_ACCESS_DENIED": "A path restricted mode can't approve: relative, with a .. segment, a filesystem root, or overlapping the agent's own directories.",
+    "TLS_VERIFICATION_REQUIRED": "TLS certificate or host name verification is off.",
+    "CONSOLE_TARGET_DENIED": "Console output goes anywhere but standard error.",
+    "ASSET_REFERENCE_REFUSED": "A managed asset reference outside an asset field of its kind, or not pinned by the version. Refused in every mode."
+  },
+  "string_rules": [
+    {
+      "pattern": "\\$[A-Za-z_]",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads an environment variable ($NAME), which only full mode interpolates"
+    },
+    {
+      "contains": "${",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads an environment variable (${NAME}), which only full mode interpolates"
+    },
+    {
+      "contains": "%{",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "uses a %{ substitution, which restricted mode refuses"
+    },
+    {
+      "contains": "SECRET[",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "reads a native secret, which needs a secret backend only full mode allows"
+    },
+    {
+      "contains": "{{",
+      "except": "template_fields",
+      "code": "DYNAMIC_CAPABILITY_DENIED",
+      "reason": "uses a template in a field that isn't a reviewed template field"
+    }
+  ],
+  "credential_shapes": {
+    "aws": {
+      "capability": "instance-credentials",
+      "explicit": [
+        "access_key_id"
+      ],
+      "ambient_keys": [
+        "assume_role",
+        "imds",
+        "profile"
+      ],
+      "refused_keys": {
+        "credentials_file": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "names an AWS credentials file, which can make Vector run a program (credential_process)"
+        }
+      }
+    },
+    "gcp": {
+      "capability": "instance-credentials",
+      "explicit": [
+        "api_key",
+        "skip_authentication"
+      ],
+      "ambient_keys": [],
+      "refused_keys": {
+        "credentials_path": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "names a Google credentials file, which isn't reviewed for restricted mode"
+        }
+      }
+    },
+    "azure": {
+      "capability": "instance-credentials",
+      "explicit": [],
+      "ambient_keys": [],
+      "refused_keys": {},
+      "kind_field": "azure_credential_kind",
+      "ambient_kinds": [
+        "managed_identity",
+        "managed_identity_client_assertion",
+        "workload_identity"
+      ],
+      "refused_kinds": {
+        "azure_cli": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "runs the Azure CLI (az) to get a token"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "scope": "sources/amqp",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/apache_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/aws_ecs_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/aws_kinesis_firehose",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/aws_s3",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "reaches AWS's S3 and SQS endpoints for its region, and the objects its queue messages name",
+      "rules": {
+        "assume_role": {
+          "class": "ambient",
+          "capability": "instance-credentials",
+          "reason": "assumes an AWS role starting from this host's own credentials"
+        },
+        "decoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"
+        },
+        "endpoint": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "region": {
+          "class": "data",
+          "reason": "an AWS region; the endpoints it implies are what approving an AWS component covers",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "sqs.deferred.queue_url": {
+          "class": "resource",
+          "kind": "url"
+        },
+        "sqs.queue_url": {
+          "class": "resource",
+          "kind": "url"
+        },
+        "sqs.tls_options.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "sqs.tls_options.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls_options.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth",
+          "shape": "aws"
+        }
+      ]
+    },
+    {
+      "scope": "sources/aws_sqs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/datadog_agent",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/demo_logs",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "generates sample events inside Vector",
+      "rules": {
+        "decoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/dnstap",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/docker_logs",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "reads container logs and metadata from this host's Docker API",
+      "rules": {
+        "docker_host": {
+          "class": "resource",
+          "kind": "url",
+          "schemes": [
+            "http",
+            "https",
+            "tcp",
+            "unix"
+          ]
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/eventstoredb_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/exec",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "runs programs",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/file",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "reads files under the host's allowed file roots",
+      "rules": {
+        "data_dir": {
+          "class": "resource",
+          "kind": "dir",
+          "writes": true
+        },
+        "exclude": {
+          "class": "data",
+          "reason": "patterns that only narrow include"
+        },
+        "include[]": {
+          "class": "resource",
+          "kind": "glob",
+          "required": true
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/file_descriptor",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "reads a file descriptor the agent never connects",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/fluent",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/gcp_pubsub",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/heroku_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/host_metrics",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "reads this host's system metrics: CPU, memory, disks, file systems, network, processes and cgroups",
+      "rules": {
+        "cgroups.base": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "names a path under the cgroup root that a .. segment can leave"
+        },
+        "cgroups.base_dir": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "points the collector at another directory, for testing"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/http",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/http_client",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/http_server",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "listens on an address the host allows",
+      "rules": {
+        "address": {
+          "class": "resource",
+          "kind": "listen",
+          "required": true
+        },
+        "decoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"
+        },
+        "path": {
+          "class": "data",
+          "reason": "the URL path it serves"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "strict_path": {
+          "class": "data",
+          "reason": "whether requests must match path exactly"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/internal_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/internal_metrics",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "reads Vector's own metrics",
+      "rules": {
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/journald",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "runs this host's journalctl to read the systemd journal",
+      "rules": {
+        "data_dir": {
+          "class": "resource",
+          "kind": "dir",
+          "writes": true
+        },
+        "extra_args": {
+          "class": "refused",
+          "code": "PASSTHROUGH_OPTION_DENIED",
+          "reason": "passes options straight to journalctl"
+        },
+        "journal_directory": {
+          "class": "resource",
+          "kind": "dir"
+        },
+        "journalctl_path": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "runs the program it names instead of this host's journalctl"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/kafka",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "connects to the brokers its cluster advertises, beyond the bootstrap servers it names",
+      "rules": {
+        "bootstrap_servers": {
+          "class": "resource",
+          "kind": "host_port_list",
+          "required": true
+        },
+        "decoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::decoding::format::protobuf::ProtobufDeserializerOptions"
+        },
+        "decompression.dictionary_path": {
+          "class": "resource",
+          "kind": "file"
+        },
+        "librdkafka_options": {
+          "class": "options",
+          "allowed_keys": [
+            "allow.auto.create.topics",
+            "api.version.fallback.ms",
+            "api.version.request",
+            "api.version.request.timeout.ms",
+            "auto.commit.interval.ms",
+            "auto.offset.reset",
+            "broker.address.family",
+            "broker.address.ttl",
+            "broker.version.fallback",
+            "check.crcs",
+            "client.id",
+            "client.rack",
+            "connections.max.idle.ms",
+            "fetch.error.backoff.ms",
+            "fetch.max.bytes",
+            "fetch.message.max.bytes",
+            "fetch.min.bytes",
+            "fetch.queue.backoff.ms",
+            "fetch.wait.max.ms",
+            "group.instance.id",
+            "heartbeat.interval.ms",
+            "isolation.level",
+            "log.connection.close",
+            "max.partition.fetch.bytes",
+            "max.poll.interval.ms",
+            "message.copy.max.bytes",
+            "message.max.bytes",
+            "metadata.max.age.ms",
+            "partition.assignment.strategy",
+            "queued.max.messages.kbytes",
+            "queued.min.messages",
+            "receive.message.max.bytes",
+            "reconnect.backoff.max.ms",
+            "reconnect.backoff.ms",
+            "retry.backoff.max.ms",
+            "retry.backoff.ms",
+            "session.timeout.ms",
+            "socket.connection.setup.timeout.ms",
+            "socket.keepalive.enable",
+            "socket.max.fails",
+            "socket.nagle.disable",
+            "socket.receive.buffer.bytes",
+            "socket.send.buffer.bytes",
+            "socket.timeout.ms",
+            "statistics.interval.ms",
+            "topic.metadata.propagation.max.ms",
+            "topic.metadata.refresh.fast.interval.ms",
+            "topic.metadata.refresh.interval.ms",
+            "topic.metadata.refresh.sparse"
+          ],
+          "code": "PASSTHROUGH_OPTION_DENIED",
+          "reason": "passes options straight to librdkafka, where they can run a command, load a library, name other brokers or turn off TLS checks"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "sasl.mechanism": {
+          "class": "constrained",
+          "allowed": [
+            "PLAIN",
+            "SCRAM-SHA-256",
+            "SCRAM-SHA-512"
+          ],
+          "default": "GSSAPI",
+          "when": {
+            "sasl.enabled": [
+              true
+            ]
+          },
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/kubernetes_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/logstash",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/mongodb_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/mqtt",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/nats",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/nginx_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/okta",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/opentelemetry",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "listens on gRPC and HTTP addresses the host allows",
+      "rules": {
+        "grpc.address": {
+          "class": "resource",
+          "kind": "listen",
+          "required": true
+        },
+        "grpc.tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "grpc.tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "grpc.tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.address": {
+          "class": "resource",
+          "kind": "listen",
+          "required": true
+        },
+        "http.tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "http.tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "http.tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/postgresql_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/prometheus_pushgateway",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/prometheus_remote_write",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/prometheus_scrape",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/pulsar",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/redis",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/socket",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/splunk_hec",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/static_metrics",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "emits the metrics its settings list",
+      "rules": {
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/statsd",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/stdin",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "reads standard input, which the agent never connects",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/syslog",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "listens on an address the host allows, or on a Unix socket under an allowed file root",
+      "rules": {
+        "address": {
+          "class": "resource",
+          "kind": "listen",
+          "required": true,
+          "when": {
+            "mode": [
+              "tcp",
+              "udp"
+            ]
+          }
+        },
+        "path": {
+          "class": "resource",
+          "kind": "unix_listen",
+          "writes": true
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.client_metadata_key": {
+          "class": "data",
+          "reason": "an event field for the client certificate's metadata",
+          "from": "vector_core::tls::settings::TlsSourceConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sources/vector",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/websocket",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sources/windows_event_log",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/aggregate",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "aggregates metrics in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/aws_ec2_metadata",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/dedupe",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "drops duplicate events in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/delay",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "holds events in memory for a while",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/exclusive_route",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "routes events by conditions in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/filter",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "drops events by a condition in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/incremental_to_absolute",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "converts metrics in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/log_to_metric",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "turns events into metrics in memory",
+      "rules": {
+        "metrics[].field": {
+          "class": "template",
+          "reason": "the event field a metric reads"
+        },
+        "metrics[].name": {
+          "class": "template",
+          "reason": "a metric name"
+        },
+        "metrics[].namespace": {
+          "class": "template",
+          "reason": "a metric namespace"
+        },
+        "metrics[].tags.*": {
+          "class": "template",
+          "reason": "a metric tag value"
+        },
+        "metrics[].tags.*[]": {
+          "class": "template",
+          "reason": "a metric tag value"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "transforms/lua",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "runs Lua scripts, which can run programs and write files",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/metric_to_log",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "turns metrics into events in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/reduce",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "merges events in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/remap",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "changes events with a VRL program",
+      "rules": {
+        "file": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "loads its VRL program from a file on this device"
+        },
+        "files": {
+          "class": "refused",
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "loads VRL from files on this device"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "transforms/route",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "routes events by conditions in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/sample",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "keeps a share of events in memory",
+      "rules": {
+        "exclude": {
+          "class": "data",
+          "reason": "a condition; its VRL is checked like every program"
+        },
+        "group_by": {
+          "class": "template",
+          "reason": "a key built from event fields"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "transforms/tag_cardinality_limit",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "limits metric tag values in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/throttle",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "rate-limits events in memory",
+      "rules": {
+        "exclude": {
+          "class": "data",
+          "reason": "a condition; its VRL is checked like every program"
+        },
+        "key_field": {
+          "class": "template",
+          "reason": "a key built from event fields"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "transforms/trace_to_log",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "turns traces into events in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "transforms/window",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "buffers events around a condition in memory",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/amqp",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/appsignal",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_kinesis_firehose",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_kinesis_streams",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_s3",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "writes to AWS S3 at the endpoints for its region",
+      "rules": {
+        "batch_encoding.schema_file": {
+          "class": "resource",
+          "kind": "file"
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "endpoint": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "key_prefix": {
+          "class": "template",
+          "reason": "an object key prefix within the bucket"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "region": {
+          "class": "data",
+          "reason": "an AWS region; the endpoints it implies are what approving an AWS component covers",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "ssekms_key_id": {
+          "class": "template",
+          "reason": "the KMS key that encrypts each object"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth",
+          "shape": "aws"
+        }
+      ]
+    },
+    {
+      "scope": "sinks/aws_sns",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/aws_sqs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/axiom",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/azure_blob",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/azure_logs_ingestion",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/blackhole",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "discards events",
+      "rules": {
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/clickhouse",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/console",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "writes events to Vector's standard error",
+      "rules": {
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "target": {
+          "class": "constrained",
+          "allowed": [
+            "stderr"
+          ],
+          "default": "stdout",
+          "code": "CONSOLE_TARGET_DENIED",
+          "reason": "writes to standard output, where Vector's startup log goes"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/databend",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/databricks_zerobus",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/datadog_events",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/datadog_logs",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "sends to Datadog's intake for its site",
+      "rules": {
+        "endpoint": {
+          "class": "resource",
+          "kind": "url"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "request.headers.*": {
+          "class": "template",
+          "reason": "a header value sent to the approved destination",
+          "from": "vector::sinks::util::http::RequestConfig"
+        },
+        "site": {
+          "class": "data",
+          "reason": "the Datadog site whose endpoints an approval covers"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/datadog_metrics",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "sends to Datadog's API for its site",
+      "rules": {
+        "endpoint": {
+          "class": "resource",
+          "kind": "url"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "site": {
+          "class": "data",
+          "reason": "the Datadog site whose endpoints an approval covers"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/datadog_traces",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/doris",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/elasticsearch",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "sends to the Elasticsearch endpoints it names",
+      "rules": {
+        "aws.endpoint": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "aws.region": {
+          "class": "data",
+          "reason": "an AWS region; the endpoints it implies are what approving an AWS component covers",
+          "from": "vector::aws::region::RegionOrEndpoint"
+        },
+        "bulk.action": {
+          "class": "template",
+          "reason": "the bulk action"
+        },
+        "bulk.index": {
+          "class": "template",
+          "reason": "an index on the approved cluster"
+        },
+        "bulk.version": {
+          "class": "template",
+          "reason": "a document version"
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "data_stream.dataset": {
+          "class": "template",
+          "reason": "a data stream on the approved cluster"
+        },
+        "data_stream.namespace": {
+          "class": "template",
+          "reason": "a data stream on the approved cluster"
+        },
+        "data_stream.type": {
+          "class": "template",
+          "reason": "a data stream on the approved cluster"
+        },
+        "endpoint": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::HttpEndpoint"
+        },
+        "endpoints[]": {
+          "class": "resource",
+          "kind": "url",
+          "required": true
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "request.headers.*": {
+          "class": "template",
+          "reason": "a header value sent to the approved destination",
+          "from": "vector::sinks::util::http::RequestConfig"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth",
+          "shape": "aws",
+          "when": {
+            "auth.strategy": [
+              "aws"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scope": "sinks/file",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "writes files under the host's allowed file roots",
+      "rules": {
+        "base_dir": {
+          "class": "resource",
+          "kind": "dir",
+          "writes": true
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "path": {
+          "class": "resource",
+          "kind": "file",
+          "template": true,
+          "base_dir": "base_dir",
+          "writes": true,
+          "required": true
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/gcp_chronicle_unstructured",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/gcp_cloud_storage",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/gcp_pubsub",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/greptimedb",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/greptimedb_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/greptimedb_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/honeycomb",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/http",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "sends to the URL it names",
+      "rules": {
+        "auth.password": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.service": {
+          "class": "data",
+          "reason": "the AWS service name used for signing",
+          "from": "vector::http::Auth"
+        },
+        "auth.strategy": {
+          "class": "data",
+          "reason": "the authentication strategy",
+          "from": "vector::http::Auth"
+        },
+        "auth.token": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.user": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.value": {
+          "class": "data",
+          "reason": "a credential sent as the Authorization header",
+          "from": "vector::http::Auth"
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "request.headers.*": {
+          "class": "template",
+          "reason": "a header value sent to the approved destination",
+          "from": "vector::sinks::util::http::RequestConfig"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "uri": {
+          "class": "resource",
+          "kind": "url",
+          "template": true,
+          "required": true
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth.auth",
+          "shape": "aws",
+          "when": {
+            "auth.strategy": [
+              "aws"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scope": "sinks/humio_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/humio_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/influxdb_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/influxdb_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/kafka",
+      "tier": "approval",
+      "reviewed": true,
+      "reach": "connects to the brokers its cluster advertises, beyond the bootstrap servers it names",
+      "rules": {
+        "bootstrap_servers": {
+          "class": "resource",
+          "kind": "host_port_list",
+          "required": true
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "librdkafka_options": {
+          "class": "options",
+          "allowed_keys": [
+            "acks",
+            "allow.auto.create.topics",
+            "api.version.fallback.ms",
+            "api.version.request",
+            "api.version.request.timeout.ms",
+            "batch.num.messages",
+            "batch.size",
+            "broker.address.family",
+            "broker.address.ttl",
+            "broker.version.fallback",
+            "client.id",
+            "client.rack",
+            "compression.codec",
+            "compression.level",
+            "compression.type",
+            "connections.max.idle.ms",
+            "delivery.timeout.ms",
+            "enable.idempotence",
+            "linger.ms",
+            "log.connection.close",
+            "max.in.flight.requests.per.connection",
+            "message.copy.max.bytes",
+            "message.max.bytes",
+            "message.send.max.retries",
+            "message.timeout.ms",
+            "metadata.max.age.ms",
+            "partitioner",
+            "queue.buffering.max.kbytes",
+            "queue.buffering.max.messages",
+            "queue.buffering.max.ms",
+            "receive.message.max.bytes",
+            "reconnect.backoff.max.ms",
+            "reconnect.backoff.ms",
+            "request.required.acks",
+            "request.timeout.ms",
+            "retries",
+            "retry.backoff.max.ms",
+            "retry.backoff.ms",
+            "socket.connection.setup.timeout.ms",
+            "socket.keepalive.enable",
+            "socket.max.fails",
+            "socket.nagle.disable",
+            "socket.receive.buffer.bytes",
+            "socket.send.buffer.bytes",
+            "socket.timeout.ms",
+            "statistics.interval.ms",
+            "sticky.partitioning.linger.ms",
+            "topic.metadata.propagation.max.ms",
+            "topic.metadata.refresh.fast.interval.ms",
+            "topic.metadata.refresh.interval.ms",
+            "topic.metadata.refresh.sparse"
+          ],
+          "code": "PASSTHROUGH_OPTION_DENIED",
+          "reason": "passes options straight to librdkafka, where they can run a command, load a library, name other brokers or turn off TLS checks"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "sasl.mechanism": {
+          "class": "constrained",
+          "allowed": [
+            "PLAIN",
+            "SCRAM-SHA-256",
+            "SCRAM-SHA-512"
+          ],
+          "default": "GSSAPI",
+          "when": {
+            "sasl.enabled": [
+              true
+            ]
+          },
+          "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+          "reason": "uses a SASL mechanism that reaches this host's Kerberos credentials or a token endpoint"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "topic": {
+          "class": "template",
+          "reason": "a topic within the approved cluster"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "sinks/keep",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/loki",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "sends to the Loki endpoint it names",
+      "rules": {
+        "auth.password": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.service": {
+          "class": "data",
+          "reason": "the AWS service name used for signing",
+          "from": "vector::http::Auth"
+        },
+        "auth.strategy": {
+          "class": "data",
+          "reason": "the authentication strategy",
+          "from": "vector::http::Auth"
+        },
+        "auth.token": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.user": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.value": {
+          "class": "data",
+          "reason": "a credential sent as the Authorization header",
+          "from": "vector::http::Auth"
+        },
+        "dangerously_allow_unconfined_template_resolution": {
+          "class": "constrained",
+          "refused_values": [
+            true
+          ],
+          "code": "UNCONFINED_TEMPLATE_DENIED",
+          "reason": "turns off Vector's template confinement"
+        },
+        "encoding.protobuf.desc_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "codecs::encoding::format::protobuf::ProtobufSerializerOptions"
+        },
+        "endpoint": {
+          "class": "resource",
+          "kind": "url",
+          "required": true
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "labels.*": {
+          "class": "template",
+          "reason": "a label value"
+        },
+        "path": {
+          "class": "data",
+          "reason": "the URL path appended to endpoint"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "structured_metadata.*": {
+          "class": "template",
+          "reason": "a structured metadata value"
+        },
+        "tenant_id": {
+          "class": "template",
+          "reason": "the tenant on the approved Loki"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth.auth",
+          "shape": "aws",
+          "when": {
+            "auth.strategy": [
+              "aws"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scope": "sinks/mezmo",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/mqtt",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/nats",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/new_relic",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/opentelemetry",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/papertrail",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/postgres",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/prometheus_exporter",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "serves metrics on an address the host allows",
+      "rules": {
+        "address": {
+          "class": "resource",
+          "kind": "listen",
+          "required": true
+        },
+        "auth.password": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.service": {
+          "class": "data",
+          "reason": "the AWS service name used for signing",
+          "from": "vector::http::Auth"
+        },
+        "auth.strategy": {
+          "class": "data",
+          "reason": "the authentication strategy",
+          "from": "vector::http::Auth"
+        },
+        "auth.token": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.user": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector::http::Auth"
+        },
+        "auth.value": {
+          "class": "data",
+          "reason": "a credential sent as the Authorization header",
+          "from": "vector::http::Auth"
+        },
+        "healthcheck.uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "healthcheck_uri": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector::sinks::util::uri::UriSerde"
+        },
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "tls.alpn_protocols": {
+          "class": "data",
+          "reason": "protocols offered during the handshake",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.ca_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "asset_capability": "managed-ca",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.crt_file": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "pem_certificates",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.enabled": {
+          "class": "data",
+          "reason": "turns TLS on",
+          "from": "vector_core::tls::settings::TlsEnableableConfig"
+        },
+        "tls.key_file": {
+          "class": "resource",
+          "kind": "file",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.key_pass": {
+          "class": "data",
+          "reason": "a credential; device secrets cover it",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.server_name": {
+          "class": "data",
+          "reason": "the name sent and verified; it adds no destination",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_certificate": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS certificate verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        },
+        "tls.verify_hostname": {
+          "class": "constrained",
+          "refused_values": [
+            false
+          ],
+          "code": "TLS_VERIFICATION_REQUIRED",
+          "reason": "turns off TLS host name verification",
+          "from": "vector_core::tls::settings::TlsConfig"
+        }
+      },
+      "credentials": [
+        {
+          "path": "auth.auth",
+          "shape": "aws",
+          "when": {
+            "auth.strategy": [
+              "aws"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "scope": "sinks/prometheus_remote_write",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/pulsar",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/redis",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/sematext_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/sematext_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/socket",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/splunk_hec_logs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/splunk_hec_metrics",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/statsd",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/vector",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/webhdfs",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/websocket",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "sinks/websocket_server",
+      "tier": "full",
+      "reviewed": false,
+      "reach": "",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    }
+  ],
+  "global_settings": [
+    {
+      "scope": "global/acknowledgements",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "turns end-to-end acknowledgements on",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/api",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "opens Vector's API, which has no authentication",
+      "code": "LOCAL_API_DENIED",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/buffer_utilization_ewma_half_life_seconds",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes how Vector smooths buffer metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/data_dir",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "chooses where Vector keeps checkpoints and disk buffers",
+      "rules": {
+        "data_dir": {
+          "class": "resource",
+          "kind": "dir",
+          "writes": true
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "global/enrichment_tables",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "declares lookup tables",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/expire_metrics",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes when Vector forgets metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/expire_metrics_per_metric_set",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes when Vector forgets chosen metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/expire_metrics_secs",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes when Vector forgets metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/healthchecks",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes Vector's start-up health checks",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/latency_ewma_alpha",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes how Vector smooths latency metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/log_schema",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "renames the event fields Vector uses",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/metrics_storage_refresh_period",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes how often Vector refreshes its metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/provider",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "replaces the signed pipeline with configuration fetched elsewhere",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/proxy",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "sends Vector's HTTP requests through a proxy",
+      "rules": {
+        "proxy.enabled": {
+          "class": "data",
+          "reason": "turns the proxy on",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.http": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.https": {
+          "class": "resource",
+          "kind": "url",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        },
+        "proxy.no_proxy": {
+          "class": "data",
+          "reason": "hosts reached without the proxy, each still named elsewhere in the pipeline",
+          "from": "vector_core::config::proxy::ProxyConfig"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "global/schema",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "turns on schema checks and the log namespace",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/secret",
+      "tier": "full",
+      "reviewed": true,
+      "reach": "defines secret backends, which can run programs and read files",
+      "code": "UNSUPPORTED_LOCAL_CAPABILITY",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/telemetry",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "tunes the tags on Vector's own metrics",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/tests",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "runs the pipeline's unit tests during validation",
+      "rules": {
+        "tests": {
+          "class": "data",
+          "reason": "unit tests: sample events and conditions, whose VRL is checked like every program"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "global/timezone",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "sets the time zone for timestamps",
+      "rules": {},
+      "credentials": []
+    },
+    {
+      "scope": "global/wildcard_matching",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "chooses how wildcard inputs match",
+      "rules": {},
+      "credentials": []
+    }
+  ],
+  "enrichment_tables": [
+    {
+      "scope": "enrichment_tables/file",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "reads a CSV file under an allowed file root or delivered as an asset",
+      "rules": {
+        "file.path": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "csv"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "enrichment_tables/geoip",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "reads a MaxMind database under an allowed file root or delivered as an asset",
+      "rules": {
+        "path": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "mmdb"
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "enrichment_tables/memory",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "keeps a table in memory, and in a file under an allowed root when a filter persists it",
+      "rules": {
+        "filter.persistence_path": {
+          "class": "resource",
+          "kind": "file",
+          "writes": true
+        }
+      },
+      "credentials": []
+    },
+    {
+      "scope": "enrichment_tables/mmdb",
+      "tier": "builtin",
+      "reviewed": true,
+      "reach": "reads a MaxMind database under an allowed file root or delivered as an asset",
+      "rules": {
+        "path": {
+          "class": "resource",
+          "kind": "file",
+          "asset": "mmdb"
+        }
+      },
+      "credentials": []
+    }
+  ],
+  "asset_fields": [
+    {
+      "scope": "enrichment_tables/file",
+      "path": "file.path",
+      "kind": "csv"
+    },
+    {
+      "scope": "enrichment_tables/geoip",
+      "path": "path",
+      "kind": "mmdb"
+    },
+    {
+      "scope": "enrichment_tables/mmdb",
+      "path": "path",
+      "kind": "mmdb"
+    },
+    {
+      "scope": "sinks/amqp",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/amqp",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/appsignal",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/appsignal",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_cloudwatch_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_kinesis_firehose",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_kinesis_firehose",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_kinesis_streams",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_kinesis_streams",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_s3",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_s3",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_sns",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_sns",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/aws_sqs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/aws_sqs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/axiom",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/axiom",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/azure_logs_ingestion",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/azure_logs_ingestion",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/clickhouse",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/clickhouse",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/databend",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/databend",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/datadog_events",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/datadog_events",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/datadog_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/datadog_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/datadog_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/datadog_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/datadog_traces",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/datadog_traces",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/doris",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/doris",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/elasticsearch",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/elasticsearch",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/gcp_chronicle_unstructured",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/gcp_chronicle_unstructured",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/gcp_cloud_storage",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/gcp_cloud_storage",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/gcp_pubsub",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/gcp_pubsub",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/gcp_stackdriver_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/greptimedb",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/greptimedb",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/greptimedb_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/greptimedb_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/greptimedb_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/greptimedb_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/http",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/http",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/humio_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/humio_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/humio_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/humio_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/influxdb_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/influxdb_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/influxdb_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/influxdb_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/kafka",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/kafka",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/loki",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/loki",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/mqtt",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/mqtt",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/nats",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/nats",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/opentelemetry",
+      "path": "protocol.tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/opentelemetry",
+      "path": "protocol.tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/papertrail",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/papertrail",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/prometheus_exporter",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/prometheus_exporter",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/prometheus_remote_write",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/prometheus_remote_write",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/socket",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/socket",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/splunk_hec_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/splunk_hec_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/splunk_hec_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/splunk_hec_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/statsd",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/statsd",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/vector",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/vector",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/websocket",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/websocket",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sinks/websocket_server",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sinks/websocket_server",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/amqp",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/amqp",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/aws_kinesis_firehose",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/aws_kinesis_firehose",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/aws_s3",
+      "path": "sqs.tls_options.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/aws_s3",
+      "path": "sqs.tls_options.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/aws_s3",
+      "path": "tls_options.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/aws_s3",
+      "path": "tls_options.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/aws_sqs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/aws_sqs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/datadog_agent",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/datadog_agent",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/docker_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/docker_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/fluent",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/fluent",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/gcp_pubsub",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/gcp_pubsub",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/heroku_logs",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/heroku_logs",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/http",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/http",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/http_client",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/http_client",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/http_server",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/http_server",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/kafka",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/kafka",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/logstash",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/logstash",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/mqtt",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/mqtt",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/nats",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/nats",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/nginx_metrics",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/nginx_metrics",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/okta",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/okta",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/opentelemetry",
+      "path": "grpc.tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/opentelemetry",
+      "path": "grpc.tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/opentelemetry",
+      "path": "http.tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/opentelemetry",
+      "path": "http.tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/prometheus_pushgateway",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/prometheus_pushgateway",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/prometheus_remote_write",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/prometheus_remote_write",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/prometheus_scrape",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/prometheus_scrape",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/socket",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/socket",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/splunk_hec",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/splunk_hec",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/statsd",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/statsd",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/syslog",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/syslog",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/vector",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/vector",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    },
+    {
+      "scope": "sources/websocket",
+      "path": "tls.ca_file",
+      "kind": "pem_certificates",
+      "capability": "managed-ca"
+    },
+    {
+      "scope": "sources/websocket",
+      "path": "tls.crt_file",
+      "kind": "pem_certificates"
+    }
+  ],
+  "vrl_functions": {
+    "refused": [
+      "dns_lookup",
+      "encode_proto",
+      "get_env_var",
+      "get_secret",
+      "http_request",
+      "parse_proto",
+      "remove_secret",
+      "reverse_dns",
+      "set_secret",
+      "validate_json_schema"
+    ],
+    "device_only": [
+      "dns_lookup",
+      "encode_proto",
+      "find_enrichment_table_records",
+      "get_enrichment_table_record",
+      "get_env_var",
+      "get_secret",
+      "http_request",
+      "parse_proto",
+      "remove_secret",
+      "reverse_dns",
+      "set_secret",
+      "validate_json_schema"
+    ]
+  },
+  "current_restricted_mode": {
+    "components": {
+      "sources": [
+        "demo_logs",
+        "internal_metrics",
+        "file",
+        "http_server",
+        "syslog",
+        "opentelemetry"
+      ],
+      "transforms": [
+        "remap",
+        "filter",
+        "route",
+        "sample",
+        "reduce",
+        "log_to_metric"
+      ],
+      "sinks": [
+        "console",
+        "blackhole",
+        "http",
+        "loki",
+        "elasticsearch",
+        "prometheus_exporter"
+      ]
+    },
+    "notes": {
+      "sinks/console": "to stderr only"
+    },
+    "global_settings": [
+      "data_dir",
+      "acknowledgements",
+      "healthchecks",
+      "timezone"
+    ]
+  }
+}
