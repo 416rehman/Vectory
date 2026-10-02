@@ -92,7 +92,7 @@ A token can also give the devices it enrolls up to 8 labels, such as `site=berli
 
 - **Accounts** are local. Passwords (12 to 256 bytes) are stored as Argon2 hashes. Two-factor secrets are encrypted at rest.
 - **Sessions** last 12 hours in an `HttpOnly`, `SameSite=Strict`, `Secure` cookie. Every change also needs a per-session CSRF token.
-- **Sign-in attempts** are rate-limited. Repeated failures for an account pause further attempts, and the error says when to try again.
+- **Sign-in attempts** are rate-limited. Repeated failures for an account pause further attempts, and the error says when to try again. Authenticator codes have their own limit: five wrong codes end a sign-in, and ten attempts in five minutes pause the account's second step, whichever addresses they come from. One address can't use up the limits other people need, and an address that has signed in before keeps a reserved share during a flood.
 - **Permissions** are enforced by the server on every request. Hiding a button is only a convenience.
 - **Browser protection:** a strict Content Security Policy with no inline scripts, no framing, and no requests to other sites. The dashboard, fonts, API reference and this Help center are all served by your server.
 - **Audit log:** each change the server accepts records who made it, when and the result. You can export it as JSON Lines with a SHA-256 of the file.

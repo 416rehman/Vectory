@@ -34,7 +34,7 @@ Put credentials in the header, never in the URL: a URL with a user name or passw
 
 ### The webhook payload
 
-Every message is one JSON object. Slack reads `text` and `blocks`; other receivers read `event`.
+Every message is one JSON object. Slack reads `text` and `blocks`; other receivers read `event`. Slack renders `text` with its own markup, so Vectory escapes `&`, `<` and `>` in it, as in the blocks; `event.headline` keeps the words as written.
 
 ```json
 {
@@ -168,7 +168,7 @@ Vectory is a server sending requests to an address an administrator typed, so it
 | --- | --- | --- |
 | Public | `hooks.slack.com` | Yes, over HTTPS. |
 | Private and loopback | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `127.0.0.0/8`, `fc00::/7`, `::1` | Only with **Allow private network addresses** on for that channel. Plain `http://` is allowed only here. |
-| Link-local and cloud metadata | `169.254.0.0/16` (including `169.254.169.254`), `fe80::/10`, `fd00:ec2::/32`, `100.100.100.200` | Never. |
+| Link-local and cloud metadata | `169.254.0.0/16` (including `169.254.169.254`), `fe80::/10`, `fd00:ec2::/32`, `100.100.100.200`, `168.63.129.16` (Azure's platform address) | Never. |
 | Multicast, reserved and documentation ranges | `224.0.0.0/4`, `0.0.0.0/8`, `240.0.0.0/4`, `192.0.2.0/24`, `2001:db8::/32` | Never. |
 
 - Vectory resolves the host name, checks every address, and connects only to an address it checked. A DNS answer that changes to a private address later is refused at connect time.
