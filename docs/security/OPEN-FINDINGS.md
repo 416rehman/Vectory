@@ -28,8 +28,13 @@ A file root that covers `/run` would let a sink that connects to Unix sockets re
 
 The `http`, `loki`, `prometheus_exporter` and `elasticsearch` sinks take `credentials_file` under their `auth` block, and the agent treats it as an ordinary path that only has to lie under an allowed file root. Measured with Vector 0.58.0 (an `aws_s3` sink): a profile file with `credential_process` made Vector run that program during `vector validate`. Exploiting it needs a file under an allowed root that parses as an AWS profile, which is easy once any approved component can write under a root. **Fix:** refuse `credentials_file` in restricted mode (the capability table already refuses it everywhere). **Test:** a policy test per sink, and a native test with the real Vector that the program never runs.
 
+### 6. The dashboard and API listener has no slow-client timeout and no connection cap
+
+The agent listener gates every connection (a 3 second ClientHello timeout, a handshake timeout, a connection limit, a 15 second header-read timeout). The dashboard and API listener (`axum::serve` in `server/src/main.rs`) installs no timer, so hyper's header-read timeout is disabled, and has no body-read deadline and no connection cap. Measured: 60 sockets that send half a request line stay open after 22 seconds. Not reachable in the documented deployment, where the HTTP listener binds inside the Compose network and only the TLS proxy publishes a port, but production enforces a loopback bind only in development mode (`check_http_bind_address`), so an operator who binds `0.0.0.0:8080` with no proxy gets neither a proxy nor timeouts, and with `VECTORY_TRUST_PROXY_HEADERS=true` a direct connection also lets the caller choose the throttle key and the audited client address. **Fix:** serve the HTTP listener through a connection loop with a timer, `header_read_timeout`, a request-body deadline and a connection semaphore, as the agent listener does; refuse a non-loopback HTTP bind in production unless an explicit opt-in is set (the Compose file sets it). **Test:** partial-header sockets are closed within the timeout and concurrent connections are capped.
+
 ## P3
 
+- `POST /account/password` and `POST /account/revoke-sessions` validate the request body before authenticating, so an anonymous caller with a malformed body gets 400 instead of 401 (a well-formed body gets 401; nothing is disclosed). Authenticate first, as the `mfa/*` and administrator account routes do, and test that an anonymous POST with any body answers 401.
 - Hypothesis, not demonstrated: a flood of a public endpoint delaying writers through the process-wide writer mutex. A control flood showed the same or higher write latency without the lock in the path.
 
 ## Residual risks the fixes left
